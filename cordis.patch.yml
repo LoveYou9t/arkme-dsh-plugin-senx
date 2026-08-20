@@ -1,0 +1,36 @@
+- insert:
+    - id: arkme-self
+      name: '@senguoyun/dsh-arkme'
+      config:
+        environment: prod
+        authBaseUrl: https://api.jotmo.cc
+        subjectBaseUrl: https://subject.jotmo.cc
+        recordBaseUrl: https://record.jotmo.cc
+        chatBaseUrl: https://chat.jotmo.cc
+        botBaseUrl: https://bot.jotmo.cc
+        imBaseUrl: https://im.jotmo.cc
+        webrtcBaseUrl: https://webrtc.jiwo.cc
+        worldBaseUrl: https://world.jotmo.cc
+        relationBaseUrl: https://relation.jotmo.cc
+        intelligentBaseUrl: https://intelligent.jotmo.cc
+        audioBaseUrl: https://audio.jotmo.cc
+        extensionPublishBaseUrl: https://extension-publish.jotmo.cc
+        extensionArtifactDirectory: ''
+        extensionTrustedSigningKeys: '{"prod-ed25519-20260819-1":"m1MKKU16hyu1b1KKIXMG+zKEr/GmhmvyUEreJzthTxs="}'
+        routePath: /arkme-self/api
+        requestTimeoutMs: 30000
+        maxTextLength: 20000
+        toolProfile: business
+        relatedRecordingsEnabled: true
+        geetestCaptchaId: ec81315ab8b0f18a7bfa13602d01e307
+        interwovenMomentsEnabled: true
+        allowNonLoopback: false
+        allowProduction: true
+        updateCheckEnabled: true
+        updateChannel: stable
+        updateRegistryUrl: https://registry.npmjs.org
+        updateCheckIntervalHours: 12
+        updateAllowLocalInstall: true
+        richMediaRenderEnabled: true
+        richMediaSendEnabled: true
+        maxUploadBytes: 104857600
