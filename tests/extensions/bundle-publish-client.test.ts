@@ -77,6 +77,7 @@ describe('Bundle v2 publish client', () => {
       const session = await client.createBundlePublishSession({
         name: '客户端测试', description: '', visibility: 'private', idempotency_key: 'bundle-client-test-1',
         bundle: source.bundle, source: source.source,
+		listingSource: { type: 'github_repository', url: 'https://github.com/example/client-test' },
       })
       await client.uploadBundle(session.bundle_upload, source.bundle)
       await client.uploadSource(session.source_upload, source.source)
@@ -94,6 +95,7 @@ describe('Bundle v2 publish client', () => {
           package_json_sha256: source.bundle.packageJsonSha256,
           source_sha256: source.source.sourceSha256,
           source_size: source.bundle.bytes.byteLength,
+			source: { type: 'github_repository', url: 'https://github.com/example/client-test' },
         },
       })
       expect(uploads).toEqual([
@@ -104,6 +106,20 @@ describe('Bundle v2 publish client', () => {
       rmSync(root, { recursive: true, force: true })
     }
   })
+
+	it('rotates an owner share link through the authenticated transport', async () => {
+		const post = vi.fn(async () => ({
+			ref: 'extshare_0123456789abcdef0123456789abcdef',
+			url: 'https://jiwo.cc/app/share/extension/extshare_0123456789abcdef0123456789abcdef',
+		}))
+		const client = new ExtensionPublishClient(post)
+		await expect(client.rotateShareLink('ext-1', '9f445b4f-55aa-45c1-9250-25161832d432')).resolves.toMatchObject({
+			ref: 'extshare_0123456789abcdef0123456789abcdef',
+		})
+		expect(post).toHaveBeenCalledWith('/api/v1/extensions/share/rotate', {
+			extension_id: 'ext-1', client_mutation_id: '9f445b4f-55aa-45c1-9250-25161832d432',
+		}, undefined)
+	})
 
   it('marks only upload-pending completion conflicts as retryable', async () => {
     for (const message of ['制品尚未上传完成（服务错误码 40901）', '源码尚未上传完成（服务错误码 40901）']) {
@@ -123,4 +139,38 @@ describe('Bundle v2 publish client', () => {
       code: 'arkme-code-40901', retryable: false,
     })
   })
+
+	it.each([
+		['arkme-code-40031', 'extension-source-invalid', false],
+		['arkme-code-40331', 'extension-source-publisher-forbidden', false],
+		['arkme-code-50331', 'extension-source-eligibility-unavailable', true],
+		['arkme-code-40931', 'extension-source-conflict', false],
+	])('maps source publication error %s to %s', async (upstreamCode, expectedCode, retryable) => {
+		const root = fixture()
+		try {
+			const source = packLocalBundleDirectory(root)
+			const client = new ExtensionPublishClient(async (): Promise<never> => {
+				throw new ArkmePluginError(upstreamCode, 'registry rejected', retryable, retryable ? 503 : 409)
+			})
+			await expect(client.createBundlePublishSession({
+				name: '来源测试', description: '', visibility: 'private', idempotency_key: 'source-error-test',
+				bundle: source.bundle, source: source.source,
+				listingSource: { type: 'github_repository', url: 'https://github.com/example/client-test' },
+			})).rejects.toMatchObject({ code: expectedCode, retryable })
+		} finally {
+			rmSync(root, { recursive: true, force: true })
+		}
+	})
+
+	it.each([
+		['arkme-code-40431', 'extension-share-not-found', false],
+		['arkme-code-40932', 'extension-share-rotate-conflict', false],
+		['arkme-code-50332', 'extension-share-update-failed', true],
+	])('maps share rotation error %s to %s', async (upstreamCode, expectedCode, retryable) => {
+		const client = new ExtensionPublishClient(async (): Promise<never> => {
+			throw new ArkmePluginError(upstreamCode, 'registry rejected', retryable, retryable ? 503 : 409)
+		})
+		await expect(client.rotateShareLink('ext-1', '9f445b4f-55aa-45c1-9250-25161832d432'))
+			.rejects.toMatchObject({ code: expectedCode, retryable })
+	})
 })
