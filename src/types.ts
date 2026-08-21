@@ -1643,6 +1643,7 @@ export type ArkmePluginOperation =
   | 'image.read'
   | 'images.list'
   | 'world.feed'
+  | 'world.mine'
   | 'world.voiceprint.availability'
   | 'world.voiceprint.playback.generate'
   | 'world.interactions.list'

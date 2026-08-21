@@ -213,6 +213,35 @@ describe('world Provider projection', () => {
     expect(JSON.stringify(page)).not.toContain('public-record-1')
   })
 
+  it('lists the signed-in account World feed through the private owner endpoint', async () => {
+    const sessions = new MemorySessionStore()
+    sessions.session = { userId: 10001, accessToken: 'access', refreshToken: 'refresh' }
+    const service = new ArkmeService(config, sessions, stateStore as never, async (input, init) => {
+      expect(String(input)).toBe('https://world.test/api/v1/public-record/my-list')
+      expect(init?.headers).toMatchObject({ Authorization: 'Bearer access' })
+      expect(JSON.parse(String(init?.body))).toEqual({ limit: 20, offset: 0 })
+      return json({ code: 200, data: { list: [{
+        record_uid: 'my-public-record-1', user_id: 10001, nick_name: '我',
+        headline: '我的世界', text_content: '只返回当前账号发布的内容',
+        images: [], videos: [], voices: [], extend_count: 0,
+      }], total: 1 } })
+    })
+
+    const page = await service.listMyWorldFeed({ limit: 999, offset: -4 })
+
+    expect(page).toMatchObject({
+      total: 1,
+      hasMore: false,
+      items: [{
+        recordRef: expect.stringMatching(/^arkme-world-record-v1\./),
+        authorName: '我',
+        headline: '我的世界',
+        textContent: '只返回当前账号发布的内容',
+      }],
+    })
+    expect(JSON.stringify(page)).not.toContain('my-public-record-1')
+  })
+
   it('downloads a sealed world image and rejects the ref after an account switch', async () => {
     const sessions = new MemorySessionStore()
     sessions.session = { userId: 10001, accessToken: 'access', refreshToken: 'refresh' }
@@ -469,6 +498,7 @@ describe('world Provider projection', () => {
   it('dispatches only bounded world feed and image inputs through the Host API', async () => {
     const service = {
       listWorldFeed: vi.fn(async (options: unknown) => options),
+      listMyWorldFeed: vi.fn(async (options: unknown) => options),
       worldVoiceprintPlaybackAvailability: vi.fn(async (recordRefs: string[]) => ({ recordRefs })),
       generateWorldVoiceprintPlayback: vi.fn(async (input: unknown) => input),
       listWorldInteractions: vi.fn(async (_recordRef: string, options: unknown) => options),
@@ -481,6 +511,7 @@ describe('world Provider projection', () => {
     }
 
     await dispatchArkmeHostOperation(service as never, 'world.feed', { limit: 999, offset: -4, userId: 900 })
+    await dispatchArkmeHostOperation(service as never, 'world.mine', { limit: 999, offset: -4, userId: 900 })
     await dispatchArkmeHostOperation(service as never, 'world.voiceprint.availability', {
       recordRefs: [' first ', '', 'second', ...Array.from({ length: 30 }, (_, index) => `extra-${String(index)}`)],
       userIds: [900],
@@ -497,6 +528,7 @@ describe('world Provider projection', () => {
     await dispatchArkmeHostOperation(service as never, 'world.image.read', { imageRef: 'opaque-ref', url: 'https://evil.test' })
 
     expect(service.listWorldFeed).toHaveBeenCalledWith({ limit: 20, offset: 0 })
+    expect(service.listMyWorldFeed).toHaveBeenCalledWith({ limit: 20, offset: 0 })
     expect(service.worldVoiceprintPlaybackAvailability).toHaveBeenCalledWith([
       'first', 'second', ...Array.from({ length: 18 }, (_, index) => `extra-${String(index)}`),
     ])

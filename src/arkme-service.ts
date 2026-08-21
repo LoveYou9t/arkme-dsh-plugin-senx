@@ -1258,6 +1258,13 @@ export class ArkmeService {
     return await this.world.listWorldFeed(options)
   }
 
+  /** Build the signed-in account's World projection without exposing owner IDs. */
+  async listMyWorldFeed(
+    options: { limit?: number; offset?: number; signal?: AbortSignal } = {},
+  ): Promise<ArkmeWorldFeedPage> {
+    return await this.world.listMyWorldFeed(options)
+  }
+
   async worldVoiceprintPlaybackAvailability(
     recordRefs: readonly string[],
     signal?: AbortSignal,
