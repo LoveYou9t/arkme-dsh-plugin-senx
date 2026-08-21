@@ -1608,6 +1608,7 @@ export type ArkmePluginOperation =
 	| 'extensions.share.detail'
   | 'extensions.installed-list'
   | 'extensions.enabled-state'
+  | 'extensions.persistent.client-state'
   | 'extensions.enabled.set'
   | 'extensions.preview.delete'
   | 'extensions.preview.reorder'
