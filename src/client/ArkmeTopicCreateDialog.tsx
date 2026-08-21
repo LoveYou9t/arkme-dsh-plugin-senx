@@ -26,11 +26,13 @@ const styles: Record<string, CSSProperties> = {
   backdrop: {
     position: 'fixed', inset: 0, zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center',
     padding: 16, boxSizing: 'border-box', background: 'var(--dsw-alias-bg-mask-1, rgba(19, 22, 26, 0.34))',
+    backdropFilter: 'var(--dsw-mask-blur, blur(2px))', WebkitBackdropFilter: 'var(--dsw-mask-blur, blur(2px))',
   },
   dialog: {
     width: 420, maxWidth: 'calc(100vw - 32px)', padding: 16, boxSizing: 'border-box', borderRadius: 12,
+    border: '1px solid var(--dsw-alias-border-inverted, rgba(0, 0, 0, 0.04))',
     background: colors.surface, color: colors.text,
-    boxShadow: '0 18px 50px rgba(18, 22, 27, 0.24)', font: 'inherit',
+    boxShadow: 'var(--dsw-shadow-lv3, 0 18px 50px rgba(18, 22, 27, 0.24))', font: 'inherit',
   },
   header: { display: 'flex', alignItems: 'center', gap: 12 },
   title: { flex: 1, margin: 0, fontSize: 18, lineHeight: '25px', fontWeight: 600 },
@@ -52,7 +54,7 @@ const styles: Record<string, CSSProperties> = {
     minWidth: 65, height: 36, padding: '0 14px', borderRadius: 8, cursor: 'pointer',
     font: 'inherit', fontSize: 14, fontWeight: 500,
   },
-  cancel: { border: `1px solid ${colors.border}`, background: colors.surface, color: colors.text },
+  cancel: { border: `1px solid ${colors.border}`, background: 'transparent', color: colors.text },
   confirm: { border: 0, background: colors.action, color: colors.actionForeground },
   confirmDisabled: {
     background: arkmeTheme.accentSoft,

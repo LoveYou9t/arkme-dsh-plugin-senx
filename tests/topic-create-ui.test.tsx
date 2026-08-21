@@ -118,8 +118,10 @@ describe('topic create UI', () => {
     expect(root).toContain('确认')
     expect(root).toContain('font-weight:500')
     expect(`${child}${root}`).not.toContain('话题磁铁')
+    expect(`${child}${root}`).toContain('background:var(--dsw-specific-input-major, var(--dsw-alias-bg-layer-2, #ffffff))')
+    expect(`${child}${root}`).toContain('background:var(--dsw-alias-bg-mask-1, rgba(19, 22, 26, 0.34))')
+    expect(`${child}${root}`).toContain('box-shadow:var(--dsw-shadow-lv3')
     expect(`${child}${root}`).toContain('--dsw-specific-menu')
-    expect(`${child}${root}`).toContain('--dsw-specific-input-major')
     expect(`${child}${root}`).toContain('--dsw-alias-state-success-tertiary')
     expect(`${child}${root}`).not.toContain('--dsw-specific-dialog-fill')
     expect(`${child}${root}`).not.toContain('--dsw-alias-brand-disabled')
@@ -138,6 +140,9 @@ describe('topic create UI', () => {
     const resting = renderToStaticMarkup(<ArkmeTopicTreeRow {...baseProps} hovered={false} />)
     const hovered = renderToStaticMarkup(<ArkmeTopicTreeRow {...baseProps} hovered />)
     const selected = renderToStaticMarkup(<ArkmeTopicTreeRow {...baseProps} selected hovered={false} />)
+    const leaf = renderToStaticMarkup(<ArkmeTopicTreeRow
+      {...baseProps} row={{ ...topicRow, hasChildren: false, expanded: false }} hovered={false}
+    />)
     const created = renderToStaticMarkup(<ArkmeTopicTreeRow
       {...baseProps} createdHighlightActive createdHighlightVisible hovered={false}
     />)
@@ -150,6 +155,7 @@ describe('topic create UI', () => {
     expect(hovered).toContain('width:58px')
     expect(hovered).toContain('padding-right:12px')
     expect(hovered).toContain('var(--dsw-alias-label-caption, #a3a8ae)')
+    expect(leaf).toContain('background:var(--dsw-alias-label-caption, #a3a8ae)')
     expect(hovered).not.toContain('＋')
     expect(resting).not.toContain('transition:')
     expect(hovered).not.toContain('transition:')
@@ -166,6 +172,7 @@ describe('topic create UI', () => {
     expect(footer).toContain('新建主题')
     expect(footer).toContain('position:absolute')
     expect(footer).toContain('background:transparent')
+    expect(footer).toContain('background:var(--dsw-alias-bg-layer-2, #f3f4f6)')
     expect(footer).toContain('padding:10px 12px 22px')
     expect(footer).not.toContain('box-shadow')
   })

@@ -83,7 +83,7 @@ const styles: Record<string, CSSProperties> = {
     display: 'grid', gridTemplateRows: 'auto auto minmax(0, 1fr)', overflow: 'hidden',
     boxSizing: 'border-box', border: `1px solid ${colors.border}`, borderRadius: 16,
     background: colors.surface,
-    boxShadow: '0 24px 64px rgba(20,24,31,.18), 0 2px 10px rgba(20,24,31,.06)',
+    boxShadow: arkmeTheme.shadow,
     backdropFilter: 'blur(24px) saturate(1.08)', WebkitBackdropFilter: 'blur(24px) saturate(1.08)',
   },
   head: {
@@ -109,7 +109,7 @@ const styles: Record<string, CSSProperties> = {
     minHeight: 120, overflowY: 'auto', margin: 0, padding: '2px 0 74px', listStyle: 'none',
   },
   status: { padding: '22px 18px 80px', color: colors.secondary, fontSize: 12, textAlign: 'center' },
-  error: { color: '#c2413b' },
+  error: { color: arkmeTheme.danger },
 }
 
 /** Keep matching topics and their ancestors so search never destroys the directory hierarchy. */
