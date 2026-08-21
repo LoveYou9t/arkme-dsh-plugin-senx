@@ -42,6 +42,14 @@ describe('native World integration', () => {
     expect(world).toContain("target === 'mine' ? 'world.mine' : 'world.feed'")
   })
 
+  it('clears the previous World scope underline when the selected scope changes', async () => {
+    const world = await source('src/client/ArkmeWorldSurface.tsx')
+
+    expect(world).toContain("borderBottom: '2px solid transparent'")
+    expect(world).toContain("tabActive: { borderBottom: '2px solid #20232d'")
+    expect(world).not.toContain('tabActive: { borderBottomColor:')
+  })
+
   it('keeps the remaining currently unsupported controls wired to their real operations', async () => {
     const api = await source('src/client/api.ts')
     const world = await source('src/client/ArkmeWorldSurface.tsx')
