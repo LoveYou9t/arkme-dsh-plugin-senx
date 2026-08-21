@@ -1615,6 +1615,7 @@ export class ArkmeExtensionManager {
     if (this.options.profileInstaller === undefined) return
     for (const item of this.store.list()) {
       if (item.extensionId === exceptExtensionId || item.enabled || item.profilePackageName === undefined) continue
+      if (!this.profileContains(item.profilePackageName, false)) continue
       await this.options.profileInstaller.setEnabled(item.profilePackageName, false)
     }
   }
