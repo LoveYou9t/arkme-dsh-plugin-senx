@@ -12,8 +12,7 @@ import { ArkmeMark } from './ArkmeFooterAction.js'
 import { ArkmeMuteIcon } from './ArkmeMuteIcon.js'
 import { ArkmeSendToSelfIcon } from './ArkmeSendToSelfIcon.js'
 import { ArkmeDSHBetaCommunityEntry } from './ArkmeDSHBetaCommunityEntry.js'
-import { ARKME_EXTENSION_BRAND_GREEN, ArkmeExtensionCenter } from './ArkmeExtensionCenter.js'
-import { ArkmeExtensionIcon } from './ArkmeExtensionIcon.js'
+import { ARKME_EXTENSION_BRAND_GREEN } from './ArkmeExtensionCenter.js'
 import { ArkmeTopicTagBadge } from './ArkmeTopicTagBadge.js'
 import { arkmeTheme } from './arkme-theme.js'
 import { arkmeAuthStore } from './auth-store.js'
@@ -675,7 +674,6 @@ export function ArkmeNavigation({
   )
   const [error, setError] = useState('')
   const [conversationQuery, setConversationQuery] = useState('')
-  const [extensionCenterOpen, setExtensionCenterOpen] = useState(false)
   const [activeDirectoryEntryId, setActiveDirectoryEntryId] = useState<string>()
   const activateDirectoryEntry = useCallback((entryId?: string) => { setActiveDirectoryEntryId(entryId) }, [])
   const activateNativeEntry = useCallback(() => { setActiveDirectoryEntryId(undefined) }, [])
@@ -710,12 +708,6 @@ export function ArkmeNavigation({
     || arkoPresentationName(arkoProfile).toLocaleLowerCase().includes(normalizedConversationQuery)
     || (arkoLatestPreview ?? ARKO_CONVERSATION_PREVIEW_FALLBACK).toLocaleLowerCase().includes(normalizedConversationQuery)
   const showSelfInSearch = normalizedConversationQuery === '' || '发给自己 默认分类与主题'.includes(normalizedConversationQuery)
-
-	useEffect(() => {
-		if (!authenticated || ui.extensionShareRef === undefined) return
-		activateNativeEntry()
-		setExtensionCenterOpen(true)
-	}, [activateNativeEntry, authenticated, ui.extensionShareRef])
 
   const stopCreatedHighlightAnimation = useCallback(() => {
     createdHighlightTimeoutsRef.current.forEach(timer => { clearTimeout(timer) })
@@ -1111,13 +1103,6 @@ export function ArkmeNavigation({
     aria-label="Arkme 会话列表"
     data-arkme-layout={embeddedProductShell ? 'product-directory' : undefined}
   >
-    {extensionCenterOpen && <ArkmeExtensionCenter
-      currentSessionId={currentSessionId}
-      {...(auth?.userId === undefined ? {} : { currentUserId: auth.userId })}
-		{...(ui.extensionShareRef === undefined ? {} : { shareRef: ui.extensionShareRef })}
-		onShareExit={() => { arkmeUi.dismissExtensionShare() }}
-		onClose={() => { setExtensionCenterOpen(false); arkmeUi.dismissExtensionShare() }}
-    />}
     {directory === 'send_to_self' && <header style={styles.header}>
       <button
         type="button" style={styles.headerButton} aria-label="返回 Arkme 会话列表" title="返回"
@@ -1169,16 +1154,6 @@ export function ArkmeNavigation({
           {...(arkoLatestPreview === undefined ? {} : { latestPreview: arkoLatestPreview })}
           onClick={showArko}
         />}
-        {authenticated && !embeddedProductShell && <button
-          type="button" role="treeitem" aria-selected={false} style={styles.chatRow}
-          onClick={() => { activateNativeEntry(); setExtensionCenterOpen(true) }}
-        >
-          <span style={styles.extensionAvatar} aria-hidden><ArkmeExtensionIcon size={22} /></span>
-          <span style={styles.chatContent}>
-            <span style={styles.chatTop}><span style={styles.chatName}>扩展市场</span></span>
-            <span style={styles.chatBottom}><span style={styles.preview}>发现、安装和更新 Arkme 扩展</span></span>
-          </span>
-        </button>}
         {showSelfInSearch && <button
           type="button" role="treeitem"
           aria-selected={activeDirectoryEntryId === undefined && ui.mode === 'source' && isArkmeSelfWorkspaceSource(ui.selectedSource)}
