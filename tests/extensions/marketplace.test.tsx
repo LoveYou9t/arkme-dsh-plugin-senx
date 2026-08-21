@@ -1,26 +1,28 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import type { ComponentType } from 'react'
 import { describe, expect, it } from 'vitest'
-import * as extensionCenterModule from '../../src/client/ArkmeExtensionCenter.js'
+import * as marketplaceModule from '../../src/client/ArkmeMarketplace.js'
 import {
   ARKME_EXTENSION_BRAND_GREEN, ARKME_EXTENSION_DETAIL_MODAL_MAX_HEIGHT, ARKME_EXTENSION_DETAIL_MODAL_MAX_WIDTH,
   ARKME_EXTENSION_MARKETPLACE_PAGE_SIZE,
   ARKME_EXTENSION_PRIMARY_ACTION_BG, ARKME_EXTENSION_PRIMARY_ACTION_FG,
-  ARKME_EXTENSION_RESTART_SURFACE, ArkmeExtensionCenter, ArkmeExtensionRestartDialog,
-  ArkmeExtensionAuthorIdentity, ArkmeExtensionDetailHeader, ArkmeExtensionDetailMetrics, ArkmeExtensionToggle, ExtensionCard,
+  ARKME_EXTENSION_RESTART_SURFACE, ArkmeMarketplace, ArkmeExtensionRestartDialog,
+  actionableExtensionUpdates, ArkmeExtensionAuthorIdentity, ArkmeExtensionAuthorPopover, ArkmeExtensionAuthorTrigger,
+  ArkmeExtensionDetailHeader, ArkmeExtensionDetailMetrics, ArkmeExtensionLifecycleRow, ArkmeExtensionToggle, ExtensionCard,
   extensionAuthorLabel, extensionCardMetadata, extensionCatalogAction, extensionCommunityAuthor, extensionDirectInstallTarget,
+  extensionAuthorProfileDeepLink, extensionGithubProfileUrl,
   classificationStatusHint, extensionDetailHasPreviews, extensionDetailMetricLabels, extensionEnableUnavailable,
   extensionInstallFailureMessage, extensionInstallOwnerId, extensionInstallPercent, extensionTabLoadMode, extensionUpdateCardStatus,
-  extensionVersionLabel, installedExtensionCatalogItem,
+  extensionVersionLabel, installedExtensionCatalogItem, mergeInstalledExtensionCatalogItem,
   extensionNativeInstallWarning, formatCompactCount, formatExtensionBytes, formatMarketplaceDate, marketplaceCategoryOptions, marketplaceListParams, MyExtensionCard, shouldLoadMoreDiscoverPage,
-} from '../../src/client/ArkmeExtensionCenter.js'
+} from '../../src/client/ArkmeMarketplace.js'
 import { ArkmeExtensionPublishDialog } from '../../src/client/ArkmeExtensionPublishDialog.js'
 import { ArkmeExtensionEditDialog } from '../../src/client/ArkmeExtensionEditDialog.js'
 import type { ArkmeMyExtensionItem } from '../../src/extensions/owned-types.js'
 import { ArkmeExtensionIcon } from '../../src/client/ArkmeExtensionIcon.js'
 import type { ArkmeExtensionPreviewItem } from '../../src/extensions/types.js'
 
-const previewModule = extensionCenterModule as unknown as {
+const previewModule = marketplaceModule as unknown as {
   ArkmeExtensionPreviewGallery?: ComponentType<{
     extensionId: string
     extensionName: string
@@ -31,7 +33,7 @@ const previewModule = extensionCenterModule as unknown as {
   ArkmeExtensionManifestDetails?: ComponentType<{ manifest: unknown }>
 }
 
-describe('Arkme extension market UI', () => {
+describe('Arkme marketplace UI', () => {
   it('treats missing manifest permissions as no declared permissions', () => {
     const ManifestDetails = previewModule.ArkmeExtensionManifestDetails
     expect(ManifestDetails).toBeTypeOf('function')
@@ -56,7 +58,7 @@ describe('Arkme extension market UI', () => {
   })
 
   it('uses a large modal with text-only navigation, no search entry, and a guided empty state', () => {
-    const html = renderToStaticMarkup(<ArkmeExtensionCenter onClose={() => {}} />)
+    const html = renderToStaticMarkup(<ArkmeMarketplace onClose={() => {}} />)
 
     expect(html).toContain('aria-label="Arkme 市集"')
     expect(html).toContain('role="dialog"')
@@ -96,7 +98,7 @@ describe('Arkme extension market UI', () => {
   })
 
   it('renders the marketplace as a page with separate visible category and sort entries', () => {
-    const html = renderToStaticMarkup(<ArkmeExtensionCenter displayMode="page" />)
+    const html = renderToStaticMarkup(<ArkmeMarketplace displayMode="page" />)
     expect(html).toContain('role="region"')
     expect(html).not.toContain('aria-modal="true"')
     expect(html.match(/data-market-header-layer=/g)).toHaveLength(2)
@@ -257,6 +259,128 @@ describe('Arkme extension market UI', () => {
     expect(html).not.toContain('octocat')
     expect(html).not.toContain('avatars.githubusercontent.com')
     expect(html).not.toContain('data-extension-source-badge="github"')
+  })
+
+  it('opens a GitHub author directly instead of toggling the author card', () => {
+    const item = {
+      extension_id: 'github/weather', name: '天气助手', description: '快速查看天气', visibility: 'public' as const,
+      source: { type: 'github_repository' as const, url: 'https://github.com/octocat/weather', label: 'GitHub', verification: 'publisher_attested' as const },
+      source_author: { name: 'octocat', profile_url: 'https://github.com/octocat' },
+    }
+    const html = renderToStaticMarkup(<ArkmeExtensionAuthorTrigger item={item} expanded onToggle={() => {}} />)
+
+    expect(extensionGithubProfileUrl(item)).toBe('https://github.com/octocat')
+    expect(html).toContain('data-extension-author-direct-link="github"')
+    expect(html).toContain('href="https://github.com/octocat"')
+    expect(html).toContain('target="_blank"')
+    expect(html).toContain('rel="noreferrer"')
+    expect(html).toContain('aria-label="在 GitHub 查看作者"')
+    expect(html).not.toContain('aria-expanded')
+    expect(html).not.toContain('<button')
+  })
+
+  it('derives the GitHub author link from the repository owner and keeps Arkme authors interactive', () => {
+    const githubItem = {
+      extension_id: 'github/weather', name: '天气助手', description: '', visibility: 'public' as const,
+      source: { type: 'github_repository' as const, url: 'https://github.com/octocat/weather', label: 'GitHub', verification: 'publisher_attested' as const },
+    }
+    expect(extensionGithubProfileUrl(githubItem)).toBe('https://github.com/octocat')
+
+    const authorHtml = renderToStaticMarkup(<ArkmeExtensionAuthorTrigger
+      item={{ extension_id: 'arkme/weather', name: '天气助手', description: '', visibility: 'public', owner_user_id: 7, owner_name: 'Lucis' }}
+      expanded
+      onToggle={() => {}}
+    />)
+    expect(authorHtml).toContain('<button')
+    expect(authorHtml).toContain('aria-expanded="true"')
+    expect(authorHtml).not.toContain('data-extension-author-direct-link="github"')
+
+    const unavailableHtml = renderToStaticMarkup(<ArkmeExtensionAuthorTrigger item={{
+      extension_id: 'github/invalid', name: '无效来源', description: '', visibility: 'public',
+      source: { type: 'github_repository', url: 'https://example.com/not-github', label: 'GitHub', verification: 'publisher_attested' },
+    }} />)
+    expect(unavailableHtml).toContain('data-extension-author-identity="github-static"')
+    expect(unavailableHtml).not.toContain('href=')
+  })
+
+  it('opens a compact Jotmo profile popover without the incorrect Arkme author label', () => {
+    const item = {
+      extension_id: 'arkme/weather', name: '天气助手', description: '', visibility: 'public' as const,
+      owner_user_id: 7, owner_name: 'Lucis 测试', owner_arkme_id: '@lucis',
+      owner_avatar_fallback: { kind: 'phone_default' as const, colorIndex: 3, label: 'L' },
+    }
+    expect(extensionAuthorProfileDeepLink(item)).toBe(
+      'jotmo://action?type=jumpToPersonalProfile&userId=7&nickName=Lucis+%E6%B5%8B%E8%AF%95',
+    )
+
+    const html = renderToStaticMarkup(<ArkmeExtensionAuthorPopover
+      item={item}
+      open
+      currentUserId={99}
+      onToggle={() => {}}
+      onPrivateChat={() => {}}
+    />)
+    expect(html).toContain('data-extension-author-popover="profile"')
+    expect(html).toContain('data-extension-author-world-link="true"')
+    expect(html).toContain('data-extension-author-profile-link="icon"')
+    expect(html).toContain('href="jotmo://action?type=jumpToPersonalProfile&amp;userId=7&amp;nickName=Lucis+%E6%B5%8B%E8%AF%95"')
+    expect(html).toContain('进入 TA 的世界')
+    expect(html).toContain('发送消息')
+    expect(html).not.toContain('Arkme 作者')
+    expect(html).not.toContain('@lucis')
+  })
+
+  it('keeps the profile entry for the current user but hides the private-message action', () => {
+    const html = renderToStaticMarkup(<ArkmeExtensionAuthorPopover
+      item={{
+        extension_id: 'arkme/self', name: '我的扩展', description: '', visibility: 'public',
+        owner_user_id: 7, owner_name: 'Lucis',
+      }}
+      open
+      currentUserId={7}
+      onToggle={() => {}}
+      onPrivateChat={() => {}}
+    />)
+    expect(html).toContain('进入 TA 的世界')
+    expect(html).not.toContain('发送消息')
+  })
+
+  it('does not invent a profile or message action when the projected user id is unavailable', () => {
+    const html = renderToStaticMarkup(<ArkmeExtensionAuthorPopover
+      item={{ extension_id: 'arkme/unknown', name: '未知作者扩展', description: '', visibility: 'public', owner_name: '未知作者' }}
+      open
+      onToggle={() => {}}
+      onPrivateChat={() => {}}
+    />)
+    expect(extensionAuthorProfileDeepLink({ owner_user_id: 0, owner_name: '未知作者' })).toBeUndefined()
+    expect(html).toContain('data-extension-author-popover="profile"')
+    expect(html).not.toContain('进入 TA 的世界')
+    expect(html).not.toContain('发送消息')
+    expect(html).not.toContain('Arkme 作者')
+  })
+
+  it('keeps the author popover closed until the user opens it and reflects message progress', () => {
+    const item = {
+      extension_id: 'arkme/weather', name: '天气助手', description: '', visibility: 'public' as const,
+      owner_user_id: 7, owner_name: 'Lucis',
+    }
+    const closed = renderToStaticMarkup(<ArkmeExtensionAuthorPopover
+      item={item}
+      open={false}
+      onToggle={() => {}}
+      onPrivateChat={() => {}}
+    />)
+    expect(closed).not.toContain('data-extension-author-popover="profile"')
+
+    const busy = renderToStaticMarkup(<ArkmeExtensionAuthorPopover
+      item={item}
+      open
+      actionBusy
+      onToggle={() => {}}
+      onPrivateChat={() => {}}
+    />)
+    expect(busy).toContain('正在打开…')
+    expect(busy).toContain('disabled=""')
   })
 
   it('keeps lifecycle actions out of the dense marketplace tile after installation', () => {
@@ -596,8 +720,74 @@ describe('Arkme extension market UI', () => {
     })
   })
 
+  it('keeps the update collection aligned with the actual update badge', () => {
+    expect(actionableExtensionUpdates([
+      { extension_id: 'current', installed_version: '1.0.0', latest_version: '1.0.0', update_available: false, revoked: false },
+      { extension_id: 'update', installed_version: '1.0.0', latest_version: '1.1.0', update_available: true, revoked: false },
+      { extension_id: 'revoked', installed_version: '1.0.0', update_available: false, revoked: true },
+    ])).toEqual([
+      { extension_id: 'update', installed_version: '1.0.0', latest_version: '1.1.0', update_available: true, revoked: false },
+    ])
+  })
+
+  it('merges authoritative catalog identity into an installed extension row', () => {
+    const installed = {
+      extensionId: 'ext-1', installedVersion: '1.0.0',
+      manifest: {
+        format: 'arkme-cordis-extension' as const, format_version: 1 as const, name: '本地名称', description: '本地说明',
+        version: '1.0.0', runtime: { dsh: '*', arkme_provider_contract: 1 as const }, halves: { host: true, client: false },
+        permissions: [], entrypoints: { host: 'host.js' },
+      },
+      enabled: true, active: true, permissionSnapshot: [], updateChannel: 'stable' as const,
+      installedAtMillis: 1, lastCheckedAtMillis: 1,
+    }
+    expect(mergeInstalledExtensionCatalogItem(installed, {
+      extension_id: 'ext-1', name: '远端名称', description: '远端说明', visibility: 'public',
+      owner_user_id: 42, owner_name: '作者', owner_arkme_id: 'author', owner_avatar_ref: 'avatar-ref',
+      icon_ref: `icon_v1_${'a'.repeat(64)}`,
+    })).toMatchObject({
+      extension_id: 'ext-1', name: '远端名称', description: '远端说明', version: '1.0.0',
+      owner_user_id: 42, owner_name: '作者', owner_avatar_ref: 'avatar-ref',
+      icon_ref: `icon_v1_${'a'.repeat(64)}`,
+    })
+  })
+
+  it('renders lifecycle rows as dividers with the correct single action', () => {
+    const installed = {
+      extensionId: 'ext-1', installedVersion: '1.0.0',
+      manifest: {
+        format: 'arkme-cordis-extension' as const, format_version: 1 as const, name: '扩展', description: '', version: '1.0.0',
+        runtime: { dsh: '*', arkme_provider_contract: 1 as const }, halves: { host: true, client: false },
+        permissions: [], entrypoints: { host: 'host.js' },
+      },
+      enabled: true, active: true, permissionSnapshot: [], updateChannel: 'stable' as const,
+      installedAtMillis: 1, lastCheckedAtMillis: 1,
+    }
+    const item = {
+      extension_id: 'ext-1', name: '扩展', description: '', visibility: 'public' as const,
+      owner_user_id: 42, owner_name: '作者', owner_arkme_id: 'author',
+    }
+    const installedHtml = renderToStaticMarkup(<ArkmeExtensionLifecycleRow
+      item={item} installed={installed} kind="installed" onOpen={() => {}} onToggle={() => {}}
+    />)
+    expect(installedHtml).toContain('data-extension-lifecycle-row="installed"')
+    expect(installedHtml).toContain('border-bottom:1px solid')
+    expect(installedHtml).toContain('role="switch"')
+    expect(installedHtml).toContain('作者')
+    expect(installedHtml).not.toContain('>更新</button>')
+    expect(installedHtml.indexOf('aria-label="查看扩展：扩展"')).toBeLessThan(installedHtml.indexOf('role="switch"'))
+
+    const updateHtml = renderToStaticMarkup(<ArkmeExtensionLifecycleRow
+      item={item} installed={installed} kind="update" onOpen={() => {}} onUpdate={() => {}}
+    />)
+    expect(updateHtml).toContain('data-extension-lifecycle-row="update"')
+    expect(updateHtml).toContain('background:#17191c')
+    expect(updateHtml).toContain('>更新</button>')
+    expect(updateHtml).not.toContain('role="switch"')
+  })
+
   it('does not render the former heavy install progress bar', () => {
-    const html = renderToStaticMarkup(<ArkmeExtensionCenter onClose={() => {}} />)
+    const html = renderToStaticMarkup(<ArkmeMarketplace onClose={() => {}} />)
     expect(html).not.toContain('aria-label="扩展安装进度"')
   })
 

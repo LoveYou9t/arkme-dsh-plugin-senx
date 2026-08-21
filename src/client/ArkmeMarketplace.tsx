@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { MagnifyingGlass } from '@phosphor-icons/react/dist/icons/MagnifyingGlass'
+import { ArrowUpRight } from '@phosphor-icons/react/dist/icons/ArrowUpRight'
+import { CaretRight } from '@phosphor-icons/react/dist/icons/CaretRight'
 import type {
   ArkmeExtensionCatalogItem, ArkmeExtensionCatalogPage, ArkmeExtensionClassificationPage,
   ArkmeExtensionClassificationStatus, ArkmeExtensionClassificationTree,
@@ -275,16 +277,58 @@ const styles: Record<string, CSSProperties> = {
     width: 18, height: 18, flex: 'none', display: 'grid', placeItems: 'center', overflow: 'hidden',
     borderRadius: '50%', background: colors.subtle, color: colors.secondary,
   },
+  lifecycleList: {
+    width: '100%', maxWidth: 1440, margin: '0 auto', borderTop: `1px solid ${colors.border}`,
+  },
+  lifecycleRow: {
+    width: '100%', minWidth: 0, minHeight: 78, display: 'flex', alignItems: 'center', gap: 14,
+    padding: '14px 8px', boxSizing: 'border-box', borderBottom: `1px solid ${colors.border}`,
+    background: 'transparent', color: colors.text,
+  },
+  lifecyclePrimary: {
+    minWidth: 0, flex: 1, display: 'flex', alignItems: 'center', gap: 12, padding: 0,
+    border: 0, background: 'transparent', color: 'inherit', textAlign: 'left', font: 'inherit', cursor: 'pointer',
+  },
+  lifecycleCopy: { minWidth: 0, flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center' },
+  lifecycleTitle: {
+    minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+    color: colors.text, fontSize: 14, lineHeight: '21px', fontWeight: 650,
+  },
+  lifecycleAuthor: {
+    minWidth: 0, display: 'flex', alignItems: 'center', marginTop: 7,
+    color: colors.secondary, fontSize: 11, lineHeight: '17px',
+  },
+  lifecycleActions: { flex: 'none', display: 'flex', alignItems: 'center', gap: 10 },
   authorButton: {
     display: 'inline-flex', alignItems: 'center', gap: 8, padding: 0, border: 0,
     background: 'transparent', color: colors.text, font: 'inherit', fontSize: 12, cursor: 'pointer',
   },
+  authorPopoverRoot: { position: 'relative', width: 'fit-content', maxWidth: '100%' },
   authorCard: {
-    width: 'min(320px, 100%)', marginTop: 10, padding: 14, boxSizing: 'border-box',
-    border: `1px solid ${colors.border}`, borderRadius: 12, background: colors.surface,
-    boxShadow: '0 12px 32px rgba(20,24,31,.12)',
+    position: 'absolute', zIndex: 25, top: 'calc(100% + 10px)', left: 0,
+    width: 'min(320px, calc(100vw - 64px))', padding: 16, boxSizing: 'border-box',
+    border: `1px solid ${colors.border}`, borderRadius: 16, background: colors.surface,
+    boxShadow: '0 18px 48px rgba(20,24,31,.18), 0 4px 14px rgba(20,24,31,.08)',
   },
-  authorCardActions: { display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 12 },
+  authorCardHeader: { position: 'relative', display: 'flex', alignItems: 'center', gap: 12, paddingRight: 30 },
+  authorCardName: {
+    minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+    color: colors.text, fontSize: 16, lineHeight: '22px', fontWeight: 650,
+  },
+  authorCardProfileIcon: {
+    position: 'absolute', top: -3, right: -3, width: 28, height: 28, display: 'grid', placeItems: 'center',
+    border: 0, borderRadius: 8, background: 'transparent', color: colors.caption, textDecoration: 'none',
+  },
+  authorCardWorldLink: {
+    minHeight: 34, marginTop: 14, display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 4,
+    color: colors.secondary, fontSize: 12, lineHeight: '18px', textDecoration: 'none',
+  },
+  authorCardActions: { display: 'flex', marginTop: 12 },
+  authorCardMessageButton: {
+    width: '100%', height: 40, border: 0, borderRadius: 999,
+    background: ARKME_EXTENSION_PRIMARY_ACTION_BG, color: ARKME_EXTENSION_PRIMARY_ACTION_FG,
+    font: 'inherit', fontSize: 13, fontWeight: 650, cursor: 'pointer',
+  },
   card: {
     width: '100%', minWidth: 0, display: 'flex', gap: 10, boxSizing: 'border-box',
     margin: 0, padding: '11px 8px', border: 0, borderBottom: `1px solid ${colors.border}`, borderRadius: 0,
@@ -849,8 +893,7 @@ export function formatMarketplaceDate(value: number): string {
 export function extensionCommunityAuthor(item: ArkmeExtensionCatalogItem): { name: string; github: boolean } {
   if (item.source?.type === 'github_repository') return { name: 'GitHub', github: true }
   const ownerName = item.owner_name?.trim() ?? ''
-  const ownerArkmeId = item.owner_arkme_id?.trim() ?? ''
-  if (ownerName !== '' || ownerArkmeId !== '') return { name: extensionAuthorLabel(item), github: false }
+  if (ownerName !== '') return { name: ownerName, github: false }
   return { name: extensionAuthorLabel(item), github: false }
 }
 
@@ -872,7 +915,7 @@ function safeGithubProfileUrl(value: unknown): string | undefined {
   } catch { return undefined }
 }
 
-function extensionGithubProfileUrl(item: ArkmeExtensionCatalogItem): string | undefined {
+export function extensionGithubProfileUrl(item: ArkmeExtensionCatalogItem): string | undefined {
   const projected = safeGithubProfileUrl(item.source_author?.profile_url)
   if (projected !== undefined) return projected
   if (item.source?.type !== 'github_repository') return undefined
@@ -939,6 +982,116 @@ export function ArkmeExtensionAuthorIdentity({ item, size = 18, presentation = '
         </span>}
     <span style={presentation === 'community' ? styles.communityIdentityName : undefined}>{author.name}</span>
   </span>
+}
+
+export function ArkmeExtensionAuthorTrigger({
+  item,
+  size = 28,
+  presentation = 'detail',
+  expanded = false,
+  style,
+  onToggle,
+}: {
+  item: ArkmeExtensionCatalogItem
+  size?: number
+  presentation?: 'community' | 'detail'
+  expanded?: boolean
+  style?: CSSProperties
+  onToggle?: (() => void) | undefined
+}) {
+  const identity = <ArkmeExtensionAuthorIdentity item={item} size={size} presentation={presentation} />
+  if (extensionCommunityAuthor(item).github) {
+    const href = extensionGithubProfileUrl(item)
+    if (href === undefined) return <span
+      style={{ ...styles.authorButton, ...style, cursor: 'default' }}
+      data-extension-author-identity="github-static"
+    >{identity}</span>
+    return <a
+      href={href}
+      target="_blank"
+      rel="noreferrer"
+      aria-label="在 GitHub 查看作者"
+      data-extension-author-direct-link="github"
+      style={{ ...styles.authorButton, ...style, textDecoration: 'none' }}
+    >{identity}</a>
+  }
+  return <button
+    type="button"
+    style={{ ...styles.authorButton, ...style }}
+    aria-expanded={expanded}
+    onClick={onToggle}
+  >{identity}</button>
+}
+
+export function extensionAuthorProfileDeepLink(
+  item: Pick<ArkmeExtensionCatalogItem, 'owner_user_id' | 'owner_name'>,
+): string | undefined {
+  const userId = item.owner_user_id
+  if (!Number.isSafeInteger(userId) || (userId ?? 0) <= 0) return undefined
+  const params = new URLSearchParams({ type: 'jumpToPersonalProfile', userId: String(userId) })
+  const displayName = item.owner_name?.trim() ?? ''
+  if (displayName !== '') params.set('nickName', displayName)
+  const hostScheme = ['jot', 'mo'].join('')
+  return `${hostScheme}://action?${params.toString()}`
+}
+
+export function ArkmeExtensionAuthorPopover({
+  item,
+  open,
+  currentUserId,
+  actionBusy = false,
+  actionError = '',
+  onToggle,
+  onPrivateChat,
+  style,
+}: {
+  item: ArkmeExtensionCatalogItem
+  open: boolean
+  currentUserId?: number | undefined
+  actionBusy?: boolean
+  actionError?: string
+  onToggle(): void
+  onPrivateChat(): void
+  style?: CSSProperties
+}) {
+  const profileLink = extensionAuthorProfileDeepLink(item)
+  const canMessage = profileLink !== undefined && item.owner_user_id !== currentUserId
+  return <div style={{ ...styles.authorPopoverRoot, ...style }}>
+    <ArkmeExtensionAuthorTrigger item={item} expanded={open} onToggle={onToggle} />
+    {open && !extensionCommunityAuthor(item).github && <aside
+      style={styles.authorCard}
+      role="dialog"
+      aria-label={`${extensionCommunityAuthor(item).name}的个人资料`}
+      data-extension-author-popover="profile"
+    >
+      <div style={styles.authorCardHeader}>
+        <ExtensionAuthorAvatar item={item} size={52} />
+        <div style={{ minWidth: 0, flex: 1 }}>
+          <div style={styles.authorCardName}>{extensionCommunityAuthor(item).name}</div>
+        </div>
+        {profileLink !== undefined && <a
+          href={profileLink}
+          style={styles.authorCardProfileIcon}
+          aria-label={`进入${extensionCommunityAuthor(item).name}的个人主页`}
+          data-extension-author-profile-link="icon"
+        ><ArrowUpRight size={17} aria-hidden /></a>}
+      </div>
+      {profileLink !== undefined && <a
+        href={profileLink}
+        style={styles.authorCardWorldLink}
+        data-extension-author-world-link="true"
+      >进入 TA 的世界 <CaretRight size={13} weight="bold" aria-hidden /></a>}
+      {actionError !== '' && <div style={{ ...styles.error, marginTop: 8 }}>{actionError}</div>}
+      {canMessage && <div style={styles.authorCardActions}>
+        <button
+          type="button"
+          style={{ ...styles.authorCardMessageButton, ...(actionBusy ? { opacity: .62, cursor: 'default' } : {}) }}
+          disabled={actionBusy}
+          onClick={onPrivateChat}
+        >{actionBusy ? '正在打开…' : '发送消息'}</button>
+      </div>}
+    </aside>}
+  </div>
 }
 
 export function ExtensionCard({ item, installed, actionLabel, status, statusColor, installTask, actionBusy, onClick, onAction, onToggle, onPause, onResume, presentation = 'list' }: {
@@ -1009,6 +1162,65 @@ export function ExtensionCard({ item, installed, actionLabel, status, statusColo
       />}
     </span>}
   </div>
+}
+
+function extensionHasAuthorIdentity(item: ArkmeExtensionCatalogItem): boolean {
+  return item.source?.type === 'github_repository'
+    || item.owner_user_id !== undefined
+    || (item.owner_name?.trim() ?? '') !== ''
+    || (item.owner_arkme_id?.trim() ?? '') !== ''
+}
+
+export function ArkmeExtensionLifecycleRow({
+  item,
+  installed,
+  kind,
+  actionBusy = false,
+  installTask,
+  onOpen,
+  onUpdate,
+  onToggle,
+  onPause,
+  onResume,
+}: {
+  item: ArkmeExtensionCatalogItem
+  installed: ArkmeInstalledExtensionView
+  kind: 'installed' | 'update'
+  actionBusy?: boolean | undefined
+  installTask?: ArkmeExtensionInstallTaskSnapshot | undefined
+  onOpen(): void
+  onUpdate?: (() => void) | undefined
+  onToggle?: ((enabled: boolean) => void) | undefined
+  onPause?: (() => void) | undefined
+  onResume?: (() => void) | undefined
+}) {
+  const processing = (installTask !== undefined && !installTask.done) || actionBusy
+  return <article style={styles.lifecycleRow} data-extension-lifecycle-row={kind}>
+    <button type="button" style={styles.lifecyclePrimary} onClick={onOpen} aria-label={`查看扩展：${item.name}`}>
+      <ArkmeExtensionAvatar extensionId={item.extension_id} iconRef={item.icon_ref} size={38} />
+      <span style={styles.lifecycleCopy}>
+        <span style={styles.lifecycleTitle}>{item.name}</span>
+        {extensionHasAuthorIdentity(item) && <span style={styles.lifecycleAuthor}>
+          <ArkmeExtensionAuthorIdentity item={item} size={20} />
+        </span>}
+      </span>
+    </button>
+    {kind === 'installed' && onToggle !== undefined && <span style={styles.lifecycleActions}>
+      <ArkmeExtensionToggle
+        item={installed}
+        busy={actionBusy}
+        onChange={onToggle}
+      />
+    </span>}
+    {kind === 'update' && <span style={styles.lifecycleActions}>
+      {processing ? <InstallLoadingButton task={installTask} onPause={onPause} onResume={onResume} /> : <button
+        type="button"
+        style={{ ...styles.installSmall, height: 32, padding: '0 16px', background: '#17191c', color: '#fff' }}
+        disabled={onUpdate === undefined}
+        onClick={onUpdate}
+      >更新</button>}
+    </span>}
+  </article>
 }
 
 export function MyExtensionCard({ item, installed, toggleBusy = false, onPublish, onEdit, onOpen, onToggle }: {
@@ -1137,6 +1349,12 @@ export function extensionUpdateCardStatus(item: ArkmeExtensionUpdateResolution):
   return item.revocation_reason?.trim() || '当前版本已撤销'
 }
 
+export function actionableExtensionUpdates(
+  items: readonly ArkmeExtensionUpdateResolution[],
+): ArkmeExtensionUpdateResolution[] {
+  return items.filter(item => item.update_available && !item.revoked)
+}
+
 export function extensionDirectInstallTarget(
   item: Pick<ArkmeExtensionCatalogItem, 'extension_id' | 'latest_stable_version' | 'version'>,
 ): { extensionId: string; version?: string } {
@@ -1201,6 +1419,25 @@ export function installedExtensionCatalogItem(item: ArkmeInstalledExtensionView,
   }
 }
 
+export function mergeInstalledExtensionCatalogItem(
+  item: ArkmeInstalledExtensionView,
+  remote?: ArkmeExtensionCatalogItem,
+  iconRef?: string,
+): ArkmeExtensionCatalogItem {
+  const local = installedExtensionCatalogItem(item, iconRef)
+  if (remote === undefined) return local
+  return {
+    ...local,
+    ...remote,
+    extension_id: item.extensionId,
+    name: remote.name.trim() === '' ? local.name : remote.name,
+    description: remote.description.trim() === '' ? local.description : remote.description,
+    version: item.installedVersion,
+    manifest: item.manifest,
+    ...(remote.icon_ref === undefined && iconRef !== undefined ? { icon_ref: iconRef } : {}),
+  }
+}
+
 function extensionEnabledLabel(item: ArkmeInstalledExtensionView): string {
   if (!item.enabled) return '已关闭'
   return item.active ? '已启用' : '已启用，尚未加载'
@@ -1213,7 +1450,7 @@ export function extensionEnableUnavailable(
   return enabled && item?.unavailable !== undefined
 }
 
-export function ArkmeExtensionCenter({
+export function ArkmeMarketplace({
   currentSessionId, currentUserId, shareRef, onShareExit, onClose,
   displayMode = 'dialog', onPrivateChatOpened, sortingEnabled = true,
 }: {
@@ -1234,6 +1471,7 @@ export function ArkmeExtensionCenter({
   const [myExtensionWarnings, setMyExtensionWarnings] = useState<ArkmeMyExtensionPage['warnings']>([])
   const [installed, setInstalled] = useState<ArkmeInstalledExtensionView[]>([])
   const [updates, setUpdates] = useState<ArkmeExtensionUpdateResolution[]>([])
+  const [lifecycleCatalogItems, setLifecycleCatalogItems] = useState<Record<string, ArkmeExtensionCatalogItem>>({})
   const [detail, setDetail] = useState<ArkmeExtensionCatalogItem>()
   const [detailRequestedExtensionId, setDetailRequestedExtensionId] = useState<string>()
   const [loadingTab, setLoadingTab] = useState<Tab | undefined>(shareRef === undefined ? 'discover' : undefined)
@@ -1323,6 +1561,23 @@ export function ArkmeExtensionCenter({
     } else if (pending?.active === true) {
       try { window.sessionStorage.removeItem(PENDING_EXTENSION_RESTART_KEY) } catch { /* Best-effort UI marker cleanup. */ }
     }
+  }
+
+  const loadLifecycleCatalogItems = async (
+    extensionIds: readonly string[],
+    owned: readonly ArkmeExtensionCatalogItem[],
+    signal: AbortSignal,
+  ): Promise<Record<string, ArkmeExtensionCatalogItem>> => {
+    const uniqueIds = [...new Set(extensionIds)]
+    const resolved = await Promise.all(uniqueIds.map(async extensionId => {
+      try {
+        return await callArkme<ArkmeExtensionCatalogItem>('extensions.catalog.detail', { extensionId }, signal)
+      } catch (caught) {
+        if ((caught as Error).name === 'AbortError') throw caught
+        return owned.find(item => item.extension_id === extensionId)
+      }
+    }))
+    return Object.fromEntries(resolved.flatMap(item => item === undefined ? [] : [[item.extension_id, item]]))
   }
 
   const reloadAfterRestart = async (previous: string | undefined): Promise<void> => {
@@ -1425,27 +1680,28 @@ export function ArkmeExtensionCenter({
           setMyExtensions(page.items); setMyExtensionWarnings(page.warnings); acceptInstalled(local)
         }
       } else if (target === 'installed') {
-        const [local, catalog, owned] = await Promise.all([
+        const [local, owned] = await Promise.all([
           callArkme<ArkmeInstalledExtensionView[]>('extensions.installed-list', undefined, controller.signal),
-          callArkme<ArkmeExtensionCatalogPage>('extensions.catalog.list', { limit: 50 }, controller.signal)
-            .catch(() => ({ items: [], total: 0 })),
           callArkme<ArkmeExtensionCatalogPage>('extensions.my-list', undefined, controller.signal)
             .catch(() => ({ items: [], total: 0 })),
         ])
+        const catalogItems = await loadLifecycleCatalogItems(local.map(item => item.extensionId), owned.items, controller.signal)
         if (sequence === requestSequence.current) {
-          acceptInstalled(local); setDiscoverItems(catalog.items); setPublishedItems(owned.items)
+          acceptInstalled(local); setLifecycleCatalogItems(catalogItems); setPublishedItems(owned.items)
         }
       } else {
-        const [local, available, catalog, owned] = await Promise.all([
+        const [local, available, owned] = await Promise.all([
           callArkme<ArkmeInstalledExtensionView[]>('extensions.installed-list', undefined, controller.signal),
           callArkme<ArkmeExtensionUpdateResolution[]>('extensions.updates', undefined, controller.signal),
-          callArkme<ArkmeExtensionCatalogPage>('extensions.catalog.list', { limit: 50 }, controller.signal)
-            .catch(() => ({ items: [], total: 0 })),
           callArkme<ArkmeExtensionCatalogPage>('extensions.my-list', undefined, controller.signal)
             .catch(() => ({ items: [], total: 0 })),
         ])
+        const actionable = actionableExtensionUpdates(available)
+        const catalogItems = await loadLifecycleCatalogItems(
+          actionable.map(item => item.extension_id), owned.items, controller.signal,
+        )
         if (sequence === requestSequence.current) {
-          acceptInstalled(local); setUpdates(available); setDiscoverItems(catalog.items); setPublishedItems(owned.items)
+          acceptInstalled(local); setUpdates(available); setLifecycleCatalogItems(catalogItems); setPublishedItems(owned.items)
         }
       }
       if (sequence === requestSequence.current) setLoadedTabs(current => new Set(current).add(target))
@@ -1911,7 +2167,7 @@ export function ArkmeExtensionCenter({
     }
   }
 
-  const updateCount = updates.filter(item => item.update_available || item.revoked).length
+  const updateCount = actionableExtensionUpdates(updates).length
   const normalizedQuery = query.trim().toLocaleLowerCase()
   const matchesQuery = (name: string, description: string) => normalizedQuery === ''
     || name.toLocaleLowerCase().includes(normalizedQuery)
@@ -1919,7 +2175,7 @@ export function ArkmeExtensionCenter({
   const visibleItems = mergeExtensionDiscoverItems(discoverItems, publishedItems)
     .filter(item => matchesQuery(item.name, item.description))
   const visibleInstalled = installed.filter(item => matchesQuery(item.manifest.name, item.manifest.description))
-  const visibleUpdates = updates.filter(item => {
+  const visibleUpdates = actionableExtensionUpdates(updates).filter(item => {
     const local = installed.find(installedItem => installedItem.extensionId === item.extension_id)
     return matchesQuery(local?.manifest.name ?? item.extension_id, local?.manifest.description ?? '')
   })
@@ -2012,11 +2268,11 @@ export function ArkmeExtensionCenter({
   <section
     style={displayMode === 'page' ? styles.pageDialog : styles.dialog}
     {...(displayMode === 'dialog' ? { role: 'dialog', 'aria-modal': true } : { role: 'region' })}
-    aria-labelledby="arkme-extension-center-title"
+    aria-labelledby="arkme-marketplace-title"
   >
   <div style={styles.shell} aria-label="Arkme 市集">
     {displayMode === 'dialog' && <header style={styles.header}>
-      <h2 id="arkme-extension-center-title" style={styles.title}>市集</h2>
+      <h2 id="arkme-marketplace-title" style={styles.title}>市集</h2>
       {detail?.share !== undefined && <button
         type="button"
         style={{ ...styles.iconButton, position: 'relative' }}
@@ -2032,7 +2288,7 @@ export function ArkmeExtensionCenter({
       ><CloseIcon /></button>
     </header>}
     {displayMode === 'page' && <header style={styles.marketPageHeader} data-market-header-layer="primary">
-      <h2 id="arkme-extension-center-title" style={styles.marketPageTitle}>市集</h2>
+      <h2 id="arkme-marketplace-title" style={styles.marketPageTitle}>市集</h2>
       {renderTabNavigation(true)}
     </header>}
     {displayMode === 'dialog' && renderTabNavigation(false)}
@@ -2148,36 +2404,15 @@ export function ArkmeExtensionCenter({
         <section style={styles.detailSection}>
           <div style={styles.detailLabel}>作者</div>
           <div style={styles.detailValue}>
-            <button type="button" style={styles.authorButton} aria-expanded={authorCardOpen} onClick={() => {
-              setAuthorCardOpen(value => !value); setAuthorActionError('')
-            }}>
-              <ArkmeExtensionAuthorIdentity item={detail} size={28} presentation="detail" />
-            </button>
-            {authorCardOpen && <div style={styles.authorCard}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                {extensionCommunityAuthor(detail).github
-                  ? <GitHubIdentityAvatar size={42} />
-                  : <ExtensionAuthorAvatar item={detail} size={42} />}
-                <div style={{ minWidth: 0 }}>
-                  <div style={{ color: colors.text, fontWeight: 600 }}>{extensionCommunityAuthor(detail).name}</div>
-                  <div style={{ marginTop: 2, color: colors.caption, fontSize: 11 }}>
-                    {extensionCommunityAuthor(detail).github
-                      ? 'GitHub 作者'
-                      : detail.owner_arkme_id === undefined ? 'Arkme 作者' : `@${detail.owner_arkme_id.replace(/^@+/, '')}`}
-                  </div>
-                </div>
-              </div>
-              {authorActionError !== '' && <div style={{ ...styles.error, marginTop: 10 }}>{authorActionError}</div>}
-              <div style={styles.authorCardActions}>
-                {detail.owner_user_id !== undefined && detail.owner_user_id !== currentUserId && <button
-                  type="button" style={styles.primaryButton} disabled={authorActionBusy} onClick={() => { void openAuthorPrivateChat() }}
-                >{authorActionBusy ? '正在发起…' : '发起私聊'}</button>}
-                {extensionGithubProfileUrl(detail) !== undefined && <a
-                  href={extensionGithubProfileUrl(detail)} target="_blank" rel="noreferrer"
-                  style={{ ...styles.restartLater, display: 'inline-flex', alignItems: 'center', textDecoration: 'none' }}
-                >查看 GitHub</a>}
-              </div>
-            </div>}
+            <ArkmeExtensionAuthorPopover
+              item={detail}
+              open={authorCardOpen}
+              currentUserId={currentUserId}
+              actionBusy={authorActionBusy}
+              actionError={authorActionError}
+              onToggle={() => { setAuthorCardOpen(value => !value); setAuthorActionError('') }}
+              onPrivateChat={() => { void openAuthorPrivateChat() }}
+            />
           </div>
         </section>
         {detailInstalled !== undefined && <section style={styles.detailSection}><div style={styles.detailLabel}>已安装版本</div><div style={styles.detailValue}>{displayVersion(detailInstalled.installedVersion)}</div></section>}
@@ -2280,48 +2515,49 @@ export function ArkmeExtensionCenter({
         {myExtensions.length === 0 && <EmptyState tab="mine" />}
       </>}
       {!busy && error === '' && sharedDetail === undefined && detail === undefined && tab === 'installed' && <>
-        {visibleInstalled.map(item => <ExtensionCard
-          key={item.extensionId}
-          item={installedExtensionCatalogItem(item, iconRefFor(item.extensionId))}
-          installed={item}
-          presentation={displayMode === 'page' ? 'community' : 'list'}
-          status={item.active ? '已加载' : '已安装，尚未加载'}
-          statusColor={item.active ? colors.accent : colors.warning}
-          actionBusy={actionBusyExtensionId === item.extensionId}
-          onClick={() => { void inspect(item.extensionId) }}
-          onToggle={enabled => { void toggleEnabled(item.extensionId, enabled) }}
-        />)}
+        <div style={styles.lifecycleList} data-extension-lifecycle-list="installed">
+          {visibleInstalled.map(item => <ArkmeExtensionLifecycleRow
+            key={item.extensionId}
+            item={mergeInstalledExtensionCatalogItem(
+              item, lifecycleCatalogItems[item.extensionId], iconRefFor(item.extensionId),
+            )}
+            installed={item}
+            kind="installed"
+            actionBusy={actionBusyExtensionId === item.extensionId}
+            onOpen={() => { void inspect(item.extensionId) }}
+            onToggle={enabled => { void toggleEnabled(item.extensionId, enabled) }}
+          />)}
+        </div>
         {visibleInstalled.length === 0 && <EmptyState tab="installed" />}
       </>}
       {!busy && error === '' && sharedDetail === undefined && detail === undefined && tab === 'updates' && <>
+        <div style={styles.lifecycleList} data-extension-lifecycle-list="updates">
         {visibleUpdates.map(item => {
           const local = installed.find(installedItem => installedItem.extensionId === item.extension_id)
-          const catalogItem = local === undefined
-            ? { extension_id: item.extension_id, name: item.extension_id, description: '', visibility: 'private' as const }
-            : installedExtensionCatalogItem(local, iconRefFor(item.extension_id))
+          if (local === undefined) return null
+          const catalogItem = mergeInstalledExtensionCatalogItem(
+            local, lifecycleCatalogItems[item.extension_id], iconRefFor(item.extension_id),
+          )
           const canAct = installTask === undefined || installTask.done
-          const updateStatus = extensionUpdateCardStatus(item)
-          return <ExtensionCard
+          return <ArkmeExtensionLifecycleRow
             key={item.extension_id}
             item={catalogItem}
-            presentation={displayMode === 'page' ? 'community' : 'list'}
-            {...(local === undefined ? {} : { installed: local })}
-            {...(item.update_available && !item.revoked ? { actionLabel: '更新' } : {})}
-            {...(updateStatus === undefined ? {} : { status: updateStatus, statusColor: colors.danger })}
+            installed={local}
+            kind="update"
             actionBusy={actionBusyExtensionId === item.extension_id}
             installTask={installTask?.extensionId === item.extension_id ? installTask : undefined}
-            onClick={() => { void inspect(item.extension_id) }}
-            {...(!canAct || !item.update_available || item.revoked ? {} : { onAction: () => {
+            onOpen={() => { void inspect(item.extension_id) }}
+            {...(!canAct || !item.update_available || item.revoked ? {} : { onUpdate: () => {
               void startInstall({
                 extensionId: item.extension_id,
                 ...(item.latest_version === undefined ? {} : { version: item.latest_version }),
               })
             } })}
-            {...(local === undefined ? {} : { onToggle: (enabled: boolean) => { void toggleEnabled(item.extension_id, enabled) } })}
             onPause={() => { void controlInstall('extensions.install.pause') }}
             onResume={() => { void controlInstall('extensions.install.resume') }}
           />
         })}
+        </div>
         {visibleUpdates.length === 0 && <EmptyState tab="updates" />}
       </>}
     </main>
@@ -2387,11 +2623,16 @@ export function ArkmeExtensionCenter({
                         <h3 style={styles.detailName}>{detail.name}</h3>
                       </div>
                       <ArkmeExtensionDetailMetrics item={detail} />
-                      <button type="button" style={{ ...styles.authorButton, marginTop: 10 }} aria-expanded={authorCardOpen} onClick={() => {
-                        setAuthorCardOpen(value => !value); setAuthorActionError('')
-                      }}>
-                        <ArkmeExtensionAuthorIdentity item={detail} size={28} presentation="detail" />
-                      </button>
+                      <ArkmeExtensionAuthorPopover
+                        item={detail}
+                        open={authorCardOpen}
+                        currentUserId={currentUserId}
+                        actionBusy={authorActionBusy}
+                        actionError={authorActionError}
+                        style={{ marginTop: 10 }}
+                        onToggle={() => { setAuthorCardOpen(value => !value); setAuthorActionError('') }}
+                        onPrivateChat={() => { void openAuthorPrivateChat() }}
+                      />
                     </div>
                   </div>
                   <div style={styles.detailPrimaryActions} data-extension-lifecycle-actions="true">
@@ -2420,31 +2661,6 @@ export function ArkmeExtensionCenter({
                     </div>}
                   </div>
                 </div>
-                {authorCardOpen && <div style={styles.authorCard}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                    {extensionCommunityAuthor(detail).github
-                      ? <GitHubIdentityAvatar size={42} />
-                      : <ExtensionAuthorAvatar item={detail} size={42} />}
-                    <div style={{ minWidth: 0 }}>
-                      <div style={{ color: colors.text, fontWeight: 600 }}>{extensionCommunityAuthor(detail).name}</div>
-                      <div style={{ marginTop: 2, color: colors.caption, fontSize: 11 }}>
-                        {extensionCommunityAuthor(detail).github
-                          ? 'GitHub 作者'
-                          : detail.owner_arkme_id === undefined ? 'Arkme 作者' : `@${detail.owner_arkme_id.replace(/^@+/, '')}`}
-                      </div>
-                    </div>
-                  </div>
-                  {authorActionError !== '' && <div style={{ ...styles.error, marginTop: 10 }}>{authorActionError}</div>}
-                  <div style={styles.authorCardActions}>
-                    {detail.owner_user_id !== undefined && detail.owner_user_id !== currentUserId && <button
-                      type="button" style={styles.primaryButton} disabled={authorActionBusy} onClick={() => { void openAuthorPrivateChat() }}
-                    >{authorActionBusy ? '正在发起…' : '发起私聊'}</button>}
-                    {extensionGithubProfileUrl(detail) !== undefined && <a
-                      href={extensionGithubProfileUrl(detail)} target="_blank" rel="noreferrer"
-                      style={{ ...styles.restartLater, display: 'inline-flex', alignItems: 'center', textDecoration: 'none' }}
-                    >查看 GitHub</a>}
-                  </div>
-                </div>}
                 {detailInstallAction.disabled && detailInstalled === undefined && <div style={styles.detailHint}>该扩展的制品上传或发布尚未完成，目前没有可安装版本。</div>}
               </div>
               {detailHasPreviews && <div style={styles.detailPreview}>
