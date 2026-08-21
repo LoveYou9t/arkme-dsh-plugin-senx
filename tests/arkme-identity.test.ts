@@ -44,6 +44,8 @@ function withoutInfrastructureNames(content: string): string {
     .replaceAll('jotmo-userfiles.oss-cn-hangzhou.aliyuncs.com', '')
     .replaceAll('jotmo-userfiles.senguo.me', '')
     .replaceAll('userfiles.jotmo.cc', '')
+    .replaceAll('jotmo-useraudio-test.oss-cn-hangzhou.aliyuncs.com', '')
+    .replaceAll('jotmo-useraudio.oss-cn-hangzhou.aliyuncs.com', '')
     .replaceAll('data.jotmo_id', '')
     .replaceAll('data.can_update_jotmo_id', '')
     .replaceAll('/api/v1/auth/check-jotmo-id-available', '')

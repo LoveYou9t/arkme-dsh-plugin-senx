@@ -245,6 +245,90 @@ describe('world Provider projection', () => {
     expect(fetchImpl).toHaveBeenCalledTimes(2)
   })
 
+  it('projects world voiceprint availability and playback through account-bound local media refs', async () => {
+    const sessions = new MemorySessionStore()
+    sessions.session = { userId: 10001, accessToken: 'access', refreshToken: 'refresh' }
+    const audioUrl = 'https://jotmo-useraudio-test.oss-cn-hangzhou.aliyuncs.com/voiceprint/playback.wav?x-oss-signature=audio-signature'
+    const fetchImpl = vi.fn<typeof fetch>(async (input, init) => {
+      const url = String(input)
+      if (url === 'https://world.test/api/public/v1/public-record/world-list') {
+        return json({ code: 200, data: { list: [{
+          record_uid: 'public-record-1', user_id: 20002, nick_name: '小林', text_content: '今天的风很舒服',
+          images: [], videos: [], voices: [],
+        }], total: 1 } })
+      }
+      if (url === 'https://audio.test/api/v1/audio/voiceprint/world-playback-availability') {
+        expect(init?.headers).toMatchObject({ Authorization: 'Bearer access' })
+        expect(JSON.parse(String(init?.body))).toEqual({ user_ids: [20002] })
+        return json({ code: 200, data: { items: [{ user_id: 20002, playable: true, reminded: false }] } })
+      }
+      if (url === 'https://audio.test/api/v1/audio/voiceprint/generate-playback') {
+        expect(init?.headers).toMatchObject({ Authorization: 'Bearer access' })
+        expect(JSON.parse(String(init?.body))).toEqual({
+          source_scene: 4,
+          source_id: 'public-record-1',
+          source_chunk_index: 0,
+        })
+        return json({ code: 200, data: {
+          audio_url: audioUrl,
+          mime_type: 'audio/wav',
+          duration_ms: 1234,
+          cache_hit: false,
+          source_chunk_index: 0,
+          source_chunk_count: 2,
+          source_chunk_start_rune: 0,
+          source_chunk_end_rune: 240,
+        } })
+      }
+      expect(url).toBe(audioUrl)
+      expect(init?.headers).toEqual({ Range: 'bytes=0-99' })
+      return new Response(Uint8Array.from([1, 2, 3]), {
+        status: 206,
+        headers: { 'Content-Type': 'audio/wav', 'Content-Range': 'bytes 0-2/3' },
+      })
+    })
+    const service = new ArkmeService(config, sessions, stateStore as never, fetchImpl)
+    const feed = await service.listWorldFeed()
+
+    const availability = await service.worldVoiceprintPlaybackAvailability([
+      feed.items[0]!.recordRef,
+      feed.items[0]!.recordRef,
+    ])
+    expect(availability).toEqual({
+      items: [{ recordRef: feed.items[0]!.recordRef, playable: true }],
+    })
+    expect(JSON.stringify(availability)).not.toContain('20002')
+    expect(JSON.stringify(availability)).not.toContain('public-record-1')
+
+    const playback = await service.generateWorldVoiceprintPlayback({
+      recordRef: feed.items[0]!.recordRef,
+      chunkIndex: 0,
+    })
+    expect(playback).toMatchObject({
+      mediaRef: expect.stringMatching(/^arkme-media-v1\./),
+      mimeType: 'audio/wav',
+      durationMillis: 1234,
+      cacheHit: false,
+      chunkIndex: 0,
+      chunkCount: 2,
+      chunkStartRune: 0,
+      chunkEndRune: 240,
+    })
+    expect(JSON.stringify(playback)).not.toContain('x-oss-signature')
+    expect(JSON.stringify(playback)).not.toContain('public-record-1')
+
+    const media = await service.fetchMedia(playback.mediaRef, 'bytes=0-99')
+    expect(media.descriptor).toMatchObject({ mimeType: 'audio/wav', fileName: '世界声纹.wav' })
+    expect(media.response.status).toBe(206)
+
+    sessions.session = { userId: 10002, accessToken: 'other', refreshToken: 'other-refresh' }
+    await expect(service.generateWorldVoiceprintPlayback({
+      recordRef: feed.items[0]!.recordRef,
+      chunkIndex: 0,
+    })).rejects.toMatchObject({ code: 'world-record-ref-invalid' })
+    await expect(service.fetchMedia(playback.mediaRef)).rejects.toMatchObject({ code: 'media-ref-invalid' })
+  })
+
   it('uses image bytes when OSS declares the wrong MIME type', async () => {
     const sessions = new MemorySessionStore()
     sessions.session = { userId: 10001, accessToken: 'access', refreshToken: 'refresh' }
@@ -318,6 +402,8 @@ describe('world Provider projection', () => {
   it('dispatches only bounded world feed and image inputs through the Host API', async () => {
     const service = {
       listWorldFeed: vi.fn(async (options: unknown) => options),
+      worldVoiceprintPlaybackAvailability: vi.fn(async (recordRefs: string[]) => ({ recordRefs })),
+      generateWorldVoiceprintPlayback: vi.fn(async (input: unknown) => input),
       listWorldInteractions: vi.fn(async (_recordRef: string, options: unknown) => options),
       createWorldTextInteraction: vi.fn(async (input: unknown) => input),
       readWorldImage: vi.fn(async (_imageRef: string) => ({
@@ -328,6 +414,13 @@ describe('world Provider projection', () => {
     }
 
     await dispatchArkmeHostOperation(service as never, 'world.feed', { limit: 999, offset: -4, userId: 900 })
+    await dispatchArkmeHostOperation(service as never, 'world.voiceprint.availability', {
+      recordRefs: [' first ', '', 'second', ...Array.from({ length: 30 }, (_, index) => `extra-${String(index)}`)],
+      userIds: [900],
+    })
+    await dispatchArkmeHostOperation(service as never, 'world.voiceprint.playback.generate', {
+      recordRef: 'record-ref', chunkIndex: 3.9, sourceRevision: 'leak', sourceId: 'leak', text: 'leak',
+    })
     await dispatchArkmeHostOperation(service as never, 'world.interactions.list', {
       recordRef: 'record-ref', limit: 999, offset: -4, recordUid: 'leak',
     })
@@ -337,6 +430,12 @@ describe('world Provider projection', () => {
     await dispatchArkmeHostOperation(service as never, 'world.image.read', { imageRef: 'opaque-ref', url: 'https://evil.test' })
 
     expect(service.listWorldFeed).toHaveBeenCalledWith({ limit: 20, offset: 0 })
+    expect(service.worldVoiceprintPlaybackAvailability).toHaveBeenCalledWith([
+      'first', 'second', ...Array.from({ length: 18 }, (_, index) => `extra-${String(index)}`),
+    ])
+    expect(service.generateWorldVoiceprintPlayback).toHaveBeenCalledWith({
+      recordRef: 'record-ref', chunkIndex: 3,
+    })
     expect(service.listWorldInteractions).toHaveBeenCalledWith('record-ref', { limit: 50, offset: 0 })
     expect(service.createWorldTextInteraction).toHaveBeenCalledWith({
       targetRef: 'target-ref', textContent: '评论', clientMutationId: 'mutation-20260819-0001',

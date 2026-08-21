@@ -16,6 +16,13 @@ describe('World consumer SDK', () => {
         const request = JSON.parse(String(init?.body)) as { operation: string; params?: Record<string, unknown> }
         calls.push(request)
         if (request.operation === 'world.feed') return success({ items: [], total: 0, hasMore: false })
+        if (request.operation === 'world.voiceprint.availability') return success({
+          items: [{ recordRef: 'record-ref', playable: true }],
+        })
+        if (request.operation === 'world.voiceprint.playback.generate') return success({
+          mediaRef: 'media-ref', mimeType: 'audio/wav', durationMillis: 1000, cacheHit: false,
+          chunkIndex: 0, chunkCount: 1, chunkStartRune: 0, chunkEndRune: 4,
+        })
         if (request.operation === 'world.interactions.list') return success({ items: [], total: 0, hasMore: false })
         if (request.operation === 'world.interactions.create-text') {
           return success({ interaction: { interactionRef: 'interaction-ref', parentRef: 'record-ref' } })
@@ -30,6 +37,12 @@ describe('World consumer SDK', () => {
     await expect(sdk.worldFeed({ limit: 20, offset: 40 })).resolves.toEqual({
       items: [], total: 0, hasMore: false,
     })
+    await expect(sdk.worldVoiceprintPlaybackAvailability(['record-ref'])).resolves.toEqual({
+      items: [{ recordRef: 'record-ref', playable: true }],
+    })
+    await expect(sdk.generateWorldVoiceprintPlayback({
+      recordRef: 'record-ref', chunkIndex: 0,
+    })).resolves.toMatchObject({ mediaRef: 'media-ref', chunkCount: 1 })
     await expect(sdk.worldInteractions('record-ref', { limit: 50, offset: 10 })).resolves.toEqual({
       items: [], total: 0, hasMore: false,
     })
@@ -40,6 +53,11 @@ describe('World consumer SDK', () => {
     expect(sdk.imageDataUrl(image)).toBe('data:image/png;base64,iVBORw0KGgo=')
     expect(calls).toEqual([
       { operation: 'world.feed', params: { limit: 20, offset: 40 } },
+      { operation: 'world.voiceprint.availability', params: { recordRefs: ['record-ref'] } },
+      {
+        operation: 'world.voiceprint.playback.generate',
+        params: { recordRef: 'record-ref', chunkIndex: 0 },
+      },
       { operation: 'world.interactions.list', params: { recordRef: 'record-ref', limit: 50, offset: 10 } },
       {
         operation: 'world.interactions.create-text',

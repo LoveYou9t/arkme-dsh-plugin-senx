@@ -164,6 +164,8 @@ import type {
   ArkmeWechatMoneyFlowPage,
   ArkmeWechatPhonePage,
   ArkmeWorldFeedPage,
+  ArkmeWorldVoiceprintAvailability,
+  ArkmeWorldVoiceprintPlaybackChunk,
   ArkmeWorldInteractionCreateResult,
   ArkmeWorldInteractionPage,
   ArkmeWorldPublishResult,
@@ -407,6 +409,7 @@ export class ArkmeService {
         extensionPreviews: true,
         worldFeed: true,
         worldInteractions: true,
+        worldVoiceprintPlayback: true,
         arrangements: true,
         myExtensions: true,
         extensionPublish: true,
@@ -1196,6 +1199,21 @@ export class ArkmeService {
     options: { limit?: number; offset?: number; signal?: AbortSignal } = {},
   ): Promise<ArkmeWorldFeedPage> {
     return await this.world.listWorldFeed(options)
+  }
+
+  async worldVoiceprintPlaybackAvailability(
+    recordRefs: readonly string[],
+    signal?: AbortSignal,
+  ): Promise<ArkmeWorldVoiceprintAvailability> {
+    return await this.world.worldVoiceprintPlaybackAvailability(recordRefs, signal)
+  }
+
+  async generateWorldVoiceprintPlayback(input: {
+    recordRef: string
+    chunkIndex?: number
+    signal?: AbortSignal
+  }): Promise<ArkmeWorldVoiceprintPlaybackChunk> {
+    return await this.world.generateWorldVoiceprintPlayback(input)
   }
 
   /** Read the authenticated comment/reply tree behind one account-bound World reference. */

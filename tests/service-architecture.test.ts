@@ -37,6 +37,7 @@ const expectedPublicMethods = [
   'listArrangements', 'arrangementDetail', 'listArrangementReminders', 'arrangementReminderSummary',
   'mutateArrangement', 'setArrangementReminderEnabled', 'markArrangementRemindersRead',
   'markAllArrangementRemindersRead', 'clearArrangementReminders', 'listWorldFeed',
+  'worldVoiceprintPlaybackAvailability', 'generateWorldVoiceprintPlayback',
   'listWorldInteractions', 'createWorldTextInteraction', 'readWorldImage',
   'publishWorldTextForConversation', 'createText', 'createTextForConversation', 'pendingWrites',
   'retryPending', 'extensionPost',

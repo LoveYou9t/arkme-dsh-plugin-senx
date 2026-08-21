@@ -99,6 +99,26 @@ function allowedSignedImageHost(environment: 'test' | 'prod', hostname: string):
   return allowed.includes(hostname.toLowerCase())
 }
 
+function allowedSignedAudioHost(environment: 'test' | 'prod', hostname: string): boolean {
+  const allowed = environment === 'prod'
+    ? ['jotmo-useraudio.oss-cn-hangzhou.aliyuncs.com']
+    : ['jotmo-useraudio-test.oss-cn-hangzhou.aliyuncs.com']
+  return allowed.includes(hostname.toLowerCase())
+}
+
+function trustedWorldVoiceprintAudioUrl(environment: 'test' | 'prod', raw: string): URL {
+  let parsed: URL
+  try { parsed = new URL(raw.trim()) }
+  catch (error) {
+    throw new ArkmePluginError('world-voiceprint-audio-invalid', '世界声纹音频地址无效', true, 502, { cause: error })
+  }
+  if (parsed.protocol !== 'https:' || parsed.username !== '' || parsed.password !== '' || parsed.hash !== ''
+    || !allowedSignedAudioHost(environment, parsed.hostname) || parsed.pathname.replace(/^\/+/, '') === '') {
+    throw new ArkmePluginError('world-voiceprint-audio-rejected', '世界声纹音频来源不受信任', false, 502)
+  }
+  return parsed
+}
+
 function trustedSignedImageUrl(environment: 'test' | 'prod', raw: string): URL {
   let parsed: URL
   try { parsed = new URL(raw.trim()) }
@@ -324,7 +344,8 @@ export class MediaService {
     }
     const url = new URL(descriptor.remoteUrl)
     if (url.protocol !== 'https:' || url.username !== '' || url.password !== ''
-      || !allowedSignedImageHost(this.runtime.config.environment, url.hostname)) {
+      || !(allowedSignedImageHost(this.runtime.config.environment, url.hostname)
+        || allowedSignedAudioHost(this.runtime.config.environment, url.hostname))) {
       throw new ArkmePluginError('media-host-rejected', '媒体来源不受信任', false, 403)
     }
     const response = await this.runtime.fetchImpl(url, {
@@ -336,6 +357,20 @@ export class MediaService {
       throw new ArkmePluginError('media-fetch-failed', `媒体读取失败（${String(response.status)}）`, true, 502)
     }
     return { response, descriptor }
+  }
+
+  issueWorldVoiceprintMediaRef(viewerUserId: number, input: { remoteUrl: string; mimeType: string }): string {
+    const remoteUrl = trustedWorldVoiceprintAudioUrl(this.runtime.config.environment, input.remoteUrl).toString()
+    const mimeType = input.mimeType.trim() || 'audio/wav'
+    if (!mimeType.startsWith('audio/')) {
+      throw new ArkmePluginError('world-voiceprint-mime-invalid', '世界声纹音频格式无效', true, 502)
+    }
+    return this.issueMediaRef(viewerUserId, {
+      remoteUrl,
+      mimeType,
+      fileName: '世界声纹.wav',
+      size: 0,
+    })
   }
 
   async readImage(
