@@ -168,6 +168,7 @@ export class WorldService {
     const ownerUserIds = [...new Set(entries
       .map(value => value.entry.ownerUserId ?? 0)
       .filter(userId => Number.isSafeInteger(userId) && userId > 0))]
+      .sort((left, right) => left - right)
     if (ownerUserIds.length === 0) {
       return { items: entries.map(({ recordRef }) => ({ recordRef, playable: false })) }
     }

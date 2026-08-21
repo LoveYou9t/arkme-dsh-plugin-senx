@@ -248,7 +248,7 @@ describe('world Provider projection', () => {
   it('projects world voiceprint availability and playback through account-bound local media refs', async () => {
     const sessions = new MemorySessionStore()
     sessions.session = { userId: 10001, accessToken: 'access', refreshToken: 'refresh' }
-    const audioUrl = 'https://jotmo-useraudio-test.oss-cn-hangzhou.aliyuncs.com/voiceprint/playback.wav?x-oss-signature=audio-signature'
+    const audioUrl = 'https://jotmo-useraudio-test.oss-cn-hangzhou.aliyuncs.com/voiceprint/playback.mp3?x-oss-signature=audio-signature'
     const fetchImpl = vi.fn<typeof fetch>(async (input, init) => {
       const url = String(input)
       if (url === 'https://world.test/api/public/v1/public-record/world-list') {
@@ -271,7 +271,7 @@ describe('world Provider projection', () => {
         })
         return json({ code: 200, data: {
           audio_url: audioUrl,
-          mime_type: 'audio/wav',
+          mime_type: 'audio/mpeg',
           duration_ms: 1234,
           cache_hit: false,
           source_chunk_index: 0,
@@ -284,7 +284,7 @@ describe('world Provider projection', () => {
       expect(init?.headers).toEqual({ Range: 'bytes=0-99' })
       return new Response(Uint8Array.from([1, 2, 3]), {
         status: 206,
-        headers: { 'Content-Type': 'audio/wav', 'Content-Range': 'bytes 0-2/3' },
+        headers: { 'Content-Type': 'audio/mpeg', 'Content-Range': 'bytes 0-2/3' },
       })
     })
     const service = new ArkmeService(config, sessions, stateStore as never, fetchImpl)
@@ -306,7 +306,7 @@ describe('world Provider projection', () => {
     })
     expect(playback).toMatchObject({
       mediaRef: expect.stringMatching(/^arkme-media-v1\./),
-      mimeType: 'audio/wav',
+      mimeType: 'audio/mpeg',
       durationMillis: 1234,
       cacheHit: false,
       chunkIndex: 0,
@@ -318,7 +318,7 @@ describe('world Provider projection', () => {
     expect(JSON.stringify(playback)).not.toContain('public-record-1')
 
     const media = await service.fetchMedia(playback.mediaRef, 'bytes=0-99')
-    expect(media.descriptor).toMatchObject({ mimeType: 'audio/wav', fileName: '世界声纹.wav' })
+    expect(media.descriptor).toMatchObject({ mimeType: 'audio/mpeg', fileName: '世界声纹.mp3' })
     expect(media.response.status).toBe(206)
 
     sessions.session = { userId: 10002, accessToken: 'other', refreshToken: 'other-refresh' }
@@ -327,6 +327,73 @@ describe('world Provider projection', () => {
       chunkIndex: 0,
     })).rejects.toMatchObject({ code: 'world-record-ref-invalid' })
     await expect(service.fetchMedia(playback.mediaRef)).rejects.toMatchObject({ code: 'media-ref-invalid' })
+  })
+
+  it('reuses world voiceprint availability cache for the same owners in a different order', async () => {
+    const sessions = new MemorySessionStore()
+    sessions.session = { userId: 10001, accessToken: 'access', refreshToken: 'refresh' }
+    let availabilityCalls = 0
+    const fetchImpl = vi.fn<typeof fetch>(async input => {
+      const url = String(input)
+      if (url === 'https://world.test/api/public/v1/public-record/world-list') {
+        return json({ code: 200, data: { list: [
+          {
+            record_uid: 'public-record-1', user_id: 20002, nick_name: '小林', text_content: '第一条',
+            images: [], videos: [], voices: [],
+          },
+          {
+            record_uid: 'public-record-2', user_id: 30003, nick_name: '阿七', text_content: '第二条',
+            images: [], videos: [], voices: [],
+          },
+        ], total: 2 } })
+      }
+      expect(url).toBe('https://audio.test/api/v1/audio/voiceprint/world-playback-availability')
+      availabilityCalls += 1
+      return json({ code: 200, data: { items: [
+        { user_id: 20002, playable: true },
+        { user_id: 30003, playable: true },
+      ] } })
+    })
+    const service = new ArkmeService(config, sessions, stateStore as never, fetchImpl)
+    const feed = await service.listWorldFeed()
+    const recordRefs = feed.items.map(item => item.recordRef)
+
+    await service.worldVoiceprintPlaybackAvailability(recordRefs)
+    await service.worldVoiceprintPlaybackAvailability([...recordRefs].reverse())
+
+    expect(availabilityCalls).toBe(1)
+  })
+
+  it('rejects unsigned world voiceprint playback URLs', async () => {
+    const sessions = new MemorySessionStore()
+    sessions.session = { userId: 10001, accessToken: 'access', refreshToken: 'refresh' }
+    const fetchImpl = vi.fn<typeof fetch>(async input => {
+      const url = String(input)
+      if (url === 'https://world.test/api/public/v1/public-record/world-list') {
+        return json({ code: 200, data: { list: [{
+          record_uid: 'public-record-1', user_id: 20002, nick_name: '小林', text_content: '今天的风很舒服',
+          images: [], videos: [], voices: [],
+        }], total: 1 } })
+      }
+      expect(url).toBe('https://audio.test/api/v1/audio/voiceprint/generate-playback')
+      return json({ code: 200, data: {
+        audio_url: 'https://jotmo-useraudio-test.oss-cn-hangzhou.aliyuncs.com/voiceprint/playback.wav',
+        mime_type: 'audio/wav',
+        duration_ms: 1234,
+        cache_hit: false,
+        source_chunk_index: 0,
+        source_chunk_count: 1,
+        source_chunk_start_rune: 0,
+        source_chunk_end_rune: 240,
+      } })
+    })
+    const service = new ArkmeService(config, sessions, stateStore as never, fetchImpl)
+    const feed = await service.listWorldFeed()
+
+    await expect(service.generateWorldVoiceprintPlayback({
+      recordRef: feed.items[0]!.recordRef,
+      chunkIndex: 0,
+    })).rejects.toMatchObject({ code: 'world-voiceprint-audio-rejected' })
   })
 
   it('uses image bytes when OSS declares the wrong MIME type', async () => {

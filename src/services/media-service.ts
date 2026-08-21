@@ -112,11 +112,28 @@ function trustedWorldVoiceprintAudioUrl(environment: 'test' | 'prod', raw: strin
   catch (error) {
     throw new ArkmePluginError('world-voiceprint-audio-invalid', '世界声纹音频地址无效', true, 502, { cause: error })
   }
+  const signature = parsed.searchParams.get('x-oss-signature')?.trim() ?? ''
   if (parsed.protocol !== 'https:' || parsed.username !== '' || parsed.password !== '' || parsed.hash !== ''
-    || !allowedSignedAudioHost(environment, parsed.hostname) || parsed.pathname.replace(/^\/+/, '') === '') {
+    || !allowedSignedAudioHost(environment, parsed.hostname) || parsed.pathname.replace(/^\/+/, '') === ''
+    || signature === '') {
     throw new ArkmePluginError('world-voiceprint-audio-rejected', '世界声纹音频来源不受信任', false, 502)
   }
   return parsed
+}
+
+function worldVoiceprintFileName(mimeType: string): string {
+  const subtype = mimeType.split(';', 1)[0]!.trim().toLowerCase().replace(/^audio\//, '')
+  const extension = ({
+    wav: 'wav',
+    'x-wav': 'wav',
+    mpeg: 'mp3',
+    mp4: 'm4a',
+    aac: 'aac',
+    ogg: 'ogg',
+    webm: 'webm',
+    flac: 'flac',
+  } as Record<string, string>)[subtype]
+  return extension === undefined ? '世界声纹' : `世界声纹.${extension}`
 }
 
 function trustedSignedImageUrl(environment: 'test' | 'prod', raw: string): URL {
@@ -368,7 +385,7 @@ export class MediaService {
     return this.issueMediaRef(viewerUserId, {
       remoteUrl,
       mimeType,
-      fileName: '世界声纹.wav',
+      fileName: worldVoiceprintFileName(mimeType),
       size: 0,
     })
   }
