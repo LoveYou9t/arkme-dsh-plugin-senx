@@ -22,6 +22,7 @@ import { ArkmePrivateCallMenu } from './ArkmePrivateCallMenu.js'
 import { ArkmeLongArticleDialog } from './ArkmeLongArticleDialog.js'
 import { ArkmeCalendarSurface } from './ArkmeCalendarSurface.js'
 import { ArkmeRecordingSurface } from './ArkmeRecordingSurface.js'
+import { ArkmeWorldSurface } from './ArkmeWorldSurface.js'
 import { ArkmeAttachmentDraftTile, ArkmeMessageContent } from './ArkmeRichContent.js'
 import { ArkmeSearchSurface } from './ArkmeSearchSurface.js'
 import {
@@ -1379,6 +1380,7 @@ export function ArkmeSurface({ floating = false, initialAuth, currentSessionId, 
     ? arkmeSourceBreadcrumb(selfBreadcrumbTrail, selfSources).map(segment => segment.label).join(' / ')
     : undefined
   const surfaceTitle = ui.mode === 'recordings' ? '全天候录音'
+    : ui.mode === 'world' ? '世界'
     : ui.mode === 'search' ? '搜索'
     : ui.mode === 'extensions' ? '插件'
     : ui.mode === 'settings' ? '设置'
@@ -1387,7 +1389,7 @@ export function ArkmeSurface({ floating = false, initialAuth, currentSessionId, 
     : 'Arkme'
   const arkoContentVisible = authView === 'content' && ui.mode === 'arko'
   const utilityContentVisible = authView === 'content'
-    && (ui.mode === 'recordings' || ui.mode === 'search' || ui.mode === 'extensions' || ui.mode === 'settings')
+    && (ui.mode === 'recordings' || ui.mode === 'world' || ui.mode === 'search' || ui.mode === 'extensions' || ui.mode === 'settings')
 
   return (
     <div
@@ -1500,6 +1502,7 @@ export function ArkmeSurface({ floating = false, initialAuth, currentSessionId, 
           onWechatLogin={() => { void beginWechat() }}
           onCancelBinding={() => { void cancelBinding() }}
         /></div> : ui.mode === 'recordings' ? <ArkmeRecordingSurface />
+          : ui.mode === 'world' ? <ArkmeWorldSurface />
           : ui.mode === 'search' ? <div style={styles.utilityBody}><ArkmeSearchSurface /></div>
           : ui.mode === 'extensions' ? <div style={styles.utilityBody}><ArkmeExtensionCenter
             embedded

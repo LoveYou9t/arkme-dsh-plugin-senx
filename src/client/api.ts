@@ -52,6 +52,11 @@ type ArkmeUiOperation = ArkmePluginOperation
   | 'search.recordings'
   | 'ai-video.list'
   | 'files.assets'
+  | 'world.mine'
+  | 'world.upload-image-data'
+  | 'world.publish-rich'
+  | 'world.publish-text'
+  | 'world.voiceprint.invite'
 
 /** Built-in UI bridge. UI-only operations intentionally stay out of the public Consumer SDK. */
 export async function callArkme<T>(

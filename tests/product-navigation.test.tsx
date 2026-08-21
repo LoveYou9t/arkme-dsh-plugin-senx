@@ -15,6 +15,7 @@ describe('Arkme product navigation', () => {
     expect(markup).toContain('>录音<')
     expect(markup).toContain('>搜索<')
     expect(markup).toContain('>日历<')
+    expect(markup).toContain('>世界<')
     expect(markup).toContain('>插件<')
     expect(markup).toContain('aria-label="账户菜单"')
     expect(markup).toContain('aria-haspopup="menu"')
@@ -84,5 +85,13 @@ describe('Arkme product navigation', () => {
     />)
     expect(pluginMarkup).not.toContain('data-arkme-owned="directory-pane"')
     expect(pluginMarkup).toContain('>扩展 Arkme 的能力<')
+
+    arkmeUi.showWorld()
+    const worldMarkup = renderToStaticMarkup(<ArkmeSurface
+      initialAuth={{ status: 'authenticated', environment: 'prod', userId: 1 }}
+    />)
+    expect(worldMarkup).toContain('data-arkme-owned="world-surface"')
+    expect(worldMarkup).not.toContain('data-arkme-owned="directory-pane"')
+    expect(worldMarkup).not.toContain('aria-label="发送消息"')
   })
 })

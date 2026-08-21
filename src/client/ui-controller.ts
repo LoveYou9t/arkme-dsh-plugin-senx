@@ -15,7 +15,7 @@ export interface ArkmeUiState {
   surfaceOpen: boolean
   authRevision: number
   chatRevision: number
-  mode: 'login' | 'source' | 'recordings' | 'calendar' | 'search' | 'extensions' | 'arko' | 'settings'
+  mode: 'login' | 'source' | 'recordings' | 'calendar' | 'world' | 'search' | 'extensions' | 'arko' | 'settings'
   settingsSection?: 'account' | 'general' | 'about'
   selectedSource?: ArkmeSourceItem
   recordingTarget?: { dateStamp: number; startAtMillis: number }
@@ -103,6 +103,11 @@ export class ArkmeUiController {
   showCalendar(): void {
     const { recordingTarget: _recordingTarget, ...rest } = this.state
     this.publish({ ...rest, open: true, surfaceOpen: true, mode: 'calendar' })
+  }
+
+  showWorld(): void {
+    const { selectedSource: _selectedSource, recordingTarget: _recordingTarget, ...rest } = this.state
+    this.publish({ ...rest, open: true, surfaceOpen: true, mode: 'world' })
   }
 
   showRecordingTarget(dateStamp: number, startAtMillis: number): void {

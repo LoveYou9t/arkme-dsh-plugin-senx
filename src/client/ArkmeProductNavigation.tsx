@@ -4,6 +4,7 @@ import { CalendarBlank } from '@phosphor-icons/react/dist/icons/CalendarBlank'
 import { MagnifyingGlass } from '@phosphor-icons/react/dist/icons/MagnifyingGlass'
 import { PuzzlePiece } from '@phosphor-icons/react/dist/icons/PuzzlePiece'
 import { Waveform } from '@phosphor-icons/react/dist/icons/Waveform'
+import { GlobeHemisphereWest } from '@phosphor-icons/react/dist/icons/GlobeHemisphereWest'
 import type { Icon } from '@phosphor-icons/react/lib'
 import { ArkmeAccountMenu } from './ArkmeAccountMenu.js'
 import { arkmeUi } from './ui-controller.js'
@@ -14,7 +15,7 @@ interface ArkmeProductNavigationProps {
 }
 
 type NavigationItem = {
-  id: 'conversations' | 'recordings' | 'search' | 'calendar' | 'extensions'
+  id: 'conversations' | 'recordings' | 'search' | 'calendar' | 'world' | 'extensions'
   label: string
   icon: Icon
 }
@@ -24,6 +25,7 @@ const items: NavigationItem[] = [
   { id: 'recordings', label: '录音', icon: Waveform },
   { id: 'search', label: '搜索', icon: MagnifyingGlass },
   { id: 'calendar', label: '日历', icon: CalendarBlank },
+  { id: 'world', label: '世界', icon: GlobeHemisphereWest },
   { id: 'extensions', label: '插件', icon: PuzzlePiece },
 ]
 
@@ -88,6 +90,7 @@ const styles: Record<string, CSSProperties> = {
 export function ArkmeProductNavigation({ compact, currentSessionId }: ArkmeProductNavigationProps) {
   const ui = useSyncExternalStore(arkmeUi.subscribe, arkmeUi.getSnapshot, arkmeUi.getSnapshot)
   const activeId = ui.mode === 'extensions' ? 'extensions'
+    : ui.mode === 'world' ? 'world'
     : ui.mode === 'calendar' ? 'calendar'
     : ui.mode === 'recordings' ? 'recordings'
       : ui.mode === 'search' ? 'search'
@@ -99,6 +102,7 @@ export function ArkmeProductNavigation({ compact, currentSessionId }: ArkmeProdu
       return
     }
     if (id === 'recordings') arkmeUi.showRecordings()
+    else if (id === 'world') arkmeUi.showWorld()
     else if (id === 'calendar') arkmeUi.showCalendar()
     else if (id === 'search') arkmeUi.showSearch()
     else arkmeUi.showConversations()

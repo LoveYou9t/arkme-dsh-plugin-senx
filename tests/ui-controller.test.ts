@@ -33,6 +33,15 @@ describe('ArkmeUiController', () => {
       selectedSource: source,
     })
 
+    controller.showWorld()
+    expect(controller.getSnapshot()).toEqual({
+      open: true,
+      surfaceOpen: true,
+      authRevision: 0,
+      chatRevision: 0,
+      mode: 'world',
+    })
+
     controller.selectSource(source)
     controller.showArko()
     expect(controller.getSnapshot()).toEqual({
