@@ -32,6 +32,61 @@ describe('Arkme SDK', () => {
     expect(calls).toEqual([{ operation: 'images.list', params: { limit: 24, cursor: 'next-images' } }])
   })
 
+  it('searches and adds contacts through opaque same-origin contracts', async () => {
+    const calls: Array<{ operation: string; params?: Record<string, unknown> }> = []
+    const sdk = createArkmeSdk({
+      fetchImpl: async (_input, init) => {
+        const request = JSON.parse(String(init?.body)) as { operation: string; params?: Record<string, unknown> }
+        calls.push(request)
+        if (request.operation === 'contacts.search') return success({
+          contactRef: 'arkme-contact-v1.9f445b4f-55aa-45c1-9250-25161832d432', identifierKind: 'arkme_id',
+          displayName: '林林', registered: true, inviteBySms: false, canAdd: true, isSelf: false,
+        })
+        if (request.operation === 'contacts.add') return success({
+          state: 'ready', source: { sourceRef: 'source-ref', kind: 'private_chat', displayName: '林林', activeAtMillis: 1, unreadCount: 0 },
+        })
+        throw new Error(`unexpected ${request.operation}`)
+      },
+    })
+    const candidate = await sdk.searchContact('lin-lin')
+    await expect(sdk.addContact(candidate.contactRef, {
+      remark: '同事', requestUid: '9f445b4f-55aa-45c1-9250-25161832d433',
+    })).resolves.toMatchObject({ state: 'ready' })
+    expect(calls).toEqual([
+      { operation: 'contacts.search', params: { identifier: 'lin-lin' } },
+      { operation: 'contacts.add', params: {
+        contactRef: candidate.contactRef, remark: '同事', requestUid: '9f445b4f-55aa-45c1-9250-25161832d433',
+      } },
+    ])
+  })
+
+  it('creates groups and Bots through safe same-origin contracts', async () => {
+    const calls: Array<{ operation: string; params?: Record<string, unknown> }> = []
+    const sdk = createArkmeSdk({
+      fetchImpl: async (_input, init) => {
+        const request = JSON.parse(String(init?.body)) as { operation: string; params?: Record<string, unknown> }
+        calls.push(request)
+        if (request.operation === 'group.create') return success({
+          sourceRef: 'group-source', kind: 'group_chat', displayName: '项目群', activeAtMillis: 1, unreadCount: 0,
+        })
+        if (request.operation === 'bots.create') return success({
+          botRef: 'bot-ref', name: '总结助手', provider: 'openclaw', description: '',
+          status: 'offline', directChatAvailable: false,
+        })
+        throw new Error(`unexpected ${request.operation}`)
+      },
+    })
+    const mutationId = 'ccfe56ca-4d7a-4c95-b383-fce1c65a635b'
+    await expect(sdk.createGroup(' 项目群 ', { clientMutationId: mutationId }))
+      .resolves.toMatchObject({ kind: 'group_chat' })
+    await expect(sdk.createBot({ name: ' 总结助手 ', provider: 'openclaw' }))
+      .resolves.toMatchObject({ botRef: 'bot-ref' })
+    expect(calls).toEqual([
+      { operation: 'group.create', params: { title: '项目群', clientMutationId: mutationId } },
+      { operation: 'bots.create', params: { name: '总结助手', provider: 'openclaw' } },
+    ])
+  })
+
   it('manages extension previews through same-origin Host operations', async () => {
     const previewRef = `preview_v1_${'a'.repeat(64)}`
     const secondRef = `preview_v1_${'b'.repeat(64)}`

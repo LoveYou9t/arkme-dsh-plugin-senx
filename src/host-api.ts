@@ -4,7 +4,7 @@ import { ArkmePluginError, ArkmeService } from './arkme-service.js'
 import { ArkmePluginUpdateError, ArkmePluginUpdateManager } from './plugin-update.js'
 import { ArkmeOutgoingCallError, type ArkmeOutgoingCallFailureCode } from './outgoing-call-contract.js'
 import type {
-  ArkmeAiVideoJobStatus, ArkmeArrangementListStatus, ArkmeArrangementMutationIntent,
+  ArkmeAiVideoJobStatus, ArkmeArrangementListStatus, ArkmeArrangementMutationIntent, ArkmeBotProvider,
   ArkmePluginRequest, ArkmePluginResponse, ArkmeRecordCursor,
   ArkmeRichSendInput, ArkmeSearchSceneKind, ArkmeSourceDirectory, ArkmeTimelineCursor,
 } from './types.js'
@@ -77,6 +77,14 @@ function numberParam(params: Record<string, unknown>, key: string, fallback: num
 
 function booleanParam(params: Record<string, unknown>, key: string): boolean {
   return params[key] === true
+}
+
+function botProviderParam(params: Record<string, unknown>): ArkmeBotProvider {
+  const provider = stringParam(params, 'provider')
+  if (provider !== 'openclaw' && provider !== 'webhook') {
+    throw new ArkmePluginError('bot-provider-unsupported', 'Bot Provider 不受支持', false, 400)
+  }
+  return provider
 }
 
 function requiredBooleanParam(params: Record<string, unknown>, key: string): boolean {
@@ -362,6 +370,22 @@ export async function dispatchArkmeHostOperation(
       stringParam(params, 'code'),
     )
     case 'auth.logout': return await service.logout()
+    case 'contacts.search': return await service.searchContact(stringParam(params, 'identifier'))
+    case 'contacts.add': return await service.addContact(stringParam(params, 'contactRef'), {
+      ...(stringParam(params, 'remark').trim() === '' ? {} : { remark: stringParam(params, 'remark') }),
+      ...(stringParam(params, 'requestUid').trim() === '' ? {} : { requestUid: stringParam(params, 'requestUid') }),
+    })
+    case 'group.create': return await service.createGroup(
+      stringParam(params, 'title'),
+      stringParam(params, 'clientMutationId'),
+    )
+    case 'bots.create': return await service.createBotSummary({
+      name: stringParam(params, 'name'),
+      provider: botProviderParam(params),
+      ...(stringParam(params, 'description').trim() === ''
+        ? {}
+        : { description: stringParam(params, 'description') }),
+    })
     case 'recordings.calendar': return await service.recordingCalendar(
       numberParam(params, 'fromStamp', 0),
       numberParam(params, 'toStamp', 0),

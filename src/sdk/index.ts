@@ -10,11 +10,15 @@ import type {
   ArkmeArrangementReminderToggleResult,
   ArkmeArrangementReminderWriteResult,
   ArkmeAuthSnapshot,
+  ArkmeBotProvider,
+  ArkmeBotSummary,
   ArkmeCalendarBucketPage,
   ArkmeCalendarDayRecordPage,
   ArkmeCalendarRecordCursor,
   ArkmeCachedQueryResult,
   ArkmeCachedSnapshot,
+  ArkmeContactAddResult,
+  ArkmeContactSearchResult,
   ArkmeContentBlock,
   ArkmeCreateTextResult,
   ArkmeGroupMemberAddResult,
@@ -38,6 +42,7 @@ import type {
   ArkmeProviderState,
   ArkmeRichSendInput,
   ArkmeSourceDirectory,
+  ArkmeSourceItem,
   ArkmeSourceList,
   ArkmeSourceReadResult,
   ArkmeSourceSendResult,
@@ -84,6 +89,9 @@ export type {
   ArkmeArrangementReminderWriteResult,
   ArkmeArrangementStatus,
   ArkmeAuthSnapshot,
+  ArkmeBotProvider,
+  ArkmeBotStatus,
+  ArkmeBotSummary,
   ArkmeCalendarBucketDay,
   ArkmeCalendarBucketPage,
   ArkmeCalendarDayRecordPage,
@@ -91,6 +99,9 @@ export type {
   ArkmeCalendarRecordItem,
   ArkmeCachedQueryResult,
   ArkmeCachedSnapshot,
+  ArkmeContactAddResult,
+  ArkmeContactIdentifierKind,
+  ArkmeContactSearchResult,
   ArkmeContentBlock,
   ArkmeContentKind,
   ArkmeCreateTextResult,
@@ -396,6 +407,70 @@ export class ArkmeSdk {
       undefined,
       options.signal,
     )
+  }
+
+  /** Search by an exact phone number or Arkme ID without exposing internal account identifiers. */
+  async searchContact(identifier: string, signal?: AbortSignal): Promise<ArkmeContactSearchResult> {
+    const value = identifier.trim()
+    if (value === '' || value.length > 64) throw new TypeError('Arkme contact identifier is invalid')
+    return await this.call<ArkmeContactSearchResult>('contacts.search', { identifier: value }, signal)
+  }
+
+  /** Add the exact candidate returned by searchContact and open its idempotent private/pending chat. */
+  async addContact(
+    contactRef: string,
+    options: { remark?: string; requestUid?: string; signal?: AbortSignal } = {},
+  ): Promise<ArkmeContactAddResult> {
+    const ref = contactRef.trim()
+    if (!/^arkme-contact-v1\.[0-9a-f-]{36}$/i.test(ref)) throw new TypeError('Arkme contact reference is invalid')
+    const remark = options.remark?.trim() ?? ''
+    if (Array.from(remark).length > 100) throw new TypeError('Arkme contact remark is too long')
+    const requestUid = options.requestUid ?? crypto.randomUUID()
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(requestUid)) {
+      throw new TypeError('Arkme contact request id must be a UUID')
+    }
+    return await this.call<ArkmeContactAddResult>('contacts.add', {
+      contactRef: ref,
+      ...(remark === '' ? {} : { remark }),
+      requestUid,
+    }, options.signal)
+  }
+
+  /** Create an initially owner-only group chat with an idempotent client mutation id. */
+  async createGroup(
+    title: string,
+    options: { clientMutationId?: string; signal?: AbortSignal } = {},
+  ): Promise<ArkmeSourceItem> {
+    const normalizedTitle = title.trim()
+    if (normalizedTitle === '' || Array.from(normalizedTitle).length > 80) {
+      throw new TypeError('Arkme group title is invalid')
+    }
+    const clientMutationId = options.clientMutationId ?? crypto.randomUUID()
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(clientMutationId)) {
+      throw new TypeError('Arkme group mutation id must be a UUID')
+    }
+    return await this.call<ArkmeSourceItem>('group.create', {
+      title: normalizedTitle,
+      clientMutationId,
+    }, options.signal)
+  }
+
+  /** Create a Bot without exposing the Host-owned one-time credential to the Consumer. */
+  async createBot(
+    input: { name: string; provider: ArkmeBotProvider; description?: string },
+    signal?: AbortSignal,
+  ): Promise<ArkmeBotSummary> {
+    const name = input.name.trim()
+    if (name === '') throw new TypeError('Arkme Bot name must not be empty')
+    if (input.provider !== 'openclaw' && input.provider !== 'webhook') {
+      throw new TypeError('Arkme Bot provider is unsupported')
+    }
+    const description = input.description?.trim() ?? ''
+    return await this.call<ArkmeBotSummary>('bots.create', {
+      name,
+      provider: input.provider,
+      ...(description === '' ? {} : { description }),
+    }, signal)
   }
 
   /** List current-account Cordis, Profile-local and cloud-published extensions through one Host owner. */

@@ -18,6 +18,7 @@ import { ArkmeTopicTagBadge } from './ArkmeTopicTagBadge.js'
 import { arkmeTheme } from './arkme-theme.js'
 import { arkmeAuthStore } from './auth-store.js'
 import { ArkmeTopicCreateDialog } from './ArkmeTopicCreateDialog.js'
+import { ArkmeQuickAddButton } from './ArkmeQuickAdd.js'
 import {
   cachedSelectedSource, clearLastNavigationCache, readLastNavigationCache,
   readNavigationCache, reconcileSelectedSource, writeNavigationCache, type ArkmeNavigationCache,
@@ -37,6 +38,7 @@ import {
 import {
   buildArkmeSourceTree, flattenVisibleArkmeSourceTree, type ArkmeSourceTreeRow,
 } from './source-tree.js'
+import arkmeUserAddIconBase64 from '../../assets/icons/user-add-linear.svg'
 
 export interface ArkmeNavigationProps {
   wide?: boolean
@@ -138,6 +140,13 @@ const styles: Record<string, CSSProperties> = {
   avatar: {
     width: 38, height: 38, flex: 'none', position: 'relative', overflow: 'hidden', borderRadius: 999,
     display: 'grid', placeItems: 'center', background: 'transparent', color: '#727982', fontSize: 15, fontWeight: 600,
+  },
+  contactAddIcon: {
+    width: 32, height: 32, background: 'currentColor',
+    WebkitMaskImage: `url(data:image/svg+xml;base64,${arkmeUserAddIconBase64})`,
+    maskImage: `url(data:image/svg+xml;base64,${arkmeUserAddIconBase64})`,
+    WebkitMaskPosition: 'center', maskPosition: 'center', WebkitMaskRepeat: 'no-repeat', maskRepeat: 'no-repeat',
+    WebkitMaskSize: 'contain', maskSize: 'contain',
   },
   extensionAvatar: {
     width: 38, height: 38, flex: 'none', display: 'grid', placeItems: 'center', borderRadius: 11,
@@ -323,6 +332,19 @@ export function ArkmeSearchRow({ selected, onClick }: { selected: boolean; onCli
     <span style={styles.chatContent}>
       <span style={styles.chatTop}><span style={styles.chatName}>搜索</span></span>
       <span style={styles.chatBottom}><span style={styles.preview}>快记、主题、录音与 AI 视频</span></span>
+    </span>
+  </button>
+}
+
+export function ArkmeContactAddRow({ selected, onClick }: { selected: boolean; onClick(): void }) {
+  return <button
+    type="button" role="treeitem" aria-selected={selected}
+    style={{ ...styles.chatRow, ...(selected ? styles.chatRowActive : {}) }} onClick={onClick}
+  >
+    <span style={styles.avatar} aria-hidden><span style={styles.contactAddIcon} /></span>
+    <span style={styles.chatContent}>
+      <span style={styles.chatTop}><span style={styles.chatName}>添加联系人</span></span>
+      <span style={styles.chatBottom}><span style={styles.preview}>通过手机号或即我号搜索</span></span>
     </span>
   </button>
 }
@@ -792,7 +814,7 @@ export function ArkmeNavigation({
       const cachedSelected = cacheRef.current === undefined ? undefined : cachedSelectedSource(cacheRef.current)
       const restored = uiSnapshot.mode === 'recordings' || uiSnapshot.mode === 'arko'
         || uiSnapshot.mode === 'calendar' || uiSnapshot.mode === 'search' || uiSnapshot.mode === 'extensions'
-        || uiSnapshot.mode === 'settings'
+        || uiSnapshot.mode === 'settings' || uiSnapshot.mode === 'contact-add'
         ? undefined
         : reconcileSelectedSource(selected ?? cachedSelected, loaded)
         ?? (next === 'send_to_self' ? loaded.find(source => source.kind === 'send_to_self') : undefined)
@@ -865,7 +887,8 @@ export function ArkmeNavigation({
     const selected = ui.mode === 'source' ? arkmeUi.getSnapshot().selectedSource : undefined
     const cachedSelected = cacheRef.current === undefined ? undefined : cachedSelectedSource(cacheRef.current)
     const restored = ui.mode === 'recordings' || ui.mode === 'arko'
-      || ui.mode === 'calendar' || ui.mode === 'search' || ui.mode === 'extensions' || ui.mode === 'settings'
+      || ui.mode === 'calendar' || ui.mode === 'search' || ui.mode === 'extensions'
+      || ui.mode === 'settings' || ui.mode === 'contact-add'
       ? undefined
       : reconcileSelectedSource(selected ?? cachedSelected, loaded)
     if (restored !== undefined) arkmeUi.selectSource(restored)
@@ -959,6 +982,7 @@ export function ArkmeNavigation({
   const showRecordings = () => { activateNativeEntry(); arkmeUi.showRecordings(); onActivateSurface?.() }
   const showCalendar = () => { activateNativeEntry(); arkmeUi.showCalendar(); onActivateSurface?.() }
   const showSearch = () => { activateNativeEntry(); arkmeUi.showSearch(); onActivateSurface?.() }
+  const showContactAdd = () => { activateNativeEntry(); arkmeUi.showContactAdd(); onActivateSurface?.() }
   const showArko = () => { activateNativeEntry(); arkmeUi.showArko(); onActivateSurface?.() }
   const changeDirectory = (next: ArkmeSourceDirectory) => {
     activateNativeEntry()
@@ -1043,6 +1067,38 @@ export function ArkmeNavigation({
     setSources(refreshed)
   }
 
+  const createdQuickAddSource = async (source: ArkmeSourceItem): Promise<void> => {
+    activateNativeEntry()
+    const sharedSources = arkmeChatDirectory.getSnapshot().sources
+    const currentSources = sharedSources.length > 0 ? sharedSources : sources
+    const optimistic = [source, ...currentSources.filter(item => item.sourceRef !== source.sourceRef)]
+    setDirectory('root')
+    setSources(optimistic)
+    arkmeChatDirectory.publish(optimistic)
+    arkmeUi.selectSource(source)
+    persistCache({ directory: 'root', sources: { root: optimistic }, selectedSourceRef: source.sourceRef })
+    onActivateSurface?.()
+
+    const refreshed = await arkmeChatDirectory.refreshRoot({ force: true }).catch(() => undefined)
+    if (refreshed === undefined) return
+    const reconciled = refreshed.some(item => item.sourceRef === source.sourceRef)
+      ? refreshed
+      : optimistic
+    setSources(reconciled)
+    arkmeChatDirectory.publish(reconciled)
+    const selected = reconciled.find(item => item.sourceRef === source.sourceRef) ?? source
+    arkmeUi.selectSource(selected)
+    persistCache({ directory: 'root', sources: { root: reconciled }, selectedSourceRef: selected.sourceRef })
+  }
+
+  const createdQuickAddBot = async (): Promise<void> => {
+    const refreshed = await arkmeChatDirectory.refreshRoot({ force: true }).catch(() => undefined)
+    if (refreshed === undefined) return
+    setSources(refreshed)
+    arkmeChatDirectory.publish(refreshed)
+    persistCache({ directory: 'root', sources: { root: refreshed } })
+  }
+
   if (!wide) {
     return <div style={styles.rail}><button
       type="button" style={styles.railButton} aria-label={authenticated ? 'Arkme' : bindingRequired ? 'Arkme · 待绑定' : 'Arkme · 未登录'}
@@ -1076,6 +1132,11 @@ export function ArkmeNavigation({
     </header>}
     {directory === 'root' && embeddedProductShell && <header style={styles.header}>
       <h2 style={styles.headerTitle}>对话</h2>
+      {authenticated && <ArkmeQuickAddButton
+        onContactAdd={showContactAdd}
+        onSourceCreated={createdQuickAddSource}
+        onBotCreated={createdQuickAddBot}
+      />}
     </header>}
     {directory === 'root' && embeddedProductShell && <label style={styles.searchField}>
       <MagnifyingGlass size={16} aria-hidden />
