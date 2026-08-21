@@ -154,6 +154,25 @@ export class WorldService {
     return { items, total, hasMore, ...(hasMore ? { nextOffset } : {}) }
   }
 
+  async listMyWorldFeed(
+    options: { limit?: number; offset?: number; signal?: AbortSignal } = {},
+  ): Promise<ArkmeWorldFeedPage> {
+    const session = await this.runtime.requireSession()
+    const limit = Math.min(20, Math.max(1, Math.trunc(options.limit ?? 20)))
+    const offset = Math.max(0, Math.trunc(options.offset ?? 0))
+    const data = await this.runtime.authenticatedWorldPost<Record<string, unknown>>(
+      '/api/v1/public-record/my-list', { limit, offset }, session, options.signal,
+    )
+    const rawItems = listValue(data.list)
+    const resolvedAvatars = await this.resolveWorldAvatarUrls(rawItems, session, options.signal)
+    const projected = await Promise.all(rawItems.map(raw => this.worldFeedItem(raw, session.userId, resolvedAvatars)))
+    const items = projected.filter((item): item is ArkmeWorldFeedItem => item !== undefined)
+    const total = Math.max(0, Math.trunc(numberValue(data.total)))
+    const nextOffset = offset + rawItems.length
+    const hasMore = rawItems.length > 0 && nextOffset < total
+    return { items, total, hasMore, ...(hasMore ? { nextOffset } : {}) }
+  }
+
   async worldVoiceprintPlaybackAvailability(
     recordRefs: readonly string[],
     signal?: AbortSignal,

@@ -42,7 +42,7 @@ const styles: Record<string, CSSProperties> = {
   primaryButton: { borderColor: '#20232d', background: '#20232d', color: '#fff' },
   tabs: { height: 44, padding: '0 26px', display: 'flex', alignItems: 'stretch', gap: 22, borderBottom: `1px solid ${colors.border}` },
   tab: { position: 'relative', padding: 0, border: 0, borderBottom: '2px solid transparent', background: 'transparent', color: colors.secondary, cursor: 'pointer', font: 'inherit', fontSize: 13 },
-  tabActive: { borderBottomColor: '#20232d', color: colors.text, fontWeight: 600 },
+  tabActive: { borderBottom: '2px solid #20232d', color: colors.text, fontWeight: 600 },
   body: { flex: 1, minWidth: 0, minHeight: 0, overflowY: 'auto', overscrollBehavior: 'contain', background: '#f7f8fa' },
   notice: { width: 'min(720px, calc(100% - 48px))', margin: '28px auto 0', padding: '13px 15px', boxSizing: 'border-box', border: `1px solid ${colors.border}`, borderRadius: 12, background: '#fff', color: colors.secondary, fontSize: 13 },
   error: { borderColor: 'rgba(185,66,59,.25)', background: 'rgba(185,66,59,.06)', color: colors.danger },

@@ -30,11 +30,31 @@ describe('native World integration', () => {
     expect(clientIndex).toContain("export { ArkmeWorldSurface } from './ArkmeWorldSurface.js'")
   })
 
-  it('keeps the original currently unsupported controls wired to their real operations', async () => {
+  it('routes My World through the canonical Provider and Host contract', async () => {
+    const api = await source('src/client/api.ts')
+    const types = await source('src/types.ts')
+    const host = await source('src/host-api.ts')
+    const world = await source('src/client/ArkmeWorldSurface.tsx')
+
+    expect(api).not.toContain("| 'world.mine'")
+    expect(types).toContain("| 'world.mine'")
+    expect(host).toContain("case 'world.mine': return await service.listMyWorldFeed")
+    expect(world).toContain("target === 'mine' ? 'world.mine' : 'world.feed'")
+  })
+
+  it('clears the previous World scope underline when the selected scope changes', async () => {
+    const world = await source('src/client/ArkmeWorldSurface.tsx')
+
+    expect(world).toContain("borderBottom: '2px solid transparent'")
+    expect(world).toContain("tabActive: { borderBottom: '2px solid #20232d'")
+    expect(world).not.toContain('tabActive: { borderBottomColor:')
+  })
+
+  it('keeps the remaining currently unsupported controls wired to their real operations', async () => {
     const api = await source('src/client/api.ts')
     const world = await source('src/client/ArkmeWorldSurface.tsx')
 
-    for (const operation of ['world.mine', 'world.upload-image-data', 'world.publish-rich', 'world.publish-text', 'world.voiceprint.invite']) {
+    for (const operation of ['world.upload-image-data', 'world.publish-rich', 'world.publish-text', 'world.voiceprint.invite']) {
       expect(api).toContain(`| '${operation}'`)
       expect(world).toContain(`'${operation}'`)
     }

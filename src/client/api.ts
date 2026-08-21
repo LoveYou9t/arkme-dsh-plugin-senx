@@ -52,7 +52,6 @@ type ArkmeUiOperation = ArkmePluginOperation
   | 'search.recordings'
   | 'ai-video.list'
   | 'files.assets'
-  | 'world.mine'
   | 'world.upload-image-data'
   | 'world.publish-rich'
   | 'world.publish-text'

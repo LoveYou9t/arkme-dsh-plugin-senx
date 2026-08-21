@@ -536,6 +536,10 @@ export async function dispatchArkmeHostOperation(
       limit: Math.min(20, Math.max(1, Math.trunc(numberParam(params, 'limit', 20)))),
       offset: Math.max(0, Math.trunc(numberParam(params, 'offset', 0))),
     })
+    case 'world.mine': return await service.listMyWorldFeed({
+      limit: Math.min(20, Math.max(1, Math.trunc(numberParam(params, 'limit', 20)))),
+      offset: Math.max(0, Math.trunc(numberParam(params, 'offset', 0))),
+    })
     case 'world.voiceprint.availability': return await service.worldVoiceprintPlaybackAvailability(
       [...new Set(stringListParam(params, 'recordRefs').map(value => value.trim()).filter(value => value !== ''))].slice(0, 20),
     )
