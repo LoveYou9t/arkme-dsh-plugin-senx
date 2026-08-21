@@ -6,6 +6,8 @@ import type {
   ArkmeWorldAvatarFallback,
   ArkmeWorldFeedItem,
   ArkmeWorldFeedPage,
+  ArkmeWorldVoiceprintAvailability,
+  ArkmeWorldVoiceprintPlaybackChunk,
   ArkmeWorldInteractionCreateResult,
   ArkmeWorldInteractionItem,
   ArkmeWorldInteractionPage,
@@ -19,7 +21,12 @@ import type { ArkmeUserProfileSnapshot } from '../types.js'
 import { RecordService } from './record-service.js'
 import { ArkmePluginError, ServiceRuntime, objectValue, stringValue } from './service.js'
 
-interface ArkmeWorldRecordRefEntry { viewerUserId: number; recordUid: string; expiresAtMillis: number }
+interface ArkmeWorldRecordRefEntry {
+  viewerUserId: number
+  recordUid: string
+  ownerUserId?: number
+  expiresAtMillis: number
+}
 
 const ARKME_WORLD_IMAGE_REF_TTL_MILLIS = 15 * 60 * 1000
 const MAX_ARKME_WORLD_IMAGE_REFS = 2048
@@ -145,6 +152,91 @@ export class WorldService {
     const nextOffset = offset + rawItems.length
     const hasMore = rawItems.length > 0 && nextOffset < total
     return { items, total, hasMore, ...(hasMore ? { nextOffset } : {}) }
+  }
+
+  async worldVoiceprintPlaybackAvailability(
+    recordRefs: readonly string[],
+    signal?: AbortSignal,
+  ): Promise<ArkmeWorldVoiceprintAvailability> {
+    const session = await this.runtime.requireSession()
+    const normalizedRefs = [...new Set(recordRefs.map(value => value.trim()).filter(value => value !== ''))].slice(0, 20)
+    if (normalizedRefs.length === 0) return { items: [] }
+    const entries = normalizedRefs.map(recordRef => ({
+      recordRef,
+      entry: this.openWorldRecordRef(recordRef, session.userId),
+    }))
+    const ownerUserIds = [...new Set(entries
+      .map(value => value.entry.ownerUserId ?? 0)
+      .filter(userId => Number.isSafeInteger(userId) && userId > 0))]
+      .sort((left, right) => left - right)
+    if (ownerUserIds.length === 0) {
+      return { items: entries.map(({ recordRef }) => ({ recordRef, playable: false })) }
+    }
+    const data = await this.runtime.authenticatedAudioPost<Record<string, unknown>>(
+      '/api/v1/audio/voiceprint/world-playback-availability',
+      { user_ids: ownerUserIds },
+      session,
+      signal,
+      { key: ownerUserIds.join(','), cacheMs: 5_000 },
+    )
+    const playableByOwner = new Map<number, boolean>()
+    for (const raw of listValue(data.items)) {
+      const item = objectValue(raw)
+      const userId = Math.trunc(numberValue(item.user_id))
+      if (userId > 0) playableByOwner.set(userId, item.playable === true)
+    }
+    return {
+      items: entries.map(({ recordRef, entry }) => ({
+        recordRef,
+        playable: playableByOwner.get(entry.ownerUserId ?? 0) === true,
+      })),
+    }
+  }
+
+  async generateWorldVoiceprintPlayback(input: {
+    recordRef: string
+    chunkIndex?: number
+    signal?: AbortSignal
+  }): Promise<ArkmeWorldVoiceprintPlaybackChunk> {
+    const session = await this.runtime.requireSession()
+    const entry = this.openWorldRecordRef(input.recordRef, session.userId)
+    const chunkIndex = Math.trunc(input.chunkIndex ?? 0)
+    if (!Number.isSafeInteger(chunkIndex) || chunkIndex < 0 || chunkIndex >= 334) {
+      throw new ArkmePluginError('world-voiceprint-playback-input-invalid', '世界声纹播放参数无效，请刷新后重试', false)
+    }
+    const data = await this.runtime.authenticatedAudioPost<Record<string, unknown>>(
+      '/api/v1/audio/voiceprint/generate-playback',
+      {
+        source_scene: 4,
+        source_id: entry.recordUid,
+        source_chunk_index: chunkIndex,
+      },
+      session,
+      input.signal,
+      { lane: 'write', bypassCache: true },
+    )
+    const mimeType = stringValue(data.mime_type).trim() || 'audio/wav'
+    const responseChunkIndex = Math.trunc(numberValue(data.source_chunk_index))
+    const chunkCount = Math.trunc(numberValue(data.source_chunk_count))
+    const chunkStartRune = Math.trunc(numberValue(data.source_chunk_start_rune))
+    const chunkEndRune = Math.trunc(numberValue(data.source_chunk_end_rune))
+    if (responseChunkIndex !== chunkIndex || chunkCount <= 0 || chunkCount > 334 || chunkIndex >= chunkCount
+      || chunkStartRune < 0 || chunkEndRune <= chunkStartRune) {
+      throw new ArkmePluginError('world-voiceprint-playback-response-invalid', '世界声纹播放响应无效，请重试', true, 502)
+    }
+    return {
+      mediaRef: this.media.issueWorldVoiceprintMediaRef(session.userId, {
+        remoteUrl: stringValue(data.audio_url),
+        mimeType,
+      }),
+      mimeType,
+      durationMillis: Math.max(0, Math.trunc(numberValue(data.duration_ms))),
+      cacheHit: data.cache_hit === true,
+      chunkIndex: responseChunkIndex,
+      chunkCount,
+      chunkStartRune,
+      chunkEndRune,
+    }
   }
 
   async listWorldInteractions(
@@ -386,7 +478,7 @@ export class WorldService {
       ? await this.sealWorldImageRef(viewerUserId, avatarUrl)
       : undefined
     return {
-      recordRef: await this.worldRecordRef(viewerUserId, recordUid),
+      recordRef: await this.worldRecordRef(viewerUserId, recordUid, ownerUserId),
       authorName: stringValue(item.nick_name ?? item.nickname).trim() || 'Arkme用户',
       ...(avatarRef === undefined ? {} : { avatarRef }),
       ...(avatarRef === undefined && avatarFallback !== undefined ? { avatarFallback } : {}),
@@ -492,16 +584,19 @@ export class WorldService {
     }
   }
 
-  private async worldRecordRef(viewerUserId: number, recordUid: string): Promise<string> {
+  private async worldRecordRef(viewerUserId: number, recordUid: string, ownerUserId?: number): Promise<string> {
     const digest = createHmac('sha256', await this.runtime.stateStore.uniqueCode())
       .update(`world-record-v1:${String(viewerUserId)}:${recordUid}`)
       .digest('base64url')
     const recordRef = `arkme-world-record-v1.${digest}`
     const now = Date.now()
     this.pruneWorldRecordRefs(now)
+    const previous = this.worldRecordRefs.get(recordRef)
+    const resolvedOwnerUserId = ownerUserId ?? previous?.ownerUserId
     this.worldRecordRefs.set(recordRef, {
       viewerUserId,
       recordUid,
+      ...(resolvedOwnerUserId === undefined || resolvedOwnerUserId <= 0 ? {} : { ownerUserId: resolvedOwnerUserId }),
       expiresAtMillis: now + ARKME_WORLD_RECORD_REF_TTL_MILLIS,
     })
     return recordRef

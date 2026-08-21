@@ -37,6 +37,8 @@ import type {
   ArkmeUserProfileSnapshot,
   ArkmeUploadedAsset,
   ArkmeWorldFeedPage,
+  ArkmeWorldVoiceprintAvailability,
+  ArkmeWorldVoiceprintPlaybackChunk,
   ArkmeWorldInteractionCreateResult,
   ArkmeWorldInteractionPage,
 } from '../types.js'
@@ -116,6 +118,9 @@ export type {
   ArkmeWorldInteractionItem,
   ArkmeWorldInteractionPage,
   ArkmeWorldFeedPage,
+  ArkmeWorldVoiceprintAvailability,
+  ArkmeWorldVoiceprintAvailabilityItem,
+  ArkmeWorldVoiceprintPlaybackChunk,
   ArkmeSelfRecordItem,
   ArkmeSelfRecordList,
   ArkmeSelfSummary,
@@ -442,6 +447,30 @@ export class ArkmeSdk {
       ...(options.limit === undefined ? {} : { limit: options.limit }),
       ...(options.offset === undefined ? {} : { offset: options.offset }),
     }, options.signal)
+  }
+
+  async worldVoiceprintPlaybackAvailability(
+    recordRefs: readonly string[],
+    signal?: AbortSignal,
+  ): Promise<ArkmeWorldVoiceprintAvailability> {
+    const normalized = [...new Set(recordRefs.map(value => value.trim()).filter(value => value !== ''))]
+    if (normalized.length === 0) return { items: [] }
+    return await this.call<ArkmeWorldVoiceprintAvailability>(
+      'world.voiceprint.availability',
+      { recordRefs: normalized.slice(0, 20) },
+      signal,
+    )
+  }
+
+  async generateWorldVoiceprintPlayback(
+    input: { recordRef: string; chunkIndex?: number },
+    signal?: AbortSignal,
+  ): Promise<ArkmeWorldVoiceprintPlaybackChunk> {
+    if (input.recordRef.trim() === '') throw new TypeError('Arkme World record reference must not be empty')
+    return await this.call<ArkmeWorldVoiceprintPlaybackChunk>('world.voiceprint.playback.generate', {
+      recordRef: input.recordRef,
+      ...(input.chunkIndex === undefined ? {} : { chunkIndex: input.chunkIndex }),
+    }, signal)
   }
 
   /** Read comments and replies for one Provider-issued World record reference. */

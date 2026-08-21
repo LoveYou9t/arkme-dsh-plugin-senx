@@ -498,6 +498,13 @@ export async function dispatchArkmeHostOperation(
       limit: Math.min(20, Math.max(1, Math.trunc(numberParam(params, 'limit', 20)))),
       offset: Math.max(0, Math.trunc(numberParam(params, 'offset', 0))),
     })
+    case 'world.voiceprint.availability': return await service.worldVoiceprintPlaybackAvailability(
+      [...new Set(stringListParam(params, 'recordRefs').map(value => value.trim()).filter(value => value !== ''))].slice(0, 20),
+    )
+    case 'world.voiceprint.playback.generate': return await service.generateWorldVoiceprintPlayback({
+      recordRef: stringParam(params, 'recordRef').trim(),
+      chunkIndex: Math.min(333, Math.max(0, Math.trunc(numberParam(params, 'chunkIndex', 0)))),
+    })
     case 'world.interactions.list': return await service.listWorldInteractions(
       stringParam(params, 'recordRef'),
       {

@@ -150,6 +150,27 @@ export interface ArkmeWorldFeedPage {
   nextOffset?: number
 }
 
+export interface ArkmeWorldVoiceprintAvailabilityItem {
+  recordRef: string
+  playable: boolean
+}
+
+export interface ArkmeWorldVoiceprintAvailability {
+  items: ArkmeWorldVoiceprintAvailabilityItem[]
+}
+
+/** Browser-safe generated World voice chunk. The signed Audio URL stays inside the Provider. */
+export interface ArkmeWorldVoiceprintPlaybackChunk {
+  mediaRef: string
+  mimeType: string
+  durationMillis: number
+  cacheHit: boolean
+  chunkIndex: number
+  chunkCount: number
+  chunkStartRune: number
+  chunkEndRune: number
+}
+
 /** Browser-safe World comment or reply. Stable record IDs stay inside the Provider. */
 export interface ArkmeWorldInteractionItem {
   interactionRef: string
@@ -439,6 +460,8 @@ export interface ArkmeProviderCapabilities {
     worldFeed?: true
     /** Optional additive capability for reading and writing World comments and replies. */
     worldInteractions?: true
+    /** Optional additive capability for author-voice playback of public World text. */
+    worldVoiceprintPlayback?: true
     /** Optional additive capability for the independent Arrangement consumer. */
     arrangements?: true
     /** Optional additive current-account Cordis/Profile/cloud extension inventory. */
@@ -1471,6 +1494,8 @@ export type ArkmePluginOperation =
   | 'image.read'
   | 'images.list'
   | 'world.feed'
+  | 'world.voiceprint.availability'
+  | 'world.voiceprint.playback.generate'
   | 'world.interactions.list'
   | 'world.interactions.create-text'
   | 'world.image.read'
