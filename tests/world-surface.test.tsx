@@ -4,6 +4,7 @@ import {
   ArkmeWorldContent,
   ArkmeWorldSurface,
   VoiceprintInviteDialog,
+  WorldImagePreviewMedia,
   WorldInteractionThreadList,
   voiceprintInvitePromptTitle,
   worldInteractionThreads,
@@ -183,6 +184,15 @@ describe('Arkme native World surface', () => {
     expect(markup.indexOf('回复第一条')).toBeLessThan(markup.indexOf('继续回复'))
   })
 
+  it('contains a 3:4 portrait image inside the preview stage without cropping it', () => {
+    const markup = renderToStaticMarkup(<WorldImagePreviewMedia imageRef="portrait-3x4" alt="3:4 竖图" />)
+
+    expect(markup).toContain('width:100%;height:100%;min-width:0;min-height:0')
+    expect(markup).toContain('overflow:hidden')
+    expect(markup).toContain('width:auto;height:auto;max-width:100%;max-height:100%;object-fit:contain')
+    expect(markup).not.toContain('object-fit:cover')
+  })
+
   it('derives the voiceprint invite confirmation from the world content', () => {
     expect(voiceprintInvitePromptTitle(item)).toBe('字不多，更想听TA怎么说')
     expect(voiceprintInvitePromptTitle({ ...item, headline: '', textContent: '今天真的很难过，留下了很多遗憾。' })).toBe('文字里有些情绪，更想听见TA的语气')
@@ -204,5 +214,29 @@ describe('Arkme native World surface', () => {
     expect(markup).toContain('>让TA知道<')
     expect(markup).not.toContain('哈哈，这件事也太搞笑了')
     expect(markup).not.toContain('点击提醒后')
+  })
+
+  it('shows the mobile relationship line selected by the same presentation index', () => {
+    const markup = renderToStaticMarkup(<VoiceprintInviteDialog
+      item={item}
+      variantIndex={1}
+      socialContext={{ relations: [
+        {
+          type: 'private_chat', displayLine: '你们曾经聊过',
+          reasonCode: 'relationship_chat', reasonLabel: '因为我们以前聊过',
+        },
+        {
+          type: 'world_interaction', displayLine: '你们曾在世界回应过彼此',
+          reasonCode: 'relationship_world', reasonLabel: '因为我们在世界里回应过彼此',
+        },
+      ] }}
+      sending={false}
+      onClose={noop}
+      onConfirm={noop}
+    />)
+
+    expect(markup).toContain('你们曾在世界回应过彼此')
+    expect(markup).not.toContain('你们曾经聊过')
+    expect(markup).toContain('>让TA知道<')
   })
 })
