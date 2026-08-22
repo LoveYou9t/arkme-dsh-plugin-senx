@@ -29,6 +29,21 @@ describe('Arkme persistent DSH shell', () => {
     expect(markup).not.toContain('sidebar.footer.action')
   })
 
+  it('renders registered directory entries inside the permanent sidebar directory', () => {
+    arkmeUi.showConversations()
+    const markup = renderToStaticMarkup(<ArkmePersistentSidebar {...({
+      collapsed: false,
+      width: 72,
+      useSessions: (selector: (state: { current?: string; ids: string[]; byId: Record<string, never> }) => unknown) => selector({ current: undefined, ids: [], byId: {} }),
+      renderSlot: () => <span data-arkme-test-directory-entry>测试插件</span>,
+      collapseSidebar: vi.fn(),
+      closeDetails: vi.fn(),
+    } as never)} />)
+
+    expect(markup).toContain('data-arkme-test-directory-entry="true"')
+    expect(markup).toContain('测试插件')
+  })
+
   it('only renders the conversation directory on conversation routes', () => {
     arkmeUi.showSearch()
     const markup = renderToStaticMarkup(<ArkmePersistentSidebar {...({
@@ -68,7 +83,6 @@ describe('Arkme persistent DSH shell', () => {
     const markup = renderToStaticMarkup(<ArkmePersistentWorkspace {...({
       sessionId: 'session-1',
       useSessions: (selector: (state: { current?: string; ids: string[]; byId: Record<string, never> }) => unknown) => selector({ current: 'session-1', ids: [], byId: {} }),
-      renderSlot: () => null,
       closeDetails: vi.fn(),
     } as never)} />)
 

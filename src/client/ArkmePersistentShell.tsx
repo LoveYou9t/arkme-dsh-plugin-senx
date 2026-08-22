@@ -99,14 +99,16 @@ export function ArkmePersistentClientRuntime() {
   return <ArkmeOutgoingCallHost />
 }
 
-export type ArkmePersistentSidebarProps = PropsRuntime<'sidebar'> & {
-  collapseSidebar(): void
-  closeDetails(): void
-}
+export type ArkmePersistentSidebarProps = PropsRuntime<'sidebar'>
+  & PropsRenderSlots<'arkme.directory.entry'>
+  & {
+    collapseSidebar(): void
+    closeDetails(): void
+  }
 
 /** Arkme permanently owns the DSH sidebar seat so navigation stays stable across Arkme and Harness conversations. */
 export function ArkmePersistentSidebar({
-  collapsed, useSessions, collapseSidebar, closeDetails,
+  collapsed, useSessions, renderSlot, collapseSidebar, closeDetails,
 }: ArkmePersistentSidebarProps) {
   const sessionState = useSessions(state => state)
   const ui = useSyncExternalStore(arkmeUi.subscribe, arkmeUi.getSnapshot, arkmeUi.getSnapshot)
@@ -151,18 +153,17 @@ export function ArkmePersistentSidebar({
         embeddedProductShell
         showHarnessEntry
         currentSessionId={sessionState.current}
+        renderSlot={renderSlot}
       />
     </div>}
   </aside>
 }
 
-export type ArkmePersistentWorkspaceProps = PropsRuntime<'conversation'>
-  & PropsRenderSlots<'arkme.directory.entry'>
-  & { closeDetails(): void }
+export type ArkmePersistentWorkspaceProps = PropsRuntime<'conversation'> & { closeDetails(): void }
 
 /** Arkme keeps the conversation seat and embeds the complete native DSH client inside it. */
 export function ArkmePersistentWorkspace({
-  sessionId, renderSlot, closeDetails,
+  sessionId, closeDetails,
 }: ArkmePersistentWorkspaceProps) {
   const ui = useSyncExternalStore(arkmeUi.subscribe, arkmeUi.getSnapshot, arkmeUi.getSnapshot)
   useLayoutEffect(() => { closeDetails() }, [closeDetails])
@@ -179,7 +180,6 @@ export function ArkmePersistentWorkspace({
         productChrome={false}
         productNavigation={false}
         currentSessionId={sessionId}
-        renderSlot={renderSlot}
         onActivateSurface={() => undefined}
       />}
   </main>

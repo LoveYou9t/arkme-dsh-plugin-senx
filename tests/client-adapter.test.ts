@@ -82,13 +82,13 @@ describe('official DSH client adapter', () => {
       expect.objectContaining({
         name: 'sidebar',
         priority: -100,
+        children: {
+          'arkme.directory.entry': { kind: 'list', scope: 'root' },
+        },
       }),
       expect.objectContaining({
         name: 'conversation',
         priority: -100,
-        children: {
-          'arkme.directory.entry': { kind: 'list', scope: 'root' },
-        },
       }),
       expect.objectContaining({ name: 'details', priority: -100 }),
     ]))
@@ -108,7 +108,7 @@ describe('official DSH client adapter', () => {
     }))
     expect(registered.map(item => item.name)).not.toContain('sidebar.footer.action')
     expect(registered.map(item => item.name)).not.toContain('settings.general.item')
-    expect(registered.find(item => item.name === 'sidebar')?.children).toBeUndefined()
+    expect(registered.find(item => item.name === 'conversation')?.children).toBeUndefined()
     cleanups.forEach(cleanup => { cleanup() })
   })
 
