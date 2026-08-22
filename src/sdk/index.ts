@@ -67,7 +67,7 @@ import type {
 import type {
   ArkmeExtensionCatalogItem, ArkmeExtensionCatalogPage, ArkmeExtensionCatalogSort,
   ArkmeExtensionClassificationPage, ArkmeExtensionClassificationTree,
-  ArkmeExtensionEnabledResult, ArkmeExtensionEnabledState, ArkmeExtensionIconMediaType,
+  ArkmeExtensionCompleteDeleteResult, ArkmeExtensionEnabledResult, ArkmeExtensionEnabledState, ArkmeExtensionIconMediaType,
   ArkmeExtensionIconResult, ArkmeExtensionInstallPreview, ArkmeExtensionPublishResult, ArkmeInstalledExtensionView,
   ArkmeNativeCapability,
   ArkmeExtensionAuditResult,
@@ -187,6 +187,7 @@ export type {
   ArkmeExtensionCatalogItem,
   ArkmeExtensionCatalogPage,
   ArkmeExtensionAuditResult,
+  ArkmeExtensionCompleteDeleteResult,
   ArkmeExtensionEnabledResult,
   ArkmeExtensionEnabledState,
   ArkmeExtensionIconMediaType,
@@ -316,6 +317,16 @@ export class ArkmeSdk {
   ): Promise<ArkmeExtensionEnabledResult> {
     if (extensionId.trim() === '') throw new TypeError('Arkme extension ID must not be empty')
     return await this.call<ArkmeExtensionEnabledResult>('extensions.enabled.set', { extensionId, enabled }, signal)
+  }
+
+  /**
+   * Delete an owned marketplace extension and remove its current local runtime/Profile/source references.
+   * Consumers must call this only from an explicit current human delete action.
+   */
+  async deleteExtension(extensionId: string, signal?: AbortSignal): Promise<ArkmeExtensionCompleteDeleteResult> {
+    const normalized = extensionId.trim()
+    if (normalized === '') throw new TypeError('Arkme extension ID must not be empty')
+    return await this.call<ArkmeExtensionCompleteDeleteResult>('extensions.delete', { extensionId: normalized }, signal)
   }
 
   /** Build the same-origin URL used by every extension list/detail avatar surface. */
