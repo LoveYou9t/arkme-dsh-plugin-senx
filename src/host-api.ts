@@ -7,8 +7,10 @@ import type {
   ArkmeAiVideoJobStatus, ArkmeArrangementListStatus, ArkmeArrangementMutationIntent, ArkmeBotProvider,
   ArkmePluginRequest, ArkmePluginResponse, ArkmeRecordCursor,
   ArkmeRichSendInput, ArkmeSearchSceneKind, ArkmeSourceDirectory, ArkmeTimelineCursor,
+  ArkmeWorldPublishFileAsset,
 } from './types.js'
 import type { ArkmeCaptchaResult } from './types.js'
+import { ARKME_WORLD_PUBLISH_MAX_IMAGE_BYTES, ARKME_WORLD_PUBLISH_MAX_IMAGES } from './types.js'
 import type { ArkmeExtensionManager } from './extensions/manager.js'
 import type { ArkmeExtensionInstallTasks } from './extensions/install-tasks.js'
 import type { ArkmeOwnedExtensionInventory } from './extensions/owned-inventory.js'
@@ -258,6 +260,30 @@ function richSendParam(params: Record<string, unknown>): ArkmeRichSendInput {
       }]
     }),
   }
+}
+
+function worldPublishFileAssetsParam(params: Record<string, unknown>): ArkmeWorldPublishFileAsset[] {
+  const rawAssets = Array.isArray(params.fileAssets) ? params.fileAssets : []
+  if (rawAssets.length === 0 || rawAssets.length > ARKME_WORLD_PUBLISH_MAX_IMAGES) {
+    throw new ArkmePluginError('world-publish-assets-invalid', '请选择 1 至 9 张图片', false, 400)
+  }
+  return rawAssets.map(raw => {
+    if (raw === null || typeof raw !== 'object') {
+      throw new ArkmePluginError('world-publish-assets-invalid', '世界图片参数无效', false, 400)
+    }
+    const asset = raw as Record<string, unknown>
+    const fileAssetUid = stringParam(asset, 'fileAssetUid').trim()
+    const fileName = stringParam(asset, 'fileName').trim()
+    const mimeType = stringParam(asset, 'mimeType').trim().toLowerCase()
+    const size = numberParam(asset, 'size', 0)
+    const fileKind = numberParam(asset, 'fileKind', 0)
+    if (!/^[A-Za-z0-9._:-]{8,256}$/.test(fileAssetUid) || fileName === '' || fileName.length > 255
+      || !mimeType.startsWith('image/') || !Number.isSafeInteger(size) || size <= 0 || size > ARKME_WORLD_PUBLISH_MAX_IMAGE_BYTES
+      || fileKind !== 1) {
+      throw new ArkmePluginError('world-publish-assets-invalid', '世界图片参数无效', false, 400)
+    }
+    return { fileAssetUid, fileName, mimeType, size, fileKind: 1 }
+  })
 }
 
 function captchaParam(params: Record<string, unknown>): ArkmeCaptchaResult {
@@ -592,6 +618,15 @@ export async function dispatchArkmeHostOperation(
         dataBase64: Buffer.from(image.data).toString('base64'),
       }
     }
+    case 'world.publish-text': return await service.publishWorldText({
+      clientMutationId: stringParam(params, 'clientMutationId'),
+      textContent: stringParam(params, 'textContent'),
+    })
+    case 'world.publish-file-assets': return await service.publishWorldFileAssets({
+      clientMutationId: stringParam(params, 'clientMutationId'),
+      textContent: stringParam(params, 'textContent'),
+      fileAssets: worldPublishFileAssetsParam(params),
+    })
     case 'dsh-beta-community.entry-state': return await service.dshBetaCommunityEntryState()
     case 'dsh-beta-community.join': return await service.joinDSHBetaCommunity()
     case 'topic.create': return await service.createTopic(

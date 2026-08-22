@@ -54,14 +54,36 @@ describe('native World integration', () => {
     expect(world).not.toContain('tabActive: { borderBottomColor:')
   })
 
-  it('keeps the remaining currently unsupported controls wired to their real operations', async () => {
+  it('wires publishing only through supported Host operations and the existing upload SDK', async () => {
     const api = await source('src/client/api.ts')
+    const entry = await source('src/index.ts')
+    const types = await source('src/types.ts')
+    const host = await source('src/host-api.ts')
     const world = await source('src/client/ArkmeWorldSurface.tsx')
 
-    for (const operation of ['world.upload-image-data', 'world.publish-rich', 'world.publish-text', 'world.voiceprint.invite']) {
-      expect(api).toContain(`| '${operation}'`)
-      expect(world).toContain(`'${operation}'`)
+    for (const operation of ['world.publish-text', 'world.publish-file-assets']) {
+      expect(types).toContain(`| '${operation}'`)
+      expect(host).toContain(`case '${operation}'`)
     }
+    expect(types).toContain('worldPublish?: true')
+    expect(entry).toContain('ArkmeWorldPublishFileAssetsInput')
+    expect(entry).toContain('ArkmeWorldPublishTextInput')
+    expect(world).toContain('createArkmeSdk')
+    expect(world).toContain('.upload(file')
+    expect(world).toContain('.publishWorldText(')
+    expect(world).toContain('.publishWorldFileAssets(')
+    expect(world).toContain('mutationIdRef')
+    expect(world).toContain('uploadedAssetsRef')
+    expect(world).toContain('cachedUploads?.mutationId === mutationIdRef.current')
+    expect(world).toContain('uploadedAssetsRef.current = { mutationId: mutationIdRef.current, assets }')
+    expect(world).toContain("result.visibility === 'pending_review'")
+    expect(world).toContain('已提交审核')
+    expect(world).toContain('result.worldPublished')
+    expect(api).not.toContain('world.upload-image-data')
+    expect(api).not.toContain('world.publish-rich')
+    expect(world).not.toContain('fileBase64')
+    expect(world).not.toContain('world.upload-image-data')
+    expect(world).not.toContain('world.publish-rich')
     expect(world).toContain('草稿不会被清空')
   })
 })

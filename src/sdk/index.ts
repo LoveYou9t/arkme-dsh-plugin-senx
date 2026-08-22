@@ -58,6 +58,9 @@ import type {
   ArkmeWorldVoiceprintPlaybackChunk,
   ArkmeWorldInteractionCreateResult,
   ArkmeWorldInteractionPage,
+  ArkmeWorldPublishFileAssetsInput,
+  ArkmeWorldPublishResult,
+  ArkmeWorldPublishTextInput,
 } from '../types.js'
 import type {
   ArkmeExtensionCatalogItem, ArkmeExtensionCatalogPage, ArkmeExtensionCatalogSort,
@@ -722,6 +725,33 @@ export class ArkmeSdk {
       targetRef: input.targetRef,
       textContent: input.textContent,
       clientMutationId: input.clientMutationId,
+    }, signal)
+  }
+
+  async publishWorldText(
+    input: ArkmeWorldPublishTextInput,
+    signal?: AbortSignal,
+  ): Promise<ArkmeWorldPublishResult> {
+    if (input.clientMutationId.trim() === '' || input.textContent.trim() === '') {
+      throw new TypeError('Arkme World publish text and mutation id must not be empty')
+    }
+    return await this.call<ArkmeWorldPublishResult>('world.publish-text', {
+      clientMutationId: input.clientMutationId,
+      textContent: input.textContent,
+    }, signal)
+  }
+
+  async publishWorldFileAssets(
+    input: ArkmeWorldPublishFileAssetsInput,
+    signal?: AbortSignal,
+  ): Promise<ArkmeWorldPublishResult> {
+    if (input.clientMutationId.trim() === '' || input.textContent.trim() === '' || input.fileAssets.length === 0) {
+      throw new TypeError('Arkme World publish text, mutation id, and file assets must not be empty')
+    }
+    return await this.call<ArkmeWorldPublishResult>('world.publish-file-assets', {
+      clientMutationId: input.clientMutationId,
+      textContent: input.textContent,
+      fileAssets: input.fileAssets,
     }, signal)
   }
 

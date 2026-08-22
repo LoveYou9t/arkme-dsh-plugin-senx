@@ -18,6 +18,38 @@ function success(value: unknown): Response {
 afterEach(() => { vi.useRealTimers() })
 
 describe('Arkme SDK', () => {
+  it('uploads World images as raw files and keeps text and file-asset publish operations separate', async () => {
+    const calls: Array<{ operation: string; params?: Record<string, unknown> }> = []
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).endsWith('/upload')) {
+        expect(init?.body).toBeInstanceOf(Blob)
+        expect(new Headers(init?.headers).get('x-arkme-file-name')).toBe('a.png')
+        return success({ fileAssetUid: 'asset-12345678', fileName: 'a.png', mimeType: 'image/png', size: 4, fileKind: 1 })
+      }
+      const request = JSON.parse(String(init?.body)) as { operation: string; params?: Record<string, unknown> }
+      calls.push(request)
+      return success({
+        recordSaved: true, recordState: 'synced', worldPublished: true,
+        visibility: 'visible', checkStatus: 2, retryable: false,
+      })
+    })
+    const sdk = createArkmeSdk({ fetchImpl: fetchImpl as typeof fetch })
+    const mutationId = 'ccfe56ca-4d7a-4c95-b383-fce1c65a635b'
+    const asset = await sdk.upload(new Blob([new Uint8Array([1, 2, 3, 4])], { type: 'image/png' }), { fileName: 'a.png' })
+
+    await sdk.publishWorldText({ clientMutationId: mutationId, textContent: '文字正文' })
+    await sdk.publishWorldFileAssets({ clientMutationId: mutationId, textContent: '图片正文', fileAssets: [{ ...asset, fileKind: 1 }] })
+
+    expect(calls).toEqual([
+      { operation: 'world.publish-text', params: { clientMutationId: mutationId, textContent: '文字正文' } },
+      { operation: 'world.publish-file-assets', params: {
+        clientMutationId: mutationId,
+        textContent: '图片正文',
+        fileAssets: [{ fileAssetUid: 'asset-12345678', fileName: 'a.png', mimeType: 'image/png', size: 4, fileKind: 1 }],
+      } },
+    ])
+  })
+
   it('reads one recording day and explicitly starts its Doubao transcript', async () => {
     const calls: Array<{ operation: string; params?: Record<string, unknown> }> = []
     const sdk = createArkmeSdk({

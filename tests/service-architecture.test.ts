@@ -44,7 +44,8 @@ const expectedPublicMethods = [
   'markAllArrangementRemindersRead', 'clearArrangementReminders', 'listWorldFeed', 'listMyWorldFeed', 'listUserWorldFeed',
   'worldVoiceprintPlaybackAvailability', 'generateWorldVoiceprintPlayback', 'inviteWorldVoiceprint',
   'listWorldInteractions', 'createWorldTextInteraction', 'readWorldImage',
-  'publishWorldTextForConversation', 'createText', 'createTextForConversation', 'pendingWrites',
+  'publishWorldText', 'publishWorldFileAssets', 'publishWorldTextForConversation',
+  'createText', 'createTextForConversation', 'pendingWrites',
   'retryPending', 'extensionPost',
 ].sort()
 
@@ -97,5 +98,14 @@ describe('Arkme service architecture', () => {
     for (const file of readdirSync(directory).filter(name => name.endsWith('-service.ts'))) {
       expect(readFileSync(join(directory, file), 'utf8')).not.toMatch(/from ['"]\.\.\/arkme-service/)
     }
+  })
+
+  it('keeps World cross-domain dependencies behind narrow ports', () => {
+    const world = readFileSync(join(root, 'src/services/world-service.ts'), 'utf8')
+    expect(world).toContain('export interface ArkmeWorldProfileReader')
+    expect(world).toContain('export interface ArkmeWorldMediaReader')
+    expect(world).toContain('export interface ArkmeWorldRecordWriter')
+    expect(world).not.toMatch(/import \{[^}]*\bMediaService\b/)
+    expect(world).not.toMatch(/import \{[^}]*\bRecordService\b/)
   })
 })

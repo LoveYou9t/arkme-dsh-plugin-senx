@@ -2,6 +2,9 @@ import { createHash, createHmac, randomUUID, timingSafeEqual } from 'node:crypto
 import type { ArkmeSessionCredentials } from '../keychain-store.js'
 import type {
   ArkmeImageBytes,
+  ArkmeConversationWriteResult,
+  ArkmeCreateFileAssetRecordResult,
+  ArkmeUploadedAsset,
   ArkmeUserProfile,
   ArkmeWorldAvatarFallback,
   ArkmeWorldFeedItem,
@@ -12,14 +15,34 @@ import type {
   ArkmeWorldInteractionItem,
   ArkmeWorldInteractionPage,
   ArkmeWorldPublishResult,
+  ArkmeWorldPublishFileAssetsInput,
+  ArkmeWorldPublishTextInput,
   ArkmeWorldRecordItem,
   ArkmeWorldRecordList,
   ArkmeWorldVisibility,
 } from '../types.js'
-import { MAX_ARKME_IMAGE_BYTES, MediaService, type ArkmeWorldImageEntry } from './media-service.js'
+import { MAX_ARKME_IMAGE_BYTES, type ArkmeWorldImageEntry } from './media-service.js'
 import type { ArkmeUserProfileSnapshot } from '../types.js'
-import { RecordService } from './record-service.js'
+import { ARKME_WORLD_PUBLISH_MAX_IMAGE_BYTES, ARKME_WORLD_PUBLISH_MAX_IMAGES } from '../types.js'
 import { ArkmePluginError, ServiceRuntime, objectValue, stringValue } from './service.js'
+
+export interface ArkmeWorldProfileReader {
+  refreshProfile(): Promise<ArkmeUserProfileSnapshot>
+}
+
+export interface ArkmeWorldMediaReader {
+  issueWorldVoiceprintMediaRef(viewerUserId: number, input: { remoteUrl: string; mimeType: string }): string
+  downloadSignedImage(signedUrl: URL, byteLimit: number, signal?: AbortSignal): Promise<ArkmeImageBytes>
+}
+
+export interface ArkmeWorldRecordWriter {
+  createTextForConversation(recordUid: string, textContent: string): Promise<ArkmeConversationWriteResult>
+  createFileAssetsForConversation(
+    recordUid: string,
+    textContent: string,
+    assets: readonly ArkmeUploadedAsset[],
+  ): Promise<ArkmeCreateFileAssetRecordResult>
+}
 
 interface ArkmeWorldRecordRefEntry {
   viewerUserId: number
@@ -90,6 +113,29 @@ function worldVisibility(checkStatus: number): ArkmeWorldVisibility {
   return 'unknown'
 }
 
+function worldPublicationResult(checkStatus: number): ArkmeWorldPublishResult {
+  const visibility = worldVisibility(checkStatus)
+  if (visibility === 'rejected') {
+    return {
+      recordSaved: true,
+      recordState: 'synced',
+      worldPublished: false,
+      visibility,
+      checkStatus,
+      retryable: false,
+      error: '内容未通过审核，请调整后重试',
+    }
+  }
+  return {
+    recordSaved: true,
+    recordState: 'synced',
+    worldPublished: true,
+    visibility,
+    checkStatus,
+    retryable: false,
+  }
+}
+
 function worldTags(text: string): string[] {
   return [...text.matchAll(/#(\S+)/gu)].map(match => match[1] ?? '').filter(tag => tag !== '')
 }
@@ -97,6 +143,13 @@ function worldTags(text: string): string[] {
 function stableWorldInteractionRecordUid(userId: number, targetRecordUid: string, clientMutationId: string): string {
   const hex = createHash('sha256')
     .update(`dsh-arkme:world-interaction:${String(userId)}:${targetRecordUid}:${clientMutationId}`)
+    .digest('hex')
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-5${hex.slice(13, 16)}-a${hex.slice(17, 20)}-${hex.slice(20, 32)}`
+}
+
+function stableWorldPublishRecordUid(userId: number, clientMutationId: string): string {
+  const hex = createHash('sha256')
+    .update(`dsh-arkme:world-publish:${String(userId)}:${clientMutationId}`)
     .digest('hex')
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-5${hex.slice(13, 16)}-a${hex.slice(17, 20)}-${hex.slice(20, 32)}`
 }
@@ -142,9 +195,9 @@ export class WorldService {
 
   constructor(
     private readonly runtime: ServiceRuntime,
-    private readonly profile: { refreshProfile(): Promise<ArkmeUserProfileSnapshot> },
-    private readonly media: MediaService,
-    private readonly record: RecordService,
+    private readonly profile: ArkmeWorldProfileReader,
+    private readonly media: ArkmeWorldMediaReader,
+    private readonly record: ArkmeWorldRecordWriter,
   ) {}
 
   dispose(): void {
@@ -543,10 +596,92 @@ export class WorldService {
         signal,
       )
       const checkStatus = Math.trunc(numberValue(published.check_status))
-      return { recordSaved: true, recordState: 'synced', worldPublished: true, visibility: worldVisibility(checkStatus), checkStatus, retryable: false }
+      return worldPublicationResult(checkStatus)
     } catch (error) {
       try {
         if (await this.worldRecordIsPublic(normalizedUid, signal)) {
+          return { recordSaved: true, recordState: 'synced', worldPublished: true, visibility: 'unknown', checkStatus: 0, retryable: false }
+        }
+      } catch { /* Preserve the original publication failure. */ }
+      return this.worldPublishFailure(true, error, 'synced')
+    }
+  }
+
+  async publishWorldText(input: ArkmeWorldPublishTextInput): Promise<ArkmeWorldPublishResult> {
+    const session = await this.runtime.requireSession()
+    const clientMutationId = input.clientMutationId.trim()
+    if (!/^[A-Za-z0-9_-]{16,128}$/.test(clientMutationId)) {
+      throw new ArkmePluginError('world-publish-mutation-invalid', '发布请求标识无效，请重试', false)
+    }
+    return await this.publishWorldTextForConversation(
+      stableWorldPublishRecordUid(session.userId, clientMutationId),
+      input.textContent,
+    )
+  }
+
+  async publishWorldFileAssets(input: ArkmeWorldPublishFileAssetsInput): Promise<ArkmeWorldPublishResult> {
+    const session = await this.runtime.requireSession()
+    const clientMutationId = input.clientMutationId.trim()
+    const textContent = input.textContent.trim()
+    if (!/^[A-Za-z0-9_-]{16,128}$/.test(clientMutationId)) {
+      throw new ArkmePluginError('world-publish-mutation-invalid', '发布请求标识无效，请重试', false)
+    }
+    if (textContent === '' || textContent.length > this.runtime.config.maxTextLength) {
+      throw new ArkmePluginError('world-text-invalid', '世界内容为空或过长', false)
+    }
+    if (input.fileAssets.length === 0 || input.fileAssets.length > ARKME_WORLD_PUBLISH_MAX_IMAGES || input.fileAssets.some(asset =>
+      !/^[A-Za-z0-9._:-]{8,256}$/.test(asset.fileAssetUid) || asset.fileName.trim() === ''
+      || !asset.mimeType.toLowerCase().startsWith('image/') || !Number.isSafeInteger(asset.size)
+      || asset.size <= 0 || asset.size > ARKME_WORLD_PUBLISH_MAX_IMAGE_BYTES || asset.fileKind !== 1)) {
+      throw new ArkmePluginError('world-publish-assets-invalid', '世界图片参数无效', false)
+    }
+    let profile: ArkmeUserProfile
+    try {
+      const snapshot = await this.profile.refreshProfile()
+      if (snapshot.profile === null) throw new ArkmePluginError('profile-unavailable', '无法读取当前 Arkme 账号资料', true)
+      profile = snapshot.profile
+    } catch (error) { return this.worldPublishFailure(false, error) }
+    if (profile.contact.phoneMasked === undefined) {
+      return {
+        recordSaved: false, recordState: 'not_saved', worldPublished: false,
+        visibility: 'not_published', checkStatus: 0, retryable: false,
+        error: '请先在 Arkme 客户端绑定手机号，再发到世界',
+      }
+    }
+    const recordUid = stableWorldPublishRecordUid(session.userId, clientMutationId)
+    try {
+      if (await this.worldRecordIsPublic(recordUid)) {
+        return { recordSaved: true, recordState: 'synced', worldPublished: true, visibility: 'unknown', checkStatus: 0, retryable: false }
+      }
+    } catch { /* Continue with the stable write identity when preflight status is unavailable. */ }
+    try { await this.record.createFileAssetsForConversation(recordUid, textContent, input.fileAssets) }
+    catch (error) { return this.worldPublishFailure(false, error) }
+    try {
+      const published = await this.runtime.authenticatedWorldPost<Record<string, unknown>>(
+        '/api/v1/public-record/publish-with-file-assets',
+        {
+          record_uid: recordUid,
+          content: textContent,
+          text_content: textContent,
+          file_assets: input.fileAssets.map((asset, index) => ({
+            file_asset_uid: asset.fileAssetUid,
+            media_type: 'image',
+            file_kind: 1,
+            sort_order: index,
+          })),
+          tags: worldTags(textContent),
+          original_topic_id: 0,
+          created_at: Date.now(),
+          nick_name: profile.nickname || profile.displayName,
+          avatar: profile.avatarRef,
+        },
+        session,
+      )
+      const checkStatus = Math.trunc(numberValue(published.check_status))
+      return worldPublicationResult(checkStatus)
+    } catch (error) {
+      try {
+        if (await this.worldRecordIsPublic(recordUid)) {
           return { recordSaved: true, recordState: 'synced', worldPublished: true, visibility: 'unknown', checkStatus: 0, retryable: false }
         }
       } catch { /* Preserve the original publication failure. */ }

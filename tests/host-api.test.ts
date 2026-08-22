@@ -37,9 +37,67 @@ function fakeService() {
     addGroupBot: vi.fn(async () => ({ installed: true })),
     listMyWorldFeed: vi.fn(async (input: unknown) => input),
     listUserWorldFeed: vi.fn(async (_userId: number, input: unknown) => input),
+    publishWorldText: vi.fn(async (input: unknown) => input),
+    publishWorldFileAssets: vi.fn(async (input: unknown) => input),
     inviteWorldVoiceprint: vi.fn(async (recordRef: string) => ({ sent: true, peerDisplayName: '小林', recordRef })),
   }
 }
+
+describe('World publish Host API dispatch', () => {
+  it('keeps text publishing separate and drops Browser-owned fields', async () => {
+    const service = fakeService()
+
+    await dispatchArkmeHostOperation(service as never, 'world.publish-text', {
+      clientMutationId: 'ccfe56ca-4d7a-4c95-b383-fce1c65a635b',
+      textContent: ' 世界正文 ',
+      recordUid: 'must-not-forward',
+      accessToken: 'must-not-forward',
+      fileAssets: [{ fileAssetUid: 'must-not-forward' }],
+    })
+
+    expect(service.publishWorldText).toHaveBeenCalledWith({
+      clientMutationId: 'ccfe56ca-4d7a-4c95-b383-fce1c65a635b',
+      textContent: ' 世界正文 ',
+    })
+    expect(service.publishWorldFileAssets).not.toHaveBeenCalled()
+  })
+
+  it('accepts only bounded image upload results for file-asset publishing', async () => {
+    const service = fakeService()
+
+    await dispatchArkmeHostOperation(service as never, 'world.publish-file-assets', {
+      clientMutationId: 'ccfe56ca-4d7a-4c95-b383-fce1c65a635b',
+      textContent: '图片正文',
+      fileAssets: [{
+        fileAssetUid: 'asset-12345678', fileName: 'a.png', mimeType: 'image/png',
+        size: 128, fileKind: 1, sortOrder: 99, signedUrl: 'must-not-forward',
+      }],
+    })
+
+    expect(service.publishWorldFileAssets).toHaveBeenCalledWith({
+      clientMutationId: 'ccfe56ca-4d7a-4c95-b383-fce1c65a635b',
+      textContent: '图片正文',
+      fileAssets: [{
+        fileAssetUid: 'asset-12345678', fileName: 'a.png', mimeType: 'image/png',
+        size: 128, fileKind: 1,
+      }],
+    })
+  })
+
+  it('rejects non-image assets before entering the World domain', async () => {
+    const service = fakeService()
+
+    await expect(dispatchArkmeHostOperation(service as never, 'world.publish-file-assets', {
+      clientMutationId: 'ccfe56ca-4d7a-4c95-b383-fce1c65a635b',
+      textContent: '文件正文',
+      fileAssets: [{
+        fileAssetUid: 'asset-12345678', fileName: 'a.pdf', mimeType: 'application/pdf',
+        size: 128, fileKind: 4,
+      }],
+    })).rejects.toMatchObject({ code: 'world-publish-assets-invalid' })
+    expect(service.publishWorldFileAssets).not.toHaveBeenCalled()
+  })
+})
 
 describe('group member Host API dispatch', () => {
   it('forwards only bounded candidate discovery and add fields', async () => {
