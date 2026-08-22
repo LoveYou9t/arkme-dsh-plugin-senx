@@ -19,8 +19,6 @@ describe('Arkme product navigation', () => {
     expect(markup).toContain('>日历<')
     expect(markup).toContain('>世界<')
     expect(markup).toContain('>市集<')
-    expect(markup).toContain('aria-label="账户菜单"')
-    expect(markup).toContain('aria-haspopup="menu"')
     expect(markup).toContain('aria-current="page"')
     expect(markup).toContain('background:#f1f2f6')
     expect(markup).toContain('outline:0')
@@ -33,7 +31,14 @@ describe('Arkme product navigation', () => {
     const markup = renderToStaticMarkup(<ArkmeProductNavigation compact currentSessionId={undefined} />)
     expect(markup).toContain('flex-direction:row')
     expect(markup).toContain('border-bottom:1px solid #e7e7e9')
-    expect(markup).toContain('margin-left:auto')
+  })
+
+  it('fits the permanent DSH sidebar seat without rendering official sidebar chrome', () => {
+    const markup = renderToStaticMarkup(<ArkmeProductNavigation hosted compact={false} currentSessionId="session-1" />)
+    expect(markup).toContain('width:100%')
+    expect(markup).toContain('min-height:52px')
+    expect(markup).toContain('aria-label="Arkme 功能导航"')
+    expect(markup).not.toContain('DSH')
   })
 
   it('composes the desktop client as navigation, directory, and main content inside one plugin surface', () => {
@@ -63,6 +68,18 @@ describe('Arkme product navigation', () => {
     expect(arkoMarkup).toContain('aria-label="Arkme 会话列表"')
   })
 
+  it('lets the permanent conversation owner render directory and content without duplicating the product rail', () => {
+    arkmeUi.showConversations()
+    const markup = renderToStaticMarkup(<ArkmeSurface
+      productNavigation={false}
+      initialAuth={{ status: 'authenticated', environment: 'prod', userId: 1 }}
+      currentSessionId="session-1"
+    />)
+    expect(markup).not.toContain('data-arkme-owned="product-navigation"')
+    expect(markup).toContain('data-arkme-owned="directory-pane"')
+    expect(markup).toContain('role="region"')
+  })
+
   it('keeps the conversation visible under the calendar overlay and removes it from standalone utility pages', () => {
     arkmeUi.showSearch()
     const searchMarkup = renderToStaticMarkup(<ArkmeSurface
@@ -71,15 +88,13 @@ describe('Arkme product navigation', () => {
     expect(searchMarkup).not.toContain('data-arkme-owned="directory-pane"')
     expect(searchMarkup).toContain('>一句话，找到所有内容<')
 
+    arkmeUi.showConversations()
     arkmeUi.showCalendar()
     const calendarMarkup = renderToStaticMarkup(<ArkmeSurface
       initialAuth={{ status: 'authenticated', environment: 'prod', userId: 1 }}
     />)
     expect(calendarMarkup).toContain('data-arkme-owned="directory-pane"')
-    expect(calendarMarkup).toContain('aria-label="客户端日历"')
-    expect(calendarMarkup.indexOf('aria-label="客户端日历"')).toBeGreaterThan(
-      calendarMarkup.indexOf('data-arkme-owned="directory-pane"'),
-    )
+    expect(arkmeUi.getSnapshot()).toMatchObject({ mode: 'source', calendarOpen: true })
 
     arkmeUi.showExtensions()
     const pluginMarkup = renderToStaticMarkup(<ArkmeSurface

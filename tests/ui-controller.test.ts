@@ -15,8 +15,6 @@ describe('ArkmeUiController', () => {
     controller.selectSource(source)
     controller.showRecordings()
     expect(controller.getSnapshot()).toEqual({
-      open: true,
-      surfaceOpen: true,
       authRevision: 0,
       chatRevision: 0,
       mode: 'recordings',
@@ -25,18 +23,17 @@ describe('ArkmeUiController', () => {
     controller.selectSource(source)
     controller.showCalendar()
     expect(controller.getSnapshot()).toMatchObject({
-      open: true,
-      surfaceOpen: true,
       authRevision: 0,
       chatRevision: 0,
-      mode: 'calendar',
+      mode: 'source',
       selectedSource: source,
+      calendarOpen: true,
     })
+    controller.hideCalendar()
+    expect(controller.getSnapshot().calendarOpen).toBeUndefined()
 
     controller.showWorld()
     expect(controller.getSnapshot()).toEqual({
-      open: true,
-      surfaceOpen: true,
       authRevision: 0,
       chatRevision: 0,
       mode: 'world',
@@ -45,14 +42,12 @@ describe('ArkmeUiController', () => {
     controller.selectSource(source)
     controller.showArko()
     expect(controller.getSnapshot()).toEqual({
-      open: true,
-      surfaceOpen: true,
       authRevision: 0,
       chatRevision: 0,
       mode: 'arko',
     })
     controller.authChanged(true)
-    expect(controller.getSnapshot()).toMatchObject({ mode: 'arko', open: true, surfaceOpen: true, authRevision: 1 })
+    expect(controller.getSnapshot()).toMatchObject({ mode: 'arko', authRevision: 1 })
 
     controller.selectSource(source)
     expect(controller.getSnapshot()).toMatchObject({ mode: 'source', selectedSource: source })
@@ -77,22 +72,16 @@ describe('ArkmeUiController', () => {
     controller.selectSource(source)
     expect(controller.getSnapshot()).toMatchObject({ mode: 'source', selectedSource: source })
     controller.focusSendToSelf()
-    expect(controller.getSnapshot()).toEqual({ open: true, surfaceOpen: true, authRevision: 0, chatRevision: 0, mode: 'source' })
-    controller.deactivateSurface()
-    expect(controller.getSnapshot()).toMatchObject({ open: true, surfaceOpen: false })
-    controller.activateSurface()
-    expect(controller.getSnapshot()).toMatchObject({ open: true, surfaceOpen: true })
+    expect(controller.getSnapshot()).toEqual({ authRevision: 0, chatRevision: 0, mode: 'source' })
     controller.showLogin()
-    expect(controller.getSnapshot()).toEqual({ open: true, surfaceOpen: true, authRevision: 0, chatRevision: 0, mode: 'login' })
-    controller.showLoginSurface()
-    expect(controller.getSnapshot()).toMatchObject({ open: false, surfaceOpen: true, mode: 'login' })
+    expect(controller.getSnapshot()).toEqual({ authRevision: 0, chatRevision: 0, mode: 'login' })
     controller.authChanged(true)
-    expect(controller.getSnapshot()).toMatchObject({ open: true, surfaceOpen: true, mode: 'source' })
+    expect(controller.getSnapshot()).toMatchObject({ mode: 'source' })
     expect(controller.getSnapshot().selectedSource).toBeUndefined()
     expect(controller.getSnapshot().authRevision).toBe(1)
     controller.chatChanged()
     expect(controller.getSnapshot().chatRevision).toBe(1)
-    expect(listener).toHaveBeenCalledTimes(8)
+    expect(listener).toHaveBeenCalledTimes(5)
     unsubscribe()
   })
 
@@ -105,7 +94,7 @@ describe('ArkmeUiController', () => {
     controller.showSearch()
 
     expect(controller.getSnapshot()).toEqual({
-      open: true, surfaceOpen: true, authRevision: 0, chatRevision: 0, mode: 'search',
+      authRevision: 0, chatRevision: 0, mode: 'search',
     })
   })
 
@@ -117,7 +106,7 @@ describe('ArkmeUiController', () => {
     controller.selectSource(source)
     controller.showContactAdd()
     expect(controller.getSnapshot()).toEqual({
-      open: true, surfaceOpen: true, authRevision: 0, chatRevision: 0, mode: 'contact-add',
+      authRevision: 0, chatRevision: 0, mode: 'contact-add',
       selectedSource: source,
     })
     controller.showConversations()
@@ -130,7 +119,7 @@ describe('ArkmeUiController', () => {
     controller.showExtensions()
 
     expect(controller.getSnapshot()).toEqual({
-      open: true, surfaceOpen: true, authRevision: 0, chatRevision: 0, mode: 'extensions',
+      authRevision: 0, chatRevision: 0, mode: 'extensions',
     })
   })
 
@@ -145,8 +134,6 @@ describe('ArkmeUiController', () => {
       avatarFallback: { kind: 'phone_default', colorIndex: 3, label: 'L' },
     })
     expect(controller.getSnapshot()).toMatchObject({
-      open: true,
-      surfaceOpen: true,
       mode: 'world',
       worldTarget: {
         userId: 7,
@@ -164,7 +151,7 @@ describe('ArkmeUiController', () => {
 
     controller.showWorld()
     expect(controller.getSnapshot()).toEqual({
-      open: true, surfaceOpen: true, authRevision: 0, chatRevision: 0, mode: 'world',
+      authRevision: 0, chatRevision: 0, mode: 'world',
     })
     expect(() => { controller.showUserWorld({ userId: 0, displayName: '无效' }) }).toThrow('世界用户 ID')
   })
@@ -178,7 +165,7 @@ describe('ArkmeUiController', () => {
     controller.showCalls()
 
     expect(controller.getSnapshot()).toEqual({
-      open: true, surfaceOpen: true, authRevision: 0, chatRevision: 0, mode: 'calls',
+      authRevision: 0, chatRevision: 0, mode: 'calls',
     })
   })
 
@@ -191,7 +178,7 @@ describe('ArkmeUiController', () => {
 
     controller.authChanged(true, true)
 
-    expect(controller.getSnapshot()).toMatchObject({ open: true, surfaceOpen: true, mode: 'source' })
+    expect(controller.getSnapshot()).toMatchObject({ mode: 'source' })
     expect(controller.getSnapshot().selectedSource).toBeUndefined()
   })
 
@@ -204,7 +191,7 @@ describe('ArkmeUiController', () => {
     controller.showExtensions()
 
     expect(controller.getSnapshot()).toEqual({
-      open: true, surfaceOpen: true, authRevision: 0, chatRevision: 0, mode: 'extensions',
+      authRevision: 0, chatRevision: 0, mode: 'extensions',
     })
   })
 
@@ -217,7 +204,7 @@ describe('ArkmeUiController', () => {
     controller.showSettings('about')
 
     expect(controller.getSnapshot()).toEqual({
-      open: true, surfaceOpen: true, authRevision: 0, chatRevision: 0, mode: 'settings', settingsSection: 'about',
+      authRevision: 0, chatRevision: 0, mode: 'settings', settingsSection: 'about',
     })
   })
 
@@ -232,8 +219,35 @@ describe('ArkmeUiController', () => {
     controller.showConversations()
 
     expect(controller.getSnapshot()).toMatchObject({
-      open: true, surfaceOpen: true, mode: 'source', selectedSource: source,
+      mode: 'source', selectedSource: source,
     })
+  })
+
+  it('switches between the Arkme task start and native DSH task conversation modes', () => {
+    const controller = new ArkmeUiController()
+    controller.showNewTask()
+    expect(controller.getSnapshot().mode).toBe('task-start')
+    controller.showTaskSession()
+    expect(controller.getSnapshot().mode).toBe('task-session')
+    controller.showConversations()
+    expect(controller.getSnapshot().mode).toBe('source')
+    controller.showSettings()
+    expect(controller.getSnapshot().mode).toBe('settings')
+  })
+
+  it('opens and closes the calendar without replacing the page underneath it', () => {
+    const controller = new ArkmeUiController()
+
+    controller.showTaskSession()
+    controller.showCalendar()
+    expect(controller.getSnapshot()).toMatchObject({ mode: 'task-session', calendarOpen: true })
+    controller.hideCalendar()
+    expect(controller.getSnapshot()).toMatchObject({ mode: 'task-session' })
+    expect(controller.getSnapshot().calendarOpen).toBeUndefined()
+
+    controller.showSearch()
+    controller.showCalendar()
+    expect(controller.getSnapshot()).toMatchObject({ mode: 'search', calendarOpen: true })
   })
 
   it('publishes an updated selected source when its mute state changes', () => {
