@@ -91,6 +91,9 @@ describe('Arko navigation entry', () => {
     expect(markup).toContain('小可')
     expect(markup).toContain('viewBox="2 1.4 12 12"')
     expect(markup).toContain('fill="#EFA7A2"')
+    const avatarSurfaceStyle = markup.match(/<span[^>]*style="([^"]+)"[^>]*><svg/)?.[1]
+    expect(avatarSurfaceStyle).toContain('width:38px')
+    expect(avatarSurfaceStyle).toContain('height:38px')
     expect(markup).toContain('data-arkme-topic-tag="AI"')
     expect(markup).toContain('>AI</span>')
     expect(markup).not.toContain('>Agent</span>')

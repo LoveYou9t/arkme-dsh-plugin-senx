@@ -376,7 +376,7 @@ export function ArkmeArkoRow({
     style={{ ...styles.chatRow, ...(selected ? styles.chatRowActive : {}) }}
     onClick={onClick}
   >
-    <span style={styles.avatar} aria-hidden><ArkmeArkoAvatar /></span>
+    <span style={styles.avatar} aria-hidden><ArkmeArkoAvatar size={38} /></span>
     <span style={styles.chatContent}>
       <span style={styles.chatTop}>
         <span style={styles.entryName}>{displayName}</span>
