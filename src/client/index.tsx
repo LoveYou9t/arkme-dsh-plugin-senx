@@ -48,7 +48,13 @@ async function resolveNotificationSource(
 
 /** Keep Arkme's shell resident and embed the native DSH client only in its conversation region. */
 export function apply(ctx: ClientContext): void {
-	if (deepSeekHarnessEmbedRequested()) return
+	if (deepSeekHarnessEmbedRequested()) {
+		ctx.slots.inject('sidebar.settings', () => ctx.slots.register({
+			name: 'sidebar.settings',
+			priority: -100,
+		}, () => null))
+		return
+	}
 	if (typeof window !== 'undefined' && window.location !== undefined && window.history !== undefined) {
 		const shareRef = consumeExtensionShareDeepLink(window.location, window.history)
 		if (shareRef !== undefined) arkmeUi.openExtensionShare(shareRef)
