@@ -453,6 +453,29 @@ export async function dispatchArkmeHostOperation(
       stringParam(params, 'code'),
     )
     case 'auth.logout': return await service.logout()
+    case 'voiceprint.status': return await service.myVoiceprint()
+    case 'voiceprint.grants': return await service.outboundVoiceprintGrants({
+      cursor: stringParam(params, 'cursor').trim(),
+      limit: Math.min(100, Math.max(1, Math.trunc(numberParam(params, 'limit', 20)))),
+    })
+    case 'voiceprint.people': return await service.recognizedVoiceprintPeople({
+      cursor: stringParam(params, 'cursor').trim(),
+      limit: Math.min(50, Math.max(1, Math.trunc(numberParam(params, 'limit', 20)))),
+    })
+    case 'voiceprint.person': return await service.recognizedVoiceprintPerson(
+      stringParam(params, 'personRef').trim(),
+    )
+    case 'voiceprint.person.voiceprints': return await service.recognizedPersonVoiceprints(
+      stringParam(params, 'personRef').trim(),
+    )
+    case 'voiceprint.person.invite': return await service.createRecognizedPersonVoiceprintInvitation(
+      stringParam(params, 'personRef').trim(), stringParam(params, 'targetContactRef').trim() || undefined,
+    )
+    case 'voiceprint.invite': return await service.createVoiceprintInvitation()
+    case 'voiceprint.revoke': return await service.revokeVoiceprintPlaybackGrant(
+      stringParam(params, 'grantRef').trim(),
+    )
+    case 'voiceprint.restore': return await service.restoreVoiceprintPlayback()
     case 'contacts.search': return await service.searchContact(stringParam(params, 'identifier'))
     case 'contacts.add': return await service.addContact(stringParam(params, 'contactRef'), {
       ...(stringParam(params, 'remark').trim() === '' ? {} : { remark: stringParam(params, 'remark') }),

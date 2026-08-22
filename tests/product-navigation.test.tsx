@@ -1,10 +1,22 @@
+import { readFileSync } from 'node:fs'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import { ArkmeProductNavigation } from '../src/client/ArkmeProductNavigation.js'
 import { ArkmeSurface } from '../src/client/ArkmeSidebar.js'
 import { arkmeUi } from '../src/client/ui-controller.js'
 
+const productNavigationSource = readFileSync(
+  new URL('../src/client/ArkmeProductNavigation.tsx', import.meta.url),
+  'utf8',
+)
+
 describe('Arkme product navigation', () => {
+  it('opens voiceprint management from the profile menu without removing the account entry', () => {
+    expect(productNavigationSource).toContain('arkmeUi.showVoiceprint()')
+    expect(productNavigationSource).toContain('<strong>声纹管理</strong>')
+    expect(productNavigationSource).toContain('<strong>我的账户</strong>')
+  })
+
   it('renders only inside an explicitly Arkme-owned boundary', () => {
     arkmeUi.showSearch()
     const markup = renderToStaticMarkup(<ArkmeProductNavigation compact={false} currentSessionId="session-1" />)
@@ -117,5 +129,12 @@ describe('Arkme product navigation', () => {
     expect(worldMarkup).toContain('data-arkme-owned="world-surface"')
     expect(worldMarkup).not.toContain('data-arkme-owned="directory-pane"')
     expect(worldMarkup).not.toContain('aria-label="发送消息"')
+
+    arkmeUi.showVoiceprint()
+    const voiceprintMarkup = renderToStaticMarkup(<ArkmeSurface
+      initialAuth={{ status: 'authenticated', environment: 'prod', userId: 1 }}
+    />)
+    expect(voiceprintMarkup).toContain('data-arkme-owned="voiceprint-surface"')
+    expect(voiceprintMarkup).not.toContain('data-arkme-owned="directory-pane"')
   })
 })

@@ -746,6 +746,7 @@ describe('ArkmeService', () => {
       environment: 'test',
       testLoginEnabled: true,
       callAssetBasePath: '/arkme-self/api/call',
+      voiceprintEnrollmentPath: '/arkme-self/api/voiceprint/enroll',
       shareWebsite: 'https://app.arkme.ai',
     })
   })
