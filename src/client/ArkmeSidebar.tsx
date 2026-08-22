@@ -55,6 +55,9 @@ import {
   releaseArkmeComposerDraft,
   type ArkmeComposerAttachment,
 } from './composer-draft-store.js'
+import {
+  arkmeConversationComposerHeight, arkmeConversationComposerLayout,
+} from './conversation-composer-presentation.js'
 import { restoreArkmeComposerFocus } from './composer-focus.js'
 import {
   ARKME_CONVERSATION_HEADER_HEIGHT, ArkmeInterwovenDetailAside, ArkmeInterwovenMentionCard,
@@ -225,25 +228,18 @@ const styles: Record<string, CSSProperties> = {
   notice: { alignSelf: 'center', maxWidth: 520, padding: '8px 12px 0', color: colors.secondary, textAlign: 'center', fontSize: 13, lineHeight: '16px' },
   sentinel: { width: '100%', height: 1 },
   loading: { textAlign: 'center', color: colors.secondary, fontSize: 12, padding: 6 },
-  composer: { flex: 'none', display: 'flex', justifyContent: 'stretch', padding: '0 24px 20px', background: '#fff' },
+  composer: { ...arkmeConversationComposerLayout.composer, background: '#fff' },
   composerInner: {
-    position: 'relative', width: '100%', overflow: 'visible', boxSizing: 'border-box',
-    display: 'flex', flexDirection: 'column', gap: 8, padding: '12px 13px 9px',
-    border: `1px solid ${colors.border}`, borderRadius: 15,
+    ...arkmeConversationComposerLayout.composerInner,
+    border: `1px solid ${colors.border}`,
     background: arkmeTheme.input, boxShadow: arkmeTheme.shadow,
   },
   textarea: {
-    width: '100%', minHeight: 38, maxHeight: 336, resize: 'none', overflowY: 'auto',
-    boxSizing: 'border-box', border: 0, outline: 0, padding: 0,
+    ...arkmeConversationComposerLayout.textarea,
     background: 'transparent', color: colors.text, boxShadow: 'none', appearance: 'none', WebkitAppearance: 'none',
-    fontFamily: 'var(--dsw-font-family, inherit)', fontSize: 13, lineHeight: '21px',
-    whiteSpace: 'pre-wrap', wordBreak: 'break-word', overflowWrap: 'anywhere',
     caretColor: 'var(--dsw-alias-state-business-primary, #3964fe)',
   },
-  tools: {
-    display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 4, minWidth: 0,
-    padding: 0,
-  },
+  tools: { ...arkmeConversationComposerLayout.tools },
   plus: { width: 34, height: 34, border: 0, borderRadius: 9, background: 'transparent', color: colors.secondary, cursor: 'pointer', fontSize: 22, lineHeight: '30px' },
   addMenu: { position: 'absolute', left: 0, bottom: 54, zIndex: 20, width: 210, padding: '6px 0', borderRadius: 12, border: `1px solid ${colors.border}`, background: colors.panel, boxShadow: '0 12px 32px rgba(0,0,0,.15)' },
   addMenuItem: { width: '100%', border: 0, padding: '11px 14px', display: 'flex', alignItems: 'center', gap: 10, background: 'transparent', color: colors.text, cursor: 'pointer', fontSize: 14, textAlign: 'left' },
@@ -898,7 +894,8 @@ export function ArkmeSurface({
   useLayoutEffect(() => {
     const textarea = textareaRef.current
     if (textarea === null) return
-    textarea.style.height = 'auto'; textarea.style.height = `${Math.min(textarea.scrollHeight, 336)}px`
+    textarea.style.height = 'auto'
+    textarea.style.height = `${arkmeConversationComposerHeight(textarea.scrollHeight)}px`
   }, [draft])
 
   const refreshAuth = useCallback(async () => {

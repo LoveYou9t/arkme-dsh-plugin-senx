@@ -12,6 +12,7 @@ import {
 import {
   arkmeAggregateSourceForUser, arkmeSourceComposerPlaceholder, arkmeSourceDestinationLabel,
 } from '../src/client/ArkmeSidebar.js'
+import { arkmeConversationComposerLayout } from '../src/client/conversation-composer-presentation.js'
 import {
   appendArkmeSourceBreadcrumbTrail, ArkmeSourceBreadcrumb, arkmeSourceBreadcrumb,
   truncateArkmeSourceBreadcrumbTrail,
@@ -46,7 +47,8 @@ describe('topic create UI', () => {
   it('keeps the add action at the far left of the composer tool row', async () => {
     const source = await readFile(new URL('../src/client/ArkmeSidebar.tsx', import.meta.url), 'utf8')
 
-    expect(source).toContain("justifyContent: 'space-between'")
+    expect(arkmeConversationComposerLayout.tools.justifyContent).toBe('space-between')
+    expect(source).toContain('...arkmeConversationComposerLayout.tools')
     expect(source.indexOf('aria-label="添加内容"')).toBeLessThan(source.indexOf('aria-label="发送消息"'))
   })
 
