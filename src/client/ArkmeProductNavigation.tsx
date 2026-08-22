@@ -100,7 +100,7 @@ const styles: Record<string, CSSProperties> = {
     width: 3,
     height: 33,
     borderRadius: 3,
-    background: '#151722',
+    background: '#9eadff',
   },
   compactMarker: { left: '50%', bottom: -6, width: 30, height: 3, transform: 'translateX(-50%)' },
   hostedMarker: { left: -5 },
