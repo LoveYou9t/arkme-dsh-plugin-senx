@@ -183,7 +183,7 @@ import type {
   ArkmeWorldVoiceprintPlaybackChunk,
   ArkmeWorldInteractionCreateResult,
   ArkmeWorldInteractionPage,
-  ArkmeWorldPublishResult,
+  ArkmeWorldPublishFileAssetsInput, ArkmeWorldPublishResult, ArkmeWorldPublishTextInput,
   ArkmeWorldRecordList,
 } from './types.js'
 import { ARKME_PROVIDER_CONTRACT_VERSION } from './types.js'
@@ -471,6 +471,7 @@ export class ArkmeService {
         extensionPreviews: true,
         worldFeed: true,
         worldInteractions: true,
+        worldPublish: true,
         worldVoiceprintPlayback: true,
         worldVoiceprintInvite: true,
         arrangements: true,
@@ -1439,13 +1440,9 @@ export class ArkmeService {
     return await this.world.readWorldImage(imageRef, options)
   }
 
-  async publishWorldTextForConversation(
-    recordUid: string,
-    textContent: string,
-    signal?: AbortSignal,
-  ): Promise<ArkmeWorldPublishResult> {
-    return await this.world.publishWorldTextForConversation(recordUid, textContent, signal)
-  }
+  async publishWorldTextForConversation(recordUid: string, textContent: string, signal?: AbortSignal): Promise<ArkmeWorldPublishResult> { return await this.world.publishWorldTextForConversation(recordUid, textContent, signal) }
+  async publishWorldText(input: ArkmeWorldPublishTextInput): Promise<ArkmeWorldPublishResult> { return await this.world.publishWorldText(input) }
+  async publishWorldFileAssets(input: ArkmeWorldPublishFileAssetsInput): Promise<ArkmeWorldPublishResult> { return await this.world.publishWorldFileAssets(input) }
 
   async createText(recordUid: string, textContent: string): Promise<ArkmeCreateTextResult> {
     return await this.record.createText(recordUid, textContent)

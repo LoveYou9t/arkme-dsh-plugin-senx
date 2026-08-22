@@ -5,6 +5,8 @@ import { Plus } from '@phosphor-icons/react/dist/icons/Plus'
 import { SpeakerHigh } from '@phosphor-icons/react/dist/icons/SpeakerHigh'
 import type {
   ArkmeImagePayload,
+  ArkmeUploadedAsset,
+  ArkmeWorldPublishResult,
   ArkmeWorldFeedItem,
   ArkmeWorldFeedPage,
   ArkmeWorldInteractionCreateResult,
@@ -14,12 +16,16 @@ import type {
   ArkmeWorldVoiceprintInviteResult,
   ArkmeWorldVoiceprintPlaybackChunk,
 } from '../types.js'
+import { ARKME_WORLD_PUBLISH_MAX_IMAGE_BYTES, ARKME_WORLD_PUBLISH_MAX_IMAGES } from '../types.js'
+import { createArkmeSdk } from '../sdk/index.js'
 import { callArkme, ArkmeClientError } from './api.js'
 import { ArkmeUserAvatar } from './ArkmeAvatar.js'
 import type { ArkmeWorldTarget } from './ui-controller.js'
 import { resolveWorldVoiceprintExpectationCopy } from './world-voiceprint-expectation-copy.js'
 
 type WorldScope = 'all' | 'mine'
+
+const worldSdk = createArkmeSdk()
 
 export type ArkmeWorldViewState = {
   status: 'loading' | 'error' | 'empty' | 'success'
@@ -322,40 +328,63 @@ export function ArkmeWorldContent({ state, scope, target, voiceprintPlayableRefs
   </>
 }
 
-async function fileBase64(file: File): Promise<string> {
-  const buffer = await file.arrayBuffer()
-  const bytes = new Uint8Array(buffer)
-  let binary = ''
-  for (let offset = 0; offset < bytes.length; offset += 0x8000) binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000))
-  return btoa(binary)
-}
-
-function PublishDialog({ onClose, onPublished }: { onClose(): void; onPublished(): void }) {
+function PublishDialog({ onClose, onPublished }: { onClose(): void; onPublished(result: ArkmeWorldPublishResult): void }) {
   const [text, setText] = useState('')
   const [files, setFiles] = useState<File[]>([])
   const [sending, setSending] = useState(false)
   const [message, setMessage] = useState('')
   const sendingRef = useRef(false)
+  const mutationIdRef = useRef(uuid())
+  const uploadedAssetsRef = useRef<{ mutationId: string; assets: ArkmeUploadedAsset[] }>()
+  const resetMutationId = () => {
+    mutationIdRef.current = uuid()
+    uploadedAssetsRef.current = undefined
+  }
   const submit = async () => {
     if (sendingRef.current) return
     const textContent = text.trim()
     if (textContent === '') { setMessage(files.length > 0 ? '图片动态也需要写一点文字' : '请输入要发到世界的内容'); return }
     if (files.some(file => !file.type.startsWith('image/'))) { setMessage('只能上传图片'); return }
-    if (files.some(file => file.size > 20 * 1024 * 1024)) { setMessage('单张图片不能超过 20MB'); return }
+    if (files.some(file => file.size > ARKME_WORLD_PUBLISH_MAX_IMAGE_BYTES)) { setMessage('单张图片不能超过 20MB'); return }
     const controller = new AbortController()
     sendingRef.current = true
     setSending(true)
     setMessage(files.length > 0 ? '正在上传图片…' : '正在发布…')
     try {
-      const assets = await withTimeout(Promise.all(files.map(async file => await callArkme<{ fileAssetUid: string }>('world.upload-image-data', {
-        fileName: file.name || 'world-image', mimeType: file.type, size: file.size, dataBase64: await fileBase64(file),
-      }, controller.signal))), 60_000, '图片上传等待太久，请检查网络后重试', () => { controller.abort() })
+      const cachedUploads = uploadedAssetsRef.current
+      let assets: ArkmeUploadedAsset[] = []
+      if (files.length > 0) {
+        if (cachedUploads?.mutationId === mutationIdRef.current) assets = cachedUploads.assets
+        else {
+          assets = await withTimeout(Promise.all(files.map(async file => await worldSdk.upload(file, {
+            fileName: file.name || 'world-image', signal: controller.signal,
+          }))), 60_000, '图片上传等待太久，请检查网络后重试', () => { controller.abort() })
+          uploadedAssetsRef.current = { mutationId: mutationIdRef.current, assets }
+        }
+      }
       setMessage('正在发布…')
-      await withTimeout(callArkme(files.length > 0 ? 'world.publish-rich' : 'world.publish-text', {
-        clientMutationId: uuid(), textContent,
-        fileAssets: assets.map((asset, index) => ({ fileAssetUid: asset.fileAssetUid, mediaType: 'image', fileKind: 1, sortOrder: index })),
-      }, controller.signal), 90_000, '发布等待太久，请刷新世界后确认是否已发布', () => { controller.abort() })
-      onPublished()
+      const result = await withTimeout<ArkmeWorldPublishResult>(files.length > 0
+        ? worldSdk.publishWorldFileAssets({
+            clientMutationId: mutationIdRef.current,
+            textContent,
+            fileAssets: assets.map(asset => ({
+              fileAssetUid: asset.fileAssetUid,
+              fileName: asset.fileName,
+              mimeType: asset.mimeType,
+              size: asset.size,
+              fileKind: 1,
+            })),
+          }, controller.signal)
+        : worldSdk.publishWorldText({
+            clientMutationId: mutationIdRef.current,
+            textContent,
+          }, controller.signal),
+      90_000, '发布等待太久，请刷新世界后确认是否已发布', () => { controller.abort() })
+      if (!result.worldPublished) {
+        throw new Error(result.error ?? (result.recordSaved ? '内容已保存，但发到世界失败，请重试' : '发布失败，请稍后重试'))
+      }
+      resetMutationId()
+      onPublished(result)
       onClose()
     } catch (error) { setMessage(messageOf(error, '发布失败，请稍后重试')) }
     finally { controller.abort(); sendingRef.current = false; setSending(false) }
@@ -363,9 +392,9 @@ function PublishDialog({ onClose, onPublished }: { onClose(): void; onPublished(
   return <div role="dialog" aria-modal="true" aria-label="发世界" style={styles.modalBackdrop} onMouseDown={event => { if (event.target === event.currentTarget && !sending) onClose() }}>
     <section style={styles.modal}>
       <h2 style={styles.modalTitle}>发世界</h2>
-      <p style={styles.modalText}>发布后会作为公开动态展示。功能如果暂未接通，失败原因会保留在这里，草稿不会被清空。</p>
-      <textarea style={styles.textarea} value={text} disabled={sending} maxLength={2000} autoFocus placeholder="分享此刻的想法…" onChange={event => { setText(event.currentTarget.value); setMessage('') }} />
-      <label style={styles.fieldLabel}>图片（最多 9 张）<input style={styles.fileInput} type="file" accept="image/*" multiple disabled={sending} onChange={event => { setFiles(Array.from(event.currentTarget.files ?? []).slice(0, 9)); setMessage('') }} /></label>
+      <p style={styles.modalText}>发布后会作为公开动态展示。发布失败时原因会保留在这里，草稿不会被清空。</p>
+      <textarea style={styles.textarea} value={text} disabled={sending} maxLength={2000} autoFocus placeholder="分享此刻的想法…" onChange={event => { setText(event.currentTarget.value); resetMutationId(); setMessage('') }} />
+      <label style={styles.fieldLabel}>图片（最多 9 张）<input style={styles.fileInput} type="file" accept="image/*" multiple disabled={sending} onChange={event => { setFiles(Array.from(event.currentTarget.files ?? []).slice(0, ARKME_WORLD_PUBLISH_MAX_IMAGES)); resetMutationId(); setMessage('') }} /></label>
       <div style={styles.modalActions}>
         <span role="status" style={message.includes('正在') ? styles.subtitle : styles.modalError}>{message}</span>
         <span style={styles.headerActions}><button type="button" style={styles.button} disabled={sending} onClick={onClose}>取消</button><button type="button" style={{ ...styles.button, ...styles.primaryButton }} disabled={sending} onClick={() => { void submit() }}>{sending ? '发布中…' : '发布'}</button></span>
@@ -629,7 +658,11 @@ export function ArkmeWorldSurface({ target, onBackToWorld }: { target?: ArkmeWor
         if (target === undefined) load(scope, state.nextOffset)
         else loadUser(target, state.nextOffset)
       }} />
-    {composerOpen && <PublishDialog onClose={() => { setComposerOpen(false) }} onPublished={() => { setLoaded(current => ({ ...current, all: false, mine: false })); setScope('mine') }} />}
+    {composerOpen && <PublishDialog onClose={() => { setComposerOpen(false) }} onPublished={result => {
+      setLoaded(current => ({ ...current, all: false, mine: false }))
+      setActionMessage(result.visibility === 'pending_review' ? '已提交审核，可稍后在“我的世界”查看' : '已发布到世界')
+      setScope('mine')
+    }} />}
     {inviteItem !== undefined && <VoiceprintInviteDialog item={inviteItem} variantIndex={invitePresentationIndexesRef.current.get(inviteItem.recordRef) ?? 0} sending={inviteSending} {...(inviteMessage === undefined ? {} : { message: inviteMessage })} onClose={closeVoiceprintInvite} onConfirm={item => { void inviteVoiceprint(item) }} />}
   </main>
 }

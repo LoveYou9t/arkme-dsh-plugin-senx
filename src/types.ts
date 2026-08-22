@@ -150,6 +150,12 @@ export interface ArkmeCreateTextResult {
   status: number
 }
 
+/** Result of creating a canonical Record backed by uploaded file assets. */
+export interface ArkmeCreateFileAssetRecordResult {
+  recordUid: string
+  status: number
+}
+
 export type ArkmeBotProvider = 'openclaw' | 'webhook'
 export type ArkmeBotStatus = 'online' | 'offline' | 'unknown'
 
@@ -368,6 +374,9 @@ export interface ArkmeArrangementReminderWriteResult {
 
 export type ArkmeWorldVisibility = 'visible' | 'pending_review' | 'rejected' | 'unknown' | 'not_published'
 
+export const ARKME_WORLD_PUBLISH_MAX_IMAGES = 9
+export const ARKME_WORLD_PUBLISH_MAX_IMAGE_BYTES = 20 * 1024 * 1024
+
 export interface ArkmeWorldPublishResult {
   recordSaved: boolean
   recordState: 'synced' | 'pending' | 'not_saved'
@@ -376,6 +385,24 @@ export interface ArkmeWorldPublishResult {
   checkStatus: number
   retryable: boolean
   error?: string
+}
+
+/** Media upload output accepted by the World image-publish boundary. */
+export interface ArkmeWorldPublishFileAsset {
+  fileAssetUid: string
+  fileName: string
+  mimeType: string
+  size: number
+  fileKind: 1
+}
+
+export interface ArkmeWorldPublishTextInput {
+  clientMutationId: string
+  textContent: string
+}
+
+export interface ArkmeWorldPublishFileAssetsInput extends ArkmeWorldPublishTextInput {
+  fileAssets: ArkmeWorldPublishFileAsset[]
 }
 
 export interface ArkmeCachedSnapshot {
@@ -550,6 +577,8 @@ export interface ArkmeProviderCapabilities {
     worldFeed?: true
     /** Optional additive capability for reading and writing World comments and replies. */
     worldInteractions?: true
+    /** Optional additive capability for publishing text and file-asset World records. */
+    worldPublish?: true
     /** Optional additive capability for author-voice playback of public World text. */
     worldVoiceprintPlayback?: true
     /** Optional additive capability for sending a voiceprint invite reminder to a World author. */
@@ -1709,6 +1738,8 @@ export type ArkmePluginOperation =
   | 'world.interactions.list'
   | 'world.interactions.create-text'
   | 'world.image.read'
+  | 'world.publish-text'
+  | 'world.publish-file-assets'
   | 'arrangements.list'
   | 'arrangements.detail'
   | 'arrangements.mutate'

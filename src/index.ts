@@ -542,7 +542,10 @@ export type {
   ArkmePluginUpdateStatus,
   ArkmeUserProfile,
   ArkmeUserProfileSnapshot,
+  ArkmeWorldPublishFileAsset,
+  ArkmeWorldPublishFileAssetsInput,
   ArkmeWorldPublishResult,
+  ArkmeWorldPublishTextInput,
   ArkmeWorldFeedItem,
   ArkmeWorldFeedPage,
   ArkmeWorldVoiceprintAvailability,
@@ -570,7 +573,11 @@ export type {
   ArkmeWechatPhoneEvidence,
   ArkmeWechatPhonePage,
 } from './types.js'
-export { ARKME_PROVIDER_CONTRACT_VERSION } from './types.js'
+export {
+  ARKME_PROVIDER_CONTRACT_VERSION,
+  ARKME_WORLD_PUBLISH_MAX_IMAGE_BYTES,
+  ARKME_WORLD_PUBLISH_MAX_IMAGES,
+} from './types.js'
 export type {
   ArkmeExtensionRatingSummary,
   ArkmeExtensionReviewAvatarFallback,
