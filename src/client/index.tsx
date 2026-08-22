@@ -93,6 +93,9 @@ export function apply(ctx: ClientContext): void {
       disposeSidebar = ctx.slots.inject('sidebar', () => ctx.slots.register({
         name: 'sidebar',
         priority: -100,
+        children: {
+          'arkme.directory.entry': { kind: 'list', scope: 'root' },
+        },
         inject: () => ({
           collapseSidebar: () => { ctx.layout.toggleSidebar() },
           closeDetails: () => { ctx.layout.closeDetails() },
@@ -170,9 +173,6 @@ export function apply(ctx: ClientContext): void {
         disposeConversation = ctx.slots.inject('conversation', () => ctx.slots.register({
           name: 'conversation',
           priority: -100,
-          children: {
-            'arkme.directory.entry': { kind: 'list', scope: 'root' },
-          },
           inject: () => ({ closeDetails: () => { ctx.layout.closeDetails() } }),
         }, ArkmePersistentWorkspace))
       }
