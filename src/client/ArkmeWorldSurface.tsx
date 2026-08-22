@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react'
+import { useCallback, useEffect, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from 'react'
 import { ArrowsClockwise } from '@phosphor-icons/react/dist/icons/ArrowsClockwise'
 import { ArrowLeft } from '@phosphor-icons/react/dist/icons/ArrowLeft'
 import { Plus } from '@phosphor-icons/react/dist/icons/Plus'
 import { SpeakerHigh } from '@phosphor-icons/react/dist/icons/SpeakerHigh'
+import { X } from '@phosphor-icons/react/dist/icons/X'
 import type {
   ArkmeImagePayload,
   ArkmeUploadedAsset,
@@ -83,7 +84,7 @@ const styles: Record<string, CSSProperties> = {
   text: { margin: '9px 0 0', whiteSpace: 'pre-wrap', wordBreak: 'break-word', color: '#4d535d', fontSize: 13, lineHeight: 1.75 },
   imageGrid: { marginTop: 13, display: 'grid', gridTemplateColumns: 'repeat(3,minmax(0,1fr))', gap: 6 },
   image: { width: '100%', aspectRatio: '1', objectFit: 'cover', borderRadius: 10, background: '#eef0f3' },
-  imageButton: { minWidth: 0, padding: 0, border: 0, borderRadius: 10, overflow: 'hidden', background: '#eef0f3', cursor: 'zoom-in' },
+  imageButton: { minWidth: 0, padding: 0, border: 0, borderRadius: 10, overflow: 'hidden', background: '#eef0f3', cursor: 'pointer' },
   cardFooter: { minHeight: 28, marginTop: 14, paddingTop: 12, display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 12, borderTop: `1px solid ${colors.border}` },
   linkButton: { padding: '5px 7px', border: 0, borderRadius: 7, background: 'transparent', color: colors.accent, cursor: 'pointer', font: 'inherit', fontSize: 11 },
   commentButton: { padding: 0, border: 0, background: 'transparent', color: colors.secondary, cursor: 'pointer', font: 'inherit', fontSize: 11 },
@@ -131,12 +132,14 @@ const styles: Record<string, CSSProperties> = {
   interactionComposer: { marginTop: 12, paddingTop: 12, borderTop: `1px solid ${colors.border}` },
   interactionComposerActions: { marginTop: 9, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 },
   interactionHint: { color: '#969ba5', fontSize: 10 },
-  previewModal: { width: 'min(960px, 94vw)', height: 'min(720px, 88vh)', padding: 14, boxSizing: 'border-box', display: 'grid', gridTemplateRows: '38px minmax(0,1fr)', borderRadius: 18, background: '#17191f' },
-  previewHeader: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', color: '#fff', fontSize: 12 },
-  previewStage: { minWidth: 0, minHeight: 0, display: 'grid', gridTemplateColumns: '44px minmax(0,1fr) 44px', gridTemplateRows: 'minmax(0,1fr)', alignItems: 'center', gap: 10, overflow: 'hidden' },
-  previewMedia: { width: '100%', height: '100%', minWidth: 0, minHeight: 0, display: 'grid', placeItems: 'center', overflow: 'hidden' },
-  previewImage: { display: 'block', width: 'auto', height: 'auto', maxWidth: '100%', maxHeight: '100%', objectFit: 'contain', borderRadius: 10 },
-  previewButton: { width: 38, height: 38, border: 0, borderRadius: 10, background: 'rgba(255,255,255,.12)', color: '#fff', cursor: 'pointer' },
+  previewBackdrop: { position: 'fixed', inset: 0, zIndex: 1300, display: 'grid', placeItems: 'center', padding: '20px 10px', boxSizing: 'border-box', background: 'rgba(0,0,0,.78)' },
+  previewModal: { position: 'relative', width: '100%', height: '100%', minWidth: 0, minHeight: 0 },
+  previewStage: { position: 'absolute', top: 30, right: 0, bottom: 20, left: 0, minWidth: 0, minHeight: 0, overflow: 'hidden', borderRadius: 12 },
+  previewViewport: { position: 'absolute', inset: 0, minWidth: 0, minHeight: 0, overflow: 'hidden', overscrollBehavior: 'contain' },
+  previewMedia: { position: 'relative', width: '100%', height: '100%', minWidth: 0, minHeight: 0 },
+  previewImage: { position: 'absolute', inset: 0, display: 'block', width: '100%', height: '100%', objectFit: 'contain', userSelect: 'none' },
+  previewClose: { position: 'absolute', top: 0, right: 8, zIndex: 2, width: 28, height: 28, padding: 0, display: 'grid', placeItems: 'center', border: 0, borderRadius: '50%', background: 'rgba(255,255,255,.14)', color: '#fff', cursor: 'pointer' },
+  previewNav: { position: 'absolute', top: '50%', zIndex: 2, width: 40, height: 40, marginTop: -20, padding: 0, border: 0, borderRadius: '50%', background: 'rgba(255,255,255,.14)', color: '#fff', cursor: 'pointer', fontSize: 24, lineHeight: 1 },
   replyTarget: { marginBottom: 8, display: 'flex', alignItems: 'center', justifyContent: 'space-between', color: colors.accent, fontSize: 12 },
 }
 
@@ -191,13 +194,196 @@ function WorldImage({ imageRef, alt, avatar = false, preview = false }: { imageR
     return () => { controller.abort() }
   }, [imageRef])
   const imageStyle = avatar ? styles.avatarImage : preview ? styles.previewImage : styles.image
+  if (preview && source === '') return <span style={imageStyle} aria-hidden data-world-image-preview-loading={failed ? 'failed' : 'true'} />
   if (failed) return <span style={imageStyle} aria-label={`${alt}加载失败`} />
-  return <img src={source || undefined} alt={alt} loading={avatar || preview ? 'eager' : 'lazy'} style={imageStyle} />
+  return <img src={source || undefined} alt={preview ? '' : alt} loading={avatar || preview ? 'eager' : 'lazy'} draggable={preview ? false : undefined} style={imageStyle} />
 }
 
-export function WorldImagePreviewMedia({ imageRef, alt }: { imageRef: string; alt: string }) {
-  return <div style={styles.previewMedia}>
-    <WorldImage imageRef={imageRef} alt={alt} preview />
+export function WorldImagePreviewMedia({ imageRef, alt, zoomed = false }: { imageRef: string; alt: string; zoomed?: boolean }) {
+  return <div role="img" aria-label={alt} style={{ ...styles.previewMedia, ...(zoomed ? { width: '200%', height: '200%' } : {}) }}>
+    <WorldImage key={imageRef} imageRef={imageRef} alt={alt} preview />
+  </div>
+}
+
+const worldImagePreviewSingleClickDelayMillis = 280
+
+export interface WorldImagePreviewDragOrigin {
+  pointerId: number
+  clientX: number
+  clientY: number
+  scrollLeft: number
+  scrollTop: number
+}
+
+export function worldImagePreviewDragPosition(origin: WorldImagePreviewDragOrigin, clientX: number, clientY: number): { left: number; top: number } {
+  return {
+    left: origin.scrollLeft + origin.clientX - clientX,
+    top: origin.scrollTop + origin.clientY - clientY,
+  }
+}
+
+export function WorldImagePreviewDialog({ item, previewIndex, onClose, onSelect }: {
+  item: ArkmeWorldFeedItem
+  previewIndex: number
+  onClose(): void
+  onSelect(index: number): void
+}) {
+  const imageRef = item.imageRefs[previewIndex]
+  const viewportRef = useRef<HTMLDivElement>(null)
+  const closeTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+  const dragOriginRef = useRef<WorldImagePreviewDragOrigin | undefined>(undefined)
+  const dragMovedRef = useRef(false)
+  const suppressNextClickRef = useRef(false)
+  const [zoomed, setZoomed] = useState(false)
+  const [dragging, setDragging] = useState(false)
+
+  const cancelScheduledClose = () => {
+    if (closeTimerRef.current === undefined) return
+    clearTimeout(closeTimerRef.current)
+    closeTimerRef.current = undefined
+  }
+
+  useEffect(() => {
+    cancelScheduledClose()
+    setZoomed(false)
+    setDragging(false)
+    dragOriginRef.current = undefined
+    dragMovedRef.current = false
+    suppressNextClickRef.current = false
+    const viewport = viewportRef.current
+    if (viewport !== null) {
+      viewport.scrollLeft = 0
+      viewport.scrollTop = 0
+    }
+    return cancelScheduledClose
+  }, [previewIndex])
+
+  if (imageRef === undefined) return null
+  const multiple = item.imageRefs.length > 1
+
+  const handlePreviewClick = (event: ReactMouseEvent<HTMLDivElement>) => {
+    if (suppressNextClickRef.current) {
+      suppressNextClickRef.current = false
+      cancelScheduledClose()
+      return
+    }
+    if (event.detail > 1) {
+      cancelScheduledClose()
+      return
+    }
+    cancelScheduledClose()
+    closeTimerRef.current = setTimeout(() => {
+      closeTimerRef.current = undefined
+      onClose()
+    }, worldImagePreviewSingleClickDelayMillis)
+  }
+
+  const handlePreviewDoubleClick = (event: ReactMouseEvent<HTMLDivElement>) => {
+    event.preventDefault()
+    cancelScheduledClose()
+    const viewport = viewportRef.current
+    if (viewport === null) return
+    if (zoomed) {
+      setZoomed(false)
+      setDragging(false)
+      dragOriginRef.current = undefined
+      window.requestAnimationFrame(() => {
+        viewport.scrollLeft = 0
+        viewport.scrollTop = 0
+      })
+      return
+    }
+    const bounds = viewport.getBoundingClientRect()
+    const localX = event.clientX - bounds.left
+    const localY = event.clientY - bounds.top
+    const horizontalRatio = localX / Math.max(1, viewport.clientWidth)
+    const verticalRatio = localY / Math.max(1, viewport.clientHeight)
+    setZoomed(true)
+    window.requestAnimationFrame(() => {
+      viewport.scrollLeft = horizontalRatio * viewport.scrollWidth - localX
+      viewport.scrollTop = verticalRatio * viewport.scrollHeight - localY
+    })
+  }
+
+  const beginPreviewDrag = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (!zoomed || event.button !== 0 || !event.isPrimary) return
+    const viewport = viewportRef.current
+    if (viewport === null) return
+    cancelScheduledClose()
+    dragOriginRef.current = {
+      pointerId: event.pointerId,
+      clientX: event.clientX,
+      clientY: event.clientY,
+      scrollLeft: viewport.scrollLeft,
+      scrollTop: viewport.scrollTop,
+    }
+    dragMovedRef.current = false
+    suppressNextClickRef.current = false
+    viewport.setPointerCapture(event.pointerId)
+    setDragging(true)
+  }
+
+  const movePreviewDrag = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const origin = dragOriginRef.current
+    const viewport = viewportRef.current
+    if (origin === undefined || origin.pointerId !== event.pointerId || viewport === null) return
+    if (Math.abs(event.clientX - origin.clientX) > 2 || Math.abs(event.clientY - origin.clientY) > 2) dragMovedRef.current = true
+    const position = worldImagePreviewDragPosition(origin, event.clientX, event.clientY)
+    viewport.scrollLeft = position.left
+    viewport.scrollTop = position.top
+    event.preventDefault()
+  }
+
+  const endPreviewDrag = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const origin = dragOriginRef.current
+    if (origin === undefined || origin.pointerId !== event.pointerId) return
+    dragOriginRef.current = undefined
+    suppressNextClickRef.current = dragMovedRef.current
+    dragMovedRef.current = false
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId)
+    setDragging(false)
+  }
+
+  const selectImage = (index: number) => {
+    cancelScheduledClose()
+    setZoomed(false)
+    setDragging(false)
+    dragOriginRef.current = undefined
+    dragMovedRef.current = false
+    suppressNextClickRef.current = false
+    const viewport = viewportRef.current
+    if (viewport !== null) {
+      viewport.scrollLeft = 0
+      viewport.scrollTop = 0
+    }
+    onSelect(index)
+  }
+
+  return <div role="dialog" aria-modal="true" aria-label="世界图片预览" style={styles.previewBackdrop} onMouseDown={event => { if (event.target === event.currentTarget) onClose() }}>
+    <section style={styles.previewModal}>
+      <button type="button" style={styles.previewClose} aria-label="关闭图片预览" title="关闭" onClick={onClose}>
+        <X size={16} weight="bold" aria-hidden />
+      </button>
+      <div style={styles.previewStage}>
+        <div
+          ref={viewportRef}
+          style={{ ...styles.previewViewport, overflow: zoomed ? 'auto' : 'hidden', cursor: zoomed ? (dragging ? 'grabbing' : 'grab') : 'default', touchAction: zoomed ? 'none' : 'auto' }}
+          data-world-image-preview-zoomed={String(zoomed)}
+          onClick={handlePreviewClick}
+          onDoubleClick={handlePreviewDoubleClick}
+          onPointerDown={beginPreviewDrag}
+          onPointerMove={movePreviewDrag}
+          onPointerUp={endPreviewDrag}
+          onPointerCancel={endPreviewDrag}
+        >
+          <WorldImagePreviewMedia imageRef={imageRef} alt={`${item.authorName}发布的图片 ${String(previewIndex + 1)}`} zoomed={zoomed} />
+        </div>
+        {multiple && <>
+          <button type="button" style={{ ...styles.previewNav, left: 10, opacity: previewIndex === 0 ? 0.3 : 1 }} aria-label="上一张图片" disabled={previewIndex === 0} onClick={() => { selectImage(Math.max(0, previewIndex - 1)) }}>‹</button>
+          <button type="button" style={{ ...styles.previewNav, right: 10, opacity: previewIndex === item.imageRefs.length - 1 ? 0.3 : 1 }} aria-label="下一张图片" disabled={previewIndex === item.imageRefs.length - 1} onClick={() => { selectImage(Math.min(item.imageRefs.length - 1, previewIndex + 1)) }}>›</button>
+        </>}
+      </div>
+    </section>
   </div>
 }
 
@@ -363,6 +549,12 @@ function WorldCard({ item, playable, voiceprintActive, interactionsOpen, onOpenI
 }) {
   const [previewIndex, setPreviewIndex] = useState<number>()
   const interactionsId = interactionRegionId(item.recordRef)
+  useEffect(() => {
+    if (previewIndex === undefined) return
+    const closeOnEscape = (event: KeyboardEvent) => { if (event.key === 'Escape') setPreviewIndex(undefined) }
+    window.addEventListener('keydown', closeOnEscape)
+    return () => { window.removeEventListener('keydown', closeOnEscape) }
+  }, [previewIndex])
   return <article style={styles.card} data-world-record-ref={item.recordRef}>
     <header style={styles.cardHeader}>
       <span style={styles.avatar}>{item.avatarRef === undefined
@@ -395,16 +587,7 @@ function WorldCard({ item, playable, voiceprintActive, interactionsOpen, onOpenI
     </footer>
     {!interactionsOpen && item.extendCount > 0 && <WorldInteractionPreview item={item} onOpen={() => { onOpenInteractions(item) }} />}
     {interactionsOpen && <InteractionPanel item={item} onClose={() => { onOpenInteractions(item) }} onInteractionCreated={onInteractionCreated} />}
-    {previewIndex !== undefined && item.imageRefs[previewIndex] !== undefined && <div role="dialog" aria-modal="true" aria-label="世界图片预览" style={styles.modalBackdrop} onMouseDown={event => { if (event.target === event.currentTarget) setPreviewIndex(undefined) }}>
-      <section style={styles.previewModal}>
-        <header style={styles.previewHeader}><span>{item.authorName} · {previewIndex + 1} / {item.imageRefs.length}</span><button type="button" style={styles.previewButton} onClick={() => { setPreviewIndex(undefined) }}>关闭</button></header>
-        <div style={styles.previewStage}>
-          <button type="button" style={styles.previewButton} disabled={previewIndex === 0} onClick={() => { setPreviewIndex(index => Math.max(0, (index ?? 0) - 1)) }}>‹</button>
-          <WorldImagePreviewMedia imageRef={item.imageRefs[previewIndex]!} alt={`${item.authorName}发布的图片 ${String(previewIndex + 1)}`} />
-          <button type="button" style={styles.previewButton} disabled={previewIndex === item.imageRefs.length - 1} onClick={() => { setPreviewIndex(index => Math.min(item.imageRefs.length - 1, (index ?? 0) + 1)) }}>›</button>
-        </div>
-      </section>
-    </div>}
+    {previewIndex !== undefined && <WorldImagePreviewDialog item={item} previewIndex={previewIndex} onClose={() => { setPreviewIndex(undefined) }} onSelect={setPreviewIndex} />}
   </article>
 }
 
