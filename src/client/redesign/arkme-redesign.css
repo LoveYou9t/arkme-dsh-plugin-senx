@@ -918,6 +918,8 @@ body[data-ds-dark-theme] .arkme-workspace-dialog-backdrop {
   .arkme-redesign-task-start { padding: 28px; }
   .arkme-redesign-starters { grid-template-columns: 1fr; gap: 6px; }
   .arkme-redesign-starters > button { border-right: 0; }
+  .arkme-voiceprint-relationships { grid-template-columns: minmax(0, 1fr) !important; gap: 28px !important; }
+  .arkme-voiceprint-outbound { padding-left: 0 !important; padding-top: 28px !important; border-left: 0 !important; border-top: 1px solid var(--dsw-alias-border-subtle, #e6e7eb) !important; }
 }
 
 @media (prefers-reduced-motion: reduce) {

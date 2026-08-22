@@ -26,6 +26,7 @@ export interface ArkmeClientConfig {
   environment: ArkmeEnvironment
   testLoginEnabled: boolean
   callAssetBasePath: string
+  voiceprintEnrollmentPath: string
   shareWebsite: string
 }
 
@@ -47,6 +48,91 @@ export interface ArkmeContactSearchResult {
 export interface ArkmeContactAddResult {
   state: 'ready' | 'pending'
   source: ArkmeSourceItem
+}
+
+export interface ArkmeMyVoiceprint {
+  hasVoiceprint: boolean
+  nickname: string
+  updatedAtMillis: number
+  canIdentify: boolean
+  canPlay: boolean
+  canRestorePlayback: boolean
+  enrollmentStatus: 'none' | 'processing' | 'ready'
+  enrollmentPending: boolean
+}
+
+export interface ArkmeVoiceprintGrantItem {
+  grantRef: string
+  displayName: string
+  avatarRef?: string
+  identifyEnabled: boolean
+  playEnabled: boolean
+  grantedAtMillis: number
+  updatedAtMillis: number
+}
+
+export interface ArkmeVoiceprintGrantPage {
+  items: ArkmeVoiceprintGrantItem[]
+  nextCursor: string
+  hasMore: boolean
+}
+
+export type ArkmeRecognizedPersonIdentityKind = 'speaker' | 'authorized_user'
+
+export interface ArkmeRecognizedPersonItem {
+  personRef: string
+  identityKind: ArkmeRecognizedPersonIdentityKind
+  displayName: string
+  avatarRef?: string
+  playGranted: boolean
+  previewAvailable: boolean
+  canInvite: boolean
+  inviteTargetSelectionRequired: boolean
+}
+
+export type ArkmeRecognizedPersonDetail = ArkmeRecognizedPersonItem
+
+export interface ArkmeRecognizedPersonPage {
+  items: ArkmeRecognizedPersonItem[]
+  nextCursor: string
+  hasMore: boolean
+}
+
+export type ArkmeRecognizedVoiceprintKind = 'local' | 'legacy' | 'authorized'
+
+export interface ArkmeRecognizedVoiceprintItem {
+  kind: ArkmeRecognizedVoiceprintKind
+  hitCount: number
+  createdAtMillis?: number
+}
+
+export interface ArkmeRecognizedVoiceprintLibrary {
+  items: ArkmeRecognizedVoiceprintItem[]
+}
+
+export interface ArkmeVoiceprintInvitation {
+  inviteUrl: string
+  expiresAtMillis: number
+}
+
+export interface ArkmeVoiceprintGrantRevocation {
+  revoked: true
+}
+
+export interface ArkmeVoiceprintPlaybackRestore {
+  canPlay: boolean
+  restored: boolean
+  updatedAtMillis: number
+}
+
+export const ARKME_VOICEPRINT_ENROLLMENT_MIN_DURATION_MS = 3_000
+export const ARKME_VOICEPRINT_ENROLLMENT_MAX_DURATION_MS = 60_000
+export const ARKME_VOICEPRINT_ENROLLMENT_MAX_AUDIO_BYTES = 10 * 1024 * 1024
+
+export interface ArkmeVoiceprintEnrollmentResult {
+  status: 'processing'
+  cloneReady: boolean
+  updatedAtMillis: number
 }
 
 export interface ArkmeRecordCursor {
@@ -604,6 +690,8 @@ export interface ArkmeProviderCapabilities {
     worldVoiceprintInvite?: true
     /** Optional additive capability for mobile-aligned relationship context in the voiceprint reminder dialog. */
     worldVoiceprintSocialContext?: true
+    /** Optional additive capability for current-account voiceprint management in the built-in UI. */
+    voiceprintManagement?: true
     /** Optional additive capability for the independent Arrangement consumer. */
     arrangements?: true
     /** Optional additive current-account Cordis/Profile/cloud extension inventory. */
@@ -1862,6 +1950,15 @@ export type ArkmePluginOperation =
 
 export type ArkmeHostOperation = ArkmePluginOperation
   | 'provider.instance'
+  | 'voiceprint.status'
+  | 'voiceprint.grants'
+  | 'voiceprint.people'
+  | 'voiceprint.person'
+  | 'voiceprint.person.voiceprints'
+  | 'voiceprint.person.invite'
+  | 'voiceprint.invite'
+  | 'voiceprint.revoke'
+  | 'voiceprint.restore'
   | 'dsh-beta-community.entry-state'
   | 'dsh-beta-community.join'
   | 'recordings.calendar'

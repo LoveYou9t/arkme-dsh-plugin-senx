@@ -45,6 +45,7 @@ import {
 import { arkmeTheme } from './arkme-theme.js'
 import { ArkmeProductNavigation } from './ArkmeProductNavigation.js'
 import { ArkmeSettingsSurface } from './ArkmeSettingsSurface.js'
+import { ArkmeVoiceprintSurface } from './ArkmeVoiceprintSurface.js'
 import { ArkmeNavigation, type ArkmeNavigationProps } from './ArkmeVirtualWorkspace.js'
 import { arkmeAuthStore } from './auth-store.js'
 import { arkmeChatDirectory, arkmeChatTimelineDelta, arkmeInterwovenInvalidation } from './chat-directory-store.js'
@@ -1848,13 +1849,14 @@ export function ArkmeSurface({
     : ui.mode === 'search' ? '搜索'
     : ui.mode === 'extensions' ? '市集'
     : ui.mode === 'settings' ? '设置'
+    : ui.mode === 'voiceprint' ? '声纹管理'
     : ui.mode === 'arko' ? 'Arko'
     : conversationBackdropVisible ? selfBreadcrumbLabel ?? arkmeSourceDestinationLabel(selectedSource)
     : 'Arkme'
   const arkoContentVisible = authView === 'content' && ui.mode === 'arko'
   const utilityContentVisible = authView === 'content'
     && (ui.mode === 'recordings' || ui.mode === 'world' || ui.mode === 'search' || ui.mode === 'extensions'
-      || ui.mode === 'settings')
+      || ui.mode === 'settings' || ui.mode === 'voiceprint')
 
   return (
     <div
@@ -1998,6 +2000,7 @@ export function ArkmeSurface({
             onPrivateChatOpened={activateSource}
           />
           : ui.mode === 'settings' ? <div style={styles.utilityBody}><ArkmeSettingsSurface /></div>
+          : ui.mode === 'voiceprint' ? <ArkmeVoiceprintSurface />
           : ui.mode === 'arko' ? <ArkmeArkoSurface key={arkmeArkoSurfaceKey(auth)} />
           : source === undefined ? <div className="arkme-conversation-body" style={styles.body}>
             {activeSelfSourcesResolution?.status === 'error'

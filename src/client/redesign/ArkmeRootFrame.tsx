@@ -30,6 +30,7 @@ import { ArkmeCalendarSurface } from '../ArkmeCalendarSurface.js'
 import { ArkmeRecordingSurface } from '../ArkmeRecordingSurface.js'
 import { ArkmeSearchSurface } from '../ArkmeSearchSurface.js'
 import { ArkmeSettingsRow } from '../ArkmeSettingsRow.js'
+import { ArkmeVoiceprintSurface } from '../ArkmeVoiceprintSurface.js'
 import { ArkmeSurface } from '../ArkmeSidebar.js'
 import { ArkmeNavigation } from '../ArkmeVirtualWorkspace.js'
 import { arkmeAuthStore } from '../auth-store.js'
@@ -52,7 +53,7 @@ export function installArkmeRedesignStyles(): () => void {
   return () => { style.remove() }
 }
 
-export type ArkmeRoute = 'chats' | 'recordings' | 'search' | 'plugins' | 'settings'
+export type ArkmeRoute = 'chats' | 'recordings' | 'search' | 'plugins' | 'settings' | 'voiceprint'
 
 export interface ArkmeRootInjected {
   layout: ArkmeLayoutController
@@ -364,7 +365,7 @@ export function ArkmeRootFrame({
           </div>
           <div className="arkme-redesign-profile-menu">
             <button type="button" role="menuitem" onClick={() => { setProfileOpen(false) }}><GlobeHemisphereWest size={19} /><span><strong>我的世界</strong><small>管理你的个人内容</small></span><CaretRight size={15} /></button>
-            <button type="button" role="menuitem" onClick={() => { setProfileOpen(false) }}><Fingerprint size={19} /><span><strong>声纹管理</strong><small>设置声音识别</small></span><CaretRight size={15} /></button>
+            <button type="button" role="menuitem" onClick={() => { selectRoute('voiceprint') }}><Fingerprint size={19} /><span><strong>声纹管理</strong><small>设置声音识别</small></span><CaretRight size={15} /></button>
             <button type="button" role="menuitem" onClick={() => { selectRoute('settings') }}><GearSix size={19} /><span><strong>设置</strong><small>账号与应用设置</small></span><CaretRight size={15} /></button>
           </div>
         </div>}
@@ -425,7 +426,9 @@ export function ArkmeRootFrame({
                     onClose={() => undefined}
                   />
                 </div>
-                : <section className="arkme-redesign-feature-page arkme-redesign-settings-page">
+                : route === 'voiceprint'
+                  ? <div className="arkme-redesign-route-surface"><ArkmeVoiceprintSurface /></div>
+                  : <section className="arkme-redesign-feature-page arkme-redesign-settings-page">
                   <header><p>设置</p><h1>Arkme 设置</h1><span>管理账号、版本与插件运行状态。</span></header>
                   <div className="arkme-redesign-settings-card"><ArkmeSettingsRow useSessions={useSessions} useWorkspaces={useWorkspaces} /></div>
                 </section>}

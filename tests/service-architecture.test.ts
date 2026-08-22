@@ -42,6 +42,9 @@ const expectedPublicMethods = [
   'mutateArrangement', 'setArrangementReminderEnabled', 'markArrangementRemindersRead',
   'markAllArrangementRemindersRead', 'clearArrangementReminders', 'listWorldFeed', 'listMyWorldFeed', 'listUserWorldFeed',
   'worldVoiceprintPlaybackAvailability', 'generateWorldVoiceprintPlayback', 'worldVoiceprintSocialContext', 'inviteWorldVoiceprint',
+  'myVoiceprint', 'outboundVoiceprintGrants', 'recognizedVoiceprintPeople', 'recognizedVoiceprintPerson',
+  'recognizedPersonVoiceprints', 'createVoiceprintInvitation', 'revokeVoiceprintPlaybackGrant', 'restoreVoiceprintPlayback',
+  'createRecognizedPersonVoiceprintInvitation', 'bindVoiceprintEnrollment',
   'listWorldInteractions', 'createWorldTextInteraction', 'readWorldImage',
   'publishWorldText', 'publishWorldFileAssets', 'publishWorldTextForConversation',
   'createText', 'createTextForConversation', 'pendingWrites',
@@ -56,6 +59,7 @@ const expectedServiceFiles = [
   'arko-service.ts', 'ai-video-service.ts', 'outgoing-call-service.ts', 'interwoven-service.ts',
   'community-service.ts', 'extension-review-service.ts', 'calendar-service.ts',
   'contact-service.ts',
+  'voiceprint-service.ts',
 ].sort()
 
 function publicMethodNames(path: string): string[] {
@@ -106,5 +110,21 @@ describe('Arkme service architecture', () => {
     expect(world).toContain('export interface ArkmeWorldRecordWriter')
     expect(world).not.toMatch(/import \{[^}]*\bMediaService\b/)
     expect(world).not.toMatch(/import \{[^}]*\bRecordService\b/)
+  })
+
+  it('keeps Voiceprint profile enrichment behind a narrow port', () => {
+    const voiceprint = readFileSync(join(root, 'src/services/voiceprint-service.ts'), 'utf8')
+    expect(voiceprint).toContain('export interface ArkmeVoiceprintProfileReader')
+    expect(voiceprint).toContain('export interface ArkmeVoiceprintInviteTargetResolver')
+    expect(voiceprint).not.toMatch(/import \{[^}]*\bProfileService\b/)
+    expect(voiceprint).not.toMatch(/import \{[^}]*\bContactService\b/)
+  })
+
+  it('keeps Voiceprint browser upload transport behind its narrow client port', () => {
+    const surface = readFileSync(join(root, 'src/client/ArkmeVoiceprintSurface.tsx'), 'utf8')
+    const enrollmentClient = readFileSync(join(root, 'src/client/voiceprint-enrollment-client.ts'), 'utf8')
+    expect(surface).not.toMatch(/\bfetch\s*\(/)
+    expect(enrollmentClient).toContain('export interface ArkmeVoiceprintEnrollmentClient')
+    expect(enrollmentClient).toContain('class SameOriginArkmeVoiceprintEnrollmentClient')
   })
 })

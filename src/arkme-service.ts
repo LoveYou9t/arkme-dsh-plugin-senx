@@ -63,6 +63,7 @@ import {
 } from './services/service.js'
 import { SourceService } from './services/source-service.js'
 import { WechatService } from './services/wechat-service.js'
+import { VoiceprintService } from './services/voiceprint-service.js'
 import { WorldService } from './services/world-service.js'
 import type {
   ArkmeBotCreateInput,
@@ -245,6 +246,7 @@ export class ArkmeService {
   private readonly aiPolish: GroupAiPolishService
   private readonly chat: ChatService
   private readonly contact: ContactService
+  private readonly voiceprint: VoiceprintService
 
   constructor(
     private readonly config: ArkmeServiceConfig,
@@ -315,6 +317,11 @@ export class ArkmeService {
       this.realtime,
     )
     this.contact = new ContactService(this.runtime, this.source, this.profile, this.realtime)
+    this.voiceprint = new VoiceprintService(this.runtime, this.profile, {
+      resolveRegisteredContactUserId: async (contactRef, session, signal) => await this.contact.resolveRegisteredContactUserId(
+        contactRef, session, signal,
+      ),
+    })
     this.auth = new AuthService(this.runtime, this.profile, {
       reconnectChatRealtime: () => { this.realtime.reconnect() },
       clearAccountState: userIds => { this.clearAccountState(userIds) },
@@ -433,6 +440,7 @@ export class ArkmeService {
       environment: this.config.environment,
       testLoginEnabled: this.config.environment === 'test',
       callAssetBasePath: `${this.config.routePath}/call`,
+      voiceprintEnrollmentPath: `${this.config.routePath}/voiceprint/enroll`,
       shareWebsite: this.config.shareWebsite ?? ARKME_DEFAULT_SHARE_WEBSITE,
     }
   }
@@ -479,6 +487,7 @@ export class ArkmeService {
         worldVoiceprintPlayback: true,
         worldVoiceprintInvite: true,
         worldVoiceprintSocialContext: true,
+        voiceprintManagement: true,
         arrangements: true,
         myExtensions: true,
         extensionPublish: true,
@@ -1433,6 +1442,17 @@ export class ArkmeService {
       throw error
     }
   }
+
+  async myVoiceprint(options: { signal?: AbortSignal } = {}) { return await this.voiceprint.myVoiceprint(options) }
+  async outboundVoiceprintGrants(input: { cursor: string; limit: number }, options: { signal?: AbortSignal } = {}) { return await this.voiceprint.outboundGrants(input, options) }
+  async recognizedVoiceprintPeople(input: { cursor: string; limit: number }, options: { signal?: AbortSignal } = {}) { return await this.voiceprint.recognizedPeople(input, options) }
+  async recognizedVoiceprintPerson(personRef: string, options: { signal?: AbortSignal } = {}) { return await this.voiceprint.recognizedPerson(personRef, options) }
+  async recognizedPersonVoiceprints(personRef: string, options: { signal?: AbortSignal } = {}) { return await this.voiceprint.recognizedPersonVoiceprints(personRef, options) }
+  async createVoiceprintInvitation(options: { signal?: AbortSignal } = {}) { return await this.voiceprint.createInvitation(options) }
+  async createRecognizedPersonVoiceprintInvitation(personRef: string, targetContactRef: string | undefined, options: { signal?: AbortSignal } = {}) { return await this.voiceprint.createRecognizedPersonInvitation(personRef, targetContactRef, options) }
+  async revokeVoiceprintPlaybackGrant(grantRef: string, options: { signal?: AbortSignal } = {}) { return await this.voiceprint.revokePlaybackGrant(grantRef, options) }
+  async restoreVoiceprintPlayback(options: { signal?: AbortSignal } = {}) { return await this.voiceprint.restorePlayback(options) }
+  async bindVoiceprintEnrollment() { return await this.voiceprint.bindEnrollment() }
 
   /** Read the authenticated comment/reply tree behind one account-bound World reference. */
   async listWorldInteractions(

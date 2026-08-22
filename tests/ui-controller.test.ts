@@ -2,6 +2,14 @@ import { describe, expect, it, vi } from 'vitest'
 import { ArkmeUiController } from '../src/client/ui-controller.js'
 
 describe('ArkmeUiController', () => {
+  it('opens voiceprint management as its own utility surface', () => {
+    const controller = new ArkmeUiController()
+    controller.authChanged(true)
+
+    controller.showVoiceprint()
+
+    expect(controller.getSnapshot().mode).toBe('voiceprint')
+  })
   it('isolates the recording view from message source selection and login changes', () => {
     const controller = new ArkmeUiController()
     const source = {

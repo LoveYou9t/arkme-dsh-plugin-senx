@@ -216,7 +216,7 @@ export function ArkmeProductNavigation({
           </div>
           <div className="arkme-redesign-profile-menu">
             <button type="button" role="menuitem" onClick={() => { setProfileOpen(false); arkmeUi.showWorld() }}><GlobeHemisphereWest size={19} /><span><strong>我的世界</strong><small>管理你的个人内容</small></span><CaretRight size={15} /></button>
-            <button type="button" role="menuitem" onClick={() => { setProfileOpen(false) }}><Fingerprint size={19} /><span><strong>声纹管理</strong><small>设置声音识别</small></span><CaretRight size={15} /></button>
+            <button type="button" role="menuitem" onClick={() => { setProfileOpen(false); arkmeUi.showVoiceprint() }}><Fingerprint size={19} /><span><strong>声纹管理</strong><small>设置声音识别</small></span><CaretRight size={15} /></button>
             <button type="button" role="menuitem" onClick={() => { setProfileOpen(false); arkmeUi.showSettings() }}><UserCircle size={19} /><span><strong>我的账户</strong><small>个人资料与登录安全</small></span><CaretRight size={15} /></button>
             <button type="button" role="menuitem" onClick={() => { setProfileOpen(false); arkmeUi.openDshSettings() }}><GearSix size={19} /><span><strong>设置</strong><small>打开 DSH 应用设置</small></span><CaretRight size={15} /></button>
           </div>
