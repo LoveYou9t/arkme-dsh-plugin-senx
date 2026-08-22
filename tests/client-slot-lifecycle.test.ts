@@ -14,9 +14,17 @@ type RuntimeModule = {
   }
 }
 
+let cachedSlotRegistry: RuntimeModule['SlotRegistry'] | undefined
+
+function restoreGlobalProperty(name: 'window' | 'document', descriptor: PropertyDescriptor | undefined): void {
+  if (descriptor === undefined) delete (globalThis as unknown as Record<string, unknown>)[name]
+  else Object.defineProperty(globalThis, name, descriptor)
+}
+
 async function loadSlotRegistry(): Promise<RuntimeModule['SlotRegistry']> {
+  if (cachedSlotRegistry !== undefined) return cachedSlotRegistry
   let runtime: RuntimeModule | undefined
-  const previousWindow = globalThis.window
+  const previousWindow = Object.getOwnPropertyDescriptor(globalThis, 'window')
   Object.defineProperty(globalThis, 'window', {
     configurable: true,
     value: {
@@ -34,11 +42,11 @@ async function loadSlotRegistry(): Promise<RuntimeModule['SlotRegistry']> {
   try {
     await import('@deepseek-ai/dsh-client-runtime/client')
   } finally {
-    if (previousWindow === undefined) delete (globalThis as { window?: Window }).window
-    else Object.defineProperty(globalThis, 'window', { configurable: true, value: previousWindow })
+    restoreGlobalProperty('window', previousWindow)
   }
   if (runtime === undefined) throw new Error('DSH client runtime did not register with the module loader')
-  return runtime.SlotRegistry
+  cachedSlotRegistry = runtime.SlotRegistry
+  return cachedSlotRegistry
 }
 
 afterEach(() => {
@@ -75,8 +83,13 @@ describe('Arkme directory slot lifecycle', () => {
       }
     })
 
-    const previousWindow = globalThis.window
-    const previousDocument = globalThis.document
+    const previousWindow = Object.getOwnPropertyDescriptor(globalThis, 'window')
+    const previousDocument = Object.getOwnPropertyDescriptor(globalThis, 'document')
+    let settingsDialogVisible = false
+    const settingsTrigger = { click: vi.fn(() => { settingsDialogVisible = true }) }
+    const sidebar = {
+      querySelector: vi.fn((selector: string) => selector.includes('[data-arkme-owned=') ? null : settingsTrigger),
+    }
     Object.defineProperty(globalThis, 'window', {
       configurable: true,
       value: {
@@ -86,7 +99,13 @@ describe('Arkme directory slot lifecycle', () => {
     })
     Object.defineProperty(globalThis, 'document', {
       configurable: true,
-      value: { querySelector: vi.fn(() => null) },
+      value: {
+        querySelector: vi.fn((selector: string) => {
+          if (selector === '[role="dialog"][aria-modal="true"]') return settingsDialogVisible ? {} : null
+          if (selector === '[data-slot="sidebar"]') return sidebar
+          return null
+        }),
+      },
     })
 
     const pluginCleanups: Array<() => void> = []
@@ -111,23 +130,27 @@ describe('Arkme directory slot lifecycle', () => {
       expect(registry.entries('arkme.directory.entry')).toHaveLength(0)
       expect(consumerDisposals).toBe(1)
 
-      vi.advanceTimersByTime(2_000)
+      vi.advanceTimersByTime(50)
+      expect(settingsTrigger.click).toHaveBeenCalledOnce()
+      expect(consumerActivations).toBe(1)
+
+      vi.advanceTimersByTime(50)
+      settingsDialogVisible = false
+      vi.advanceTimersByTime(50)
 
       expect(registry.entries('arkme.directory.entry')).toHaveLength(1)
       expect(consumerActivations).toBe(2)
       expect(consumerDisposals).toBe(1)
 
-      vi.advanceTimersByTime(500)
+      vi.advanceTimersByTime(2_000)
       expect(consumerActivations).toBe(2)
       expect(registry.entries('arkme.directory.entry')).toHaveLength(1)
     } finally {
       pluginCleanups.reverse().forEach(cleanup => { cleanup() })
       stopConsumer()
       disposeFrame()
-      if (previousWindow === undefined) delete (globalThis as { window?: Window }).window
-      else Object.defineProperty(globalThis, 'window', { configurable: true, value: previousWindow })
-      if (previousDocument === undefined) delete (globalThis as { document?: Document }).document
-      else Object.defineProperty(globalThis, 'document', { configurable: true, value: previousDocument })
+      restoreGlobalProperty('window', previousWindow)
+      restoreGlobalProperty('document', previousDocument)
     }
   })
 })
