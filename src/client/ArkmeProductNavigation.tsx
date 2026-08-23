@@ -11,6 +11,7 @@ import { Fingerprint } from '@phosphor-icons/react/dist/icons/Fingerprint'
 import { GearSix } from '@phosphor-icons/react/dist/icons/GearSix'
 import { GlobeHemisphereWest } from '@phosphor-icons/react/dist/icons/GlobeHemisphereWest'
 import { UserCircle } from '@phosphor-icons/react/dist/icons/UserCircle'
+import { AddressBook } from '@phosphor-icons/react/dist/icons/AddressBook'
 import type { Icon } from '@phosphor-icons/react/lib'
 import type { ArkmeUserProfile, ArkmeUserProfileSnapshot } from '../types.js'
 import pluginManifest from '../../package.json' with { type: 'json' }
@@ -32,13 +33,14 @@ export interface ArkmeProductNavigationProps {
 }
 
 type NavigationItem = {
-  id: 'conversations' | 'calls' | 'recordings' | 'search' | 'calendar' | 'world' | 'extensions'
+  id: 'conversations' | 'contacts' | 'calls' | 'recordings' | 'search' | 'calendar' | 'world' | 'extensions'
   label: string
   icon: Icon
 }
 
 const items: NavigationItem[] = [
   { id: 'conversations', label: '对话', icon: ChatCircleText },
+  { id: 'contacts', label: '联系人', icon: AddressBook },
   { id: 'calls', label: '通话', icon: PhoneCall },
   { id: 'recordings', label: '录音', icon: Waveform },
   { id: 'search', label: '搜索', icon: MagnifyingGlass },
@@ -105,7 +107,6 @@ const styles: Record<string, CSSProperties> = {
     color: 'inherit',
     cursor: 'pointer',
     font: 'inherit',
-    outline: 0,
     boxShadow: 'none',
   },
   compactButton: { minHeight: 42, height: 42, flex: 1, flexDirection: 'row', gap: 6, padding: '0 8px', borderRadius: 12 },
@@ -176,7 +177,7 @@ export function ArkmeProductNavigation({
     : ui.mode === 'calls' ? 'calls'
     : ui.mode === 'recordings' ? 'recordings'
       : ui.mode === 'search' ? 'search'
-        : 'conversations'
+        : ui.mode === 'source' && ui.productMode === 'contacts' ? 'contacts' : 'conversations'
   const pluginUpdate = pluginUpdateState.status
   const installedPluginVersion = pluginUpdate?.installedVersion ?? pluginManifest.version
   const pluginUpdateAvailable = pluginUpdate?.availability === 'available'
@@ -192,7 +193,8 @@ export function ArkmeProductNavigation({
       arkmeUi.showExtensions()
       return
     }
-    if (id === 'calls') arkmeUi.showCalls()
+    if (id === 'contacts') arkmeUi.showContacts()
+    else if (id === 'calls') arkmeUi.showCalls()
     else if (id === 'recordings') arkmeUi.showRecordings()
     else if (id === 'world') arkmeUi.showWorld()
     else if (id === 'calendar') arkmeUi.showCalendar()

@@ -1,6 +1,6 @@
 {
   "name": "@senguoyun/dsh-arkme",
-  "version": "0.1.20",
+  "version": "0.1.21",
   "description": "Arkme account, records, chat and interwoven-moments integration for DeepSeek Harness",
   "license": "UNLICENSED",
   "publishConfig": {
@@ -59,9 +59,9 @@
     "updateNotice": {
       "schemaVersion": 1,
       "level": "normal",
-      "title": "Arkme 插件 0.1.20 更新",
-      "summary": "DeepSeek Harness 现会优先预热，切换回来无需重复加载。",
-      "publishedAt": "2026-08-23T12:33:00.000Z",
+      "title": "Arkme 插件 0.1.21 更新",
+      "summary": "新增独立联系人板块，支持群聊、Bot、未标记说话人、团队和联系人目录，并展示联系人资料与世界内容。",
+      "publishedAt": "2026-08-23T14:51:41.000Z",
       "releaseNotesUrl": "https://www.npmjs.com/package/@senguoyun/dsh-arkme"
     }
   },
@@ -81,6 +81,7 @@
     "@phosphor-icons/react": "2.1.10",
     "ali-oss": "6.23.0",
     "jsqr": "1.4.0",
+    "pinyin-pro": "3.29.3",
     "qrcode-generator": "2.0.4",
     "semver": "7.8.5",
     "sharp": "0.35.3",
@@ -130,9 +131,11 @@
     "@types/node": "22.20.0",
     "@types/react": "~18.3.1",
     "@types/react-dom": "~18.3.1",
+    "@types/react-test-renderer": "18.3.1",
     "@types/semver": "7.8.0",
     "react": "18.3.1",
     "react-dom": "18.3.1",
+    "react-test-renderer": "18.3.1",
     "tsdown": "0.22.2",
     "typescript": "6.0.3",
     "vitest": "4.1.8"
