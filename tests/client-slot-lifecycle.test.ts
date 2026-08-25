@@ -87,7 +87,10 @@ describe('Arkme directory slot lifecycle', () => {
     const previousWindow = Object.getOwnPropertyDescriptor(globalThis, 'window')
     const previousDocument = Object.getOwnPropertyDescriptor(globalThis, 'document')
     let settingsDialogVisible = false
-    const settingsTrigger = { click: vi.fn(() => { settingsDialogVisible = true }) }
+    const settingsTrigger = {
+      click: vi.fn(() => { settingsDialogVisible = true }),
+      getAttribute: vi.fn((name: string) => name === 'aria-expanded' ? String(settingsDialogVisible) : null),
+    }
     const sidebar = {
       querySelector: vi.fn((selector: string) => selector.includes('[data-arkme-owned=') ? null : settingsTrigger),
     }

@@ -10,7 +10,6 @@ import { CaretRight } from '@phosphor-icons/react/dist/icons/CaretRight'
 import { Fingerprint } from '@phosphor-icons/react/dist/icons/Fingerprint'
 import { GearSix } from '@phosphor-icons/react/dist/icons/GearSix'
 import { GlobeHemisphereWest } from '@phosphor-icons/react/dist/icons/GlobeHemisphereWest'
-import { UserCircle } from '@phosphor-icons/react/dist/icons/UserCircle'
 import { AddressBook } from '@phosphor-icons/react/dist/icons/AddressBook'
 import type { Icon } from '@phosphor-icons/react/lib'
 import type { ArkmeUserProfile, ArkmeUserProfileSnapshot } from '../types.js'
@@ -164,7 +163,7 @@ export function ArkmeProductNavigation({
       document.removeEventListener('keydown', dismissOnEscape)
     }
   }, [profileOpen])
-  const activeId = ui.mode === 'settings' || ui.mode === 'login' ? undefined
+  const activeId = ui.mode === 'login' ? undefined
     : ui.calendarOpen === true ? 'calendar'
     : ui.mode === 'extensions' ? 'extensions'
     : ui.mode === 'world' ? 'world'
@@ -174,7 +173,6 @@ export function ArkmeProductNavigation({
         : ui.mode === 'source' && ui.productMode === 'contacts' ? 'contacts' : 'conversations'
   const pluginUpdate = pluginUpdateState.status
   const installedPluginVersion = pluginUpdate?.installedVersion ?? pluginManifest.version
-
   const activate = (id: NavigationItem['id']) => {
     if (id === 'extensions') {
       arkmeUi.showExtensions()
@@ -259,7 +257,6 @@ export function ArkmeProductNavigation({
           <div className="arkme-redesign-profile-menu">
             <button type="button" role="menuitem" onClick={() => { setProfileOpen(false); arkmeUi.showWorld() }}><GlobeHemisphereWest size={19} /><span><strong>我的世界</strong><small>管理你的个人内容</small></span><CaretRight size={15} /></button>
             <button type="button" role="menuitem" onClick={() => { setProfileOpen(false); arkmeUi.showVoiceprint() }}><Fingerprint size={19} /><span><strong>声纹管理</strong><small>设置声音识别</small></span><CaretRight size={15} /></button>
-            <button type="button" role="menuitem" onClick={() => { setProfileOpen(false); arkmeUi.showSettings() }}><UserCircle size={19} /><span><strong>我的账户</strong><small>个人资料与登录安全</small></span><CaretRight size={15} /></button>
             <button type="button" role="menuitem" onClick={() => { setProfileOpen(false); arkmeUi.openDshSettings() }}><GearSix size={19} /><span><strong>设置</strong><small>打开 DSH 应用设置</small></span><CaretRight size={15} /></button>
           </div>
         </div>, document.body)}

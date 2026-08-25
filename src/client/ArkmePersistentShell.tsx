@@ -5,7 +5,6 @@ import type {} from './slots-contract.js'
 import type { ArkmeChatClientEvent, ArkmeSourceItem, ArkmeSourceList } from '../types.js'
 import { ArkmeOutgoingCallHost } from './ArkmeOutgoingCallHost.js'
 import { ArkmeProductNavigation } from './ArkmeProductNavigation.js'
-import { ArkmeSettingsSurface } from './ArkmeSettingsSurface.js'
 import { ArkmeSurface } from './ArkmeSidebar.js'
 import { ArkmeNavigation } from './ArkmeVirtualWorkspace.js'
 import { ContactDirectorySurface } from './redesign/contacts/ContactDirectorySurface.js'
@@ -328,11 +327,7 @@ export function ArkmePersistentWorkspace({
           onCandidateCleared={() => { arkmeContactsTab.clear() }} onDirectoryRefresh={() => { arkmeContactsTab.activateAccount(contactsAccountKey); arkmeContactsTab.refresh() }}
         />}
       />
-    </div> : ui.mode === 'settings'
-      ? <div className="arkme-redesign-route-surface arkme-redesign-settings-page">
-        <ArkmeSettingsSurface />
-      </div>
-      : <div
+    </div> : <div
         data-arkme-owned="arkme-conversation-layer"
         style={{
           ...styles.conversationLayer,
