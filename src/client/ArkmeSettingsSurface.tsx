@@ -7,6 +7,7 @@ import type {
   ArkmeUserProfileSnapshot,
 } from '../types.js'
 import { callArkme } from './api.js'
+import { arkmeAppUpdateStore, type ArkmeAppUpdateSnapshot } from './app-update-store.js'
 import { ArkmeUserAvatar } from './ArkmeAvatar.js'
 import { arkmeAuthStore } from './auth-store.js'
 import { arkmeDesktopNotifications } from './desktop-notification-runtime.js'
@@ -75,6 +76,15 @@ export interface ArkmePluginUpdateRow {
   feedback?: string
 }
 
+export interface ArkmeAppUpdateRow {
+  label: string
+  current: string
+  latest: string
+  action: 'check' | 'download' | 'open' | 'busy'
+  feedback?: string
+  downloadedFilePath?: string
+}
+
 function versionLabel(version: string | undefined): string {
   return `v${version?.trim() || '…'}`
 }
@@ -83,6 +93,38 @@ export function updateVersionText(current: string, latest: string): string {
   if (current === 'v…') return '当前版本读取中…'
   if (latest === 'v…') return `当前 ${current}`
   return current === latest ? `当前 ${current} · 已是最新版本` : `当前 ${current} → 最新 ${latest}`
+}
+
+export function buildArkmeAppUpdateRow(input: {
+  app?: Pick<ArkmeAppUpdateSnapshot, 'status' | 'currentVersion' | 'noUpdateAvailable' | 'latestVersion' | 'error' | 'downloadedFilePath'>
+  appError?: string
+}): ArkmeAppUpdateRow {
+  const status = input.app?.status
+  const unavailable = input.app === undefined && input.appError?.trim() !== undefined && input.appError.trim() !== ''
+  const busy = status === 'checking' || status === 'downloading'
+  const feedback = input.appError?.trim()
+    ? `检查失败：${input.appError.trim()}`
+    : status === 'checking'
+      ? '正在检查更新…'
+      : status === 'current'
+        ? input.app?.noUpdateAvailable === true ? '已检查 · 暂无可用版本' : '已检查 · 当前已是最新版本'
+        : status === 'available'
+          ? '发现新版本，可以下载更新包'
+          : status === 'downloading'
+            ? '正在下载更新包'
+            : status === 'downloaded'
+              ? '下载完成，可打开所在文件夹定位安装包'
+              : status === 'failed'
+                ? `检查失败：${input.app?.error || '请稍后重试'}`
+                : undefined
+  return {
+    label: 'APP',
+    current: versionLabel(input.app?.currentVersion),
+    latest: versionLabel(input.app?.latestVersion ?? input.app?.currentVersion),
+    action: unavailable || busy ? 'busy' : status === 'downloaded' ? 'open' : status === 'available' ? 'download' : 'check',
+    ...(feedback === undefined ? {} : { feedback }),
+    ...(input.app?.downloadedFilePath === undefined ? {} : { downloadedFilePath: input.app.downloadedFilePath }),
+  }
 }
 
 export function buildArkmePluginUpdateRow(input: {
@@ -116,6 +158,7 @@ export function ArkmeSettingsSurface() {
   const surfaceRef = useRef<HTMLDivElement>(null)
   const authState = useSyncExternalStore(arkmeAuthStore.subscribe, arkmeAuthStore.getSnapshot, arkmeAuthStore.getSnapshot)
   const updateState = useSyncExternalStore(arkmePluginUpdateStore.subscribe, arkmePluginUpdateStore.getSnapshot, arkmePluginUpdateStore.getSnapshot)
+  const appUpdateState = useSyncExternalStore(arkmeAppUpdateStore.subscribe, arkmeAppUpdateStore.getSnapshot, arkmeAppUpdateStore.getSnapshot)
   const [profile, setProfile] = useState<ArkmeUserProfile>()
   const [logoutBusy, setLogoutBusy] = useState(false)
   const [notificationBusy, setNotificationBusy] = useState(false)
@@ -185,6 +228,10 @@ export function ArkmeSettingsSurface() {
   const version = updateState.status?.installedVersion ?? '…'
   const updateInstalling = updateState.install !== undefined
     && ['preparing', 'downloading', 'verifying', 'installing', 'restarting'].includes(updateState.install.phase)
+  const appUpdateRow = buildArkmeAppUpdateRow({
+    ...(appUpdateState.status === undefined ? {} : { app: appUpdateState.status }),
+    ...(appUpdateState.error === '' ? {} : { appError: appUpdateState.error }),
+  })
   const pluginUpdateRow = buildArkmePluginUpdateRow({
     ...(updateState.status === undefined ? {} : { plugin: updateState.status }),
     pluginBusy: updateState.busy || updateInstalling,
@@ -195,6 +242,13 @@ export function ArkmeSettingsSurface() {
     if (row.action === 'busy') return
     if (row.action === 'install') arkmeUpdateUi.open('plugin')
     else void arkmePluginUpdateStore.refresh(true)
+  }
+
+  const runAppUpdateAction = (row: ArkmeAppUpdateRow) => {
+    if (row.action === 'busy') return
+    if (row.action === 'download') arkmeUpdateUi.open('app')
+    else if (row.action === 'open') void arkmeAppUpdateStore.showDownloadedFile()
+    else void arkmeAppUpdateStore.refresh(true)
   }
 
   return <div ref={surfaceRef} className="arkme-redesign-settings-surface" data-arkme-settings-surface aria-label="Arkme 设置">
@@ -224,6 +278,13 @@ export function ArkmeSettingsSurface() {
       </SettingsGroup>
 
       <SettingsGroup title="更新">
+        <SettingsRow
+          title={appUpdateRow.label}
+          description={`${updateVersionText(appUpdateRow.current, appUpdateRow.latest)} · ${appUpdateRow.feedback ?? '尚未检查'}`
+            + (appUpdateRow.downloadedFilePath === undefined ? '' : ` · ${appUpdateRow.downloadedFilePath}`)}
+          disabled={appUpdateRow.action === 'busy'}
+          {...(appUpdateRow.action === 'busy' ? {} : { onClick: () => { runAppUpdateAction(appUpdateRow) } })}
+        />
         <SettingsRow
           title={pluginUpdateRow.label}
           description={`${updateVersionText(pluginUpdateRow.current, pluginUpdateRow.latest)} · ${pluginUpdateRow.feedback ?? '尚未检查'}`}
