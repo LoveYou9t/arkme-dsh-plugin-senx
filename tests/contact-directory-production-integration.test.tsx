@@ -119,7 +119,9 @@ describe('production sibling Contacts tab', () => {
     await act(async () => { contacts.props.onClick(); await Promise.resolve() })
     expect(contacts.props['aria-current']).toBe('page')
     expect(renderer.root.findByProps({ 'aria-label': '联系人目录' })).toBeDefined()
-    expect(renderer.root.findByProps({ 'data-arkme-contacts-workspace': true }).findAllByProps({ alt: 'Arkme' })).toHaveLength(1)
+    const brandImages = renderer.root.findByProps({ 'data-arkme-contacts-workspace': true }).findAllByProps({ alt: 'Arkme' })
+    expect(brandImages).toHaveLength(2)
+    expect(brandImages.map(image => image.props['data-arkme-theme-image'])).toEqual(['light', 'dark'])
   })
 
   it('uses the AppFrame seats as a single narrow Contacts view and retains section folds across a conversations round trip', async () => {

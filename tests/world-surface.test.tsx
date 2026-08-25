@@ -40,6 +40,12 @@ const actions = {
   onToggleVoiceprint: noop,
 }
 
+function styleForDataAttribute(markup: string, attribute: string, value: string): string {
+  const match = new RegExp(`<[^>]+style="([^"]+)"[^>]+${attribute}="${value}"`).exec(markup)
+  expect(match?.[1]).toBeDefined()
+  return match?.[1] ?? ''
+}
+
 const item: ArkmeWorldFeedItem = {
   recordRef: 'world_1',
   authorName: '陈一涵',
@@ -103,6 +109,17 @@ describe('Arkme native World surface', () => {
     expect(markup).toContain('>发布</button>')
     expect(markup).not.toContain('aria-modal="true"')
     expect(markup).not.toContain('>关闭<')
+  })
+
+  it('uses semantic backgrounds for the World root, layout and scroll pane', () => {
+    const markup = renderToStaticMarkup(<ArkmeWorldSurface />)
+
+    expect(styleForDataAttribute(markup, 'data-arkme-owned', 'world-surface'))
+      .toContain('background:var(--dsw-alias-bg-base, #ffffff)')
+    expect(styleForDataAttribute(markup, 'data-world-layout', 'feed'))
+      .toContain('background:var(--dsw-alias-bg-layer-2, #f3f4f6)')
+    expect(styleForDataAttribute(markup, 'data-world-feed-pane', 'true'))
+      .toContain('background:var(--dsw-alias-bg-layer-2, #f3f4f6)')
   })
 
   it('keeps World and My World scroll positions independent when switching tabs', () => {

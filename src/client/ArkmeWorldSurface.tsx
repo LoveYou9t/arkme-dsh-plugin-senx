@@ -31,6 +31,7 @@ import { ArkmeUserAvatar } from './ArkmeAvatar.js'
 import { ArkmeWorldEmptyNotice } from './ArkmeWorldEmptyNotice.js'
 import { ArkmeMemberProfileCard } from './ArkmeChatMemberActions.js'
 import { arkmeEmojiPlainText } from './arkme-emoji.js'
+import { arkmeTheme } from './arkme-theme.js'
 import type { ArkmeWorldTarget } from './ui-controller.js'
 import { resolveWorldVoiceprintExpectationCopy } from './world-voiceprint-expectation-copy.js'
 import { downloadWorldVoiceprintAudio, playPreparedWorldVoiceprintAudio, playWorldVoiceprintChunkQueue } from './world-voiceprint-playback.js'
@@ -75,7 +76,7 @@ const colors = {
 }
 
 const styles: Record<string, CSSProperties> = {
-  root: { flex: 1, width: '100%', height: '100%', minWidth: 0, minHeight: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column', background: '#fff', color: colors.text },
+  root: { flex: 1, width: '100%', height: '100%', minWidth: 0, minHeight: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column', background: arkmeTheme.base, color: colors.text },
   header: { width: 'min(980px, 100%)', minHeight: 90, margin: '0 auto', padding: '34px 48px 0', boxSizing: 'border-box', display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 24 },
   heading: { margin: 0, fontSize: 26, lineHeight: '34px', fontWeight: 650, letterSpacing: '-.035em' },
   subtitle: { margin: '2px 0 0', color: colors.secondary, fontSize: 11 },
@@ -90,8 +91,8 @@ const styles: Record<string, CSSProperties> = {
   tabs: { minWidth: 0, height: 38, padding: 0, display: 'flex', alignItems: 'stretch', gap: 23 },
   tab: { position: 'relative', padding: 0, border: 0, borderBottom: '2px solid transparent', background: 'transparent', color: '#7b8089', cursor: 'pointer', font: 'inherit', fontSize: 12 },
   tabActive: { borderBottom: '2px solid #20232d', color: colors.text, fontWeight: 600 },
-  worldLayout: { flex: 1, minWidth: 0, minHeight: 0, overflow: 'hidden', display: 'flex', position: 'relative', background: '#fff' },
-  body: { flex: 1, minWidth: 0, minHeight: 0, overflowX: 'hidden', overflowY: 'auto', overscrollBehavior: 'contain', background: '#fff' },
+  worldLayout: { flex: 1, minWidth: 0, minHeight: 0, overflow: 'hidden', display: 'flex', position: 'relative', background: arkmeTheme.layer2 },
+  body: { flex: 1, minWidth: 0, minHeight: 0, overflowX: 'hidden', overflowY: 'auto', overscrollBehavior: 'contain', background: arkmeTheme.layer2 },
   notice: { width: 'min(884px, calc(100% - 96px))', margin: '22px auto 0', padding: '13px 15px', boxSizing: 'border-box', border: 0, borderRadius: 12, background: '#f6f6f7', color: colors.secondary, fontSize: 12 },
   emptyNotice: { width: 'min(884px, calc(100% - 96px))', margin: '22px auto 0' },
   error: { borderColor: 'rgba(185,66,59,.25)', background: 'rgba(185,66,59,.06)', color: colors.danger },
