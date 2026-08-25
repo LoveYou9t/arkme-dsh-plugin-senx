@@ -74,6 +74,7 @@ import {
   type ArkmeConversationRow, type ArkmeInterwovenDetailViewState,
 } from './interwoven-moments.js'
 import { arkmeUi } from './ui-controller.js'
+import { arkmeWechatRequestStartedAfterAuthStatus } from './arkme-auth-flow.js'
 import {
   isCurrentRelatedRecordingRequest, mergeRelatedRecordingItems, RelatedRecordingDetail,
   RelatedRecordingsPanel, shouldShowPrivateChatActions, shouldShowRelatedRecordingsEntry,
@@ -95,6 +96,7 @@ export interface ArkmeSurfaceProps {
   directoryLead?: ReactNode
   onCreateTask?: () => void
   onActivateSurface?: () => void
+  ownsWechatLogin?: boolean
 }
 
 export type ArkmeAuthView = 'login' | 'content'
@@ -346,8 +348,10 @@ export function arkmeShouldBeginWechat(
   agreed: boolean,
   qr: string,
   qrRequestStarted: boolean,
+  ownsWechatLogin = true,
 ): boolean {
-  return authView === 'login'
+  return ownsWechatLogin
+    && authView === 'login'
     && auth !== undefined
     && ['logged-out', 'expired'].includes(auth.status)
     && loginMode === 'wechat'
@@ -708,6 +712,7 @@ export function ArkmeSurface({
   directoryLead,
   onCreateTask,
   onActivateSurface,
+  ownsWechatLogin = true,
 }: ArkmeSurfaceProps = {}) {
   const ui = useSyncExternalStore(arkmeUi.subscribe, arkmeUi.getSnapshot, arkmeUi.getSnapshot)
   const authStoreSnapshot = useSyncExternalStore(
@@ -1511,7 +1516,7 @@ export function ArkmeSurface({
   }, [smsCountdown])
 
   useEffect(() => {
-    if (loginMode !== 'wechat' || !agreed || auth?.status !== 'pending' || auth.attemptId === undefined) return
+    if (!ownsWechatLogin || loginMode !== 'wechat' || !agreed || auth?.status !== 'pending' || auth.attemptId === undefined) return
     let stopped = false; let timer: ReturnType<typeof setTimeout>
     const poll = async () => {
       try {
@@ -1524,7 +1529,7 @@ export function ArkmeSurface({
     }
     timer = setTimeout(() => { void poll() }, 800)
     return () => { stopped = true; clearTimeout(timer) }
-  }, [agreed, auth?.attemptId, auth?.status, loginMode, t])
+  }, [agreed, auth?.attemptId, auth?.status, loginMode, ownsWechatLogin, t])
 
   const beginWechat = async () => {
     if (!agreed) { setError(t('error.agreement.required')); return }
@@ -1579,10 +1584,25 @@ export function ArkmeSurface({
   }
 
   useEffect(() => {
-    if (!arkmeShouldBeginWechat(auth, authView, loginMode, agreed, qr, qrRequestStartedRef.current)) return
+    qrRequestStartedRef.current = arkmeWechatRequestStartedAfterAuthStatus(
+      qrRequestStartedRef.current,
+      auth?.status,
+    )
+  }, [auth?.status])
+
+  useEffect(() => {
+    if (!arkmeShouldBeginWechat(
+      auth,
+      authView,
+      loginMode,
+      agreed,
+      qr,
+      qrRequestStartedRef.current,
+      ownsWechatLogin,
+    )) return
     qrRequestStartedRef.current = true
     void beginWechat()
-  }, [agreed, auth, authView, loginMode, qr])
+  }, [agreed, auth, authView, loginMode, ownsWechatLogin, qr])
 
   const changeLoginMode = (mode: ArkmeLoginMode) => {
     setLoginMode(mode)

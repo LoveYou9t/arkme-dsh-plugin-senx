@@ -13,6 +13,7 @@ import { UnmarkedSpeakerDetail } from './redesign/contacts/UnmarkedSpeakerDetail
 import { arkmeContactsTab } from './redesign/contacts/contacts-tab-store.js'
 import { callArkme } from './api.js'
 import { DeepSeekHarnessSurface } from './DeepSeekHarnessSurface.js'
+import { startupAuthGateEnabled } from './ArkmeStartupAuthGate.js'
 import { arkmeAuthStore } from './auth-store.js'
 import {
   arkmeChatDirectory, arkmeChatTimelineDelta, arkmeInterwovenInvalidation,
@@ -344,6 +345,7 @@ export function ArkmePersistentWorkspace({
           t={t}
           productChrome={false}
           productNavigation={false}
+          ownsWechatLogin={!startupAuthGateEnabled()}
           currentSessionId={sessionId}
           onActivateSurface={() => undefined}
         />
