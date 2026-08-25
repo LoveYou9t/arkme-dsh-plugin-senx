@@ -11,27 +11,35 @@ export interface ArkmeSourceBreadcrumbSegment {
 }
 
 const colors = {
-  text: 'var(--dsw-alias-label-primary, #17191c)',
-  secondary: 'var(--dsw-alias-label-secondary, #8a9099)',
-  caption: 'var(--dsw-alias-label-caption, #b0b5bc)',
+  text: '#171923',
+  secondary: '#8e9199',
+  caption: '#a0a3aa',
 }
 
 const styles: Record<string, CSSProperties> = {
   breadcrumb: {
     minWidth: 0, flex: 1, display: 'flex', alignItems: 'center', overflow: 'hidden', whiteSpace: 'nowrap',
-    fontSize: 14, lineHeight: '20px',
+  },
+  titleGroup: {
+    minWidth: 0, flex: '1 1 auto', display: 'flex', flexDirection: 'column', justifyContent: 'center', overflow: 'hidden',
+  },
+  path: {
+    minWidth: 0, display: 'flex', alignItems: 'center', overflow: 'hidden', color: colors.secondary,
+    fontSize: 11, lineHeight: '15px', whiteSpace: 'nowrap',
   },
   segment: {
-    minWidth: 0, maxWidth: 160, flex: '0 1 auto', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+    minWidth: 0, maxWidth: 132, flex: '0 1 auto', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
   },
   ancestor: {
     padding: 0, border: 0, background: 'transparent', color: colors.secondary,
     font: 'inherit', fontWeight: 400, textAlign: 'left', cursor: 'pointer',
   },
   root: { flex: 'none', color: colors.caption },
-  current: { color: colors.text, fontWeight: 500 },
-  currentRoot: { color: colors.text, fontWeight: 500 },
-  separator: { flex: 'none', padding: '0 5px', color: colors.caption, fontWeight: 400 },
+  current: {
+    minWidth: 0, overflow: 'hidden', color: colors.text, fontSize: 15, lineHeight: '21px', fontWeight: 600,
+    textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+  },
+  separator: { flex: 'none', padding: '0 4px', color: colors.caption, fontWeight: 400 },
 }
 
 function reconcileBreadcrumbSource(
@@ -45,7 +53,7 @@ function reconcileBreadcrumbSource(
   return equivalent.length === 1 ? equivalent[0]! : source
 }
 
-/** Append one visited personal destination without deriving its directory ancestry. */
+/** Move one visited personal destination to the end without keeping an older duplicate. */
 export function appendArkmeSourceBreadcrumbTrail(
   trail: ArkmeSourceItem[],
   selectedSource: ArkmeSourceItem | undefined,
@@ -55,12 +63,14 @@ export function appendArkmeSourceBreadcrumbTrail(
   if (selectedSource.kind !== 'default_category' && selectedSource.kind !== 'topic') return trail
   const resolved = reconcileBreadcrumbSource(selectedSource, sources)
   const last = trail.at(-1)
-  if (last !== undefined && last.kind === resolved.kind && last.displayName === resolved.displayName) {
+  const uniqueNamedDestination = sources.filter(source => source.kind === resolved.kind
+    && source.displayName === resolved.displayName).length === 1
+  const sameDestination = (source: ArkmeSourceItem): boolean => source.sourceRef === resolved.sourceRef
+    || (uniqueNamedDestination && source.kind === resolved.kind && source.displayName === resolved.displayName)
+  if (last !== undefined && sameDestination(last)) {
     return last === resolved ? trail : [...trail.slice(0, -1), resolved]
   }
-  if (last?.sourceRef !== resolved.sourceRef) return [...trail, resolved]
-  if (last === resolved) return trail
-  return [...trail.slice(0, -1), resolved]
+  return [...trail.filter(source => !sameDestination(source)), resolved]
 }
 
 /** Return to one visited destination and discard everything visited after it. */
@@ -108,29 +118,36 @@ export function ArkmeSourceBreadcrumb({
   onSelectAggregate(): void
 }) {
   const segments = arkmeSourceBreadcrumb(trail, sources)
+  const currentSegment = segments.at(-1)!
+  const ancestorSegments = segments.slice(0, -1)
   return <nav aria-label="当前主题路径" style={styles.breadcrumb}>
-    {segments.map((segment, index) => <span key={segment.key} style={{ display: 'contents' }}>
-      {index > 0 && <span aria-hidden style={styles.separator}>/</span>}
-      {segment.current
-        ? <span
-          aria-current="page" title={segment.label}
-          style={{
-            ...styles.segment,
-            ...styles.current,
-            ...(segment.root ? { ...styles.root, ...styles.currentRoot } : {}),
-          }}
-        >{segment.label}</span>
-        : <button
-          type="button" title={segment.label}
-          style={{ ...styles.segment, ...styles.ancestor, ...(segment.root ? styles.root : {}) }}
-          onClick={segment.root
-            ? onSelectAggregate
-            : () => {
-                if (segment.source !== undefined && segment.trailIndex !== undefined) {
-                  onSelect(segment.trailIndex, segment.source)
-                }
-              }}
-        >{segment.label}</button>}
-    </span>)}
+    <span style={styles.titleGroup}>
+      {ancestorSegments.length > 0 && <span
+        data-arkme-source-breadcrumb-path="true"
+        title={ancestorSegments.map(segment => segment.label).join(' / ')}
+        style={styles.path}
+      >
+        {ancestorSegments.map((segment, index) => <span key={segment.key} style={{ display: 'contents' }}>
+            {index > 0 && <span aria-hidden style={styles.separator}>/</span>}
+            <button
+              type="button" title={segment.label}
+              style={{ ...styles.segment, ...styles.ancestor, ...(segment.root ? styles.root : {}) }}
+              onClick={segment.root
+                ? onSelectAggregate
+                : () => {
+                    if (segment.source !== undefined && segment.trailIndex !== undefined) {
+                      onSelect(segment.trailIndex, segment.source)
+                    }
+                  }}
+            >{segment.label}</button>
+          </span>)}
+      </span>}
+      <span
+        aria-current="page"
+        data-arkme-source-breadcrumb-current="true"
+        title={currentSegment.label}
+        style={styles.current}
+      >{currentSegment.label}</span>
+    </span>
   </nav>
 }
