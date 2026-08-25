@@ -22,7 +22,8 @@ describe('ArkmeSettingsSurface', () => {
     expect(markup).not.toContain('>外观<')
     expect(markup).not.toContain('>执行前确认<')
     expect(markup).not.toContain('>可读取内容<')
-    expect(markup).not.toContain('>APP<')
+    expect(markup).toContain('>APP<')
+    expect(markup.indexOf('>APP<')).toBeLessThan(markup.indexOf('>核心插件<'))
   })
 
   it('offers logout only for an authenticated account', () => {
