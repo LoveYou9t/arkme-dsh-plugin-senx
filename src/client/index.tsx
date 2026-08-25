@@ -1,4 +1,5 @@
 import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
+import type {} from '@deepseek-ai/dsh-client-locale/client'
 import type {} from '@deepseek-ai/dsh-client-ui-layout/client'
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 import type {} from '@deepseek-ai/dsh-client-ui-sidebar/client'
@@ -19,8 +20,11 @@ import { arkmeUi } from './ui-controller.js'
 import { consumeExtensionShareDeepLink } from './extension-share-deeplink.js'
 import { deepSeekHarnessEmbedRequested } from './DeepSeekHarnessSurface.js'
 import { installArkmeRedesignStyles } from './redesign/styles.js'
+import {
+  ARKME_LOGIN_LOCALE_NAMESPACE, arkmeLoginEn, arkmeLoginZh,
+} from './arkme-login-locales.js'
 
-export const inject = ['slots', 'layout']
+export const inject = ['slots', 'layout', 'locale']
 
 function ArkmeDshSettingsSection() {
   return <ArkmeSettingsSurface />
@@ -63,6 +67,12 @@ export function apply(ctx: ClientContext): void {
 		const shareRef = consumeExtensionShareDeepLink(window.location, window.history)
 		if (shareRef !== undefined) arkmeUi.openExtensionShare(shareRef)
 	}
+
+  ctx.effect(() => ctx.locale.register(ARKME_LOGIN_LOCALE_NAMESPACE, {
+    zh: arkmeLoginZh,
+    en: arkmeLoginEn,
+  }), 'dsh-arkme: login dictionaries')
+  const loginT = ctx.locale.bind(ARKME_LOGIN_LOCALE_NAMESPACE)
 
   ctx.effect(() => arkmePluginUpdateStore.start(), 'dsh-arkme: client plugin update status')
   ctx.effect(() => arkmeAppUpdateStore.start(), 'dsh-arkme: client app update status')
@@ -181,6 +191,7 @@ export function apply(ctx: ClientContext): void {
         disposeConversation = ctx.slots.inject('conversation', () => ctx.slots.register({
           name: 'conversation',
           priority: -100,
+          locale: ARKME_LOGIN_LOCALE_NAMESPACE,
           inject: () => ({ closeDetails: () => { ctx.layout.closeDetails() } }),
         }, ArkmePersistentWorkspace))
       }
@@ -213,7 +224,8 @@ export function apply(ctx: ClientContext): void {
       name: 'shell.overlay',
       id: 'arkme-startup-auth-gate',
       order: 100,
-      label: 'Arkme 启动认证门禁',
+      label: () => loginT('gate.dialog'),
+      locale: ARKME_LOGIN_LOCALE_NAMESPACE,
     }, ArkmeStartupAuthGate))
   }
 }
