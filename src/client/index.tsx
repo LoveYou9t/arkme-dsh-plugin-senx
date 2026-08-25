@@ -5,6 +5,7 @@ import type {} from '@deepseek-ai/dsh-client-ui-sidebar/client'
 import type { ArkmeSourceItem, ArkmeSourceList } from '../types.js'
 import './composer-draft-auth-binding.js'
 import { callArkme } from './api.js'
+import { ArkmeSettingsSurface } from './ArkmeSettingsSurface.js'
 import { ArkmeStartupAuthGate, startupAuthGateEnabled } from './ArkmeStartupAuthGate.js'
 import {
   ArkmePersistentDetails, ArkmePersistentSidebar, ArkmePersistentWorkspace,
@@ -20,6 +21,10 @@ import { deepSeekHarnessEmbedRequested } from './DeepSeekHarnessSurface.js'
 import { installArkmeRedesignStyles } from './redesign/styles.js'
 
 export const inject = ['slots', 'layout']
+
+function ArkmeDshSettingsSection() {
+  return <ArkmeSettingsSurface />
+}
 
 async function resolveNotificationSource(
   activation: { sourceRef: string; sourceKey?: string },
@@ -90,7 +95,7 @@ export function apply(ctx: ClientContext): void {
   ctx.effect(() => {
     let disposeSidebar: (() => void) | undefined
     let settingsTimer: number | undefined
-    let settingsDialogSeen = false
+    let settingsOpened = false
     let disposed = false
 
     const mountArkmeSidebar = () => {
@@ -114,7 +119,7 @@ export function apply(ctx: ClientContext): void {
     }
     const restoreArkmeSidebar = () => {
       stopSettingsTimer()
-      settingsDialogSeen = false
+      settingsOpened = false
       mountArkmeSidebar()
     }
     const openOfficialSettings = () => {
@@ -122,32 +127,30 @@ export function apply(ctx: ClientContext): void {
       stopSettingsTimer()
       disposeSidebar?.()
       disposeSidebar = undefined
-      settingsDialogSeen = false
+      settingsOpened = false
       let attempts = 0
       let triggerClicked = false
       settingsTimer = window.setInterval(() => {
         if (disposed) return
         attempts += 1
-        const dialog = document.querySelector('[role="dialog"][aria-modal="true"]')
-        if (dialog !== null) settingsDialogSeen = true
-        if (settingsDialogSeen && dialog === null) {
+        const sidebar = document.querySelector('[data-slot="sidebar"]')
+        const arkmeSidebarPresent = sidebar?.querySelector('[data-arkme-owned="persistent-sidebar"]') !== null
+        const trigger = arkmeSidebarPresent
+          ? null
+          : sidebar?.querySelector<HTMLButtonElement>(
+            '[data-slot="sidebar.settings"] button[aria-haspopup="dialog"]',
+          ) ?? null
+        if (!triggerClicked && trigger !== null) {
+          triggerClicked = true
+          trigger.click()
+        }
+        const open = trigger?.getAttribute('aria-expanded') === 'true'
+        if (open) settingsOpened = true
+        if (settingsOpened && !open) {
           restoreArkmeSidebar()
           return
         }
-        if (!triggerClicked) {
-          const sidebar = document.querySelector('[data-slot="sidebar"]')
-          const arkmeSidebarPresent = sidebar?.querySelector('[data-arkme-owned="persistent-sidebar"]') !== null
-          const trigger = arkmeSidebarPresent
-            ? null
-            : sidebar?.querySelector<HTMLButtonElement>(
-              '[data-slot="sidebar.settings"] button[aria-haspopup="dialog"]',
-            ) ?? null
-          if (trigger !== null) {
-            triggerClicked = true
-            trigger.click()
-          }
-        }
-        if (!settingsDialogSeen && attempts >= 40) restoreArkmeSidebar()
+        if (!settingsOpened && attempts >= 40) restoreArkmeSidebar()
       }, 50)
     }
 
@@ -198,6 +201,13 @@ export function apply(ctx: ClientContext): void {
     }
   }, 'dsh-arkme: keep Arkme conversation seats around the embedded DeepSeek Harness')
 
+  ctx.slots.inject('settings.section', () => ctx.slots.register({
+    name: 'settings.section',
+    id: 'arkme-account',
+    order: 1000,
+    label: '我的账户',
+  }, ArkmeDshSettingsSection))
+
   if (startupAuthGateEnabled()) {
     ctx.slots.inject('shell.overlay', () => ctx.slots.register({
       name: 'shell.overlay',
@@ -222,7 +232,6 @@ export { ArkmePrivateCallMenu } from './ArkmePrivateCallMenu.js'
 export { ArkmeAppUpdateDialog } from './ArkmeAppUpdateDialog.js'
 export { ArkmeUpdateRailSlot, ArkmeUpdateTopCapsule, deriveArkmeUpdatePresentation } from './ArkmeUpdateSurfaces.js'
 export { ArkmePluginUpdateDialog } from './ArkmePluginUpdateDialog.js'
-export { ArkmeSettingsRow } from './ArkmeSettingsRow.js'
 export { ArkmeStartupAuthGate } from './ArkmeStartupAuthGate.js'
 export {
   ArkmePersistentClientRuntime, ArkmePersistentDetails,
@@ -253,10 +262,7 @@ export {
 export { ArkmeSurface } from './ArkmeSidebar.js'
 export { ArkmeProductNavigation } from './ArkmeProductNavigation.js'
 export { ArkmeCallSurface } from './ArkmeCallSurface.js'
-export { ArkmeAccountMenu } from './ArkmeAccountMenu.js'
-export { ArkmeSettingsSurface } from './ArkmeSettingsSurface.js'
 export { ArkmeCallsRow, ArkmeDirectoryRow, ArkmeNavigation, ArkmeRecordingsRow, renderArkmeDirectoryRow } from './ArkmeVirtualWorkspace.js'
-export { ArkmeRootFrame } from './redesign/ArkmeRootFrame.js'
 export { ArkmeLayoutController } from './redesign/layout-controller.js'
 export type { ArkmeDirectoryEntryOwnerProps, ArkmeDirectoryRowProps } from './slots-contract.js'
 export { outgoingCallUi } from './outgoing-call-ui-controller.js'

@@ -462,18 +462,19 @@ button.arkme-update-rail.is-error { background: #fff0ee !important; color: #b548
 @keyframes arkme-icon-spin { to { transform: rotate(360deg); } }
 .arkme-icon-spin { animation: arkme-icon-spin .8s linear infinite; }
 
-.arkme-redesign-settings-page { overflow: hidden; background: #fff; }
-.arkme-redesign-settings-surface { width: 100%; height: 100%; overflow-y: auto; color: #20232c; background: #fff; }
-.arkme-redesign-settings-shell { width: min(760px, calc(100% - 96px)); margin: 0 auto; padding: 58px 0 68px; }
-.arkme-redesign-settings-profile { padding: 0 4px 32px; display: flex; align-items: center; gap: 16px; }
+.arkme-redesign-settings-surface { width: 100%; height: auto; overflow: visible; color: #20232c; background: transparent; }
+.arkme-redesign-settings-shell { width: 100%; box-sizing: border-box; margin: 0; padding: 0; }
+.arkme-redesign-settings-profile { padding: 0 0 24px; display: flex; align-items: center; gap: 16px; }
 .arkme-redesign-settings-profile > div:last-child { min-width: 0; }
 .arkme-redesign-settings-profile h1 { margin: 0 0 6px; overflow: hidden; color: #20232c; font-size: 24px; line-height: 30px; font-weight: 600; letter-spacing: -.03em; white-space: nowrap; text-overflow: ellipsis; }
 .arkme-redesign-settings-profile p { margin: 0; overflow: hidden; color: #858992; font-size: 13px; line-height: 18px; white-space: nowrap; text-overflow: ellipsis; }
-.arkme-redesign-settings-group { margin: 0 0 28px; overflow: hidden; border: 1px solid #e1e2e5; border-radius: 16px; background: #fff; scroll-margin-top: 24px; }
-.arkme-redesign-settings-group h2 { margin: 0 16px; padding: 15px 1px 10px; border-bottom: 1px solid #ededee; color: #8a8e96; font-size: 12px; line-height: 17px; font-weight: 500; }
-.arkme-redesign-settings-group > div { padding: 0 16px; }
+.arkme-redesign-settings-group { margin: 0; overflow: hidden; border: 0; border-bottom: 1px solid #e1e2e5; border-radius: 0; background: transparent; }
+.arkme-redesign-settings-group:last-child { border-bottom: 0; }
+.arkme-redesign-settings-group h2 { margin: 0; padding: 15px 1px 10px; border-bottom: 1px solid #ededee; color: #8a8e96; font-size: 12px; line-height: 17px; font-weight: 500; }
+.arkme-redesign-settings-group > div { padding: 0; }
 .arkme-redesign-setting-row {
   width: 100%;
+  box-sizing: border-box;
   min-height: 54px;
   padding: 9px 1px;
   display: grid;
@@ -768,8 +769,6 @@ body[data-ds-dark-theme] .arkme-redesign-content,
 body[data-ds-dark-theme] .arkme-redesign-feature-page,
 body[data-ds-dark-theme] .arkme-redesign-recordings-page,
 body[data-ds-dark-theme] .arkme-redesign-plugins-page,
-body[data-ds-dark-theme] .arkme-redesign-settings-page,
-body[data-ds-dark-theme] .arkme-redesign-settings-surface,
 body[data-ds-dark-theme] .arkme-redesign-model-settings,
 body[data-ds-dark-theme] .arkme-redesign-details {
   background: var(--dsw-alias-bg-base);
@@ -888,10 +887,14 @@ body[data-ds-dark-theme] .arkme-redesign-placeholder h1 {
 }
 
 body[data-ds-dark-theme] .arkme-redesign-task-list,
-body[data-ds-dark-theme] .arkme-redesign-settings-group,
 body[data-ds-dark-theme] .arkme-redesign-model-settings > header button,
 body[data-ds-dark-theme] .arkme-redesign-plugins-page .arkme-extension-card {
   background: var(--dsw-alias-bg-layer-1) !important;
+}
+body[data-ds-dark-theme] .arkme-redesign-settings-surface,
+body[data-ds-dark-theme] .arkme-redesign-settings-group {
+  color: var(--dsw-alias-label-primary);
+  background: transparent !important;
 }
 body[data-ds-dark-theme] .arkme-redesign-route-chats .arkme-conversation-surface,
 body[data-ds-dark-theme] .arkme-redesign-plugins-page .arkme-extension-center-embedded > section {
