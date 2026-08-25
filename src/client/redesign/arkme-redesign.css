@@ -517,18 +517,6 @@ body[data-ds-dark-theme] [data-arkme-owned="persistent-workspace"] div:has(> inp
   background: var(--dsw-specific-input-major) !important;
   box-shadow: var(--dsw-shadow-lv2) !important;
 }
-body[data-ds-dark-theme] [data-arkme-owned="world-surface"] {
-  background: var(--dsw-alias-bg-base) !important;
-}
-body[data-ds-dark-theme] [data-arkme-owned="world-surface"] article {
-  background: var(--dsw-alias-bg-layer-1) !important;
-}
-body[data-ds-dark-theme] [data-arkme-owned="world-surface"] [role="status"] {
-  background: var(--dsw-alias-bg-layer-1) !important;
-}
-body[data-ds-dark-theme] [data-arkme-owned="world-surface"] button[aria-label="刷新"] {
-  background: var(--dsw-specific-input-major) !important;
-}
 body[data-ds-dark-theme] [data-arkme-owned="product-navigation"] button:hover {
   background: var(--dsw-alias-interactive-bg-hover) !important;
   color: var(--dsw-alias-label-primary) !important;
@@ -646,42 +634,6 @@ body[data-ds-dark-theme] [aria-label="客户端日历"]:has(> button[aria-label=
 body[data-ds-dark-theme] [aria-label="客户端日历"]:has(> button[aria-label="关闭日历"])
   section[aria-label="当天内容"] article span {
   color: var(--dsw-alias-label-secondary) !important;
-}
-
-/* World has inline light colors below its owner root. Cover its body, cards,
-   comments and non-media dialogs while preserving the dark image preview. */
-body[data-ds-dark-theme] [data-arkme-owned="world-surface"] > div:not([role]) {
-  background: var(--dsw-alias-bg-layer-2) !important;
-}
-body[data-ds-dark-theme] [data-arkme-owned="world-surface"] > header button:not([aria-label]),
-body[data-ds-dark-theme] [data-arkme-owned="world-surface"] [role="alert"] button {
-  border-color: var(--dsw-alias-button-primary-fill) !important;
-  background: var(--dsw-alias-button-primary-fill) !important;
-  color: var(--dsw-alias-label-primary-inverted) !important;
-}
-body[data-ds-dark-theme] [data-arkme-owned="world-surface"] > div:not([role]) > div > div > button {
-  border-color: var(--dsw-alias-border-l2) !important;
-  background: var(--dsw-alias-button-elevated-fill) !important;
-  color: var(--dsw-alias-label-primary) !important;
-}
-body[data-ds-dark-theme] [data-arkme-owned="world-surface"] nav[aria-label="世界范围"] button[aria-current="page"] {
-  border-bottom-color: var(--dsw-alias-state-business-primary) !important;
-}
-body[data-ds-dark-theme] [data-arkme-owned="world-surface"] article p {
-  color: var(--dsw-alias-label-secondary) !important;
-}
-body[data-ds-dark-theme] [data-arkme-owned="world-surface"] section[aria-label$="的评论区"] {
-  background: var(--dsw-alias-bg-layer-2) !important;
-}
-body[data-ds-dark-theme] [data-arkme-owned="world-surface"] [role="dialog"]:not([aria-label="世界图片预览"]) > section {
-  border-color: var(--dsw-alias-border-l2) !important;
-  background: var(--dsw-specific-menu) !important;
-  color: var(--dsw-alias-label-primary) !important;
-}
-body[data-ds-dark-theme] [data-arkme-owned="world-surface"] [role="dialog"]:not([aria-label="世界图片预览"]) textarea {
-  border-color: var(--dsw-alias-border-l2) !important;
-  background: var(--dsw-specific-input-major) !important;
-  color: var(--dsw-alias-label-primary) !important;
 }
 
 body[data-ds-dark-theme] .arkme-redesign-root,
