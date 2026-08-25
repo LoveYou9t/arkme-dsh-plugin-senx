@@ -30,8 +30,12 @@ import { ArkmeLongArticleDialog } from './ArkmeLongArticleDialog.js'
 import { ArkmeRecordingSurface } from './ArkmeRecordingSurface.js'
 import { ArkmeCallSurface } from './ArkmeCallSurface.js'
 import { ArkmeWorldSurface } from './ArkmeWorldSurface.js'
-import { ArkmeAttachmentDraftTile, ArkmeMessageContent } from './ArkmeRichContent.js'
-import { ArkmeMentionTextarea } from './ArkmeMentionTextarea.js'
+import { ArkmeAttachmentDraftTile, ArkmeMessageContent, ArkmeRichText } from './ArkmeRichContent.js'
+import { ArkmeRichComposerInput, type ArkmeRichComposerHandle } from './ArkmeRichComposerInput.js'
+import { ArkmeEmojiPicker } from './ArkmeEmojiPicker.js'
+import { ArkmeComposerToolButton } from './ArkmeComposerToolButton.js'
+import { ArkmeComposerPlusIcon } from './ArkmeComposerToolIcon.js'
+import type { ArkmeEmoji } from './arkme-emoji.js'
 import { ArkmeSearchSurface } from './ArkmeSearchSurface.js'
 import { ArkmeContactAddSurface } from './ArkmeContactAddSurface.js'
 import { ARKME_DEFAULT_SHARE_WEBSITE } from '../types.js'
@@ -62,11 +66,10 @@ import {
   arkmeComposerDraftStore,
   arkmeSourceComposerDraftKey,
   releaseArkmeComposerDraft,
+  serializeArkmeComposerDraft,
   type ArkmeComposerAttachment,
 } from './composer-draft-store.js'
-import {
-  arkmeConversationComposerHeight, arkmeConversationComposerLayout,
-} from './conversation-composer-presentation.js'
+import { arkmeConversationComposerLayout } from './conversation-composer-presentation.js'
 import { restoreArkmeComposerFocus } from './composer-focus.js'
 import {
   ARKME_CONVERSATION_HEADER_HEIGHT, ArkmeInterwovenDetailAside, ArkmeInterwovenMentionCard,
@@ -267,7 +270,7 @@ const styles: Record<string, CSSProperties> = {
     caretColor: 'var(--dsw-alias-state-business-primary, #3964fe)',
   },
   tools: { ...arkmeConversationComposerLayout.tools },
-  plus: { width: 34, height: 34, border: 0, borderRadius: 9, background: 'transparent', color: colors.secondary, cursor: 'pointer', fontSize: 22, lineHeight: '30px' },
+  toolGroup: { display: 'flex', alignItems: 'center', gap: 2 },
   addMenu: { position: 'absolute', left: 0, bottom: 54, zIndex: 20, width: 210, padding: '6px 0', borderRadius: 12, border: `1px solid ${colors.border}`, background: colors.panel, boxShadow: '0 12px 32px rgba(0,0,0,.15)' },
   addMenuItem: { width: '100%', border: 0, padding: '11px 14px', display: 'flex', alignItems: 'center', gap: 10, background: 'transparent', color: colors.text, cursor: 'pointer', fontSize: 14, textAlign: 'left' },
   menuDivider: { height: 1, margin: '4px 0', background: colors.border },
@@ -775,7 +778,7 @@ export function ArkmeSurface({
   const bodyRef = useRef<HTMLDivElement>(null)
   const sentinelRef = useRef<HTMLDivElement>(null)
   const composerRef = useRef<HTMLDivElement>(null)
-  const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const textareaRef = useRef<ArkmeRichComposerHandle>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const addMenuRef = useRef<HTMLDivElement>(null)
   const addMenuTriggerRef = useRef<HTMLButtonElement>(null)
@@ -1084,13 +1087,6 @@ export function ArkmeSurface({
       setError(arkmeStoredLoginErrorMessage(authStoreSnapshot.error, t))
     }
   }, [authStoreSnapshot.error, authView, t])
-
-  useLayoutEffect(() => {
-    const textarea = textareaRef.current
-    if (textarea === null) return
-    textarea.style.height = 'auto'
-    textarea.style.height = `${arkmeConversationComposerHeight(textarea.scrollHeight)}px`
-  }, [draft])
 
   const refreshAuth = useCallback(async () => {
     setBusy(true); setError('')
@@ -1654,10 +1650,10 @@ export function ArkmeSurface({
       if (currentAuth?.status === 'authenticated' && currentAuth.userId === targetUserId) {
         arkmeComposerDraftStore.appendAttachments(targetDraftKey, uploaded)
       } else {
-        releaseArkmeComposerDraft({ text: '', attachments: uploaded, mentions: [] })
+        releaseArkmeComposerDraft({ text: '', attachments: uploaded, mentions: [], emojis: [] })
       }
     } catch (caught) {
-      releaseArkmeComposerDraft({ text: '', attachments: uploaded, mentions: [] })
+      releaseArkmeComposerDraft({ text: '', attachments: uploaded, mentions: [], emojis: [] })
       setError(errorMessage(caught))
     }
     finally {
@@ -1674,7 +1670,8 @@ export function ArkmeSurface({
     const targetDraftKey = composerDraftKey
     const targetUserId = authenticatedUserId
     if (targetUserId === undefined) return
-    const textContent = draft.trim()
+    const serializedDraft = serializeArkmeComposerDraft(composerDraft)
+    const textContent = serializedDraft.text.trim()
     if (textContent === '' && attachments.length === 0) return
     const recordUid = crypto.randomUUID(); const relationUid = crypto.randomUUID(); const now = Date.now()
     const optimisticSenderName = selfProfile?.displayName.trim() || selfProfile?.nickname.trim() || '我'
@@ -1692,7 +1689,7 @@ export function ArkmeSurface({
     const pendingAttachments = [...pendingDraft.attachments]
     const pendingAssets = pendingAttachments.map(attachment => attachment.asset)
     pendingViewportRestoreRef.current = { sourceRef: targetSource.sourceRef, viewport: undefined }
-    const pendingMentions = pendingDraft.mentions.map(mention => ({
+    const pendingMentions = serializedDraft.mentions.map(mention => ({
       memberRef: mention.memberRef,
       startIndex: mention.startIndex,
       length: mention.length,
@@ -1843,6 +1840,19 @@ export function ArkmeSurface({
       textareaRef.current?.setSelectionRange(cursor, cursor)
     })
   }, [composerDraftKey, draft.length, source?.kind])
+
+  const insertEmoji = useCallback((emoji: ArkmeEmoji) => {
+    if (composerDraftKey === undefined || busy) return
+    const textarea = textareaRef.current
+    const start = textarea?.selectionStart ?? draft.length
+    const end = textarea?.selectionEnd ?? start
+    const caretIndex = arkmeComposerDraftStore.insertEmoji(composerDraftKey, emoji, start, end)
+    if (caretIndex === undefined) return
+    requestAnimationFrame(() => {
+      textareaRef.current?.focus()
+      textareaRef.current?.setSelectionRange(caretIndex, caretIndex)
+    })
+  }, [busy, composerDraftKey, draft])
   const openPrivateChatForMember = useCallback((member: ArkmeConversationMemberItem) => {
     if (source === undefined || privateChatBusy) return
     setPrivateChatBusy(true)
@@ -2321,8 +2331,8 @@ export function ArkmeSurface({
             />)}</div>}
             {uploadStatus !== undefined && uploadStatus.key === composerDraftKey
               && <div style={styles.uploadStatus} role="status">{uploadStatus.message}</div>}
-            <ArkmeMentionTextarea className="arkme-conversation-textarea" ref={textareaRef} rows={1} style={styles.textarea!} value={draft} mentions={composerDraft.mentions} maxLength={20000} placeholder={arkmeSourceComposerPlaceholder(selectedSource)} aria-label={arkmeSourceComposerPlaceholder(selectedSource)} disabled={busy}
-              onChange={event => { arkmeComposerDraftStore.setText(composerDraftKey, event.target.value) }}
+            <ArkmeRichComposerInput className="arkme-conversation-textarea" ref={textareaRef} style={styles.textarea!} value={draft} mentions={composerDraft.mentions} emojis={composerDraft.emojis} maxLength={20000} placeholder={arkmeSourceComposerPlaceholder(selectedSource)} ariaLabel={arkmeSourceComposerPlaceholder(selectedSource)} disabled={busy}
+              onTextChange={text => { arkmeComposerDraftStore.setText(composerDraftKey, text) }}
               onPaste={event => {
                 const imageFiles = arkmeClipboardImageFiles(event.clipboardData)
                 if (imageFiles.length === 0) return
@@ -2333,8 +2343,8 @@ export function ArkmeSurface({
                 if (!event.nativeEvent.isComposing && (event.key === 'Backspace' || event.key === 'Delete')) {
                   const caret = arkmeComposerDraftStore.deleteMentionAtSelection(
                     composerDraftKey,
-                    event.currentTarget.selectionStart,
-                    event.currentTarget.selectionEnd,
+                    textareaRef.current?.selectionStart ?? draft.length,
+                    textareaRef.current?.selectionEnd ?? draft.length,
                     event.key === 'Backspace' ? 'backward' : 'forward',
                   )
                   if (caret !== undefined) {
@@ -2351,7 +2361,11 @@ export function ArkmeSurface({
                   if (canSend) void send()
                 }
               }} />
-            <div style={styles.tools}><button ref={addMenuTriggerRef} type="button" style={styles.plus} aria-label="添加内容" aria-haspopup="menu" aria-expanded={addMenuOpen} onClick={() => { setAddMenuOpen(value => !value) }}>+</button><button
+            <div style={styles.tools}><div style={styles.toolGroup}><ArkmeComposerToolButton ref={addMenuTriggerRef} aria-label="添加内容" aria-haspopup="menu" aria-expanded={addMenuOpen} data-arkme-composer-tool="add" onClick={() => { setAddMenuOpen(value => !value) }}><ArkmeComposerPlusIcon /></ArkmeComposerToolButton><ArkmeEmojiPicker
+              disabled={busy}
+              scopeKey={composerDraftKey}
+              onSelect={insertEmoji}
+            /></div><button
               type="button"
               style={{ ...styles.send, opacity: canSend ? 1 : .4 }}
               disabled={!canSend}
@@ -2420,11 +2434,11 @@ export function ArkmeSurface({
               && <button type="button" style={styles.toggle} onClick={() => { setShowOriginal(value => !value) }}>
                 {showOriginal ? '👁️显示润色' : '👁️显示原文'}
               </button>}
-            <p style={styles.detailText}>{showOriginal && detailItem.aiPolish?.originalText !== undefined
+            <p style={styles.detailText}><ArkmeRichText text={showOriginal && detailItem.aiPolish?.originalText !== undefined
               ? detailItem.aiPolish.originalText
               : detailItem.aiPolish?.state === 'polished' && detailItem.aiPolish.polishedText !== undefined
                 ? detailItem.aiPolish.polishedText
-                : detailItem.textContent || detailItem.title || '非文本内容'}</p>
+                : detailItem.textContent || detailItem.title || '非文本内容'} /></p>
           </div>
         </aside>}
         {authView === 'content' && ui.mode === 'contact-add' && <div
