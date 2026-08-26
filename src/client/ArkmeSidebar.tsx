@@ -13,6 +13,8 @@ import type {
   ArkmeUploadedAsset, ArkmeUserProfile, ArkmeUserProfileSnapshot,
   ArkmeConversationMemberItem, ArkmeConversationMemberList, ArkmeConversationMemberRecordMode,
   ArkmeConversationMemberJoinEvent, ArkmeConversationMemberJoinPerson, ArkmeOpenPrivateChatResult,
+  ArkmeTopicHierarchyMoveResult,
+  ArkmeTopicDissolveTask,
   ArkmeBotList, ArkmeGroupBotCandidate, ArkmeGroupBotCandidateList,
 } from '../types.js'
 import { callArkme, ArkmeClientError } from './api.js'
@@ -42,11 +44,10 @@ import { ArkmeContactAddSurface } from './ArkmeContactAddSurface.js'
 import { ARKME_DEFAULT_SHARE_WEBSITE } from '../types.js'
 import { ArkmeMarketplace } from './ArkmeMarketplace.js'
 import {
-  appendArkmeSourceBreadcrumbTrail, ArkmeSourceBreadcrumb, arkmeSourceBreadcrumb,
-  truncateArkmeSourceBreadcrumbTrail,
+  ArkmeSourceBreadcrumb,
 } from './ArkmeSourceBreadcrumb.js'
 import {
-  ArkmeTopicDirectoryPopover, type ArkmeSelfSourcesResolution,
+  ArkmeTopicDirectoryPopover, type ArkmeSelfSourcesResolution, type ArkmeTopicCreateOpener,
 } from './ArkmeTopicDirectoryPopover.js'
 import { arkmeTheme } from './arkme-theme.js'
 import { ArkmeProductNavigation } from './ArkmeProductNavigation.js'
@@ -746,7 +747,6 @@ export function ArkmeSurface({
   const selectedSource = conversationBackdropVisible ? ui.selectedSource : undefined
   const [selfSourcesResolution, setSelfSourcesResolution] = useState<ArkmeAccountSelfSourcesResolution>()
   const [selfSourcesRetryRevision, setSelfSourcesRetryRevision] = useState(0)
-  const [selfBreadcrumbTrail, setSelfBreadcrumbTrail] = useState<ArkmeSourceItem[]>([])
   const activeSelfSourcesResolution = selfSourcesResolution === undefined
     || selfSourcesResolution.userId !== authenticatedUserId
     ? undefined
@@ -755,16 +755,13 @@ export function ArkmeSurface({
   const selfSources = activeSelfSourcesResolution?.status === 'ready'
     ? activeSelfSourcesResolution.sources
     : EMPTY_SELF_SOURCES
-  const selfSourcesRef = useRef(selfSources)
-  selfSourcesRef.current = selfSources
-  const breadcrumbUserIdRef = useRef(authenticatedUserId)
-  useEffect(() => {
-    const accountChanged = breadcrumbUserIdRef.current !== authenticatedUserId
-    breadcrumbUserIdRef.current = authenticatedUserId
-    setSelfBreadcrumbTrail(current => appendArkmeSourceBreadcrumbTrail(
-      accountChanged ? [] : current, selectedSource, selfSources,
-    ))
-  }, [authenticatedUserId, selectedSource, selfSources])
+  const selfSourcesLoading = activeSelfSourcesResolution?.status === 'loading'
+    || activeSelfSourcesResolution?.status === 'ready' && activeSelfSourcesResolution.loading
+  const selfSourcesError = activeSelfSourcesResolution?.status === 'error'
+    ? activeSelfSourcesResolution.message
+    : activeSelfSourcesResolution?.status === 'ready'
+      ? activeSelfSourcesResolution.error
+      : undefined
   const source = conversationBackdropVisible ? selectedSource ?? aggregateSource : undefined
   const sourceProjectionRevision = source?.kind === 'private_chat' || source?.kind === 'group_chat'
     ? ui.chatRevision
@@ -787,6 +784,26 @@ export function ArkmeSurface({
   const fileInputRef = useRef<HTMLInputElement>(null)
   const addMenuRef = useRef<HTMLDivElement>(null)
   const addMenuTriggerRef = useRef<HTMLButtonElement>(null)
+  const selfTopicCreateRef = useRef<ArkmeTopicCreateOpener | undefined>()
+  const [activeTopicDissolve, setActiveTopicDissolve] = useState<ArkmeTopicDissolveTask>()
+  useEffect(() => {
+    if (authenticatedUserId === undefined) {
+      setActiveTopicDissolve(undefined)
+      return
+    }
+    let disposed = false
+    const refresh = async () => {
+      try {
+        const task = await callArkme<ArkmeTopicDissolveTask | null>('topic.dissolve.active')
+        if (!disposed) setActiveTopicDissolve(task ?? undefined)
+      } catch {
+        // A transient progress lookup failure must not interrupt the conversation UI.
+      }
+    }
+    void refresh()
+    const timer = globalThis.setInterval(() => { void refresh() }, 500)
+    return () => { disposed = true; globalThis.clearInterval(timer) }
+  }, [authenticatedUserId])
   const [timelineView, setTimelineView] = useState<ArkmeTimelineViewState>({
     sourceRef: '', items: [], aiPolishNotices: [], aiPolishSettings: undefined, nextCursor: undefined, hasMore: false,
   })
@@ -2087,15 +2104,9 @@ export function ArkmeSurface({
     }
   }, [memberMenu])
   const activateSelfSource = useCallback((nextSource: ArkmeTimelinePage['source']) => {
-    setSelfBreadcrumbTrail(current => appendArkmeSourceBreadcrumbTrail(current, nextSource, selfSourcesRef.current))
-    activateSource(nextSource)
-  }, [activateSource])
-  const activateBreadcrumbSource = useCallback((trailIndex: number, nextSource: ArkmeTimelinePage['source']) => {
-    setSelfBreadcrumbTrail(current => truncateArkmeSourceBreadcrumbTrail(current, trailIndex))
     activateSource(nextSource)
   }, [activateSource])
   const activateSendToSelf = useCallback(() => {
-    setSelfBreadcrumbTrail([])
     arkmeUi.focusSendToSelf()
     arkmeUi.chatChanged()
   }, [])
@@ -2106,7 +2117,6 @@ export function ArkmeSurface({
     setSelfSourcesResolution({ userId, resolution })
   }, [])
   const invalidateTopicSelection = useCallback(() => {
-    setSelfBreadcrumbTrail([])
     arkmeUi.focusSendToSelf()
   }, [])
 
@@ -2214,9 +2224,6 @@ export function ArkmeSurface({
     [chatDirectory, detailState],
   )
   const showMessageAvatars = arkmeSourceShowsMessageAvatars(source)
-  const selfBreadcrumbLabel = isArkmeSelfWorkspaceSource(selectedSource)
-    ? arkmeSourceBreadcrumb(selfBreadcrumbTrail, selfSources).map(segment => segment.label).join(' / ')
-    : undefined
   const surfaceTitle = ui.mode === 'recordings' ? '全天候录音'
     : ui.mode === 'calls' ? '通话'
     : ui.mode === 'world' ? '世界'
@@ -2224,7 +2231,7 @@ export function ArkmeSurface({
     : ui.mode === 'extensions' ? '市集'
     : ui.mode === 'voiceprint' ? '声纹管理'
     : ui.mode === 'arko' ? 'Arko'
-    : conversationBackdropVisible ? selfBreadcrumbLabel ?? arkmeSourceDestinationLabel(selectedSource)
+    : conversationBackdropVisible ? arkmeSourceDestinationLabel(selectedSource)
     : 'Arkme'
   const arkoContentVisible = authView === 'content' && ui.mode === 'arko'
   const utilityContentVisible = authView === 'content'
@@ -2276,18 +2283,70 @@ export function ArkmeSurface({
               key={auth.userId}
               userId={auth.userId}
               selectedSource={selectedSource}
+              trigger="none"
               onSelect={activateSelfSource}
               onSelectionInvalidated={invalidateTopicSelection}
               onSelfSourcesResolution={acceptSelfSourcesResolution}
+              onCreateTopicReady={open => { selfTopicCreateRef.current = open }}
               retryRevision={selfSourcesRetryRevision}
             />}
           <div style={styles.titleGroup}>
             {authenticated && conversationBackdropVisible && isArkmeSelfWorkspaceSource(selectedSource)
               ? <ArkmeSourceBreadcrumb
-                trail={selfBreadcrumbTrail}
+                selectedSource={selectedSource}
                 sources={selfSources}
-                onSelect={activateBreadcrumbSource}
+                loading={selfSourcesLoading}
+                {...(selfSourcesError === undefined ? {} : { error: selfSourcesError })}
+                onSelect={activateSelfSource}
                 onSelectAggregate={activateSendToSelf}
+                onCreateTopic={() => { selfTopicCreateRef.current?.() }}
+                onCreateChildTopic={(parent, parentLevel) => { selfTopicCreateRef.current?.(parent, parentLevel) }}
+                onRenameTopic={async (topic, title) => {
+                  const result = await callArkme<{ sourceRef: string; displayName: string }>('topic.rename', {
+                    sourceRef: topic.sourceRef,
+                    title,
+                  })
+                  setSelfSourcesRetryRevision(value => value + 1)
+                  return { ...topic, sourceRef: result.sourceRef, displayName: result.displayName }
+                }}
+                onDissolveTopic={async (topic, parent, children, onProgress) => {
+                  const requestId = globalThis.crypto?.randomUUID?.() ?? `topic-dissolve-${String(Date.now())}`
+                  let polling = true
+                  const reportProgress = async () => {
+                    if (!polling) return
+                    const progress = await callArkme<ArkmeTopicDissolveTask | null>('topic.dissolve.status', { requestId })
+                    if (progress !== null) {
+                      onProgress(progress)
+                      setActiveTopicDissolve(progress)
+                    }
+                  }
+                  const timer = globalThis.setInterval(() => { void reportProgress().catch(() => undefined) }, 250)
+                  try {
+                  await callArkme('topic.dissolve', {
+                    sourceRef: topic.sourceRef,
+                    ...(parent === undefined ? {} : { parentSourceRef: parent.sourceRef }),
+                    childSourceRefs: children.map(child => child.sourceRef),
+                    requestId,
+                    expectedRecordCount: Math.max(0, topic.recordCount ?? 0),
+                  })
+                  await reportProgress()
+                  setSelfSourcesRetryRevision(value => value + 1)
+                  } finally {
+                    polling = false
+                    globalThis.clearInterval(timer)
+                  }
+                }}
+                {...(activeTopicDissolve === undefined ? {} : { activeDissolve: activeTopicDissolve })}
+                onRetry={() => { setSelfSourcesRetryRevision(value => value + 1) }}
+                onMoveTopic={async (topic, currentParent, nextParent, insertBefore) => {
+                  await callArkme<ArkmeTopicHierarchyMoveResult>('topic.hierarchy.move', {
+                    sourceRef: topic.sourceRef,
+                    ...(currentParent === undefined ? {} : { currentParentSourceRef: currentParent.sourceRef }),
+                    ...(nextParent === undefined ? {} : { nextParentSourceRef: nextParent.sourceRef }),
+                    ...(insertBefore === undefined ? {} : { insertBeforeSourceRef: insertBefore.sourceRef }),
+                  })
+                  setSelfSourcesRetryRevision(value => value + 1)
+                }}
               />
               : <div style={styles.titleBlock}>
                 <span style={styles.titleLine}>
