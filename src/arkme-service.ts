@@ -126,7 +126,7 @@ import type {
   ArkmeConversationMemberRecordPage,
   ArkmeCreateTextResult,
   ArkmeDirectTextSendResult,
-  ArkmeFileAssetDisplayItem,
+  ArkmeFileAssetDisplayItem, ArkmeFavoriteStickerList, ArkmeFavoriteStickerAddInput, ArkmeFavoriteStickerManageAction,
   ArkmeGroupActionResult,
   ArkmeGroupAiPolishMutationResult,
   ArkmeGroupAiPolishNotice,
@@ -1119,14 +1119,12 @@ export class ArkmeService {
   ): Promise<ArkmeSourceSendResult> {
     return await this.chat.sendSourceText(sourceRef, textContent, options)
   }
-
   async retryGroupAiPolish(
     retryRef: string,
     options: { signal?: AbortSignal } = {},
   ): Promise<ArkmeSourceSendResult> {
     return await this.aiPolish.retryGroupAiPolish(retryRef, options)
   }
-
   async sendSourceRich(
     sourceRef: string,
     input: ArkmeRichSendInput,
@@ -1134,11 +1132,13 @@ export class ArkmeService {
   ): Promise<ArkmeSourceSendResult> {
     return await this.chat.sendSourceRich(sourceRef, input, options)
   }
-
+  async favoriteStickers(signal?: AbortSignal): Promise<ArkmeFavoriteStickerList> { return await this.chat.favoriteStickers(signal) }
+  async addFavoriteSticker(item: ArkmeFavoriteStickerAddInput, signal?: AbortSignal): Promise<ArkmeFavoriteStickerList> { return await this.chat.addFavoriteSticker(item, signal) }
+  async sendFavoriteSticker(sourceRef: string, fileAssetUid: string, options: { recordUid?: string; relationUid?: string; signal?: AbortSignal } = {}): Promise<ArkmeSourceSendResult> { return await this.chat.sendFavoriteSticker(sourceRef, fileAssetUid, options) }
+  async manageFavoriteSticker(fileAssetUid: string, action: ArkmeFavoriteStickerManageAction, signal?: AbortSignal): Promise<ArkmeFavoriteStickerList> { return await this.chat.manageFavoriteSticker(fileAssetUid, action, signal) }
   async longArticleDetail(sourceRef: string, itemUid: string, signal?: AbortSignal): Promise<ArkmeLongArticleDetail> {
     return await this.chat.longArticleDetail(sourceRef, itemUid, signal)
   }
-
   async updateLongArticle(
     sourceRef: string,
     itemUid: string,
@@ -1169,8 +1169,9 @@ export class ArkmeService {
   async fetchMedia(
     mediaRef: string,
     range?: string,
+    signal?: AbortSignal,
   ): Promise<{ response: Response; descriptor: ArkmeMediaDescriptor }> {
-    return await this.chat.fetchMedia(mediaRef, range)
+    return await this.chat.fetchMedia(mediaRef, range, signal)
   }
 
   async sendDirectText(
