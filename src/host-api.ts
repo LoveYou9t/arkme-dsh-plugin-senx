@@ -7,6 +7,8 @@ import { ArkmeOutgoingCallError, type ArkmeOutgoingCallFailureCode } from './out
 import type {
   ArkmeAiVideoJobStatus, ArkmeArrangementListStatus, ArkmeArrangementMutationIntent, ArkmeBotProvider,
   ArkmeConversationMemberRecordMode, ArkmeDirectorySectionKind, ArkmeHumanMentionInput,
+  ArkmeFavoriteStickerAddInput,
+  ArkmeFavoriteStickerManageAction,
   ArkmeMessageReadReceiptQueryItem,
   ArkmeBotMentionInput,
   ArkmePluginRequest, ArkmePluginResponse, ArkmeRecordCursor,
@@ -387,6 +389,27 @@ function richSendParam(params: Record<string, unknown>): ArkmeRichSendInput {
       }]
     }),
   }
+}
+
+function favoriteStickerItemParam(params: Record<string, unknown>): ArkmeFavoriteStickerAddInput {
+  if (params.item === null || typeof params.item !== 'object' || Array.isArray(params.item)) {
+    throw new ArkmePluginError('favorite-sticker-invalid', '收藏表情参数无效', false, 400)
+  }
+  const item = params.item as Record<string, unknown>
+  return {
+    fileAssetUid: stringParam(item, 'fileAssetUid'),
+    fileName: stringParam(item, 'fileName'),
+    mimeType: stringParam(item, 'mimeType'),
+    size: Math.max(0, Math.trunc(numberParam(item, 'size', 0))),
+    fileKind: 1,
+    ...(item.isAnimated === true ? { isAnimated: true } : {}),
+  }
+}
+
+function favoriteStickerManageActionParam(params: Record<string, unknown>): ArkmeFavoriteStickerManageAction {
+  const action = stringParam(params, 'action')
+  if (action === 'move-to-front' || action === 'delete') return action
+  throw new ArkmePluginError('favorite-sticker-manage-invalid', '收藏表情管理操作无效', false, 400)
 }
 
 function worldPublishFileAssetsParam(params: Record<string, unknown>): ArkmeWorldPublishFileAsset[] {
@@ -1036,6 +1059,19 @@ export async function dispatchArkmeHostOperation(
         ...(stringParam(params, 'recordUid') === '' ? {} : { recordUid: stringParam(params, 'recordUid') }),
         ...(stringParam(params, 'relationUid') === '' ? {} : { relationUid: stringParam(params, 'relationUid') }),
       },
+    )
+    case 'favorite-stickers.list': return await service.favoriteStickers()
+    case 'favorite-stickers.add': return await service.addFavoriteSticker(favoriteStickerItemParam(params))
+    case 'favorite-stickers.send': return await service.sendFavoriteSticker(
+      stringParam(params, 'sourceRef'),
+      stringParam(params, 'fileAssetUid'),
+      {
+        ...(stringParam(params, 'recordUid') === '' ? {} : { recordUid: stringParam(params, 'recordUid') }),
+        ...(stringParam(params, 'relationUid') === '' ? {} : { relationUid: stringParam(params, 'relationUid') }),
+      },
+    )
+    case 'favorite-stickers.manage': return await service.manageFavoriteSticker(
+      stringParam(params, 'fileAssetUid'), favoriteStickerManageActionParam(params),
     )
     case 'source.long-article.detail': return await service.longArticleDetail(
       stringParam(params, 'sourceRef'),
