@@ -1,8 +1,6 @@
 import { useEffect, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
-import { FileTextIcon as FileText } from '@phosphor-icons/react/dist/csr/FileText'
-import { FileAudioIcon as FileAudio } from '@phosphor-icons/react/dist/csr/FileAudio'
-import { FileVideoIcon as FileVideo } from '@phosphor-icons/react/dist/csr/FileVideo'
+import { ArkmeFileIcon } from './ArkmeFileIcon.js'
 import { arkmeTheme } from './arkme-theme.js'
 import { ARKME_DEFAULT_SHARE_WEBSITE } from '../types.js'
 import type { ArkmeContentBlock, ArkmeLinkMetadata, ArkmeLongArticleDetail, ArkmeTimelineItem, ArkmeUploadedAsset } from '../types.js'
@@ -10,6 +8,8 @@ import { callArkme } from './api.js'
 import { ArkmeLongArticleDialog } from './ArkmeLongArticleDialog.js'
 import { arkmeEmojiTextRuns } from './arkme-emoji.js'
 import { ArkmeVoiceContent, arkmeVoiceMediaUrl } from './ArkmeVoiceContent.js'
+import { ArkmeFileViewer, ArkmeFileActions, arkmeLocalFileUrl, arkmeFileSize, useArkmeOriginal } from './ArkmeFileViewer.js'
+import { arkmeVisibleUploadFraction } from '../file-transfer-contract.js'
 
 const mediaRoute = '/arkme-self/api/media'
 const textCollapseCharacterThreshold = 300
@@ -32,8 +32,7 @@ const styles: Record<string, CSSProperties> = {
   videoPreview: { display: 'block', width: '100%', height: '100%', objectFit: 'cover', background: '#111', pointerEvents: 'none' },
   videoBadge: { position: 'absolute', left: 6, bottom: 6, display: 'inline-flex', alignItems: 'center', gap: 4, padding: '2px 5px', borderRadius: 6, background: 'rgba(0,0,0,.62)', color: '#fff', fontSize: 10, lineHeight: '14px' },
   file: { width: 220, maxWidth: '100%', height: 56, display: 'flex', alignItems: 'center', gap: 10, padding: '4px 0', boxSizing: 'border-box', borderRadius: 8, color: 'inherit', background: 'transparent', textDecoration: 'none' },
-  fileIconBox: { width: 40, height: 40, flex: 'none', display: 'grid', placeItems: 'center', borderRadius: 8, background: 'var(--dsw-specific-input-major, #fff)' },
-  fileIcon: { fontSize: 24, lineHeight: 1 },
+  fileIconBox: { width: 40, height: 40, flex: 'none', display: 'grid', placeItems: 'center' },
   fileName: { minWidth: 0, display: '-webkit-box', overflow: 'hidden', overflowWrap: 'anywhere', WebkitBoxOrient: 'vertical', WebkitLineClamp: 2, fontSize: 12, lineHeight: '18px' },
   article: { width: 400, maxWidth: '100%', display: 'flex', flexDirection: 'column', padding: 0, boxSizing: 'border-box', borderRadius: 0, background: 'transparent', color: 'inherit' },
   articleButton: { border: 0, font: 'inherit', textAlign: 'left', cursor: 'pointer' },
@@ -262,7 +261,14 @@ function ArkmeRichTextWithInlineLinks({
 }
 
 function mediaUrl(block: ArkmeContentBlock): string {
+  if (block.localFileRef !== undefined) return arkmeLocalFileUrl(block.localFileRef)
   return `${mediaRoute}?ref=${encodeURIComponent(block.mediaRef)}`
+}
+
+function UploadProgress({ block }: { block: ArkmeContentBlock }) {
+  if (block.uploadProgress === undefined || block.uploadProgress.phase === 'ready') return null
+  const percent = Math.floor(arkmeVisibleUploadFraction(block.uploadProgress) * 100)
+  return <span role="progressbar" aria-label={`上传 ${block.fileName}`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent} style={{ position: 'absolute', inset: 0, display: 'grid', placeItems: 'center', background: 'rgba(0,0,0,.38)', color: '#fff', borderRadius: 8, fontSize: 12, pointerEvents: 'none' }}><span style={{ width: 36, height: 36, borderRadius: '50%', border: '2px solid rgba(255,255,255,.8)', display: 'grid', placeItems: 'center' }}>{percent}%</span></span>
 }
 
 function durationLabel(durationSec?: number): string {
@@ -398,16 +404,23 @@ function MediaGallery({ blocks, onOpen, onFallback }: {
             <video src={src} muted playsInline preload="metadata" style={styles.videoPreview} aria-hidden onError={() => { onFallback(block) }} />
             <span style={styles.videoBadge} aria-hidden>▶ {durationLabel(block.durationSec)}</span>
           </>}
+        <UploadProgress block={block} />
       </button>
     })}
   </div>
 }
 
-function FileCard({ block, fallback = false }: { block: ArkmeContentBlock; fallback?: boolean }) {
-  return <a href={mediaUrl(block)} download={block.fileName} style={styles.file} data-arkme-file-card={fallback ? 'fallback' : 'file'}>
-    <span style={styles.fileIconBox} aria-hidden>{block.kind === 'audio' ? <FileAudio size={23} /> : block.kind === 'video' ? <FileVideo size={23} /> : <FileText size={23} />}</span>
-    <span style={styles.fileName}>{block.fileName || '未知文件'}</span>
-  </a>
+export function ArkmeFileCard({ block, fallback = false, onOpen, previewOpen = false }: { block: ArkmeContentBlock; fallback?: boolean; onOpen?: (block: ArkmeContentBlock) => void; previewOpen?: boolean }) {
+  const [open, setOpen] = useState(false)
+  const original = useArkmeOriginal(block, false, open || previewOpen)
+  const downloading = original.reception.state === 'receiving'
+  const percent = original.reception.totalBytes > 0 ? Math.min(99, Math.floor(original.reception.receivedBytes / original.reception.totalBytes * 100)) : undefined
+  const downloadLabel = original.localRef !== undefined ? '' : downloading ? `下载中${percent === undefined ? '' : ` ${percent}%`}` : original.reception.state === 'failed' ? '下载失败' : '未下载'
+  return <><button type="button" onClick={event => { event.stopPropagation(); if (onOpen !== undefined) onOpen(block); else setOpen(true) }} style={{ ...styles.file, border: 0, textAlign: 'left', cursor: 'pointer', position: 'relative' }} data-arkme-file-card={fallback ? 'fallback' : 'file'}>
+    <span style={{ ...styles.fileIconBox, position: 'relative' }}><ArkmeFileIcon fileName={block.fileName} mimeType={block.mimeType} /><UploadProgress block={block} /></span>
+    <span><span style={styles.fileName}>{block.fileName || '未知文件'}</span><small style={{ color: arkmeTheme.tertiary }}>{arkmeFileSize(block.size)}{downloadLabel && ` · ${downloadLabel}`}</small></span>
+    {downloading && <progress aria-label={`下载 ${block.fileName}`} max={100} value={percent} style={{ position: 'absolute', left: 0, bottom: 0, height: 3, width: '100%' }} />}
+  </button>{open && <ArkmeFileViewer block={block} openLocalFile onClose={() => setOpen(false)} />}</>
 }
 
 function LongArticleWordCountIcon() {
@@ -472,11 +485,12 @@ export function arkmeContainedImageRect(viewportWidth: number, viewportHeight: n
   }
 }
 
-export function ArkmeMediaPreview({ blocks, selected, onSelect, onClose }: {
+export function ArkmeMediaPreview({ blocks, selected, onSelect, onClose, openLocalFile = true }: {
   blocks: ArkmeContentBlock[]
   selected: ArkmeContentBlock
   onSelect: (block: ArkmeContentBlock) => void
   onClose: () => void
+  openLocalFile?: boolean
 }) {
   const index = Math.max(0, blocks.findIndex(block => block.mediaRef === selected.mediaRef))
   const viewportRef = useRef<HTMLDivElement>(null)
@@ -484,6 +498,8 @@ export function ArkmeMediaPreview({ blocks, selected, onSelect, onClose }: {
   const zoomAnchorRef = useRef<{ imageYRatio: number; pointerY: number } | undefined>(undefined)
   const [imageMode, setImageMode] = useState<ImagePreviewMode>('contained')
   const [imageDragging, setImageDragging] = useState(false)
+  const original = useArkmeOriginal(selected, selected.kind === 'image')
+  const originalUrl = original.localRef === undefined ? mediaUrl(selected) : arkmeLocalFileUrl(original.localRef)
 
   useEffect(() => {
     setImageMode('contained')
@@ -590,6 +606,8 @@ export function ArkmeMediaPreview({ blocks, selected, onSelect, onClose }: {
     onSelect(block)
   }
 
+  if (selected.kind === 'file') return <ArkmeFileViewer block={selected} blocks={blocks} onSelect={onSelect} onClose={onClose} openLocalFile={openLocalFile} />
+
   return <div style={styles.previewOverlay} role="dialog" aria-modal="true" aria-label={selected.fileName} onClick={onClose}>
     <div style={styles.previewBody} onClick={event => { event.stopPropagation() }}>
       <button type="button" style={styles.previewClose} aria-label="关闭预览" onClick={onClose}>×</button>
@@ -611,7 +629,7 @@ export function ArkmeMediaPreview({ blocks, selected, onSelect, onClose }: {
         >
           <div style={imageMode === 'contained' ? styles.previewCanvasContained : styles.previewCanvasWidth}>
             <img
-              src={mediaUrl(selected)}
+              src={originalUrl}
               alt={selected.fileName}
               draggable={false}
               title={imageMode === 'contained' ? '双击铺满宽度' : '双击恢复整图'}
@@ -620,10 +638,11 @@ export function ArkmeMediaPreview({ blocks, selected, onSelect, onClose }: {
             />
           </div>
         </div>
-        : <video src={mediaUrl(selected)} controls autoPlay playsInline style={styles.previewMedia} aria-label={selected.fileName} />}
+        : <video src={originalUrl} controls autoPlay playsInline style={styles.previewMedia} aria-label={selected.fileName} />}
+      <div style={{ position: 'absolute', bottom: -42, left: 0, right: 0, color: '#fff' }}><ArkmeFileActions block={selected} original={original} /></div>
       {blocks.length > 1 && <>
-        <button type="button" aria-label="上一个媒体" style={{ ...styles.previewNav, left: -54 }} onClick={() => { selectMedia(blocks[(index - 1 + blocks.length) % blocks.length]!) }}>‹</button>
-        <button type="button" aria-label="下一个媒体" style={{ ...styles.previewNav, right: -54 }} onClick={() => { selectMedia(blocks[(index + 1) % blocks.length]!) }}>›</button>
+        <button type="button" aria-label="上一个媒体" disabled={index === 0} style={{ ...styles.previewNav, left: -54 }} onClick={() => { selectMedia(blocks[index - 1]!) }}>‹</button>
+        <button type="button" aria-label="下一个媒体" disabled={index === blocks.length - 1} style={{ ...styles.previewNav, right: -54 }} onClick={() => { selectMedia(blocks[index + 1]!) }}>›</button>
       </>}
     </div>
   </div>
@@ -657,8 +676,23 @@ export function ArkmeMessageContent({ item, sourceRef, onLongArticleUpdated, hig
   shareWebsite?: string
   onMessageCopyLinkOpen?: (sid: string) => void
 }) {
-  const blocks = [...(item.contentBlocks ?? [])].sort((left, right) => left.sortOrder - right.sortOrder)
-  const visualBlocks = blocks.filter(block => block.kind === 'image' || block.kind === 'video')
+  const lastMedia = useRef<{ sourceRef: string | undefined; item: ArkmeTimelineItem }>()
+  const snapshot = lastMedia.current
+  const previous = snapshot !== undefined && snapshot.sourceRef === sourceRef ? snapshot.item : undefined
+  const version = item.recordVersion ?? item.version
+  const sameRevision = version !== undefined && version > 0
+    && version === (previous?.recordVersion ?? previous?.version)
+  // A failed media lookup is not an authoritative attachment deletion. Keep only
+  // this mounted record's same-version display until a complete response arrives.
+  const retained = item.mediaUnavailable === true && sameRevision && item.status === 1
+    && previous?.status === 1 && previous.itemUid === item.itemUid
+    && (item.contentBlocks?.length ?? 0) === 0 ? previous.contentBlocks : undefined
+  const displayBlocks = retained ?? item.contentBlocks
+  useEffect(() => {
+    lastMedia.current = { sourceRef, item: { ...item, ...(displayBlocks === undefined ? {} : { contentBlocks: displayBlocks }) } }
+  }, [item, sourceRef, displayBlocks])
+  const blocks = [...(displayBlocks ?? [])].sort((left, right) => left.sortOrder - right.sortOrder)
+  const visualBlocks = blocks.filter(block => block.kind !== 'audio')
   const [preview, setPreview] = useState<ArkmeContentBlock>()
   const [articleOpen, setArticleOpen] = useState(false)
   const [failedRefs, setFailedRefs] = useState<Set<string>>(() => new Set())
@@ -703,10 +737,10 @@ export function ArkmeMessageContent({ item, sourceRef, onLongArticleUpdated, hig
       const failed = row.filter(block => failedRefs.has(block.mediaRef))
       return <div key={`visual-row:${String(rowIndex)}`} style={styles.stack}>
         {usable.length > 0 && <MediaGallery blocks={usable} onOpen={setPreview} onFallback={markFailed} />}
-        {failed.map(block => <FileCard key={block.mediaRef} block={block} fallback />)}
+        {failed.map(block => <ArkmeFileCard key={block.mediaRef} block={block} fallback onOpen={setPreview} previewOpen={preview?.mediaRef === block.mediaRef} />)}
       </div>
     }
-    if (failedRefs.has(row.mediaRef)) return <FileCard key={row.mediaRef} block={row} fallback />
+    if (failedRefs.has(row.mediaRef)) return <ArkmeFileCard key={row.mediaRef} block={row} fallback onOpen={setPreview} previewOpen={preview?.mediaRef === row.mediaRef} />
     if (row.renderRole === 3 && row.kind === 'image') return <img
       key={row.mediaRef}
       src={mediaUrl(row)}
@@ -719,7 +753,7 @@ export function ArkmeMessageContent({ item, sourceRef, onLongArticleUpdated, hig
       onError={() => { markFailed(row) }}
     />
     if (row.kind === 'audio') return renderVoice(row)
-    return <FileCard key={row.mediaRef} block={row} />
+    return <ArkmeFileCard key={row.mediaRef} block={row} onOpen={setPreview} previewOpen={preview?.mediaRef === row.mediaRef} />
   })
 
   return <>
@@ -775,40 +809,26 @@ export function ArkmeRecordDetailContent({ item, sourceRef, showOriginal = false
   return <p style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontSize: 16, lineHeight: '26px' }}><ArkmeRichText text={text || item.title || '非文本内容'} /></p>
 }
 
-function attachmentType(asset: ArkmeUploadedAsset): { color: string; label: string } {
-  const extension = asset.fileName.split('.').pop()?.trim().toUpperCase() ?? ''
-  if (asset.fileKind === 1) return { color: '#4d8cf5', label: 'IMG' }
-  if (asset.fileKind === 2) return { color: '#8b5cf6', label: 'AUDIO' }
-  if (asset.fileKind === 3) return { color: '#3f4753', label: 'VIDEO' }
-  if (extension === 'PDF') return { color: '#e32636', label: 'PDF' }
-  if (['DOC', 'DOCX'].includes(extension)) return { color: '#3478d4', label: 'DOC' }
-  if (['XLS', 'XLSX'].includes(extension)) return { color: '#1f9d62', label: 'XLS' }
-  if (['PPT', 'PPTX'].includes(extension)) return { color: '#e06a32', label: 'PPT' }
-  if (['ZIP', 'RAR', '7Z'].includes(extension)) return { color: '#e2982f', label: 'ZIP' }
-  return { color: '#7f8792', label: extension.slice(0, 5) || 'FILE' }
-}
-
-export function ArkmeAttachmentDraftTile({ asset, previewUrl, onRemove }: {
-  asset: ArkmeUploadedAsset
+export function ArkmeAttachmentDraftTile({ asset, previewUrl, onRemove, onOpen, disabled = false }: {
+  asset: Pick<ArkmeUploadedAsset, 'fileName' | 'fileKind'> & Partial<Pick<ArkmeUploadedAsset, 'mimeType'>>
   previewUrl?: string
   onRemove: () => void
+  onOpen?: () => void
+  disabled?: boolean
 }) {
-  const type = attachmentType(asset)
   return <span
     data-arkme-attachment-tile={asset.fileKind === 1 && previewUrl !== undefined ? 'image-preview' : 'file-icon'}
     title={asset.fileName}
     aria-label={`附件 ${asset.fileName}`}
     style={{ position: 'relative', width: 48, height: 48, flex: 'none', display: 'inline-grid', placeItems: 'center', overflow: 'hidden', borderRadius: 8, background: 'var(--dsw-alias-bg-subtle, #f0f2f5)' }}
   >
-    {asset.fileKind === 1 && previewUrl !== undefined
+    <button type="button" aria-label={`预览 ${asset.fileName}`} onClick={onOpen} disabled={onOpen === undefined} style={{ border: 0, padding: 0, width: '100%', height: '100%', display: 'grid', placeItems: 'center', background: 'transparent', cursor: 'pointer' }}>{asset.fileKind === 1 && previewUrl !== undefined
       ? <img src={previewUrl} alt={asset.fileName} style={{ width: '100%', height: '100%', display: 'block', objectFit: 'cover' }} />
-      : <span data-arkme-file-type={type.label} aria-hidden style={{ position: 'relative', width: 28, height: 32, display: 'grid', placeItems: 'end center', paddingBottom: 4, boxSizing: 'border-box', borderRadius: 3, background: type.color, color: '#fff', fontSize: type.label.length > 3 ? 6 : 7, lineHeight: 1, fontWeight: 700, letterSpacing: -.2 }}>
-        <span style={{ position: 'absolute', top: 0, right: 0, width: 9, height: 9, background: 'rgba(255,255,255,.88)', clipPath: 'polygon(0 0,100% 100%,0 100%)' }} />
-        {type.label}
-      </span>}
+      : <ArkmeFileIcon fileName={asset.fileName} {...(asset.mimeType === undefined ? {} : { mimeType: asset.mimeType })} size={32} />}</button>
     <button
       type="button"
       aria-label={`移除${asset.fileName}`}
+      disabled={disabled}
       onClick={onRemove}
       style={{ position: 'absolute', top: 2, right: 2, width: 16, height: 16, display: 'grid', placeItems: 'center', border: 0, borderRadius: 999, padding: 0, background: 'var(--dsw-alias-bg-elevated, rgba(255,255,255,.9))', color: 'var(--dsw-alias-label-primary, #17191c)', boxShadow: '0 1px 3px rgba(0,0,0,.14)', cursor: 'pointer', fontSize: 13, lineHeight: '16px' }}
     >×</button>

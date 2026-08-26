@@ -14,6 +14,25 @@ const config: ArkmeServiceConfig = {
 }
 
 describe('MediaService', () => {
+  it('keeps previews separate from originals and leaves picked audio as a file', async () => {
+    const sessions: ArkmeSessionStore = { async read() { return { userId: 42, accessToken: 'fixture', refreshToken: 'fixture' } }, async write() {}, async delete() {} }
+    const fetchImpl = vi.fn(async () => new Response('original'))
+    const runtime = new ServiceRuntime(config, sessions, {} as StateStore, fetchImpl)
+    const media = new MediaService(runtime, new ProfileService(runtime), {} as never, { recordUid() { return '' } })
+    const origin = 'https://jotmo-userfiles-test.oss-cn-hangzhou.aliyuncs.com/'
+    const blocks = media.richContentBlocks({ media_display_items: [
+      { file_asset_uid: 'image-1', file_kind: 1, file_name: 'a.png', mime_type: 'image/png', preview_url: `${origin}preview`, download_url: `${origin}original`, size: 8 },
+      { file_asset_uid: 'image-2', file_kind: 1, file_name: 'b.png', mime_type: 'image/png', preview_url: `${origin}preview-only`, size: 8 },
+      { file_asset_uid: 'audio-1', file_kind: 4, file_name: 'song.mp3', mime_type: 'audio/mpeg', download_url: `${origin}song`, size: 8 },
+    ] }, 42)
+    expect(blocks[0]!.originalRef).toBeDefined()
+    expect(blocks[0]!.originalRef).not.toBe(blocks[0]!.mediaRef)
+    expect(blocks[1]!.originalRef).toBeUndefined()
+    expect(blocks[2]!.kind).toBe('file')
+    await expect(media.fetchMedia(blocks[0]!.mediaRef, undefined, undefined, true)).rejects.toMatchObject({ code: 'original-unavailable' })
+    await media.fetchMedia(blocks[0]!.originalRef!, undefined, undefined, true)
+    expect(fetchImpl).toHaveBeenCalledWith(new URL(`${origin}original`), expect.anything())
+  })
   it('keeps forwarded media account-bound, rejects untrusted URLs, and preserves valid siblings', async () => {
     let userId = 42
     const sessions: ArkmeSessionStore = {

@@ -19,6 +19,10 @@ import type {
   ArkmeBotList, ArkmeGroupBotCandidate, ArkmeGroupBotCandidateList,
 } from '../types.js'
 import { callArkme, ArkmeClientError } from './api.js'
+import { createArkmeSdk } from '../sdk/index.js'
+import type { ArkmeContentBlock } from '../types.js'
+import type { ArkmeFileSendTask } from '../file-transfer-contract.js'
+import { fileTaskTimelineItem, localFileBlock, useArkmeFileSendTasks } from './file-send-tasks.js'
 import { isArkmeRequestAbort, retryArkmeRead } from './read-retry.js'
 import { verifyPhoneCaptcha } from './geetest.js'
 import { ArkmeSourceAvatar, ArkmeUserAvatar } from './ArkmeAvatar.js'
@@ -37,7 +41,8 @@ import { ArkmeLongArticleDialog } from './ArkmeLongArticleDialog.js'
 import { ArkmeRecordingSurface } from './ArkmeRecordingSurface.js'
 import { ArkmeCallSurface } from './ArkmeCallSurface.js'
 import { ArkmeWorldSurface } from './ArkmeWorldSurface.js'
-import { ArkmeAttachmentDraftTile, ArkmeMessageContent } from './ArkmeRichContent.js'
+import { ArkmeMediaPreview, ArkmeMessageContent } from './ArkmeRichContent.js'
+import { ArkmeAttachmentStrip, ArkmeFilePreparingIndicator } from './ArkmeAttachmentStrip.js'
 import { ArkmeRichComposerInput, type ArkmeRichComposerHandle } from './ArkmeRichComposerInput.js'
 import { ArkmeEmojiPicker } from './ArkmeEmojiPicker.js'
 import type { ArkmeEmoji } from './arkme-emoji.js'
@@ -70,6 +75,7 @@ import {
 import {
   arkmeComposerCanSend,
   arkmeComposerDraftStore,
+  arkmeAttachmentId,
   arkmeSourceComposerDraftKey,
   releaseArkmeComposerDraft,
   serializeArkmeComposerDraft,
@@ -679,13 +685,15 @@ function qrDataUrl(content: string): string {
   const qr = qrcode(0, 'M'); qr.addData(content); qr.make(); return qr.createDataURL(6, 12)
 }
 
-export function arkmeClipboardImageFiles(clipboardData: Pick<DataTransfer, 'files' | 'items'>): File[] {
+export function arkmeClipboardFiles(clipboardData: Pick<DataTransfer, 'files' | 'items'>): File[] {
   const itemFiles = Array.from(clipboardData.items)
     .filter(item => item.kind === 'file')
     .map(item => item.getAsFile())
     .filter((file): file is File => file !== null)
-  const files = itemFiles.length > 0 ? itemFiles : Array.from(clipboardData.files)
-  return files.filter(file => file.type.toLowerCase().startsWith('image/'))
+  return itemFiles.length > 0 ? itemFiles : Array.from(clipboardData.files)
+}
+export function arkmeClipboardImageFiles(clipboardData: Pick<DataTransfer, 'files' | 'items'>): File[] {
+  return arkmeClipboardFiles(clipboardData).filter(file => file.type.toLowerCase().startsWith('image/'))
 }
 
 export function arkmeMessageCopyText(item: ArkmeTimelineItem): string {
@@ -1664,9 +1672,18 @@ export function ArkmeSurface({
   const [newMessageCount, setNewMessageCount] = useState(0)
   const [longArticleCreating, setLongArticleCreating] = useState(false)
   const [addMenuOpen, setAddMenuOpen] = useState(false)
-  const [uploadStatus, setUploadStatus] = useState<{ key: string; message: string }>()
+  const preparationJobs = useRef(new Map<string, Promise<boolean>>())
+  const stageControllers = useRef(new Set<AbortController>())
+  const sendingDrafts = useRef(new Set<string>())
+  const [preparingKeys, setPreparingKeys] = useState<Set<string>>(() => new Set())
+  const [draftPreview, setDraftPreview] = useState<ArkmeContentBlock>()
+  const fileTasks = useArkmeFileSendTasks(source?.sourceRef, authenticatedUserId)
+  const notifiedFileTasks = useRef(new Set<string>())
+  useEffect(() => { setDraftPreview(undefined) }, [authenticatedUserId])
+  useEffect(() => () => { for (const controller of stageControllers.current) controller.abort() }, [authenticatedUserId])
   const [busy, setBusy] = useState(false)
-  const canSend = arkmeComposerCanSend(draft, attachments.length, busy)
+  const preparingFiles = composerDraftKey !== undefined && preparingKeys.has(composerDraftKey)
+  const canSend = arkmeComposerCanSend(draft, attachments.length + (composerDraftKey !== undefined && preparingKeys.has(composerDraftKey) ? 1 : 0), busy)
   const pendingComposerFocusDraftKeyRef = useRef<string>()
   const [compactNavigation, setCompactNavigation] = useState(false)
   const [submitBusy, setSubmitBusy] = useState(false)
@@ -2296,6 +2313,27 @@ export function ArkmeSurface({
   }, [acknowledgeRead, interwovenMoments, source, sourceProjectionRevision])
 
   useEffect(() => {
+    if (source === undefined || authenticatedUserId === undefined) return
+    let changed = false
+    for (const task of fileTasks.tasks) {
+      if (task.state !== 'sent' || notifiedFileTasks.current.has(task.taskRef)) continue
+      notifiedFileTasks.current.add(task.taskRef); changed = true
+      if (isArkmeChatDirectorySource(source) && task.result?.sequence !== undefined) {
+        arkmeChatDirectory.recordSent(source, { latestPreview: task.content.textContent || '文件', activeAtMillis: task.createdAtMillis, latestSequence: task.result.sequence })
+      }
+    }
+    if (changed) { arkmeUi.chatChanged(); void loadTimeline().catch(caught => setError(errorMessage(caught))) }
+    // Recover the acceptance boundary after a page refresh without producing a second send.
+    const current = arkmeComposerDraftStore.get(composerDraftKey)
+    const refs = current.attachments.map(arkmeAttachmentId)
+    if ((current.fileSendIdentity !== undefined || arkmeComposerDraftStore.isRestored(composerDraftKey)) && refs.length > 0 && !sendingDrafts.current.has(composerDraftKey ?? '') && fileTasks.tasks.some(task =>
+      (current.fileSendIdentity === undefined || current.fileSendIdentity.recordUid === task.recordUid) &&
+      task.content.textContent === serializeArkmeComposerDraft(current).text.trim() && JSON.stringify(task.fileRefs) === JSON.stringify(refs))) {
+      arkmeComposerDraftStore.clear(composerDraftKey)
+    }
+  }, [fileTasks.tasks, source, authenticatedUserId, loadTimeline, composerDraftKey])
+
+  useEffect(() => {
     const target = ui.conversationTarget
     if (!authenticated || source === undefined || target === undefined
       || timelineStateSourceRef !== source.sourceRef) return
@@ -2666,15 +2704,11 @@ export function ArkmeSurface({
     qrRequestStartedRef.current = false
   }
 
-  const uploadFile = async (file: File, targetDraftKey: string): Promise<ArkmeUploadedAsset> => await new Promise((resolve, reject) => {
+  const uploadFavoriteSticker = async (file: File): Promise<ArkmeUploadedAsset> => await new Promise((resolve, reject) => {
     const request = new XMLHttpRequest()
     request.open('POST', '/arkme-self/api/upload')
     request.setRequestHeader('Content-Type', file.type || 'application/octet-stream')
     request.setRequestHeader('X-Arkme-File-Name', encodeURIComponent(file.name))
-    request.upload.onprogress = event => {
-      if (event.lengthComputable) setUploadStatus({ key: targetDraftKey, message: `正在上传 ${file.name} ${String(Math.round(event.loaded / event.total * 100))}%` })
-    }
-    request.upload.onload = () => { setUploadStatus({ key: targetDraftKey, message: `正在保存 ${file.name}…` }) }
     request.onerror = () => { reject(new Error('文件上传网络错误')) }
     request.onload = () => {
       try {
@@ -2691,37 +2725,40 @@ export function ArkmeSurface({
     const targetDraftKey = composerDraftKey
     const targetUserId = authenticatedUserId
     if (targetDraftKey === undefined || targetUserId === undefined) return
-    setAddMenuOpen(false); setBusy(true); setError('')
-    const uploaded: ArkmeComposerAttachment[] = []
-    try {
-      for (const file of Array.from(files)) {
-        const previewUrl = file.type.toLowerCase().startsWith('image/') && typeof URL.createObjectURL === 'function'
-          ? URL.createObjectURL(file)
-          : undefined
+    const picked = Array.from(files)
+    const controller = new AbortController(); stageControllers.current.add(controller)
+    setAddMenuOpen(false); setError(''); setPreparingKeys(current => new Set([...current, targetDraftKey]))
+    if (fileInputRef.current !== null) fileInputRef.current.value = ''
+    const job = (preparationJobs.current.get(targetDraftKey) ?? Promise.resolve(true)).catch(() => false).then(async () => {
+      const sdk = createArkmeSdk()
+      const policy = await sdk.fileCapabilities()
+      const errors: string[] = []
+      let added = false
+      for (const file of picked) {
+        controller.signal.throwIfAborted()
+        const limit = file.type.startsWith('image/') ? policy.maxImageBytes : policy.maxFileBytes
+        if (arkmeComposerDraftStore.get(targetDraftKey).attachments.length >= policy.maxAttachments) { errors.push(`最多添加 ${policy.maxAttachments} 个附件：${file.name}`); continue }
+        if (file.size === 0 || file.size > limit) { errors.push(`${file.name} 为空或超过 ${Math.floor(limit / 1024 / 1024)} MiB`); continue }
         try {
-          const asset = await uploadFile(file, targetDraftKey)
-          uploaded.push({ asset, ...(previewUrl === undefined ? {} : { previewUrl }) })
-        } catch (caught) {
-          if (previewUrl !== undefined) URL.revokeObjectURL(previewUrl)
-          throw caught
-        }
+          const localFile = await sdk.stageFile(file, { signal: controller.signal })
+          const currentAuth = arkmeAuthStore.getSnapshot().auth
+          if (currentAuth?.status !== 'authenticated' || currentAuth.userId !== targetUserId) return false
+          arkmeComposerDraftStore.appendAttachments(targetDraftKey, [{ localFile }], policy.maxAttachments)
+          added = true
+        } catch (caught) { if (controller.signal.aborted) throw caught; errors.push(`${file.name}：${errorMessage(caught)}`) }
       }
-      const currentAuth = arkmeAuthStore.getSnapshot().auth
-      if (currentAuth?.status === 'authenticated' && currentAuth.userId === targetUserId) {
-        arkmeComposerDraftStore.appendAttachments(targetDraftKey, uploaded)
-      } else {
-        releaseArkmeComposerDraft({ text: '', attachments: uploaded, mentions: [], emojis: [] })
+      if (errors.length > 0) setError(errors.join('；'))
+      return added
+    }).catch(caught => { if (!controller.signal.aborted) setError(errorMessage(caught)); return false }).finally(() => {
+      stageControllers.current.delete(controller)
+      if (preparationJobs.current.get(targetDraftKey) === job) {
+        preparationJobs.current.delete(targetDraftKey)
+        setPreparingKeys(current => { const next = new Set(current); next.delete(targetDraftKey); return next })
       }
-    } catch (caught) {
-      releaseArkmeComposerDraft({ text: '', attachments: uploaded, mentions: [], emojis: [] })
-      setError(errorMessage(caught))
-    }
-    finally {
-      setUploadStatus(current => current?.key === targetDraftKey ? undefined : current)
       pendingComposerFocusDraftKeyRef.current = targetDraftKey
-      setBusy(false)
-      if (fileInputRef.current !== null) fileInputRef.current.value = ''
-    }
+    })
+    preparationJobs.current.set(targetDraftKey, job)
+    await job
   }
 
   const send = async () => {
@@ -2730,10 +2767,20 @@ export function ArkmeSurface({
     const targetDraftKey = composerDraftKey
     const targetUserId = authenticatedUserId
     if (targetUserId === undefined) return
-    const serializedDraft = serializeArkmeComposerDraft(composerDraft)
+    if (sendingDrafts.current.has(targetDraftKey)) return
+    sendingDrafts.current.add(targetDraftKey)
+    const preparationSucceeded = await preparationJobs.current.get(targetDraftKey)
+    if (preparationSucceeded === false) { sendingDrafts.current.delete(targetDraftKey); return }
+    const currentAuth = arkmeAuthStore.getSnapshot().auth
+    if (currentAuth?.status !== 'authenticated' || currentAuth.userId !== targetUserId) { sendingDrafts.current.delete(targetDraftKey); return }
+    const readyDraft = arkmeComposerDraftStore.get(targetDraftKey)
+    const serializedDraft = serializeArkmeComposerDraft(readyDraft)
     const textContent = serializedDraft.text.trim()
-    if (textContent === '' && attachments.length === 0) return
-    const recordUid = crypto.randomUUID(); const relationUid = crypto.randomUUID(); const now = Date.now()
+    if (textContent === '' && readyDraft.attachments.length === 0) { sendingDrafts.current.delete(targetDraftKey); return }
+    const { recordUid, relationUid } = readyDraft.attachments.some(item => item.localFile !== undefined)
+      ? arkmeComposerDraftStore.beginFileSend(targetDraftKey)
+      : { recordUid: crypto.randomUUID(), relationUid: crypto.randomUUID() }
+    const now = Date.now()
     const optimisticSenderName = selfProfile?.displayName.trim() || selfProfile?.nickname.trim() || '我'
     const optimisticAvatarRef = selfProfile?.avatarRef.trim()
     const optimistic: ArkmeTimelineItem = {
@@ -2745,9 +2792,10 @@ export function ArkmeSurface({
         : {}),
       displayKind: 0,
     }
-    const pendingDraft = arkmeComposerDraftStore.take(targetDraftKey)
+    const pendingDraft = readyDraft.attachments.some(item => item.localFile !== undefined) ? readyDraft : arkmeComposerDraftStore.take(targetDraftKey)
     const pendingAttachments = [...pendingDraft.attachments]
-    const pendingAssets = pendingAttachments.map(attachment => attachment.asset)
+    const pendingAssets = pendingAttachments.flatMap(attachment => attachment.asset === undefined ? [] : [attachment.asset])
+    const pendingFileRefs = pendingAttachments.flatMap(attachment => attachment.localFile === undefined ? [] : [attachment.localFile.fileRef])
     pendingViewportRestoreRef.current = { sourceRef: targetSource.sourceRef, viewport: undefined }
     const pendingHumanMentions = serializedDraft.mentions.flatMap<{ memberRef?: string; all?: boolean; startIndex: number; length: number }>(mention => {
       const base = { startIndex: mention.startIndex, length: mention.length }
@@ -2758,8 +2806,21 @@ export function ArkmeSurface({
       if (mention.botRef === undefined) return []
       return [{ botRef: mention.botRef, startIndex: mention.startIndex, length: mention.length }]
     })
-    setItems(current => mergeItems(current, [optimistic])); setBusy(true); setError('')
+    if (pendingFileRefs.length === 0) setItems(current => mergeItems(current, [optimistic]))
+    setBusy(true); setError('')
     try {
+      if (pendingFileRefs.length > 0) {
+        if (pendingAssets.length > 0) throw new Error('旧版附件与本地附件不能混合发送，请重新添加旧版附件')
+        const acceptedTask = await callArkme<ArkmeFileSendTask>('files.send', {
+          sourceRef: targetSource.sourceRef, recordUid, relationUid, fileRefs: pendingFileRefs, title: '', textContent, displayKind: 0,
+          ...(pendingHumanMentions.length === 0 ? {} : { humanMentions: pendingHumanMentions }),
+          ...(pendingBotMentions.length === 0 ? {} : { botMentions: pendingBotMentions }),
+        })
+        arkmeComposerDraftStore.take(targetDraftKey)
+        releaseArkmeComposerDraft(pendingDraft)
+        fileTasks.accept(acceptedTask)
+        return
+      }
       const result = pendingAssets.length > 0
         ? await callArkme<ArkmeSourceSendResult>('source.send-rich', {
           sourceRef: targetSource.sourceRef, title: '', textContent, displayKind: 0,
@@ -2815,12 +2876,13 @@ export function ArkmeSurface({
       setItems(current => current.filter(item => item.itemUid !== recordUid))
       const currentAuth = arkmeAuthStore.getSnapshot().auth
       if (currentAuth?.status === 'authenticated' && currentAuth.userId === targetUserId) {
-        arkmeComposerDraftStore.restore(targetDraftKey, pendingDraft)
+        if (pendingFileRefs.length === 0) arkmeComposerDraftStore.restore(targetDraftKey, pendingDraft)
       } else {
         releaseArkmeComposerDraft(pendingDraft)
       }
       setError(errorMessage(caught))
     } finally {
+      sendingDrafts.current.delete(targetDraftKey)
       pendingComposerFocusDraftKeyRef.current = targetDraftKey
       setBusy(false)
     }
@@ -3114,7 +3176,11 @@ export function ArkmeSurface({
     setDetailState(undefined)
   }
 
-  const displayItems = useMemo(() => [...items].sort((a, b) => a.sendAtMillis - b.sendAtMillis), [items])
+  const displayItems = useMemo(() => {
+    const remoteIds = new Set(items.map(item => item.itemUid))
+    return [...items, ...fileTasks.tasks.filter(task => !remoteIds.has(task.result?.itemUid ?? task.recordUid)).map(fileTaskTimelineItem)]
+      .sort((a, b) => a.sendAtMillis - b.sendAtMillis)
+  }, [items, fileTasks.tasks])
   const visibleConversationJoinEvents = useMemo(
     () => source?.kind === 'group_chat'
       ? arkmeConversationJoinEventsInLoadedWindow(conversationJoinEvents, displayItems, hasMore)
@@ -4000,6 +4066,11 @@ export function ArkmeSurface({
                               }}
                             />
                             <ArkmeTimelineAgentSourceBadge item={item} />
+                            {fileTasks.tasks.filter(task => (task.result?.itemUid ?? task.recordUid) === item.itemUid && task.state !== 'sent').map(task => <div key={task.taskRef} role="status" style={{ fontSize: 12, marginTop: 6 }}>
+                              {task.error ?? (task.state === 'sending' ? '正在发送…' : task.state === 'queued' ? '等待上传' : '正在上传')}
+                              {task.state === 'failed' && <button type="button" onClick={event => { event.stopPropagation(); void callArkme('files.send.retry', { taskRef: task.taskRef }).then(fileTasks.refresh).catch(caught => setError(errorMessage(caught))) }}>重试</button>}
+                              {task.state === 'uncertain' && <button type="button" onClick={event => { event.stopPropagation(); void callArkme<ArkmeFileSendTask>('files.send.reconcile', { taskRef: task.taskRef }).then(value => { fileTasks.refresh(); if (value.state === 'uncertain') setError('最近的会话记录还无法确认发送结果，请先核对原会话，不要重复发送') }).catch(caught => setError(errorMessage(caught))) }}>核对发送结果</button>}
+                            </div>)}
                           </div>
                         </ArkmeMessageReadReceiptLine>
                         {selfTopicSource !== undefined && <ArkmeTimelineSelfTopicBadge topic={selfTopicSource} onSelect={activateSelfSource} />}
@@ -4093,23 +4164,25 @@ export function ArkmeSurface({
             </button>
           </div>}
           {messageActionStatus !== '' && <div role="status" aria-live="polite" style={styles.messageActionToast}>{messageActionStatus}</div>}
-          {activeSelectMode === undefined && <footer className="arkme-conversation-composer" style={styles.composer}><div ref={composerRef} className="arkme-conversation-composer-inner" style={styles.composerInner}>
+          {activeSelectMode === undefined && <footer className="arkme-conversation-composer" style={styles.composer}
+            onDragOver={event => { if (!busy && Array.from(event.dataTransfer.types).includes('Files')) { event.preventDefault(); event.dataTransfer.dropEffect = 'copy' } }}
+            onDrop={event => { if (!busy && event.dataTransfer.files.length > 0) { event.preventDefault(); void selectFiles(event.dataTransfer.files) } }}
+          ><div ref={composerRef} className="arkme-conversation-composer-inner" style={styles.composerInner}>
             {addMenuOpen && <div ref={addMenuRef} style={styles.addMenu} role="menu">
               <button type="button" role="menuitem" style={styles.addMenuItem} onClick={() => { setAddMenuOpen(false); fileInputRef.current?.click() }}><span aria-hidden>📎</span>添加照片和文件</button>
               <div style={styles.menuDivider} />
               <button type="button" role="menuitem" style={styles.addMenuItem} onClick={() => { setLongArticleCreating(true); setAddMenuOpen(false) }}><span aria-hidden>✎</span>写长文</button>
             </div>}
-            <input ref={fileInputRef} type="file" multiple hidden accept="image/*,video/*,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.zip" onChange={event => { void selectFiles(event.currentTarget.files) }} />
-            {attachments.length > 0 && <div style={styles.attachments}>{attachments.map(attachment => <ArkmeAttachmentDraftTile
-              key={attachment.asset.fileAssetUid}
-              asset={attachment.asset}
-              {...(attachment.previewUrl === undefined ? {} : { previewUrl: attachment.previewUrl })}
-              onRemove={() => {
-                arkmeComposerDraftStore.removeAttachment(composerDraftKey, attachment.asset.fileAssetUid)
+            <input ref={fileInputRef} type="file" multiple hidden onChange={event => { void selectFiles(event.currentTarget.files) }} />
+            {attachments.length > 0 && <ArkmeAttachmentStrip attachments={attachments} disabled={busy || preparingFiles}
+              onMove={(from, to) => arkmeComposerDraftStore.moveAttachment(composerDraftKey, from, to)}
+              onPreview={attachment => { if (attachment.localFile !== undefined) setDraftPreview(localFileBlock(attachment.localFile)) }}
+              onRemove={attachment => {
+                arkmeComposerDraftStore.removeAttachment(composerDraftKey, arkmeAttachmentId(attachment))
+                if (attachment.localFile !== undefined) void callArkme('files.local.remove', { fileRef: attachment.localFile.fileRef }).catch(caught => setError(errorMessage(caught)))
               }}
-            />)}</div>}
-            {uploadStatus !== undefined && uploadStatus.key === composerDraftKey
-              && <div style={styles.uploadStatus} role="status">{uploadStatus.message}</div>}
+            />}
+            {draftPreview !== undefined && createPortal(<ArkmeMediaPreview selected={draftPreview} blocks={attachments.flatMap(attachment => attachment.localFile === undefined ? [] : [localFileBlock(attachment.localFile)])} onSelect={setDraftPreview} onClose={() => setDraftPreview(undefined)} openLocalFile={false} />, document.body)}
             {mentionTrigger !== undefined && <div style={styles.mentionSuggestions} role="listbox" aria-label="选择要 @ 的对象">
               {mentionCandidates.length === 0
                 ? <div style={styles.mentionSuggestionsEmpty}>暂无可 @ 的对象</div>
@@ -4151,10 +4224,10 @@ export function ArkmeSurface({
               onTextChange={text => { arkmeComposerDraftStore.setText(composerDraftKey, text) }}
               onSelectionChange={updateMentionTrigger}
               onPaste={event => {
-                const imageFiles = arkmeClipboardImageFiles(event.clipboardData)
-                if (imageFiles.length === 0) return
+                const files = arkmeClipboardFiles(event.clipboardData)
+                if (files.length === 0) return
                 event.preventDefault()
-                void selectFiles(imageFiles)
+                void selectFiles(files)
               }}
               onKeyDown={event => {
                 if (mentionTrigger !== undefined) {
@@ -4201,7 +4274,7 @@ export function ArkmeSurface({
                   if (canSend) void send()
                 }
               }} />
-            <div style={styles.tools}><div style={styles.toolGroup}><button ref={addMenuTriggerRef} type="button" style={styles.plus} aria-label="添加内容" aria-haspopup="menu" aria-expanded={addMenuOpen} onClick={() => { setAddMenuOpen(value => !value) }}>+</button><ArkmeEmojiPicker
+            <div style={styles.tools}><div style={styles.toolGroup}><button ref={addMenuTriggerRef} type="button" style={styles.plus} aria-label="添加内容" aria-haspopup="menu" aria-expanded={addMenuOpen} disabled={preparingFiles || busy} onClick={() => { setAddMenuOpen(value => !value) }}>{preparingFiles ? <ArkmeFilePreparingIndicator /> : '+'}</button><ArkmeEmojiPicker
               disabled={busy}
               scopeKey={composerDraftKey}
               {...(source?.kind === 'private_chat' || source?.kind === 'group_chat' ? { sourceRef: source.sourceRef } : {})}
@@ -4210,7 +4283,7 @@ export function ArkmeSurface({
               onSelect={insertEmoji}
               onUploadSticker={async file => {
                 if (composerDraftKey === undefined) throw new Error('请先选择聊天')
-                return await uploadFile(file, composerDraftKey)
+                return await uploadFavoriteSticker(file)
               }}
               onStickerSent={async () => { await loadTimeline() }}
               onError={message => { setError(message) }}

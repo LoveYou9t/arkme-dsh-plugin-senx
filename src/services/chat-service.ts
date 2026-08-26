@@ -2182,12 +2182,14 @@ export class ChatService {
   async sendSourceRich(
       sourceRef: string,
       input: ArkmeRichSendInput,
-      options: { recordUid?: string; relationUid?: string } = {},
+      options: { recordUid?: string; relationUid?: string; expectedUserId?: number; signal?: AbortSignal } = {},
     ): Promise<ArkmeSourceSendResult> {
       if (this.runtime.config.richMediaSendEnabled === false) {
         throw new ArkmePluginError('rich-content-disabled', '富内容发送已被插件配置关闭', false, 403)
       }
       const session = await this.runtime.requireSession()
+      if (options.expectedUserId !== undefined && options.expectedUserId !== session.userId) throw new ArkmePluginError('file-account-changed', '账号已切换', false, 403)
+      options.signal?.throwIfAborted()
       const source = await this.source.openSourceRef(sourceRef, session.userId)
       const title = input.title?.trim() ?? ''
       const textContent = input.textContent?.trim() ?? ''
@@ -2234,7 +2236,7 @@ export class ChatService {
         }
         if (longArticle) throw new ArkmePluginError('mention-rich-invalid', '长文暂不支持 mention', false)
         const mentionPayload = await this.humanMentionContentPayload(
-          source, input.textContent ?? '', textContent, input.humanMentions ?? [], session, undefined, input.botMentions ?? [],
+          source, input.textContent ?? '', textContent, input.humanMentions ?? [], session, options.signal, input.botMentions ?? [],
         )
         contentPayload = { ...(mediaContentPayload ?? {}), ...mentionPayload }
       }
@@ -2249,13 +2251,13 @@ export class ChatService {
         send_at: Date.now(),
       }
       if (source.kind === 'send_to_self' || source.kind === 'default_category') {
-        const result = await this.runtime.authenticatedPost<Record<string, unknown>>('/api/v1/records/create', commonBody, session)
+        const result = await this.runtime.authenticatedPost<Record<string, unknown>>('/api/v1/records/create', commonBody, session, options.signal)
         this.source.invalidateSourceListCache(session.userId, 'send_to_self')
         return { sourceRef, itemUid: stringValue(result.record_uid).trim() || recordUid, status: numberValue(result.status), localState: 'synced' }
       }
       if (source.kind === 'topic') {
         const result = await this.runtime.authenticatedPost<Record<string, unknown>>(
-          '/api/v1/topics/records/create', { topic_uid: source.ownerRef, ...commonBody }, session,
+          '/api/v1/topics/records/create', { topic_uid: source.ownerRef, ...commonBody }, session, options.signal,
         )
         this.source.invalidateSourceListCache(session.userId, 'send_to_self')
         return { sourceRef, itemUid: stringValue(result.record_uid).trim() || recordUid, status: numberValue(result.status), localState: 'synced' }
@@ -2264,6 +2266,7 @@ export class ChatService {
         '/api/v1/chats/records/send',
         { chat_session_uid: source.ownerRef, rel_uid: relationUid, ...commonBody },
         session,
+        options.signal,
       )
       const sequence = numberValue(result.seq)
       this.realtime.scheduleChatSessionProjection(source.ownerRef, sequence)

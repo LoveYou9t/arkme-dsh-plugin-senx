@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto'
+import { createReadStream } from 'node:fs'
 import { mkdir, open, unlink } from 'node:fs/promises'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { join } from 'node:path'
@@ -33,7 +34,7 @@ function assertLocalRequest(req: IncomingMessage, options: ArkmeRichMediaRouteOp
   }
 }
 
-function writeJson(res: ServerResponse, status: number, body: ArkmePluginResponse<ArkmeUploadedAsset>): void {
+function writeJson(res: ServerResponse, status: number, body: ArkmePluginResponse<unknown>): void {
   const encoded = JSON.stringify(body)
   res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Content-Length': Buffer.byteLength(encoded), 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' })
   res.end(encoded)
@@ -51,12 +52,13 @@ function fileKindFor(mimeType: string): 1 | 2 | 3 | 4 {
   return 4
 }
 
-export function createArkmeUploadHandler(service: ArkmeService, options: ArkmeRichMediaRouteOptions) {
+export function createArkmeUploadHandler(service: ArkmeService, options: ArkmeRichMediaRouteOptions, mode: 'upload' | 'stage' = 'upload') {
   return async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
     let temporaryPath = ''
     try {
       if (req.method !== 'POST') throw new ArkmePluginError('method-not-allowed', '只允许 POST 请求', false, 405)
       assertLocalRequest(req, options)
+      const expectedUserId = mode === 'stage' ? await service.fileSessionUser() : undefined
       const plannedSize = Number(headerText(req, 'content-length'))
       const encodedName = headerText(req, 'x-arkme-file-name')
       const mimeType = headerText(req, 'content-type').split(';')[0]?.trim() || 'application/octet-stream'
@@ -80,13 +82,48 @@ export function createArkmeUploadHandler(service: ArkmeService, options: ArkmeRi
         }
       } finally { await handle.close() }
       if (received !== plannedSize) throw new ArkmePluginError('upload-size-mismatch', '上传文件不完整', false, 400)
-      const value = await service.uploadLocalFile(temporaryPath, { size: received, sha256: hash.digest('hex'), mimeType, fileName, fileKind: fileKindFor(mimeType) })
+      const value = mode === 'stage'
+        ? await service.fileStage(temporaryPath, { size: received, mimeType, fileName }, expectedUserId)
+        : await service.uploadLocalFile(temporaryPath, { size: received, sha256: hash.digest('hex'), mimeType, fileName, fileKind: fileKindFor(mimeType) })
       writeJson(res, 200, { ok: true, value })
     } catch (error) {
       const known = error instanceof ArkmePluginError ? error : new ArkmePluginError('upload-internal-error', '文件上传失败', true, 500, { cause: error })
       writeJson(res, known.httpStatus, { ok: false, error: { code: known.code, message: known.message, retryable: known.retryable } })
     } finally {
       if (temporaryPath !== '') await unlink(temporaryPath).catch(() => undefined)
+    }
+  }
+}
+
+export function createArkmeLocalFileHandler(service: ArkmeService, options: ArkmeRichMediaRouteOptions) {
+  return async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
+    try {
+      if (req.method !== 'GET' && req.method !== 'HEAD') throw new ArkmePluginError('method-not-allowed', '只允许读取文件', false, 405)
+      assertLocalRequest(req, options)
+      const url = new URL(req.url ?? '/', `http://localhost:${options.expectedPort}`)
+      const { path, file } = await service.fileReadLocal(url.searchParams.get('ref') ?? '')
+      const safeInline = /^(image\/(png|jpeg|gif|webp)|video\/(mp4|webm)|audio\/(mpeg|mp4|wav)|application\/pdf)$/.test(file.mimeType)
+      const attachment = url.searchParams.get('download') === '1' || !safeInline
+      let start = 0; let end = file.size - 1
+      const range = headerText(req, 'range')
+      if (range) {
+        const match = /^bytes=(\d+)-(\d*)$/.exec(range)
+        if (!match) { res.writeHead(416, { 'Content-Range': `bytes */${file.size}` }); res.end(); return }
+        start = Number(match[1]); end = match[2] ? Math.min(Number(match[2]), end) : end
+        if (start > end) { res.writeHead(416, { 'Content-Range': `bytes */${file.size}` }); res.end(); return }
+      }
+      res.writeHead(range ? 206 : 200, {
+        'Content-Type': file.mimeType, 'Content-Length': end - start + 1,
+        'Content-Disposition': `${attachment ? 'attachment' : 'inline'}; filename*=UTF-8''${encodeURIComponent(file.fileName)}`,
+        'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'Content-Security-Policy': "sandbox; default-src 'none'",
+        'Accept-Ranges': 'bytes', ...(range ? { 'Content-Range': `bytes ${start}-${end}/${file.size}` } : {}),
+      })
+      if (req.method === 'HEAD') { res.end(); return }
+      await pipeline(createReadStream(path, { start, end }), res)
+    } catch (error) {
+      if (res.headersSent) { res.destroy(); return }
+      const known = error instanceof ArkmePluginError ? error : new ArkmePluginError('file-read-failed', '本地文件无法读取', true, 500)
+      writeJson(res, known.httpStatus, { ok: false, error: { code: known.code, message: known.message, retryable: known.retryable } })
     }
   }
 }
