@@ -356,6 +356,7 @@ export class ProfileService {
       const avatarRef = stringValue(data.head_img).trim()
       const phone = maskedPhone(stringValue(data.phone))
       const email = maskedEmail(stringValue(data.email))
+      const wechatName = stringValue(data.wechat_nick_name).trim()
       const canUpdateArkmeId = optionalBooleanValue(data.can_update_jotmo_id)
       const profile: ArkmeUserProfile = {
         userId,
@@ -372,6 +373,7 @@ export class ProfileService {
           wechat: booleanValue(data.has_bind_wechat),
           google: booleanValue(data.has_bind_google),
         },
+        ...(wechatName === '' ? {} : { bindingNames: { wechat: wechatName } }),
         contact: {
           ...(phone === undefined ? {} : { phoneMasked: phone }),
           ...(email === undefined ? {} : { emailMasked: email }),

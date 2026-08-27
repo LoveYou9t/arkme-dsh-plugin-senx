@@ -11,6 +11,7 @@ import type {
   ArkmeArrangementReminderToggleResult,
   ArkmeArrangementReminderWriteResult,
   ArkmeAuthSnapshot,
+  ArkmeCaptchaResult,
   ArkmeBotList,
   ArkmeBotMentionInput,
   ArkmeBotProvider,
@@ -42,6 +43,8 @@ import type {
   ArkmeGroupBotCandidateList,
   ArkmeImagePayload,
   ArkmeImageSearchResult,
+  ArkmeIdAvailabilitySnapshot,
+  ArkmeIdMutationResult,
   ArkmeHumanMentionInput,
   ArkmeLinkMetadata,
   ArkmeLongArticleDetail,
@@ -172,6 +175,9 @@ export type {
   ArkmeImagePayload,
   ArkmeImageSearchItem,
   ArkmeImageSearchResult,
+  ArkmeIdAvailabilityReason,
+  ArkmeIdAvailabilitySnapshot,
+  ArkmeIdMutationResult,
   ArkmeHumanMentionInput,
   ArkmeLinkMetadata,
   ArkmeLongArticleDetail,
@@ -555,6 +561,36 @@ export class ArkmeSdk {
       undefined,
       options.signal,
     )
+  }
+
+  /** Validate a candidate Arkme ID with the same one-time account rule used by the built-in UI. */
+  async checkArkmeIdAvailability(arkmeId: string, signal?: AbortSignal): Promise<ArkmeIdAvailabilitySnapshot> {
+    const normalized = arkmeId.trim()
+    if (normalized === '') throw new TypeError('Arkme ID must not be empty')
+    return await this.call<ArkmeIdAvailabilitySnapshot>('user.arkme-id.check', { arkmeId: normalized }, signal)
+  }
+
+  /** Set the current account Arkme ID once after explicit user confirmation. */
+  async setArkmeIdOnce(arkmeId: string, signal?: AbortSignal): Promise<ArkmeIdMutationResult> {
+    const normalized = arkmeId.trim()
+    if (normalized === '') throw new TypeError('Arkme ID must not be empty')
+    return await this.call<ArkmeIdMutationResult>('user.arkme-id.set', { arkmeId: normalized }, signal)
+  }
+
+  /** Send a phone verification code for login, first bind, or phone rebind depending on auth state. */
+  async sendPhoneCode(phone: string, captcha: ArkmeCaptchaResult, signal?: AbortSignal): Promise<{ sent: true }> {
+    const normalized = phone.replace(/[\s-]/g, '')
+    if (!/^1[3-9][0-9]{9}$/.test(normalized)) throw new TypeError('Phone number is invalid')
+    return await this.call<{ sent: true }>('auth.phone.send', { phone: normalized, captcha }, signal)
+  }
+
+  /** Verify a phone code and refresh the account auth/profile state. */
+  async verifyPhoneCode(phone: string, code: string, signal?: AbortSignal): Promise<ArkmeAuthSnapshot> {
+    const normalized = phone.replace(/[\s-]/g, '')
+    const normalizedCode = code.trim()
+    if (!/^1[3-9][0-9]{9}$/.test(normalized)) throw new TypeError('Phone number is invalid')
+    if (!/^[0-9]{6}$/.test(normalizedCode)) throw new TypeError('Phone verification code is invalid')
+    return await this.call<ArkmeAuthSnapshot>('auth.phone.verify', { phone: normalized, code: normalizedCode }, signal)
   }
 
   /** Search by an exact phone number or Arkme ID without exposing internal account identifiers. */

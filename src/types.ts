@@ -994,6 +994,8 @@ export interface ArkmeProviderCapabilities {
     retryOutbox: true
     revisionPolling: true
     userProfile: true
+    /** Current-account profile settings support Arkme ID, personal QR, and phone binding flows. */
+    accountSettings?: true
     imageRead: true
     /** Record-calendar bucket and day-record reads backed by the Arkme record service. */
     recordCalendar?: true
@@ -1095,6 +1097,9 @@ export interface ArkmeUserProfile {
     apple: boolean
     wechat: boolean
     google: boolean
+  }
+  bindingNames?: {
+    wechat?: string
   }
   contact: {
     phoneMasked?: string
@@ -2536,6 +2541,8 @@ export type ArkmePluginOperation =
   | 'calendar.records'
   | 'user.profile'
   | 'user.profile.refresh'
+  | 'user.arkme-id.check'
+  | 'user.arkme-id.set'
   | 'image.read'
   | 'images.list'
   | 'world.feed'
