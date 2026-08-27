@@ -36,7 +36,8 @@ describe('Desktop Credential Broker', () => {
   })
 
   it('isolates direction keys by Binding, Runtime and final signed-Grant channel', async () => {
-    const broker = new DesktopCredentialBroker(new MemorySecrets())
+    const secrets = new MemorySecrets()
+    const broker = new DesktopCredentialBroker(secrets)
     await broker.putChannelKeys({
       accountId: 'account-1', bindingRef: 'binding-1', runtimeRef: 'runtime-1', channelRef: 'remotech-one',
       keyEpoch: 1, rootSecret: Buffer.alloc(32, 8), controllerPublicKey: 'A'.repeat(43), controllerKeyFingerprint: 'F'.repeat(43),
@@ -56,6 +57,13 @@ describe('Desktop Credential Broker', () => {
     expect(await broker.channelKeys({
       accountId: 'account-1', bindingRef: 'binding-1', runtimeRef: 'runtime-1', channelRef: 'remotech-two',
     })).toBeUndefined()
+    await broker.deleteBindingChannelKeys({ accountId: 'account-1', bindingRef: 'binding-1', runtimeRef: 'runtime-1' })
+    expect(await broker.channelKeys({
+      accountId: 'account-1', bindingRef: 'binding-1', runtimeRef: 'runtime-1', channelRef: 'remotech-one',
+    })).toBeUndefined()
+    expect(await broker.channelKeys({
+      accountId: 'account-1', bindingRef: 'binding-1', runtimeRef: 'runtime-2', channelRef: 'remotech-two',
+    })).toBeDefined()
   })
 })
 

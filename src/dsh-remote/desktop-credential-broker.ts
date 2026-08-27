@@ -89,6 +89,7 @@ export class DesktopCredentialBroker {
       controllerToHost: encodeBase64Url(input.controllerToHost),
       hostToController: encodeBase64Url(input.hostToController),
     }))
+    await this.store.write(this.channelIndexAccount(input), input.channelRef)
   }
 
   async channelKeys(input: { accountId: string; bindingRef: string; runtimeRef: string; channelRef: string }): Promise<{
@@ -124,6 +125,16 @@ export class DesktopCredentialBroker {
 
   async deleteChannelKeys(input: { accountId: string; bindingRef: string; runtimeRef: string; channelRef: string }): Promise<void> {
     await this.store.delete(this.channelAccount(input))
+    await this.store.delete(this.channelIndexAccount(input))
+  }
+
+  async deleteBindingChannelKeys(input: { accountId: string; bindingRef: string; runtimeRef: string }): Promise<void> {
+    const indexAccount = this.channelIndexAccount(input)
+    const channelRef = await this.store.read(indexAccount)
+    if (channelRef !== undefined) {
+      await this.store.delete(this.channelAccount({ ...input, channelRef }))
+    }
+    await this.store.delete(indexAccount)
   }
 
   private async secrets(accountId: string): Promise<PersistedDesktopSecrets> {
@@ -161,5 +172,15 @@ export class DesktopCredentialBroker {
       'dsh-remote-channel-key-v1', input.accountId, input.bindingRef, input.runtimeRef, input.channelRef,
     ].join('\n')).digest('base64url')
     return `dsh-remote-channel:${digest}`
+  }
+
+  private channelIndexAccount(input: { accountId: string; bindingRef: string; runtimeRef: string }): string {
+    for (const value of [input.accountId, input.bindingRef, input.runtimeRef]) {
+      if (value.trim() === '' || value.length > 256) throw new DshRemoteError('REMOTE_REQUEST_INVALID', '远控频道密钥索引无效')
+    }
+    const digest = createHash('sha256').update([
+      'dsh-remote-channel-index-v1', input.accountId, input.bindingRef, input.runtimeRef,
+    ].join('\n')).digest('base64url')
+    return `dsh-remote-channel-index:${digest}`
   }
 }

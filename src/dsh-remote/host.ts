@@ -392,6 +392,10 @@ export class ArkmeRemoteRealtimeHost implements DshRemoteHostFacade {
   async listBindings(): Promise<DshRemoteBindingProjection[]> {
     this.requireReady()
     const items = await this.options.controlPlane.listBindings()
+    const active = new Set(items.filter(item => item.status === 'active').map(item => item.bindingRef))
+    for (const previous of this.bindings) {
+      if (!active.has(previous.bindingRef)) await this.purgeBindingChannel(previous.bindingRef)
+    }
     this.bindings = items
     await this.options.runtimeStore.upsertBindings(this.accountId!, items)
     this.bump()
@@ -410,9 +414,19 @@ export class ArkmeRemoteRealtimeHost implements DshRemoteHostFacade {
       actor_credential_ref: this.credentialRef,
     })
     this.bindings = this.bindings.map(item => item.bindingRef === normalized ? { ...item, status: 'revoked' } : item)
-    await this.channelManager?.close(normalized)
+    await this.purgeBindingChannel(normalized)
     await this.options.runtimeStore.upsertBindings(this.accountId!, this.bindings)
     this.bump()
+  }
+
+  private async purgeBindingChannel(bindingRef: string): Promise<void> {
+    if (this.channelManager !== undefined) {
+      await this.channelManager.revoke(bindingRef)
+      return
+    }
+    await this.options.credentialBroker.deleteBindingChannelKeys({
+      accountId: this.accountId!, bindingRef, runtimeRef: this.runtime!.runtimeRef,
+    })
   }
 
   async renameDesktop(displayName: string): Promise<DshRemoteStatus> {

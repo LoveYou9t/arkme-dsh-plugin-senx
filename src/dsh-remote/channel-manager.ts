@@ -226,6 +226,15 @@ export class DshRemoteHostChannelManager {
     await Promise.all([...this.channels.keys()].map(async bindingRef => await this.close(bindingRef)))
   }
 
+  async revoke(bindingRef: string): Promise<void> {
+    await this.close(bindingRef)
+    await this.options.credentialBroker.deleteBindingChannelKeys({
+      accountId: this.options.accountId,
+      bindingRef,
+      runtimeRef: this.options.runtimeRef,
+    })
+  }
+
   private async handle(channel: ActiveChannel, payload: DshRemoteCipherEnvelope, metadata: DshRemoteTrustedEventMetadata): Promise<void> {
     if (this.channels.get(channel.binding.bindingRef) !== channel) return
     // Realtime broadcasts every Channel event to every subscriber, including
