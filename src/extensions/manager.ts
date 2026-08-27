@@ -16,8 +16,9 @@ import { ArkmeExtensionInstallStore } from './install-store.js'
 import { ExtensionPublishClient } from './publish-client.js'
 import { normalizeGitHubRepositoryURL } from './source.js'
 import {
-  materializePersistentExtensionBundle, quarantinePersistentExtension, readPersistentExtensionActivation,
-  refreshPersistentClientWrapper, writePersistentExtensionActivation,
+  materializePersistentExtensionBundle, persistentExtensionBundleDirectory,
+  persistentExtensionPackageIdentity, quarantinePersistentExtension, readPersistentExtensionActivation,
+  refreshPersistentClientWrapper, repairPersistentExtensionInstallation, writePersistentExtensionActivation,
 } from './persistent-bundle.js'
 import type { ArkmeExtensionProfileInstaller } from './profile-installer.js'
 import {
@@ -390,6 +391,7 @@ export class ArkmeExtensionManager {
   private readonly iconCache = new Map<string, ArkmeExtensionIconBytes>()
   private readonly previewCache = new Map<string, ArkmeExtensionPreviewBytes>()
   private readonly installationInstanceId: string
+  private readonly relocatedPersistentBundles = new Map<string, string>()
 
   constructor(
     readonly client: ExtensionPublishClient,
@@ -402,6 +404,7 @@ export class ArkmeExtensionManager {
     this.installationInstanceId = store.installationInstanceId()
     mkdirSync(options.artifactDirectory, { recursive: true, mode: 0o700 })
     chmodSync(options.artifactDirectory, 0o700)
+    this.repairRelocatedPersistentPaths()
   }
 
   /** Profile installation is Host-owned and does not need a live conversation Agent. */
@@ -412,6 +415,14 @@ export class ArkmeExtensionManager {
   /** Reconcile this Profile once during Host startup; failures remain compatible with older services. */
   async reconcileInstallationMetrics(): Promise<void> {
     const repairFailures: Array<{ extensionId: string; error: unknown }> = []
+    for (const [extensionId, bundleDirectory] of this.relocatedPersistentBundles) {
+      try {
+        await this.options.profileInstaller?.install(bundleDirectory)
+        this.relocatedPersistentBundles.delete(extensionId)
+      } catch (error) {
+        repairFailures.push({ extensionId, error })
+      }
+    }
     const repaired = await this.restoreDisabledProfileLayers('', (item, error) => {
       repairFailures.push({ extensionId: item.extensionId, error })
     })
@@ -2112,6 +2123,83 @@ export class ArkmeExtensionManager {
           console.error(`[arkme-extension:${item.extensionId}] failed to disable an unrepairable Client wrapper`, disableError)
         })
       }
+    }
+  }
+
+  private repairRelocatedPersistentPaths(): void {
+    if (this.options.profileDirectory === undefined) return
+    for (const item of this.store.list()) {
+      if (item.executionModel !== undefined || item.profilePackageName === undefined
+        || item.profileBundlePath === undefined
+        || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(item.extensionId)
+        || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(item.installedVersion)) continue
+      try {
+        const expectedPackageName = persistentExtensionPackageIdentity(item.extensionId).packageName
+        if (item.profilePackageName !== expectedPackageName) continue
+        const artifactPath = this.resolveRelocatedPersistentArtifact(item)
+        if (artifactPath === undefined) continue
+        const bundleDirectory = this.resolveLegacyBundlePath(persistentExtensionBundleDirectory(
+          this.options.profileDirectory,
+          item.extensionId,
+          item.installedVersion,
+        ))
+        if (bundleDirectory === undefined) continue
+        const unpacked = unpackArkmeExtension(readFileSync(artifactPath))
+        if (unpacked.manifestSha256 === ''
+          || unpacked.manifest.version !== item.installedVersion
+          || canonicalExtensionJson(unpacked.manifest) !== canonicalExtensionJson(item.manifest)) continue
+        repairPersistentExtensionInstallation({
+          bundleDirectory,
+          packageName: item.profilePackageName,
+          extensionId: item.extensionId,
+          version: item.installedVersion,
+          artifactPath,
+          artifactSha256: item.artifactSha256,
+          manifestSha256: unpacked.manifestSha256,
+        })
+        if (item.artifactPath !== artifactPath || item.profileBundlePath !== bundleDirectory) {
+          this.store.put({ ...item, artifactPath, profileBundlePath: bundleDirectory })
+        }
+        if (!this.profileDependencyTargets(item.profilePackageName, bundleDirectory)) {
+          this.relocatedPersistentBundles.set(item.extensionId, bundleDirectory)
+        }
+      } catch {
+        // A copied path is only migrated after every local identity check succeeds.
+      }
+    }
+  }
+
+  private resolveRelocatedPersistentArtifact(item: ArkmeInstalledExtension): string | undefined {
+    try {
+      const root = realpathSync(resolve(this.options.artifactDirectory))
+      const target = realpathSync(join(root, item.extensionId, item.installedVersion, 'extension.arkext'))
+      const pathFromRoot = relative(root, target)
+      if (pathFromRoot === '' || pathFromRoot === '..' || pathFromRoot.startsWith(`..${sep}`)
+        || isAbsolute(pathFromRoot)) return undefined
+      const bytes = readFileSync(target)
+      if (sha256Hex(bytes) !== item.artifactSha256) return undefined
+      return target
+    } catch {
+      return undefined
+    }
+  }
+
+  private profileDependencyTargets(packageName: string, bundleDirectory: string): boolean {
+    if (this.options.profileDirectory === undefined) return false
+    try {
+      const manifest = JSON.parse(readFileSync(join(this.options.profileDirectory, 'package.json'), 'utf8')) as {
+        dependencies?: Record<string, unknown>
+      }
+      const spec = manifest.dependencies?.[packageName]
+      if (typeof spec !== 'string' || !spec.startsWith('link:')) return false
+      const declaredPath = spec.slice('link:'.length)
+      if (declaredPath === '') return false
+      const declaredTarget = realpathSync(isAbsolute(declaredPath)
+        ? resolve(declaredPath)
+        : resolve(this.options.profileDirectory, declaredPath))
+      return declaredTarget === realpathSync(bundleDirectory)
+    } catch {
+      return false
     }
   }
 

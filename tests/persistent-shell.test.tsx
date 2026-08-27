@@ -104,7 +104,7 @@ describe('Arkme persistent DSH shell', () => {
     expect(markup).not.toContain('开始 Arkme 任务')
   })
 
-  it('embeds the complete native DSH client inside the current conversation region', () => {
+  it('embeds the core-only native DSH client inside the current conversation region', () => {
     arkmeUi.showHarness()
     const markup = renderToStaticMarkup(<ArkmePersistentWorkspace {...({
       sessionId: 'session-1',
@@ -115,7 +115,7 @@ describe('Arkme persistent DSH shell', () => {
 
     expect(markup).toContain('data-arkme-owned="persistent-workspace"')
     expect(markup).toContain('data-arkme-owned="deepseek-harness-surface"')
-    expect(markup).toContain('src="/?arkme-harness-embed=1"')
+    expect(markup).toContain('src="/arkme-self/harness-frame?arkme-harness-embed=1"')
     expect(markup).toContain('data-arkme-visible="true"')
     expect(markup).toContain('data-arkme-owned="product-surface"')
     expect(markup).toContain('data-arkme-owned="arkme-conversation-layer"')

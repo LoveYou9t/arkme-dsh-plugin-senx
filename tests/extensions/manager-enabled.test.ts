@@ -1,12 +1,14 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { packArkmeExtension } from '../../src/extensions/artifact.js'
 import { materializeCordisBundle } from '../../src/extensions/bundle-materializer.js'
 import { arkmeClientContentDigest } from '../../src/extensions/client-owner.js'
 import { ArkmeExtensionInstallStore } from '../../src/extensions/install-store.js'
 import { ArkmeExtensionManager } from '../../src/extensions/manager.js'
+import { materializePersistentExtensionBundle } from '../../src/extensions/persistent-bundle.js'
 import { ArkmeExtensionProfileInstaller } from '../../src/extensions/profile-installer.js'
 import type { ArkmeInstalledExtension } from '../../src/extensions/types.js'
 
@@ -30,6 +32,160 @@ function installed(root: string, client: boolean): ArkmeInstalledExtension {
 }
 
 describe('extension desired enable state owner', () => {
+  it('rebases a copied persistent extension onto the current Profile after validating its identity', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'arkme extension relocated '))
+    directories.push(root)
+    const currentHome = join(root, 'Current Home With Spaces')
+    const profile = join(currentHome, 'profiles', 'web')
+    const artifactDirectory = join(currentHome, 'arkme-self', 'extensions')
+    const extensionId = 'ext-relocated'
+    const version = '1.0.0'
+    const artifact = packArkmeExtension({
+      name: 'Relocated', description: '', version, arkmeProviderContract: 1,
+      hostCode: 'return { apply() {} }', clientCode: 'return { apply() {} }',
+    })
+    const artifactPath = join(artifactDirectory, extensionId, version, 'extension.arkext')
+    mkdirSync(join(artifactDirectory, extensionId, version), { recursive: true })
+    writeFileSync(artifactPath, artifact.bytes)
+    const bundle = materializePersistentExtensionBundle({
+      profileDirectory: profile,
+      artifactPath,
+      trustedPublicKey: 'public-key',
+      clientCode: 'return { apply() {} }',
+      resolution: {
+        extension_id: extensionId, version, artifact_url: 'https://objects.test/relocated',
+        artifact_size: artifact.bytes.byteLength, artifact_sha256: artifact.artifactSha256,
+        manifest_sha256: artifact.manifestSha256, manifest: artifact.manifest,
+        signature: 'signature', signing_key_id: 'key-1', published_at: 1_787_000_000_000, revoked: false,
+      },
+    })
+    const oldHome = join(root, 'Previous Home')
+    const oldArtifactPath = join(oldHome, 'arkme-self', 'extensions', extensionId, version, 'extension.arkext')
+    const oldBundlePath = join(oldHome, 'profiles', 'web', 'arkme-extensions', 'relocated', version)
+    const installationPath = join(bundle.bundleDirectory, 'installation.json')
+    writeFileSync(installationPath, JSON.stringify({
+      ...JSON.parse(readFileSync(installationPath, 'utf8')) as Record<string, unknown>,
+      artifact_path: oldArtifactPath,
+    }))
+    writeFileSync(join(profile, 'package.json'), JSON.stringify({
+      dependencies: { [bundle.packageName]: `link:${oldBundlePath}` },
+      dsh: { profile: { bundles: [bundle.packageName] } },
+    }))
+    const store = new ArkmeExtensionInstallStore(artifactDirectory)
+    store.put({
+      extensionId,
+      installedVersion: version,
+      artifactSha256: artifact.artifactSha256,
+      artifactPath: oldArtifactPath,
+      manifest: artifact.manifest,
+      enabled: true,
+      active: true,
+      profilePackageName: bundle.packageName,
+      profileBundlePath: oldBundlePath,
+      permissionSnapshot: [],
+      updateChannel: 'stable',
+      installedAtMillis: 7,
+      lastCheckedAtMillis: 7,
+    })
+    const install = vi.fn(async () => undefined)
+    const canonicalArtifactPath = realpathSync(artifactPath)
+    const canonicalBundlePath = realpathSync(bundle.bundleDirectory)
+    const manager = new ArkmeExtensionManager({} as never, store, {} as never, {
+      artifactDirectory,
+      trustedSigningKeys: '{}',
+      profileDirectory: profile,
+      profileInstaller: { install, remove: vi.fn(), restart: vi.fn(), setEnabled: vi.fn() },
+      persistentRuntimeState: () => ({
+        version,
+        installationUrl: pathToFileURL(join(canonicalBundlePath, 'installation.json')).href,
+        active: true,
+      }),
+    })
+
+    expect(store.get(extensionId)).toMatchObject({
+      artifactPath: canonicalArtifactPath,
+      profileBundlePath: canonicalBundlePath,
+    })
+    expect(JSON.parse(readFileSync(installationPath, 'utf8'))).toMatchObject({ artifact_path: canonicalArtifactPath })
+    expect(manager.persistentClientState(extensionId, version)).toMatchObject({ mount: true })
+
+    await manager.reconcileInstallationMetrics()
+    expect(install).toHaveBeenCalledWith(canonicalBundlePath)
+    store.close()
+  })
+
+  it('does not rebase a copied persistent Bundle with a mismatched installation identity', () => {
+    const root = mkdtempSync(join(tmpdir(), 'arkme-extension-relocated-invalid-'))
+    directories.push(root)
+    const currentHome = join(root, 'current')
+    const profile = join(currentHome, 'profiles', 'web')
+    const artifactDirectory = join(currentHome, 'arkme-self', 'extensions')
+    const extensionId = 'ext-relocated-invalid'
+    const version = '1.0.0'
+    const artifact = packArkmeExtension({
+      name: 'Relocated invalid', description: '', version, arkmeProviderContract: 1,
+      hostCode: 'return { apply() {} }', clientCode: 'return { apply() {} }',
+    })
+    const artifactPath = join(artifactDirectory, extensionId, version, 'extension.arkext')
+    mkdirSync(join(artifactDirectory, extensionId, version), { recursive: true })
+    writeFileSync(artifactPath, artifact.bytes)
+    const bundle = materializePersistentExtensionBundle({
+      profileDirectory: profile,
+      artifactPath,
+      trustedPublicKey: 'public-key',
+      resolution: {
+        extension_id: extensionId, version, artifact_url: 'https://objects.test/invalid',
+        artifact_size: artifact.bytes.byteLength, artifact_sha256: artifact.artifactSha256,
+        manifest_sha256: artifact.manifestSha256, manifest: artifact.manifest,
+        signature: 'signature', signing_key_id: 'key-1', published_at: 1_787_000_000_000, revoked: false,
+      },
+    })
+    const installationPath = join(bundle.bundleDirectory, 'installation.json')
+    writeFileSync(installationPath, JSON.stringify({
+      ...JSON.parse(readFileSync(installationPath, 'utf8')) as Record<string, unknown>,
+      extension_id: 'ext-other',
+    }))
+    const oldArtifactPath = join(root, 'old', extensionId, version, 'extension.arkext')
+    const oldBundlePath = join(root, 'old-profile', 'arkme-extensions', extensionId, version)
+    const store = new ArkmeExtensionInstallStore(artifactDirectory)
+    store.put({
+      extensionId,
+      installedVersion: version,
+      artifactSha256: artifact.artifactSha256,
+      artifactPath: oldArtifactPath,
+      manifest: artifact.manifest,
+      enabled: true,
+      active: true,
+      profilePackageName: bundle.packageName,
+      profileBundlePath: oldBundlePath,
+      permissionSnapshot: [],
+      updateChannel: 'stable',
+      installedAtMillis: 7,
+      lastCheckedAtMillis: 7,
+    })
+    const manager = new ArkmeExtensionManager({} as never, store, {} as never, {
+      artifactDirectory,
+      trustedSigningKeys: '{}',
+      profileDirectory: profile,
+      profileInstaller: { install: vi.fn(), remove: vi.fn(), restart: vi.fn(), setEnabled: vi.fn() },
+      persistentRuntimeState: () => ({
+        version,
+        installationUrl: pathToFileURL(installationPath).href,
+        active: true,
+      }),
+    })
+
+    expect(store.get(extensionId)).toMatchObject({
+      artifactPath: oldArtifactPath,
+      profileBundlePath: oldBundlePath,
+    })
+    expect(manager.persistentClientState(extensionId, version)).toMatchObject({
+      mount: false,
+      reason: 'runtime-mismatch',
+    })
+    store.close()
+  })
+
   it('leases a Bundle Client by canonical extension id and exact installed instance', async () => {
     const root = mkdtempSync(join(tmpdir(), 'arkme-extension-client-lease-'))
     directories.push(root)
