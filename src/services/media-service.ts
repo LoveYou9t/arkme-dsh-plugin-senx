@@ -3,7 +3,7 @@ import { createReadStream } from 'node:fs'
 import { open as openFile } from 'node:fs/promises'
 import OSS from 'ali-oss'
 import { Readable } from 'node:stream'
-import type { ArkmeFileProgress } from '../file-transfer-contract.js'
+import { arkmeMediaKind, arkmeNormalizedFileMimeType, type ArkmeFileProgress } from '../file-transfer-contract.js'
 import type { ArkmeSessionCredentials } from '../keychain-store.js'
 import type {
   ArkmeContentBlock,
@@ -710,11 +710,14 @@ export class MediaService {
     return await this.downloadSignedImage(signedUrl, byteLimit, signal, this.runtime.requestScope(session.userId))
   }
 
-  private mediaKind(fileKind: number, mimeType: string): ArkmeContentBlock['kind'] {
-    if (fileKind === 4) return 'file'
-    if (fileKind === 1 || mimeType.startsWith('image/')) return 'image'
-    if (fileKind === 2 || mimeType.startsWith('audio/')) return 'audio'
-    if (fileKind === 3 || mimeType.startsWith('video/')) return 'video'
+  private mediaKind(fileKind: number, mimeType: string, fileName: string): ArkmeContentBlock['kind'] {
+    const detectedKind = arkmeMediaKind(mimeType, fileName)
+    if (detectedKind !== undefined) return detectedKind
+    if (fileKind === 2) return 'audio'
+    if (!/\.[A-Za-z0-9]+$/u.test(fileName.trim())) {
+      if (fileKind === 1) return 'image'
+      if (fileKind === 3) return 'video'
+    }
     return 'file'
   }
 
@@ -1025,10 +1028,11 @@ export class MediaService {
       return Math.trunc(numberValue(item.content_file_role)) !== RECORD_CONTENT_FILE_ROLE_BACKGROUND_SOUND
     }).flatMap((item, index): ArkmeContentBlock[] => {
       const fileAssetUid = stringValue(item.file_asset_uid).trim()
-      const mimeType = stringValue(item.mime_type).trim() || 'application/octet-stream'
       const fileName = stringValue(item.file_name).trim() || `附件-${String(index + 1)}`
       const fileKind = Math.trunc(numberValue(item.file_kind))
-      const kind = this.mediaKind(fileKind, mimeType)
+      const declaredMimeType = stringValue(item.mime_type).trim().toLowerCase()
+      const mimeType = arkmeNormalizedFileMimeType(declaredMimeType, fileName)
+      const kind = this.mediaKind(fileKind, mimeType, fileName)
       const remoteUrl = stringValue(kind === 'image' ? item.preview_url ?? item.download_url : item.download_url).trim()
       if (remoteUrl === '') return []
       const originalUrl = stringValue(item.download_url).trim()

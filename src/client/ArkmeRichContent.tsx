@@ -9,13 +9,15 @@ import { ArkmeLongArticleDialog } from './ArkmeLongArticleDialog.js'
 import { arkmeEmojiTextRuns } from './arkme-emoji.js'
 import { ArkmeVoiceContent, arkmeVoiceMediaUrl } from './ArkmeVoiceContent.js'
 import { ArkmeFileViewer, ArkmeFileActions, arkmeLocalFileUrl, arkmeFileSize, useArkmeOriginal } from './ArkmeFileViewer.js'
-import { arkmeVisibleUploadFraction } from '../file-transfer-contract.js'
+import { arkmeCanInlineLocalFile, arkmeVisibleUploadFraction } from '../file-transfer-contract.js'
+import { createArkmeSdk } from '../sdk/index.js'
 
 const mediaRoute = '/arkme-self/api/media'
 const textCollapseCharacterThreshold = 300
 const textCollapseNewlineThreshold = 5
 const textCollapseMaxLines = 5
 const mediaGap = 5
+const fileSdk = createArkmeSdk()
 
 const styles: Record<string, CSSProperties> = {
   stack: { width: 'max-content', maxWidth: '100%', display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 8 },
@@ -265,6 +267,11 @@ function mediaUrl(block: ArkmeContentBlock): string {
   return `${mediaRoute}?ref=${encodeURIComponent(block.mediaRef)}`
 }
 
+function mediaAttemptUrl(block: ArkmeContentBlock, attempt: number): string {
+  const url = mediaUrl(block)
+  return attempt > 0 ? `${url}${url.includes('?') ? '&' : '?'}retry=${String(attempt)}` : url
+}
+
 function UploadProgress({ block }: { block: ArkmeContentBlock }) {
   if (block.uploadProgress === undefined || block.uploadProgress.phase === 'ready') return null
   const percent = Math.floor(arkmeVisibleUploadFraction(block.uploadProgress) * 100)
@@ -376,10 +383,40 @@ function mediaColumns(count: number): 1 | 2 | 3 {
   return 3
 }
 
-function MediaGallery({ blocks, onOpen, onFallback }: {
+type MediaFailure = 'retryable' | 'unsupported'
+
+function VisualMediaFallback({ block, failure, onRetry, onOpenAsFile, style }: { block: ArkmeContentBlock; failure: MediaFailure; onRetry: () => void; onOpenAsFile: () => void; style?: CSSProperties }) {
+  const video = block.kind === 'video'
+  const label = video ? '视频' : '图片'
+  const unsupported = failure === 'unsupported'
+  return <button
+    type="button"
+    aria-label={unsupported ? `接收${label} ${block.fileName}` : `重新加载${label} ${block.fileName}`}
+    data-arkme-media-fallback={unsupported ? `${block.kind}-unsupported` : block.kind}
+    onClick={unsupported ? onOpenAsFile : onRetry}
+    style={{ ...styles.mediaTile, ...style, display: 'grid', placeItems: 'center', color: 'var(--dsw-alias-label-secondary, #68707c)' }}
+  >
+    <span role="status" style={{ display: 'grid', justifyItems: 'center', gap: 7, fontSize: 12 }}>
+      <svg width="28" height="28" viewBox="0 0 28 28" fill="none" aria-hidden>
+        <rect x="3.5" y="4.5" width="21" height="19" rx="3" stroke="currentColor" strokeWidth="1.5" />
+        {video
+          ? <path d="m11.5 9.5 7 4.5-7 4.5v-9Z" fill="currentColor" />
+          : <><circle cx="10" cy="10" r="2" fill="currentColor" /><path d="m6.5 20 5.5-5 3.5 3 2.5-2 3.5 4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" /></>}
+      </svg>
+      <span>{unsupported ? `接收${label}` : `${label}加载失败，点击重试`}</span>
+    </span>
+    {video && <span style={styles.videoBadge} aria-hidden>▶ {durationLabel(block.durationSec)}</span>}
+  </button>
+}
+
+function MediaGallery({ blocks, failures, retryVersions, onOpen, onFailure, onRetry, onOpenAsFile }: {
   blocks: ArkmeContentBlock[]
+  failures: ReadonlyMap<string, MediaFailure>
+  retryVersions: ReadonlyMap<string, number>
   onOpen: (block: ArkmeContentBlock) => void
-  onFallback: (block: ArkmeContentBlock) => void
+  onFailure: (block: ArkmeContentBlock, failure: MediaFailure) => void
+  onRetry: (block: ArkmeContentBlock) => void
+  onOpenAsFile: (block: ArkmeContentBlock) => void
 }) {
   const columns = mediaColumns(blocks.length)
   const tileSize = columns === 1 ? 150 : 75
@@ -390,7 +427,9 @@ function MediaGallery({ blocks, onOpen, onFallback }: {
     data-arkme-media-columns={columns}
   >
     {blocks.map(block => {
-      const src = mediaUrl(block)
+      const failure = failures.get(block.mediaRef)
+      if (failure !== undefined) return <VisualMediaFallback key={`${block.mediaRef}:${String(block.sortOrder)}`} block={block} failure={failure} onRetry={() => { onRetry(block) }} onOpenAsFile={() => { onOpenAsFile(block) }} />
+      const src = mediaAttemptUrl(block, retryVersions.get(block.mediaRef) ?? 0)
       return <button
         key={`${block.mediaRef}:${String(block.sortOrder)}`}
         type="button"
@@ -399,9 +438,9 @@ function MediaGallery({ blocks, onOpen, onFallback }: {
         onClick={() => { onOpen(block) }}
       >
         {block.kind === 'image'
-          ? <img src={src} alt={block.fileName} loading="lazy" style={styles.mediaImage} onError={() => { onFallback(block) }} />
+          ? <img src={src} alt={block.fileName} loading="lazy" style={styles.mediaImage} onError={() => { onFailure(block, arkmeCanInlineLocalFile(block.mimeType, block.fileName) ? 'retryable' : 'unsupported') }} />
           : <>
-            <video src={src} muted playsInline preload="metadata" style={styles.videoPreview} aria-hidden onError={() => { onFallback(block) }} />
+            <video src={src} muted playsInline preload="metadata" style={styles.videoPreview} aria-hidden onError={event => { onFailure(block, event.currentTarget.error?.code === 4 || !arkmeCanInlineLocalFile(block.mimeType, block.fileName) ? 'unsupported' : 'retryable') }} />
             <span style={styles.videoBadge} aria-hidden>▶ {durationLabel(block.durationSec)}</span>
           </>}
         <UploadProgress block={block} />
@@ -412,11 +451,25 @@ function MediaGallery({ blocks, onOpen, onFallback }: {
 
 export function ArkmeFileCard({ block, fallback = false, onOpen, previewOpen = false }: { block: ArkmeContentBlock; fallback?: boolean; onOpen?: (block: ArkmeContentBlock) => void; previewOpen?: boolean }) {
   const [open, setOpen] = useState(false)
+  const [opening, setOpening] = useState(false)
+  const controller = useRef<AbortController>()
   const original = useArkmeOriginal(block, false, open || previewOpen)
   const downloading = original.reception.state === 'receiving'
   const percent = original.reception.totalBytes > 0 ? Math.min(99, Math.floor(original.reception.receivedBytes / original.reception.totalBytes * 100)) : undefined
   const downloadLabel = original.localRef !== undefined ? '' : downloading ? `下载中${percent === undefined ? '' : ` ${percent}%`}` : original.reception.state === 'failed' ? '下载失败' : '未下载'
-  return <><button type="button" onClick={event => { event.stopPropagation(); if (onOpen !== undefined) onOpen(block); else setOpen(true) }} style={{ ...styles.file, border: 0, textAlign: 'left', cursor: 'pointer', position: 'relative' }} data-arkme-file-card={fallback ? 'fallback' : 'file'}>
+  useEffect(() => () => { controller.current?.abort() }, [block.mediaRef, block.localFileRef])
+  const showReception = () => { if (onOpen !== undefined) onOpen(block); else setOpen(true) }
+  const activate = async () => {
+    if (opening) return
+    if (original.localRef === undefined) { showReception(); return }
+    const request = new AbortController(); controller.current = request
+    setOpening(true)
+    try { await fileSdk.openLocalFile(original.localRef, request.signal) }
+    catch {
+      if (!request.signal.aborted) showReception()
+    } finally { if (!request.signal.aborted) setOpening(false) }
+  }
+  return <><button type="button" aria-busy={opening} disabled={opening} onClick={event => { event.stopPropagation(); void activate() }} style={{ ...styles.file, border: 0, textAlign: 'left', cursor: opening ? 'progress' : 'pointer', position: 'relative' }} data-arkme-file-card={fallback ? 'fallback' : 'file'}>
     <span style={{ ...styles.fileIconBox, position: 'relative' }}><ArkmeFileIcon fileName={block.fileName} mimeType={block.mimeType} /><UploadProgress block={block} /></span>
     <span><span style={styles.fileName}>{block.fileName || '未知文件'}</span><small style={{ color: arkmeTheme.tertiary }}>{arkmeFileSize(block.size)}{downloadLabel && ` · ${downloadLabel}`}</small></span>
     {downloading && <progress aria-label={`下载 ${block.fileName}`} max={100} value={percent} style={{ position: 'absolute', left: 0, bottom: 0, height: 3, width: '100%' }} />}
@@ -485,12 +538,13 @@ export function arkmeContainedImageRect(viewportWidth: number, viewportHeight: n
   }
 }
 
-export function ArkmeMediaPreview({ blocks, selected, onSelect, onClose, openLocalFile = true }: {
+export function ArkmeMediaPreview({ blocks, selected, onSelect, onClose, openLocalFile = true, forceDownload = false }: {
   blocks: ArkmeContentBlock[]
   selected: ArkmeContentBlock
   onSelect: (block: ArkmeContentBlock) => void
   onClose: () => void
   openLocalFile?: boolean
+  forceDownload?: boolean
 }) {
   const index = Math.max(0, blocks.findIndex(block => block.mediaRef === selected.mediaRef))
   const viewportRef = useRef<HTMLDivElement>(null)
@@ -606,7 +660,7 @@ export function ArkmeMediaPreview({ blocks, selected, onSelect, onClose, openLoc
     onSelect(block)
   }
 
-  if (selected.kind === 'file') return <ArkmeFileViewer block={selected} blocks={blocks} onSelect={onSelect} onClose={onClose} openLocalFile={openLocalFile} />
+  if (selected.kind === 'file' || forceDownload) return <ArkmeFileViewer block={selected} blocks={blocks} onSelect={onSelect} onClose={onClose} openLocalFile={openLocalFile} forceDownload={forceDownload} />
 
   return <div style={styles.previewOverlay} role="dialog" aria-modal="true" aria-label={selected.fileName} onClick={onClose}>
     <div style={styles.previewBody} onClick={event => { event.stopPropagation() }}>
@@ -693,9 +747,15 @@ export function ArkmeMessageContent({ item, sourceRef, onLongArticleUpdated, hig
   }, [item, sourceRef, displayBlocks])
   const blocks = [...(displayBlocks ?? [])].sort((left, right) => left.sortOrder - right.sortOrder)
   const visualBlocks = blocks.filter(block => block.kind !== 'audio')
-  const [preview, setPreview] = useState<ArkmeContentBlock>()
+  const [preview, setPreview] = useState<{ block: ArkmeContentBlock; forceDownload?: boolean }>()
   const [articleOpen, setArticleOpen] = useState(false)
-  const [failedRefs, setFailedRefs] = useState<Set<string>>(() => new Set())
+  const [failures, setFailures] = useState<Map<string, MediaFailure>>(() => new Map())
+  const [retryVersions, setRetryVersions] = useState<Map<string, number>>(() => new Map())
+  const mediaRevision = `${sourceRef ?? ''}\0${item.itemUid}\0${String(version ?? '')}\0${blocks.map(block => `${block.mediaRef}:${block.kind}`).join(',')}`
+  useEffect(() => {
+    setFailures(new Map())
+    setRetryVersions(new Map())
+  }, [mediaRevision])
   if (item.forwardRecords !== undefined) {
     const itemLines = item.forwardRecords.items.flatMap(value => {
       if (value.segments?.length) return value.segments.map(segment => `${segment.speakerName}：${segment.textContent || '语音片段'}`)
@@ -713,9 +773,23 @@ export function ArkmeMessageContent({ item, sourceRef, onLongArticleUpdated, hig
       </div>
     </div>
   }
-  const markFailed = (block: ArkmeContentBlock) => {
-    setFailedRefs(current => new Set(current).add(block.mediaRef))
+  const markFailed = (block: ArkmeContentBlock, failure: MediaFailure = 'retryable') => {
+    setFailures(current => new Map(current).set(block.mediaRef, failure))
   }
+  const retryMedia = (block: ArkmeContentBlock) => {
+    setRetryVersions(current => {
+      const next = new Map(current)
+      next.set(block.mediaRef, (next.get(block.mediaRef) ?? 0) + 1)
+      return next
+    })
+    setFailures(current => {
+      const next = new Map(current)
+      next.delete(block.mediaRef)
+      return next
+    })
+  }
+  const openPreview = (block: ArkmeContentBlock) => { setPreview({ block }) }
+  const openAsFile = (block: ArkmeContentBlock) => { setPreview({ block, forceDownload: true }) }
   const isArticle = item.templateKind === 8 || item.displayKind === 1
   const text = item.textContent || (!isArticle && blocks.length === 0 ? item.title : '')
   // Only a voice note's single audio owns its transcript. Generic/mixed
@@ -733,27 +807,25 @@ export function ArkmeMessageContent({ item, sourceRef, onLongArticleUpdated, hig
   >{withTranscript && text !== '' ? <ArkmeRichText text={text} highlightMentions={highlightMentions} /> : undefined}</ArkmeVoiceContent>
   const renderRows = splitVisualRuns(blocks).map((row, rowIndex) => {
     if (Array.isArray(row)) {
-      const usable = row.filter(block => !failedRefs.has(block.mediaRef))
-      const failed = row.filter(block => failedRefs.has(block.mediaRef))
       return <div key={`visual-row:${String(rowIndex)}`} style={styles.stack}>
-        {usable.length > 0 && <MediaGallery blocks={usable} onOpen={setPreview} onFallback={markFailed} />}
-        {failed.map(block => <ArkmeFileCard key={block.mediaRef} block={block} fallback onOpen={setPreview} previewOpen={preview?.mediaRef === block.mediaRef} />)}
+        <MediaGallery blocks={row} failures={failures} retryVersions={retryVersions} onOpen={openPreview} onFailure={markFailed} onRetry={retryMedia} onOpenAsFile={openAsFile} />
       </div>
     }
-    if (failedRefs.has(row.mediaRef)) return <ArkmeFileCard key={row.mediaRef} block={row} fallback onOpen={setPreview} previewOpen={preview?.mediaRef === row.mediaRef} />
+    const failure = failures.get(row.mediaRef)
+    if (failure !== undefined) return <VisualMediaFallback key={row.mediaRef} block={row} failure={failure} onRetry={() => { retryMedia(row) }} onOpenAsFile={() => { openAsFile(row) }} {...(styles.sticker === undefined ? {} : { style: styles.sticker })} />
     if (row.renderRole === 3 && row.kind === 'image') return <img
       key={row.mediaRef}
-      src={mediaUrl(row)}
+      src={mediaAttemptUrl(row, retryVersions.get(row.mediaRef) ?? 0)}
       alt={row.fileName}
       title={row.fileName}
       draggable={false}
       style={styles.sticker}
       data-arkme-chat-sticker="true"
-      onClick={() => { setPreview(row) }}
-      onError={() => { markFailed(row) }}
+      onClick={() => { openPreview(row) }}
+      onError={() => { markFailed(row, arkmeCanInlineLocalFile(row.mimeType, row.fileName) ? 'retryable' : 'unsupported') }}
     />
     if (row.kind === 'audio') return renderVoice(row)
-    return <ArkmeFileCard key={row.mediaRef} block={row} onOpen={setPreview} previewOpen={preview?.mediaRef === row.mediaRef} />
+    return <ArkmeFileCard key={row.mediaRef} block={row} onOpen={openPreview} previewOpen={preview?.block.mediaRef === row.mediaRef} />
   })
 
   return <>
@@ -778,7 +850,7 @@ export function ArkmeMessageContent({ item, sourceRef, onLongArticleUpdated, hig
       </p>}
     </div>
     {preview !== undefined && typeof document !== 'undefined' && createPortal(
-      <ArkmeMediaPreview blocks={visualBlocks} selected={preview} onSelect={setPreview} onClose={() => { setPreview(undefined) }} />,
+      <ArkmeMediaPreview blocks={visualBlocks} selected={preview.block} onSelect={openPreview} onClose={() => { setPreview(undefined) }} {...(preview.forceDownload === undefined ? {} : { forceDownload: preview.forceDownload })} />,
       document.body,
     )}
     {articleOpen && sourceRef !== undefined && typeof document !== 'undefined' && createPortal(
@@ -816,14 +888,17 @@ export function ArkmeAttachmentDraftTile({ asset, previewUrl, onRemove, onOpen, 
   onOpen?: () => void
   disabled?: boolean
 }) {
+  const visualPreview = previewUrl !== undefined && (asset.fileKind === 1 || asset.fileKind === 3)
   return <span
-    data-arkme-attachment-tile={asset.fileKind === 1 && previewUrl !== undefined ? 'image-preview' : 'file-icon'}
+    data-arkme-attachment-tile={visualPreview ? asset.fileKind === 1 ? 'image-preview' : 'video-preview' : 'file-icon'}
     title={asset.fileName}
     aria-label={`附件 ${asset.fileName}`}
     style={{ position: 'relative', width: 48, height: 48, flex: 'none', display: 'inline-grid', placeItems: 'center', overflow: 'hidden', borderRadius: 8, background: 'var(--dsw-alias-bg-subtle, #f0f2f5)' }}
   >
-    <button type="button" aria-label={`预览 ${asset.fileName}`} onClick={onOpen} disabled={onOpen === undefined} style={{ border: 0, padding: 0, width: '100%', height: '100%', display: 'grid', placeItems: 'center', background: 'transparent', cursor: 'pointer' }}>{asset.fileKind === 1 && previewUrl !== undefined
+    <button type="button" aria-label={`预览 ${asset.fileName}`} onClick={onOpen} disabled={onOpen === undefined} style={{ border: 0, padding: 0, width: '100%', height: '100%', display: 'grid', placeItems: 'center', background: 'transparent', cursor: 'pointer' }}>{visualPreview && asset.fileKind === 1
       ? <img src={previewUrl} alt={asset.fileName} style={{ width: '100%', height: '100%', display: 'block', objectFit: 'cover' }} />
+      : visualPreview && asset.fileKind === 3
+        ? <><video src={previewUrl} muted playsInline preload="metadata" aria-label={asset.fileName} style={{ width: '100%', height: '100%', display: 'block', objectFit: 'cover', background: '#111' }} /><span aria-hidden style={{ position: 'absolute', inset: 0, display: 'grid', placeItems: 'center', color: '#fff', fontSize: 16, textShadow: '0 1px 4px rgba(0,0,0,.55)' }}>▶</span></>
       : <ArkmeFileIcon fileName={asset.fileName} {...(asset.mimeType === undefined ? {} : { mimeType: asset.mimeType })} size={32} />}</button>
     <button
       type="button"

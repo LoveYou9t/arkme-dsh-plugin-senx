@@ -15,6 +15,33 @@ export function fileTaskTimelineItem(task: ArkmeFileSendTask): ArkmeTimelineItem
     })),
   }
 }
+export function fileTaskConversationPreview(task: ArkmeFileSendTask): string {
+  const text = task.content.textContent?.trim() ?? ''
+  if (text !== '') return text
+  const fileKind = task.files[0]?.fileKind
+  return fileKind === 1 ? '[图片]' : fileKind === 2 ? '[语音]' : fileKind === 3 ? '[视频]' : '[文件]'
+}
+export function bindSentFileTaskLocals(item: ArkmeTimelineItem, tasks: readonly ArkmeFileSendTask[]): ArkmeTimelineItem {
+  if (item.contentBlocks === undefined || item.contentBlocks.length === 0) return item
+  const localByAsset = new Map<string, string>()
+  for (const task of tasks) {
+    if ((task.result?.itemUid ?? task.recordUid) !== item.itemUid) continue
+    for (const file of task.files) {
+      const fileAssetUid = file.asset?.fileAssetUid.trim()
+      if (fileAssetUid !== undefined && fileAssetUid !== '') localByAsset.set(fileAssetUid, file.fileRef)
+    }
+  }
+  if (localByAsset.size === 0) return item
+  let changed = false
+  const contentBlocks = item.contentBlocks.map(block => {
+    if (block.localFileRef !== undefined || block.fileAssetUid === undefined) return block
+    const localFileRef = localByAsset.get(block.fileAssetUid)
+    if (localFileRef === undefined) return block
+    changed = true
+    return { ...block, localFileRef }
+  })
+  return changed ? { ...item, contentBlocks } : item
+}
 export function useArkmeFileSendTasks(sourceRef: string | undefined, userId: number | undefined) {
   const [snapshot, setSnapshot] = useState<{ sourceRef: string; userId: number; tasks: ArkmeFileSendTask[] }>()
   const [revision, setRevision] = useState(0)

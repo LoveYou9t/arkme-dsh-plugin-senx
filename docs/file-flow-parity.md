@@ -1,10 +1,11 @@
 # File lifecycle parity
 
-Baseline: official master `6ff27fe1fa9bc6a32dcc7b97efeaeda901aad2db`.
+Baseline: official master `3af3554949e8d47f2fcb8f3962e2da1aced0ba73`
+(v0.1.28), rebased on 2026-08-27 before this correction.
 
-Client reference (read-only): native frontend remote `master`
-`7c4bd34a7837eb0a19dc5c520290338b0719fcc0`, confirmed by a direct remote query
-on 2026-08-26. Only the Arkme plugin is changed; no client or DSH source is changed.
+Client reference (read-only): native frontend remote `pre-release`
+`0fc133450`, inspected on 2026-08-27. Only the Arkme plugin is changed; no
+client or DSH source is changed.
 
 ## Product reference, not internal capability names
 
@@ -21,8 +22,10 @@ after reception, unless that page has already been saved successfully in the
 current preview. This condition is independent of the original-file cache
 (`desktop_image_preview.dart`, lines 99–112 and 2214–2247;
 `test/features/file/desktop_image_preview_open_file_test.dart`, lines 357–379).
-The center action changes from 接收文件 to progress to 打开. These statements
-describe the remote desktop source, not a driven native-app acceptance test.
+The center action changes from 接收文件 to percentage progress, then hands the
+completed local original to the operating system and closes the preview. Opening
+the same cached original later shows 打开. These statements describe the remote
+desktop source, not a driven native-app acceptance test.
 
 File icons use the user-selected **B: Untitled UI File Icons / Solid** set,
 pinned to `@untitledui/file-icons@0.0.9`. All 12 SVGs retain upstream geometry
@@ -45,10 +48,32 @@ business capability, transfer logic or button visibility rule changes.
 | Send | Accept a fixed message with attachments, clear that draft, allow the next input while uploading |
 | Upload | Per-file overlay/progress; completing capped at 99%; failure removes a stale progress overlay |
 | Retry | Keep the message identity and already uploaded siblings; never overwrite a newer draft |
-| Open a remote file | File information panel with 接收文件; share reception progress with its message card |
-| Open a cached file | Reuse original bytes; Markdown uses the existing public MarkdownText renderer |
+| Open a remote generic file | 接收文件, shared percentage progress, then automatically open with the system default application |
+| Open a cached generic file | Show 打开 and hand the account-bound local original to the system default application |
+| Open browser media/text | Reuse original bytes; supported media and Markdown keep the existing inline renderer |
 | Download | Client download icon; native browser picker first where supported, cancellation has no download side effect |
 | Search | Existing file scene; reuse the same file card, receiver and viewer |
+
+Image, video and generic-file presentation are separate after classification.
+Real filename/MIME format wins over a stale upstream `file_kind=4`, so JPG,
+MP4 and MP3 records do not flash or remain in a generic file card. Presentation
+classification is separate from browser decoding: HEIC and SVG remain images,
+and MKV remains video, even when the Web host cannot render their bytes inline.
+Those formats use a media-shaped receive/download fallback instead of being
+relabeled as files. Legacy visual metadata is still rejected when the real
+filename has a non-media suffix, preventing old `.dmg` records from being
+decoded as images. PDF, Office documents, archives, installers and unknown
+types remain generic files. Recorded voice messages continue to use the audio
+flow.
+
+If an image or transient video resource fails to load, the message keeps an
+image- or video-shaped failure tile with a retry action. It does not temporarily
+replace that media with a generic file card. Retrying uses a fresh URL, and a
+newer record version clears stale failure state. A browser-declared unsupported
+image or video format instead offers 接收图片 or 接收视频 and opens the existing
+receive/download flow; it does not promise that retrying the same bytes will work. This prevents
+the observed `image -> file text/card -> image` flash while preserving explicit
+files.
 
 The retry/status UI is a plugin recovery adaptation, not a claim that every
 client surface has an identical retry control. Unknown server acknowledgement
@@ -69,15 +94,20 @@ their synchronous completion contract.
 
 | Consumer | Required implementation | Verification |
 | --- | --- | --- |
-| Host | Single account-bound file owner: local staging, durable send state, upload progress, original reception | Owner and route failure/recovery tests |
-| UI | Local attachment strip, preview/reorder/remove, optimistic files, per-file progress, retry; shared viewer and search | Interactive and rendering tests, isolated Web acceptance |
-| SDK | Public typed capabilities, stage/send/status/retry/receive; abortable polling and old-host detection | External consumer compile and contract tests |
-| Tools | Authorized opaque file references, status and explicit-user-write send/retry; no arbitrary filesystem reads | Formal catalog/grant registration and official DSH session invocation |
+| Host | Single account-bound file owner: local staging, MIME normalization, durable send state, upload progress, original reception and validated local open | Owner, account-isolation, API-proxy and route failure/recovery tests |
+| UI | Local attachment strip, preview/reorder/remove, optimistic files, per-file progress, retry; distinct visual/file rendering; generic receive/open state machine | Interactive and rendering tests, actual Web acceptance |
+| SDK | Public typed stage/send/status/retry/receive plus `openLocalFile(fileRef)`; paths never cross the API | External consumer compile and contract tests |
+| Tools | Existing `arkme_file_task` adds confirmed `open-local` for opaque current-account file refs; no arbitrary filesystem read | Formal catalog/grant registration and official DSH session invocation |
 
-DSH public seam: WebServer.register() owns HTTP response lifecycle and returns a
+DSH public seams: WebServer.register() owns HTTP response lifecycle and returns a
 disposer. Existing Arkme HTTP adapters remain responsible for Origin/auth checks.
-DSH attachment v1 supports images only, not generic files. No private DSH imports,
-native open commands or new remote upload/search services are introduced.
+The Host resolves an opaque Arkme file ref and calls the public `ctx.apiProxy.host.openPath`
+gateway, which owns Finder / Explorer / xdg-open handoff. Before that handoff,
+the owner creates an account-scoped hard-link alias with a sanitized original
+file name and extension. This lets the OS recognize PDF, ZIP, Office and other
+generic formats while the canonical cache remains opaque. Both paths stay
+Host-side and aliases are removed with their cached originals. DSH attachment v1 supports images only, not generic files. No private
+DSH imports, custom shell-open commands or new remote upload/search services are introduced.
 
 ## Acceptance
 
@@ -89,13 +119,21 @@ native open commands or new remote upload/search services are introduced.
 - Same record ID is idempotent; uncertain acknowledgement is shown explicitly.
 - Original reception is shared, validates length, and never promotes partial data.
 - Cache/staging references remain account-bound and do not expose paths or URLs.
+- Generic files show 接收文件, real percentage progress, automatically open on
+  successful reception, and an already received file card opens the account-local
+  original directly without showing a second confirmation dialog.
+- When an authoritative remote message replaces its local pending send row, the
+  current-account task rebinds each matching `fileAssetUid` to its opaque local
+  file ref. A file selected on this device therefore never regresses to 未下载.
 - Browser download fallback reports only handoff, never unverified disk-save success.
 - With a supported save picker, success is reported only after the writable file closes.
 - Feature remains plugin-only; running user profiles are not replaced.
 
 ## Verification and remaining boundaries
 
-Typecheck, full tests (1864 passed, 5 skipped) and build passed on macOS,
+Typecheck, the complete media/file interaction matrix and the production build
+passed on macOS. The full suite passed 1917 product tests and skipped 5; its
+remaining package-list harness uses an npm flag that npm 11 no longer parses,
 including the B / Solid icon replacement. File icon tests pin all 12 SVG hashes,
 check inactive/self-contained assets, retain MIME precedence and verify the
 shared draft/card/preview mapping, including DMG. No new Host, SDK or Tool
@@ -108,13 +146,17 @@ covered; the latter stops propagation so a parent detail view stays open.
 
 The Web adaptation shows actual reception percentages on the reference client's
 220px-wide, 4px-high rounded track, with no invented percentage when total bytes
-are unknown. A received browser-previewable file offers Preview; other formats
-(including DMG, Office and archives) offer Download directly. It does not offer
-an unusable Open button or show a native-application limitation paragraph.
-The primary download action and toolbar share one save operation, so moving the
-action into the panel after reception cannot cancel a download already in flight.
-This is UI-only adaptation of existing reception and download operations; it adds
-no Host route, SDK or Tool capability. Native OS opening remains unsupported.
+are unknown. A received browser-previewable image, video, audio or supported text
+file offers Preview. A stale generic-file marker cannot override a real media
+format. PDF, XML, Office documents, installers, archives and unknown formats use
+the native generic-file flow: 接收文件, percentage progress, automatic system open,
+then 打开 for the cached original. PDF is never placed in a blank browser iframe.
+Clicking an already received generic-file card bypasses the information panel and
+hands the cached original directly to the native opener. The panel remains the
+receive/progress/retry surface for files that are missing, receiving or failed.
+The bottom download control remains a separate optional disk-copy action and does
+not replace the central receive/open state. No native-application limitation text
+or central save-success state is shown.
 
 The mounted message view now retains its last usable attachment display when
 the Host explicitly reports a media lookup failure for the same record version.
@@ -135,27 +177,28 @@ copy-name fallback, or nonfunctional copy button is added. A client-side native
 file-clipboard bridge with explicit permission is needed for full parity.
 Owner/SDK route tests cover account isolation, Origin, range reads, local staging,
 durable identity, partial upload failure, unknown acknowledgement, cache reuse,
-truncated reception, save cancellation and failed disk writes. UI tests also
+truncated reception, validated native opening, save cancellation and failed disk writes. UI tests also
 cover original-menu-only, drag order, shared card reception, formatted Markdown
 and the absence of invented file-library/Save-As controls.
 
-An isolated official DSH installation successfully exposed all six file tools
-to an actual persisted agent session, which called the capabilities-only tool
-through the real Host owner. A separate external consumer compiled against the
-public SDK, read capabilities and disposed its subscription. These checks do not
-prove authenticated upstream upload/send behavior. The interactive fixture uses
-real plugin components and file owner, but simulated upstream upload/send ports;
-it never sends to a real user's conversation.
+An isolated official DSH rc.7 installation loaded the immutable package on a
+fresh Profile. Its Host reported `canOpenPath=true`; the real Web conversation
+rendered a remote PDF with 接收文件 as the central action and the separate download
+icon. The file Tool owner/action and conversational confirmation are covered by
+registration and dispatch tests; no automated acceptance opened a user file.
+A separate external consumer compiled against the packaged public SDK and its
+exported `ArkmeFileOpenResult`. These checks do not prove authenticated upstream
+upload/send behavior. The interactive fixture uses real plugin components and
+file owner, but simulated upstream upload/send ports; it never sends to a real
+user's conversation.
 
 Still **not full native-client parity**:
 
-- The Web plugin cannot assume a native bridge for opening a file in an OS
-  application or copying an OS file to the clipboard. The inspected public
-  clipboard primitive accepts text, and the existing Arkme desktop bridge is
-  update-specific. Do not use arbitrary shell commands or open files on a remote
-  Host as a substitute for opening on the user's computer. Office/unsupported
-  formats explicitly require download then local opening; archives require
-  manual extraction. A supported desktop file bridge needs separate scope.
+- Native opening is available only when this DSH Host reports its official native
+  opener capability. The plugin uses that Host seam and never invents a remote
+  browser-open claim. Native file clipboard copy remains unavailable: the public
+  clipboard primitive accepts text, not an OS file list, so no misleading copy
+  fallback is added.
 - Browser save dialogs, clipboard file availability, video codecs and PDF viewer
   support depend on the browser. Native OS dialogs and Windows/Linux behavior
   have not been validated. The current receive/preview presentation is not a

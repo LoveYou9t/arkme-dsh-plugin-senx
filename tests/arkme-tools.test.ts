@@ -394,6 +394,23 @@ function fakeService(): ArkmeCoreToolPorts & {
 }
 
 describe('Arkme conversation tools', () => {
+  it('opens only an opaque local file reference through the file owner action', async () => {
+    const service = fakeService()
+    const fileOpenLocal = vi.fn(async (fileRef: string) => ({
+      opened: true as const,
+      file: { fileRef, fileName: 'report.pdf', mimeType: 'application/pdf', size: 3, fileKind: 4 as const },
+    }))
+    const tool = createArkmeCoreToolDefinitions({ ...service, fileOpenLocal }).find(definition => definition.name === 'arkme_file_task')!
+    const output = await tool.execute(
+      { action: 'open-local', reference: 'arkme-file-v1.00000000-0000-4000-8000-000000000001' },
+      { signal: new AbortController().signal } as never,
+    ) as string
+
+    expect(fileOpenLocal).toHaveBeenCalledWith('arkme-file-v1.00000000-0000-4000-8000-000000000001')
+    expect(output).toContain('"opened": true')
+    expect(output).not.toContain('/Users/')
+  })
+
   it('reads recent records with optional refresh and an explicit data boundary', async () => {
     const service = fakeService()
     const tool = createArkmeCoreToolDefinitions(service).find(definition => definition.name === 'arkme_records_recent')!

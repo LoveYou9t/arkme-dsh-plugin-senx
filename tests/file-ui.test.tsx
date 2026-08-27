@@ -4,6 +4,7 @@ import { ArkmeFileActions, ArkmeFileViewer, useArkmeOriginal } from '../src/clie
 import type { ReactNode } from 'react'
 import { ArkmeSdk } from '../src/sdk/index.js'
 import { ArkmeFileQuickView } from '../src/client/ArkmeFileQuickView.js'
+import { ArkmeFileCard } from '../src/client/ArkmeRichContent.js'
 
 const api = vi.hoisted(() => ({ call: vi.fn() }))
 vi.mock('../src/client/api.js', () => ({ callArkme: api.call }))
@@ -104,6 +105,31 @@ describe('shared original-file reception display', () => {
 })
 
 describe('client file preview interaction', () => {
+  it('opens an already received file directly from its card without rendering the file dialog', async () => {
+    const open = vi.spyOn(ArkmeSdk.prototype, 'openLocalFile').mockResolvedValue({ opened: true, file: { fileRef: original.localRef, fileName: 'a.pdf', mimeType: 'application/pdf', size: 3, fileKind: 4 } })
+    const onOpen = vi.fn()
+    let view!: ReactTestRenderer
+    await act(async () => { view = create(<ArkmeFileCard block={{ ...block, localFileRef: original.localRef }} onOpen={onOpen} />) })
+
+    await act(async () => { view.root.findByProps({ 'data-arkme-file-card': 'file' }).props.onClick({ stopPropagation: vi.fn() }); await Promise.resolve() })
+
+    expect(open).toHaveBeenCalledWith(original.localRef, expect.any(AbortSignal))
+    expect(onOpen).not.toHaveBeenCalled()
+    expect(view.root.findAllByProps({ role: 'dialog' })).toHaveLength(0)
+    expect(JSON.stringify(view.toJSON())).not.toContain('未下载')
+    await act(async () => view.unmount())
+  })
+  it('keeps the reception dialog entry for a file that has not been received yet', async () => {
+    vi.spyOn(ArkmeSdk.prototype, 'receiveFile').mockResolvedValue({ state: 'missing', receivedBytes: 0, totalBytes: 3 })
+    const onOpen = vi.fn()
+    let view!: ReactTestRenderer
+    await act(async () => { view = create(<ArkmeFileCard block={{ ...block, originalRef: 'arkme-media-v1.not-received' }} onOpen={onOpen} />) })
+
+    await act(async () => view.root.findByProps({ 'data-arkme-file-card': 'file' }).props.onClick({ stopPropagation: vi.fn() }))
+
+    expect(onOpen).toHaveBeenCalledWith(expect.objectContaining({ originalRef: 'arkme-media-v1.not-received' }))
+    await act(async () => view.unmount())
+  })
   it('shows a real reception percentage with a compact themed track instead of native progress', async () => {
     vi.useFakeTimers()
     vi.stubGlobal('document', { body: {}, activeElement: null })
@@ -117,36 +143,77 @@ describe('client file preview interaction', () => {
     expect(JSON.stringify(view.toJSON())).toContain('正在接收文件 37%')
     await act(async () => view.unmount())
   })
-  it.each(['ChatGPT.dmg', 'report.docx', 'archive.zip'])('downloads received %s directly without an unusable Open action', async fileName => {
-    const anchor = { href: '', download: '', click: vi.fn(), remove: vi.fn() }
-    vi.stubGlobal('window', {})
-    vi.stubGlobal('document', { body: { append: vi.fn() }, activeElement: null, createElement: () => anchor })
+  it.each(['window_dump.xml', 'report.pdf', 'report.docx'])('opens received %s with the DSH native opener', async fileName => {
+    vi.stubGlobal('document', { body: {}, activeElement: null })
     const receive = vi.spyOn(ArkmeSdk.prototype, 'receiveFile')
+    const open = vi.spyOn(ArkmeSdk.prototype, 'openLocalFile').mockResolvedValue({ opened: true, file: { fileRef: original.localRef, fileName, mimeType: 'application/octet-stream', size: 3, fileKind: 4 } })
+    const onClose = vi.fn()
     let view!: ReactTestRenderer
-    await act(async () => { view = create(<ArkmeFileViewer block={{ ...block, fileName, mimeType: 'application/octet-stream', localFileRef: original.localRef }} onClose={() => {}} />) })
+    await act(async () => { view = create(<ArkmeFileViewer block={{ ...block, fileName, mimeType: 'application/octet-stream', localFileRef: original.localRef }} onClose={onClose} />) })
     const buttons = view.root.findAllByType('button')
-    expect(buttons.some(button => button.props.children === '打开')).toBe(false)
-    const download = view.root.findByProps({ 'aria-label': '下载文件' })
-    expect(download.props.children).toBe('下载')
-    await act(async () => { download.props.onClick(); await Promise.resolve() })
-    expect(anchor.click).toHaveBeenCalledOnce()
-    expect(anchor.download).toBe(fileName)
-    expect(anchor.href).toContain('download=1')
+    const openButton = buttons.find(button => button.props.children === '打开')
+    expect(openButton).toBeDefined()
+    expect(view.root.findByProps({ 'aria-label': '下载文件' }).findByType('svg')).toBeDefined()
+    await act(async () => { openButton!.props.onClick(); await Promise.resolve() })
+    expect(open).toHaveBeenCalledWith(original.localRef, expect.any(AbortSignal))
+    expect(onClose).toHaveBeenCalledOnce()
     expect(receive).not.toHaveBeenCalled()
-    expect(JSON.stringify(view.toJSON())).not.toContain('浏览器无法调用本机应用')
     await act(async () => view.unmount())
   })
-  it('receives an archive before offering its download, without attempting to open it', async () => {
+  it('opens a received PDF with the system application instead of a blank browser iframe', async () => {
     vi.stubGlobal('document', { body: {}, activeElement: null })
-    const receive = vi.spyOn(ArkmeSdk.prototype, 'receiveFile').mockImplementation(async (_ref, start) => start
-      ? { state: 'ready', receivedBytes: 3, totalBytes: 3, file: { fileRef: original.localRef, fileName: 'a.zip', mimeType: 'application/zip', size: 3, fileKind: 4 } }
-      : { state: 'missing', receivedBytes: 0, totalBytes: 3 })
+    vi.spyOn(ArkmeSdk.prototype, 'openLocalFile').mockResolvedValue({ opened: true, file: { fileRef: original.localRef, fileName: 'a.pdf', mimeType: 'application/pdf', size: 3, fileKind: 4 } })
     let view!: ReactTestRenderer
-    await act(async () => { view = create(<ArkmeFileViewer block={{ ...block, fileName: 'a.zip', mimeType: 'application/zip', originalRef: 'arkme-media-v1.archive' }} onClose={() => {}} />) })
-    await act(async () => view.root.findAllByType('button').find(button => button.props.children === '接收文件')!.props.onClick())
-    expect(receive).toHaveBeenCalledWith('arkme-media-v1.archive', true, expect.any(AbortSignal))
-    expect(view.root.findByProps({ 'aria-label': '下载文件' }).props.children).toBe('下载')
+    await act(async () => { view = create(<ArkmeFileViewer block={{ ...block, localFileRef: original.localRef }} onClose={() => {}} />) })
+    expect(view.root.findAllByType('iframe')).toHaveLength(0)
+    expect(view.root.findAllByType('button').some(button => button.props.children === '预览')).toBe(false)
+    expect(view.root.findAllByType('button').some(button => button.props.children === '打开')).toBe(true)
+    expect(JSON.stringify(view.toJSON())).toContain('a.pdf')
+    await act(async () => view.unmount())
+  })
+  it.each([
+    ['image', 'photo.jpg', 'image/jpeg', 'img'],
+    ['video', 'movie.mp4', 'video/mp4', 'video'],
+    ['audio', 'track.mp3', 'audio/mpeg', 'audio'],
+  ])('uses the real %s preview even when an old block was marked as a generic file', async (_label, fileName, mimeType, element) => {
+    vi.stubGlobal('window', {})
+    vi.stubGlobal('document', { body: {}, activeElement: null })
+    let view!: ReactTestRenderer
+    await act(async () => { view = create(<ArkmeFileViewer block={{ ...block, fileName, mimeType, localFileRef: original.localRef }} onClose={() => {}} />) })
+    const preview = view.root.findAllByType('button').find(button => button.props.children === '预览')
+    expect(preview).toBeDefined()
+    await act(async () => preview!.props.onClick())
+    expect(view.root.findAllByType(element)).toHaveLength(1)
+    await act(async () => view.unmount())
+  })
+  it('receives a generic file, reports progress, and opens it automatically when ready', async () => {
+    vi.useFakeTimers()
+    vi.stubGlobal('document', { body: {}, activeElement: null })
+    const receive = vi.spyOn(ArkmeSdk.prototype, 'receiveFile').mockResolvedValue({ state: 'missing', receivedBytes: 0, totalBytes: 3 })
+    const open = vi.spyOn(ArkmeSdk.prototype, 'openLocalFile').mockResolvedValue({ opened: true, file: { fileRef: original.localRef, fileName: 'a.xml', mimeType: 'application/xml', size: 3, fileKind: 4 } })
+    const onClose = vi.fn()
+    let view!: ReactTestRenderer
+    await act(async () => { view = create(<ArkmeFileViewer block={{ ...block, fileName: 'a.xml', mimeType: 'application/xml', originalRef: 'arkme-media-v1.document' }} onClose={onClose} />) })
+    receive.mockResolvedValue({ state: 'receiving', receivedBytes: 1, totalBytes: 3 })
+    await act(async () => { view.root.findAllByType('button').find(button => button.props.children === '接收文件')!.props.onClick(); await Promise.resolve() })
+    expect(receive).toHaveBeenCalledWith('arkme-media-v1.document', true, expect.any(AbortSignal))
+    expect(view.root.findByProps({ role: 'progressbar' }).props['aria-valuenow']).toBe(33)
+    receive.mockResolvedValue({ state: 'ready', receivedBytes: 3, totalBytes: 3, file: { fileRef: original.localRef, fileName: 'a.xml', mimeType: 'application/xml', size: 3, fileKind: 4 } })
+    await act(async () => { await vi.advanceTimersByTimeAsync(750); await Promise.resolve() })
+    expect(open).toHaveBeenCalledWith(original.localRef, expect.any(AbortSignal))
+    expect(onClose).toHaveBeenCalledOnce()
     expect(view.root.findAllByProps({ role: 'alert' })).toHaveLength(0)
+    await act(async () => view.unmount())
+  })
+  it.each([
+    ['an unsupported video extension', { fileName: 'movie.mkv', mimeType: 'video/x-matroska' }, false],
+    ['an unsupported codec fallback', { fileName: 'movie.mp4', mimeType: 'video/mp4' }, true],
+  ])('uses system Open for %s when browser inline preview is unavailable', async (_label, media, forceDownload) => {
+    vi.stubGlobal('document', { body: {}, activeElement: null })
+    let view!: ReactTestRenderer
+    await act(async () => { view = create(<ArkmeFileViewer block={{ ...block, ...media, kind: 'video', localFileRef: original.localRef }} forceDownload={forceDownload} onClose={() => {}} />) })
+    expect(view.root.findAllByType('video')).toHaveLength(0)
+    expect(view.root.findAllByType('button').some(button => button.props.children === '打开')).toBe(true)
     await act(async () => view.unmount())
   })
   it.each([[0, 0, undefined], [-1, 100, 0], [101, 100, 100]])('keeps reception progress honest for %s / %s bytes', async (receivedBytes, totalBytes, expected) => {
@@ -159,7 +226,7 @@ describe('client file preview interaction', () => {
     if (expected === undefined) expect(view.root.findByProps({ role: 'status' }).props.children).toBe('正在接收文件')
     await act(async () => view.unmount())
   })
-  it('finishes a toolbar download when reception switches it to the central Download action', async () => {
+  it('keeps the separate toolbar download working without replacing the central receive/open flow', async () => {
     vi.useFakeTimers()
     vi.stubGlobal('document', { body: {}, activeElement: null })
     const writable = { write: vi.fn(async () => {}), close: vi.fn(async () => {}), abort: vi.fn(async () => {}) }
@@ -176,7 +243,7 @@ describe('client file preview interaction', () => {
     expect(writable.write).toHaveBeenCalledOnce()
     expect(writable.close).toHaveBeenCalledOnce()
     expect(writable.abort).not.toHaveBeenCalled()
-    expect(view.root.findByProps({ 'aria-label': '下载文件' }).props.children).toBe('下载')
+    expect(view.root.findAllByProps({ 'aria-label': '下载文件' })).toHaveLength(0)
     expect(JSON.stringify(view.toJSON())).toContain('保存成功')
     await act(async () => view.unmount())
   })

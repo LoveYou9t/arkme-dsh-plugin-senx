@@ -1,8 +1,8 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { createReadStream } from 'node:fs'
-import { chmod, copyFile, mkdir, open, readFile, rename, stat, unlink, writeFile } from 'node:fs/promises'
+import { chmod, copyFile, link, mkdir, open, readFile, rename, rm, stat, unlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { arkmePickedFileKind, type ArkmeFilePolicy, type ArkmeFileProgress, type ArkmeFileReception, type ArkmeFileSendInput, type ArkmeFileSendTask, type ArkmeLocalFile } from '../file-transfer-contract.js'
+import { arkmeNormalizedFileMimeType, arkmePickedFileKind, type ArkmeFileOpenResult, type ArkmeFilePolicy, type ArkmeFileProgress, type ArkmeFileReception, type ArkmeFileSendInput, type ArkmeFileSendTask, type ArkmeLocalFile } from '../file-transfer-contract.js'
 import type { ArkmeUploadedAsset, ArkmeSourceSendResult } from '../types.js'
 import { ArkmePluginError } from './service.js'
 import { ARKME_TOOL_FILE_MAX_BYTES } from '../file-transfer-contract.js'
@@ -16,6 +16,7 @@ export interface FileTransferPorts {
   upload(path: string, metadata: StoredFile, progress: (value: ArkmeFileProgress) => void, userId: number, signal: AbortSignal): Promise<ArkmeUploadedAsset>
   send(input: ArkmeFileSendInput, assets: ArkmeUploadedAsset[], userId: number, signal: AbortSignal): Promise<ArkmeSourceSendResult>
   fetchMedia(ref: string, signal: AbortSignal): Promise<{ response: Response; descriptor: Metadata }>
+  openPath?(path: string, signal: AbortSignal): Promise<void>
   reconcile?(input: ArkmeFileSendInput, signal: AbortSignal): Promise<ArkmeSourceSendResult | undefined>
 }
 const REF = /^arkme-file-v1\.[0-9a-f-]{36}$/
@@ -23,6 +24,15 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-
 const fail = (code: string, message: string) => new ArkmePluginError(code, message, false, 400)
 const clone = <T>(value: T): T => structuredClone(value)
 const publicFile = (file: ArkmeLocalFile): ArkmeLocalFile => ({ fileRef: file.fileRef, fileName: file.fileName, mimeType: file.mimeType, size: file.size, fileKind: file.fileKind })
+const nativeOpenFileName = (fileName: string): string => {
+  const cleaned = fileName.replace(/[<>:"/\\|?*\u0000-\u001f\u007f]/g, '_').trim().replace(/^[. ]+|[. ]+$/g, '')
+  const extension = /\.[a-zA-Z0-9]{1,16}$/.exec(cleaned)?.[0] ?? ''
+  let stem = (extension === '' ? cleaned : cleaned.slice(0, -extension.length)).replace(/[. ]+$/g, '')
+  if (stem === '' || stem === '.' || stem === '..') stem = 'file'
+  stem = stem.slice(0, Math.max(1, 180 - extension.length))
+  if (/^(?:CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])$/i.test(stem)) stem = `_${stem}`
+  return `${stem}${extension}`
+}
 
 /** Plugin-owned files, not DSH session attachments. No client-controlled path is persisted. */
 export class FileTransfers {
@@ -47,6 +57,28 @@ export class FileTransfers {
   private path(userId: number, ref: string): string {
     if (!REF.test(ref)) throw fail('file-ref-invalid', '文件引用无效或不属于当前账号')
     return join(this.root(userId), ref)
+  }
+  private openDirectory(userId: number, ref: string): string {
+    if (!REF.test(ref)) throw fail('file-ref-invalid', '文件引用无效或不属于当前账号')
+    return join(this.root(userId), '.open', ref)
+  }
+  private async nativeOpenPath(userId: number, ref: string, file: ArkmeLocalFile): Promise<string> {
+    const source = this.path(userId, ref)
+    const directory = this.openDirectory(userId, ref)
+    const target = join(directory, nativeOpenFileName(file.fileName))
+    await mkdir(directory, { recursive: true, mode: 0o700 })
+    try {
+      await link(source, target)
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
+      const info = await stat(target).catch(() => undefined)
+      if (!info?.isFile() || info.size !== file.size) {
+        await unlink(target).catch(() => {})
+        await link(source, target)
+      }
+    }
+    await chmod(target, 0o600)
+    return target
   }
   private async assertUser(userId: number, signal?: AbortSignal): Promise<void> {
     signal?.throwIfAborted()
@@ -103,7 +135,8 @@ export class FileTransfers {
   async stage(temporaryPath: string, metadata: Metadata, expectedUserId?: number): Promise<ArkmeLocalFile> {
     const userId = await this.ports.currentUser()
     if (expectedUserId !== undefined && expectedUserId !== userId) throw fail('file-account-changed', '账号已切换，本次文件导入已取消')
-    this.validateMetadata(metadata)
+    const normalizedMetadata = { ...metadata, mimeType: arkmeNormalizedFileMimeType(metadata.mimeType, metadata.fileName) }
+    this.validateMetadata(normalizedMetadata)
     return this.exclusive(async () => {
       const state = await this.state(userId)
       await this.prune(userId, state)
@@ -117,7 +150,7 @@ export class FileTransfers {
       for await (const chunk of createReadStream(temporaryPath)) hash.update(chunk)
       await this.assertUser(userId)
       const ref = `arkme-file-v1.${randomUUID()}`
-      const file: StoredFile = { ...metadata, fileRef: ref, fileKind: arkmePickedFileKind(metadata.mimeType), sha256: hash.digest('hex'), createdAtMillis: Date.now() }
+      const file: StoredFile = { ...normalizedMetadata, fileRef: ref, fileKind: arkmePickedFileKind(normalizedMetadata.mimeType, normalizedMetadata.fileName), sha256: hash.digest('hex'), createdAtMillis: Date.now() }
       await copyFile(temporaryPath, this.path(userId, ref))
       await chmod(this.path(userId, ref), 0o600)
       state.files[ref] = file
@@ -134,6 +167,7 @@ export class FileTransfers {
       // Unsent drafts are never evicted by cache cleanup.
       delete state.files[file.fileRef]
       await unlink(this.path(userId, file.fileRef)).catch(() => {})
+      await rm(this.openDirectory(userId, file.fileRef), { recursive: true, force: true })
     }
     state.tasks = state.tasks.filter(task => task.state !== 'sent' || Date.now() - task.createdAtMillis < 7 * 24 * 3600_000)
   }
@@ -148,6 +182,26 @@ export class FileTransfers {
     await this.assertUser(userId)
     return { path, file: publicFile(file) }
   }
+  async openLocal(ref: string): Promise<ArkmeFileOpenResult> {
+    if (this.ports.openPath === undefined) throw fail('file-open-unavailable', '当前宿主不能使用本机应用打开文件')
+    const controller = new AbortController()
+    this.controllers.add(controller)
+    try {
+      const userId = await this.ports.currentUser()
+      const { file } = await this.readLocal(ref)
+      await this.assertUser(userId, controller.signal)
+      const path = await this.nativeOpenPath(userId, ref, file)
+      await this.assertUser(userId, controller.signal)
+      await this.ports.openPath(path, controller.signal)
+      await this.assertUser(userId, controller.signal)
+      return { opened: true, file }
+    } catch (error) {
+      if (error instanceof ArkmePluginError) throw error
+      throw fail('file-open-failed', '文件打开失败，请重试')
+    } finally {
+      this.controllers.delete(controller)
+    }
+  }
   async files(): Promise<ArkmeLocalFile[]> {
     const state = await this.state(await this.ports.currentUser())
     return Object.values(state.files).map(publicFile)
@@ -161,6 +215,7 @@ export class FileTransfers {
       if (!state.files[ref]) return
       delete state.files[ref]; await this.save(userId, state)
       await unlink(this.path(userId, ref)).catch(() => {})
+      await rm(this.openDirectory(userId, ref), { recursive: true, force: true })
     })
   }
   async tasks(sourceRef?: string): Promise<ArkmeFileSendTask[]> {

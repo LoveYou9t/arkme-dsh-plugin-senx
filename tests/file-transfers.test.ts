@@ -1,9 +1,9 @@
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { FileTransfers, type FileTransferPorts } from '../src/services/file-transfers.js'
-import { arkmeVisibleUploadFraction } from '../src/file-transfer-contract.js'
+import { arkmeCanInlineLocalFile, arkmePickedFileKind, arkmeVisibleUploadFraction } from '../src/file-transfer-contract.js'
 import { fileTaskTimelineItem } from '../src/client/file-send-tasks.js'
 
 const directories: string[] = []
@@ -13,14 +13,15 @@ async function fixture() {
   let user = 42
   const upload = vi.fn<FileTransferPorts['upload']>(async (_path, metadata) => ({ ...metadata, fileAssetUid: `asset-${metadata.fileName}` }))
   const send = vi.fn<FileTransferPorts['send']>(async input => ({ sourceRef: input.sourceRef, itemUid: input.recordUid, status: 1, localState: 'synced' }))
+  const openPath = vi.fn<NonNullable<FileTransferPorts['openPath']>>(async () => {})
   const ports: FileTransferPorts = { currentUser: async () => user, upload, send, validateSource: async () => {},
-    fetchMedia: async () => { throw new Error('unexpected download') } }
+    fetchMedia: async () => { throw new Error('unexpected download') }, openPath }
   const owner = new FileTransfers(directory, ports, 1000)
   async function stage(name: string) {
     const path = join(directory, name); await writeFile(path, name.padEnd(10, '.'))
     return owner.stage(path, { fileName: name, mimeType: 'application/pdf', size: 10 })
   }
-  return { owner, directory, ports, upload, send, stage, setUser: (value: number) => { user = value } }
+  return { owner, directory, ports, upload, send, openPath, stage, setUser: (value: number) => { user = value } }
 }
 const input = (fileRefs: string[]) => ({ sourceRef: 'source', recordUid: '00000000-0000-4000-8000-000000000001', relationUid: '00000000-0000-4000-8000-000000000002', fileRefs, content: { textContent: 'hello' } })
 
@@ -32,6 +33,47 @@ describe('account-bound file lifecycle', () => {
     expect((await f.owner.readLocal(file.fileRef)).file.size).toBe(10)
     f.setUser(43)
     await expect(f.owner.readLocal(file.fileRef)).rejects.toMatchObject({ code: 'file-ref-invalid' })
+  })
+  it('normalizes a browser file with missing MIME before classification and policy checks', async () => {
+    const f = await fixture()
+    const path = join(f.directory, 'photo.jpg')
+    await writeFile(path, 'image-data')
+    const image = await f.owner.stage(path, { fileName: 'photo.jpg', mimeType: 'application/octet-stream', size: 10 })
+
+    expect(image).toMatchObject({ fileName: 'photo.jpg', mimeType: 'image/jpeg', fileKind: 1 })
+    expect((await f.owner.readLocal(image.fileRef)).file).toMatchObject({ mimeType: 'image/jpeg', fileKind: 1 })
+  })
+  it('opens only the current account local file through the injected Host opener without exposing its path', async () => {
+    const f = await fixture(); const file = await f.stage('open.pdf')
+    await expect(f.owner.openLocal(file.fileRef)).resolves.toEqual({ opened: true, file })
+    expect(f.openPath).toHaveBeenCalledOnce()
+    expect(basename(f.openPath.mock.calls[0]![0])).toBe('open.pdf')
+    expect(f.openPath.mock.calls[0]![0]).not.toBe((await f.owner.readLocal(file.fileRef)).path)
+    expect(JSON.stringify(await f.owner.openLocal(file.fileRef))).not.toContain(f.directory)
+    f.setUser(43)
+    await expect(f.owner.openLocal(file.fileRef)).rejects.toMatchObject({ code: 'file-ref-invalid' })
+  })
+  it('preserves the original extension for native ZIP opening and sanitizes unsafe path characters', async () => {
+    const f = await fixture()
+    const source = join(f.directory, 'archive-source'); await writeFile(source, '0123456789')
+    const file = await f.owner.stage(source, { fileName: '../MBTI:assets?.zip', mimeType: 'application/zip', size: 10 })
+
+    await f.owner.openLocal(file.fileRef)
+
+    expect(basename(f.openPath.mock.calls[0]![0])).toBe('_MBTI_assets_.zip')
+    expect(f.openPath.mock.calls[0]![0]).toContain(join('42', '.open', file.fileRef))
+  })
+  it('keeps media presentation separate from browser inline-preview support', () => {
+    expect(arkmePickedFileKind('image/svg+xml', 'diagram.svg')).toBe(1)
+    expect(arkmePickedFileKind('image/heic', 'camera.heic')).toBe(1)
+    expect(arkmePickedFileKind('video/x-matroska', 'movie.mkv')).toBe(3)
+    expect(arkmePickedFileKind('image/png', 'renamed.dmg')).toBe(4)
+    expect(arkmePickedFileKind('image/jpeg', 'photo.jpg')).toBe(1)
+    expect(arkmePickedFileKind('video/mp4', 'movie.mp4')).toBe(3)
+    expect(arkmeCanInlineLocalFile('image/heic', 'camera.heic')).toBe(false)
+    expect(arkmeCanInlineLocalFile('image/svg+xml', 'diagram.svg')).toBe(false)
+    expect(arkmeCanInlineLocalFile('video/x-matroska', 'movie.mkv')).toBe(false)
+    expect(arkmeCanInlineLocalFile('application/pdf', 'report.pdf')).toBe(false)
   })
   it('retains a successful sibling when another upload fails and retries with the same IDs', async () => {
     const f = await fixture(); const a = await f.stage('a.pdf'); const b = await f.stage('b.pdf')

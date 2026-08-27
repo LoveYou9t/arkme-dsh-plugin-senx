@@ -113,7 +113,7 @@ import type {
 import type { ArkmeMyExtensionPage, ArkmeMyExtensionPublishInput } from '../extensions/owned-types.js'
 import { normalizeGitHubRepositoryURL } from '../extensions/source.js'
 import type { ArkmeFilePolicy, ArkmeLocalFile, ArkmeFileSendInput, ArkmeFileSendTask, ArkmeFileReception } from '../file-transfer-contract.js'
-export type { ArkmeFilePolicy, ArkmeLocalFile, ArkmeFileProgress, ArkmeFileSendInput, ArkmeFileSendTask, ArkmeFileReception } from '../file-transfer-contract.js'
+export type { ArkmeFileOpenResult, ArkmeFilePolicy, ArkmeLocalFile, ArkmeFileProgress, ArkmeFileSendInput, ArkmeFileSendTask, ArkmeFileReception } from '../file-transfer-contract.js'
 
 export type {
   ArkmeArrangementDetail,
@@ -1528,6 +1528,7 @@ export class ArkmeSdk {
     return this.call('files.search', params, signal)
   }
   async localFiles(signal?: AbortSignal): Promise<ArkmeLocalFile[]> { return this.call('files.local.list', undefined, signal) }
+  async openLocalFile(fileRef: string, signal?: AbortSignal): Promise<import('../file-transfer-contract.js').ArkmeFileOpenResult> { return this.call('files.local.open', { fileRef }, signal) }
   async removeLocalFile(fileRef: string): Promise<void> { return this.call('files.local.remove', { fileRef }) }
   async sendFiles(input: ArkmeFileSendInput): Promise<ArkmeFileSendTask> { return this.call('files.send', { ...input.content, ...input }) }
   async fileSendTasks(sourceRef?: string, signal?: AbortSignal): Promise<ArkmeFileSendTask[]> { return this.call('files.send.tasks', sourceRef === undefined ? {} : { sourceRef }, signal) }

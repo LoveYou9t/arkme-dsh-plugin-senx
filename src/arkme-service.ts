@@ -63,8 +63,7 @@ import {
   RelatedRecordingService,
 } from './services/related-recording-service.js'
 import { SearchService } from './services/search-service.js'
-import { FileTransfers } from './services/file-transfers.js'
-import type { ArkmeFileSendInput, ArkmeLocalFile } from './file-transfer-contract.js'
+import { createArkmeFileTransfers, type ArkmeFileSendInput, type ArkmeLocalFile, type FileTransfers } from './file-transfer-owner.js'
 import {
   ArkmePluginError,
   ServiceRuntime,
@@ -287,6 +286,7 @@ export class ArkmeService {
   private readonly unmarkedSpeaker: UnmarkedSpeakerService
   private readonly voiceprint: VoiceprintService
   private readonly fileTransfers: FileTransfers | undefined
+  private localFileOpener?: (path: string, signal: AbortSignal) => Promise<void>
   private worldVoiceprintInviteVariantIndex = 0
 
   constructor(
@@ -379,20 +379,18 @@ export class ArkmeService {
       reconnectChatRealtime: () => { this.realtime.reconnect() },
       clearAccountState: userIds => { this.clearAccountState(userIds) },
     })
-    this.fileTransfers = config.fileStateDirectory === undefined ? undefined : new FileTransfers(config.fileStateDirectory, {
-      currentUser: async () => (await this.runtime.requireSession()).userId,
-      validateSource: async sourceRef => { await this.source.openSourceRef(sourceRef, (await this.runtime.requireSession()).userId) },
-      upload: async (path, metadata, onProgress, expectedUserId, signal) => await this.media.uploadLocalFile(path, metadata, { onProgress, expectedUserId, signal }),
-      send: async (input, assets, expectedUserId, signal) => await this.chat.sendSourceRich(input.sourceRef, { ...input.content, assets }, {
-        recordUid: input.recordUid, relationUid: input.relationUid, expectedUserId, signal,
-      }),
-      fetchMedia: async (ref, signal) => await this.media.fetchMedia(ref, undefined, signal, true),
-      reconcile: async (input, signal) => {
-        const page = await this.chat.readSource(input.sourceRef, { limit: 100, signal })
-        const item = page.items.find(value => value.itemUid === input.recordUid && value.isMe)
-        return item === undefined ? undefined : { sourceRef: input.sourceRef, itemUid: item.itemUid, status: item.status, ...(item.sequence === undefined ? {} : { sequence: item.sequence }), localState: 'synced' as const }
+    this.fileTransfers = createArkmeFileTransfers({
+      directory: config.fileStateDirectory,
+      maxUploadBytes: config.maxUploadBytes,
+      runtime: this.runtime,
+      source: this.source,
+      media: this.media,
+      chat: this.chat,
+      openPath: async (path, signal) => {
+        if (this.localFileOpener === undefined) throw new Error('当前 DSH 宿主未提供本机文件打开能力')
+        await this.localFileOpener(path, signal)
       },
-    }, config.maxUploadBytes ?? 100 * 1024 * 1024)
+    })
   }
 
   private filesOwner(): FileTransfers {
@@ -405,6 +403,8 @@ export class ArkmeService {
   async fileStage(path: string, metadata: Pick<ArkmeLocalFile, 'fileName' | 'mimeType' | 'size'>, expectedUserId?: number) { return await this.filesOwner().stage(path, metadata, expectedUserId) }
   async fileList() { return await this.filesOwner().files() }
   async fileReadLocal(ref: string) { return await this.filesOwner().readLocal(ref) }
+  attachLocalFileOpener(openPath: (path: string, signal: AbortSignal) => Promise<void>) { this.localFileOpener = openPath }
+  async fileOpenLocal(ref: string) { return await this.filesOwner().openLocal(ref) }
   async fileRemove(ref: string) { await this.filesOwner().remove(ref) }
   async fileSend(input: ArkmeFileSendInput) { return await this.filesOwner().enqueue(input) }
   async fileSendTasks(sourceRef?: string) { return await this.filesOwner().tasks(sourceRef) }

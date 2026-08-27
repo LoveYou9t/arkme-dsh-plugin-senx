@@ -5,6 +5,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import { join } from 'node:path'
 import { Readable } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
+import { arkmeCanInlineLocalFile, arkmeNormalizedFileMimeType, arkmePickedFileKind } from './file-transfer-contract.js'
 import { ArkmePluginError, ArkmeService } from './arkme-service.js'
 import type { ArkmePluginResponse, ArkmeUploadedAsset } from './types.js'
 
@@ -45,13 +46,6 @@ function headerText(req: IncomingMessage, name: string): string {
   return Array.isArray(value) ? value[0] ?? '' : value ?? ''
 }
 
-function fileKindFor(mimeType: string): 1 | 2 | 3 | 4 {
-  if (mimeType.startsWith('image/')) return 1
-  if (mimeType.startsWith('audio/')) return 2
-  if (mimeType.startsWith('video/')) return 3
-  return 4
-}
-
 export function createArkmeUploadHandler(service: ArkmeService, options: ArkmeRichMediaRouteOptions, mode: 'upload' | 'stage' = 'upload') {
   return async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
     let temporaryPath = ''
@@ -67,6 +61,7 @@ export function createArkmeUploadHandler(service: ArkmeService, options: ArkmeRi
       if (!Number.isSafeInteger(plannedSize) || plannedSize <= 0 || plannedSize > options.maxUploadBytes || fileName === '' || fileName.length > 255) {
         throw new ArkmePluginError('upload-metadata-invalid', '文件为空、过大或文件名无效', false, 400)
       }
+      const normalizedMimeType = arkmeNormalizedFileMimeType(mimeType, fileName)
       await mkdir(options.temporaryDirectory, { recursive: true, mode: 0o700 })
       temporaryPath = join(options.temporaryDirectory, `${randomUUID()}.upload`)
       const handle = await open(temporaryPath, 'wx', 0o600)
@@ -82,9 +77,10 @@ export function createArkmeUploadHandler(service: ArkmeService, options: ArkmeRi
         }
       } finally { await handle.close() }
       if (received !== plannedSize) throw new ArkmePluginError('upload-size-mismatch', '上传文件不完整', false, 400)
+      const uploadedFileKind = normalizedMimeType.startsWith('audio/') ? 2 : arkmePickedFileKind(normalizedMimeType, fileName)
       const value = mode === 'stage'
-        ? await service.fileStage(temporaryPath, { size: received, mimeType, fileName }, expectedUserId)
-        : await service.uploadLocalFile(temporaryPath, { size: received, sha256: hash.digest('hex'), mimeType, fileName, fileKind: fileKindFor(mimeType) })
+        ? await service.fileStage(temporaryPath, { size: received, mimeType: normalizedMimeType, fileName }, expectedUserId)
+        : await service.uploadLocalFile(temporaryPath, { size: received, sha256: hash.digest('hex'), mimeType: normalizedMimeType, fileName, fileKind: uploadedFileKind })
       writeJson(res, 200, { ok: true, value })
     } catch (error) {
       const known = error instanceof ArkmePluginError ? error : new ArkmePluginError('upload-internal-error', '文件上传失败', true, 500, { cause: error })
@@ -102,7 +98,7 @@ export function createArkmeLocalFileHandler(service: ArkmeService, options: Arkm
       assertLocalRequest(req, options)
       const url = new URL(req.url ?? '/', `http://localhost:${options.expectedPort}`)
       const { path, file } = await service.fileReadLocal(url.searchParams.get('ref') ?? '')
-      const safeInline = /^(image\/(png|jpeg|gif|webp)|video\/(mp4|webm)|audio\/(mpeg|mp4|wav)|application\/pdf)$/.test(file.mimeType)
+      const safeInline = arkmeCanInlineLocalFile(file.mimeType, file.fileName)
       const attachment = url.searchParams.get('download') === '1' || !safeInline
       let start = 0; let end = file.size - 1
       const range = headerText(req, 'range')

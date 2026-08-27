@@ -2640,6 +2640,7 @@ export type ArkmePluginOperation =
   | 'files.send.discard'
   | 'files.send.reconcile'
   | 'files.local.list'
+  | 'files.local.open'
   | 'files.local.remove'
   | 'files.send'
   | 'files.send.tasks'

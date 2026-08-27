@@ -5045,7 +5045,10 @@ describe('ArkmeService', () => {
     }, { recordUid: 'record-rich', relationUid: 'relation-rich' })).resolves.toMatchObject({ itemUid: 'record-rich', sequence: 4 })
     expect(sentBodies[0]).toMatchObject({
       chat_session_uid: 'chat-media', record_uid: 'record-rich', rel_uid: 'relation-rich', template_kind: 2,
-      content_payload: { media_refs: [{ file_asset_uid: 'asset-12345678', render_role: 1 }] },
+      content_payload: { media_refs: [{
+        file_asset_uid: 'asset-12345678', render_role: 1, file_name: '示例.png', file_kind: 1,
+        mime_type: 'image/png', size: 3,
+      }] },
     })
     await expect(service.sendSourceRich(sourceRef, {
       title: '长文标题', textContent: '长文正文', displayKind: 1, thinkingDurationMillis: 4200,

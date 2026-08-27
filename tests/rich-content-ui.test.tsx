@@ -342,6 +342,16 @@ describe('Arkme rich content presentation', () => {
     />)
     expect(imageHtml).toContain('data-arkme-attachment-tile="image-preview"')
     expect(imageHtml).toContain('src="blob:clipboard-preview"')
+
+    const videoHtml = renderToStaticMarkup(<ArkmeAttachmentDraftTile
+      asset={{ fileAssetUid: 'video-asset', fileName: 'clip.mp4', mimeType: 'video/mp4', size: 8, fileKind: 3 }}
+      previewUrl="blob:video-preview"
+      onRemove={() => undefined}
+    />)
+    expect(videoHtml).toContain('data-arkme-attachment-tile="video-preview"')
+    expect(videoHtml).toContain('<video')
+    expect(videoHtml).toContain('src="blob:video-preview"')
+    expect(videoHtml).toContain('▶')
   })
 
   it('extracts clipboard images without consuming text-only clipboard content', () => {

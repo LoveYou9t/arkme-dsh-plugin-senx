@@ -2224,6 +2224,9 @@ export class ChatService {
           render_role: 1,
           sort_order: index,
           file_name: asset.fileName,
+          file_kind: asset.fileKind,
+          mime_type: asset.mimeType,
+          size: asset.size,
         })),
       }
       let contentPayload: Record<string, unknown> | undefined = mediaContentPayload

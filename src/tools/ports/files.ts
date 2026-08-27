@@ -3,6 +3,7 @@ import type { ArkmeRecordSearchResult } from '../../types.js'
 export interface ArkmeFileToolPort {
   fileCapabilities(): ArkmeFilePolicy
   fileList(): Promise<ArkmeLocalFile[]>
+  fileOpenLocal(fileRef: string): Promise<import('../../file-transfer-contract.js').ArkmeFileOpenResult>
   fileSearch(options: { query?: string; limit: number; cursor?: string; signal?: AbortSignal }): Promise<ArkmeRecordSearchResult>
   fileStageBytes(contentBase64: string, metadata: Pick<ArkmeLocalFile, 'fileName' | 'mimeType'>): Promise<ArkmeLocalFile>
   fileRemove(fileRef: string): Promise<void>

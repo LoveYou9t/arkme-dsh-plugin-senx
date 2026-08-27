@@ -40,10 +40,11 @@ export const fileToolModules = [
   defineArkmeCoreToolModule({
     meta: { id: 'business.media.file-task.v1', toolName: 'arkme_file_task', kind: 'business', phase: 'core', effect: 'write', grant: 'explicit-user-write', profiles: ['business', 'hybrid'] },
     create: ports => defineTool({
-      name: 'arkme_file_task', description: 'Only on explicit human request: retry a failed task with the same record IDs, reconcile an uncertain acknowledgement, remove a finished/failed local task, or remove an unused local file. Discard does not retract a remote message. References must come from arkme_files_list. Uncertain tasks cannot be retried blindly.',
-      parameters: { action: { type: 'string', enum: ['retry', 'reconcile', 'discard', 'remove-local'], required: true }, reference: { type: 'string', required: true } }, output: TEXT_OUTPUT,
+      name: 'arkme_file_task', description: 'Only on explicit human request: open an account-local file with the operating system default application, retry a failed task with the same record IDs, reconcile an uncertain acknowledgement, remove a finished/failed local task, or remove an unused local file. Opening never reveals a host path. Discard does not retract a remote message. References must come from arkme_files_list. Uncertain tasks cannot be retried blindly.',
+      parameters: { action: { type: 'string', enum: ['open-local', 'retry', 'reconcile', 'discard', 'remove-local'], required: true }, reference: { type: 'string', required: true } }, output: TEXT_OUTPUT,
       execute: async args => {
-        const result = args.action === 'retry' ? await ports.fileSendRetry(args.reference)
+        const result = args.action === 'open-local' ? await ports.fileOpenLocal(args.reference)
+          : args.action === 'retry' ? await ports.fileSendRetry(args.reference)
           : args.action === 'reconcile' ? await ports.fileSendReconcile(args.reference)
             : args.action === 'discard' ? await ports.fileSendDiscard(args.reference) : await ports.fileRemove(args.reference)
         return taggedJSON('Arkme 文件任务操作', { action: args.action, result: result ?? null })

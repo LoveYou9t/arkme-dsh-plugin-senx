@@ -22,7 +22,7 @@ import { callArkme, ArkmeClientError } from './api.js'
 import { createArkmeSdk } from '../sdk/index.js'
 import type { ArkmeContentBlock } from '../types.js'
 import type { ArkmeFileSendTask } from '../file-transfer-contract.js'
-import { fileTaskTimelineItem, localFileBlock, useArkmeFileSendTasks } from './file-send-tasks.js'
+import { bindSentFileTaskLocals, fileTaskConversationPreview, fileTaskTimelineItem, localFileBlock, useArkmeFileSendTasks } from './file-send-tasks.js'
 import { isArkmeRequestAbort, retryArkmeRead } from './read-retry.js'
 import { verifyPhoneCaptcha } from './geetest.js'
 import { ArkmeSourceAvatar, ArkmeUserAvatar } from './ArkmeAvatar.js'
@@ -2319,7 +2319,7 @@ export function ArkmeSurface({
       if (task.state !== 'sent' || notifiedFileTasks.current.has(task.taskRef)) continue
       notifiedFileTasks.current.add(task.taskRef); changed = true
       if (isArkmeChatDirectorySource(source) && task.result?.sequence !== undefined) {
-        arkmeChatDirectory.recordSent(source, { latestPreview: task.content.textContent || '文件', activeAtMillis: task.createdAtMillis, latestSequence: task.result.sequence })
+        arkmeChatDirectory.recordSent(source, { latestPreview: fileTaskConversationPreview(task), activeAtMillis: task.createdAtMillis, latestSequence: task.result.sequence })
       }
     }
     if (changed) { arkmeUi.chatChanged(); void loadTimeline().catch(caught => setError(errorMessage(caught))) }
@@ -3178,7 +3178,8 @@ export function ArkmeSurface({
 
   const displayItems = useMemo(() => {
     const remoteIds = new Set(items.map(item => item.itemUid))
-    return [...items, ...fileTasks.tasks.filter(task => !remoteIds.has(task.result?.itemUid ?? task.recordUid)).map(fileTaskTimelineItem)]
+    const remoteItems = items.map(item => bindSentFileTaskLocals(item, fileTasks.tasks))
+    return [...remoteItems, ...fileTasks.tasks.filter(task => !remoteIds.has(task.result?.itemUid ?? task.recordUid)).map(fileTaskTimelineItem)]
       .sort((a, b) => a.sendAtMillis - b.sendAtMillis)
   }, [items, fileTasks.tasks])
   const visibleConversationJoinEvents = useMemo(
