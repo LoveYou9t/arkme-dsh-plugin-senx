@@ -92,8 +92,16 @@ export function arkmeTimelineDetailSenderText(item: ArkmeTimelineItem): string {
   return item.agentSource === undefined ? item.senderName : `${item.senderName} · ${item.agentSource.label}`
 }
 
-export function ArkmeTimelineDetailDrawer({ item, sourceRef, showOriginal, onClose, onToggleOriginal }: {
-  item: ArkmeTimelineItem; sourceRef?: string | undefined; showOriginal: boolean; onClose: () => void; onToggleOriginal: () => void
+export function ArkmeTimelineDetailDrawer({
+  item, sourceRef, showOriginal, onClose, onToggleOriginal, shareWebsite, onMessageCopyLinkOpen,
+}: {
+  item: ArkmeTimelineItem
+  sourceRef?: string | undefined
+  showOriginal: boolean
+  onClose: () => void
+  onToggleOriginal: () => void
+  shareWebsite?: string
+  onMessageCopyLinkOpen?: (sid: string) => void
 }) {
   const textContent = showOriginal && item.aiPolish?.originalText !== undefined ? item.aiPolish.originalText
     : item.aiPolish?.state === 'polished' && item.aiPolish.polishedText !== undefined ? item.aiPolish.polishedText : item.textContent
@@ -107,7 +115,13 @@ export function ArkmeTimelineDetailDrawer({ item, sourceRef, showOriginal, onClo
     </div>
     {canToggle && <button type="button" style={styles.toggle} onClick={onToggleOriginal}>{showOriginal ? '显示润色' : '显示原文'}</button>}
     <div data-arkme-timeline-detail-rich-content>
-      <ArkmeMessageContent presentation="detail" item={{ ...item, textContent }} {...(sourceRef === undefined ? {} : { sourceRef })} />
+      <ArkmeMessageContent
+        presentation="detail"
+        item={{ ...item, textContent }}
+        {...(sourceRef === undefined ? {} : { sourceRef })}
+        {...(shareWebsite === undefined ? {} : { shareWebsite })}
+        {...(onMessageCopyLinkOpen === undefined ? {} : { onMessageCopyLinkOpen })}
+      />
     </div>
   </NoteDetailShell>
 }

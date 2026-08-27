@@ -1,10 +1,12 @@
-import { useEffect, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from 'react'
+import { useEffect, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { FileTextIcon as FileText } from '@phosphor-icons/react/dist/csr/FileText'
 import { FileAudioIcon as FileAudio } from '@phosphor-icons/react/dist/csr/FileAudio'
 import { FileVideoIcon as FileVideo } from '@phosphor-icons/react/dist/csr/FileVideo'
 import { arkmeTheme } from './arkme-theme.js'
-import type { ArkmeContentBlock, ArkmeLongArticleDetail, ArkmeTimelineItem, ArkmeUploadedAsset } from '../types.js'
+import { ARKME_DEFAULT_SHARE_WEBSITE } from '../types.js'
+import type { ArkmeContentBlock, ArkmeLinkMetadata, ArkmeLongArticleDetail, ArkmeTimelineItem, ArkmeUploadedAsset } from '../types.js'
+import { callArkme } from './api.js'
 import { ArkmeLongArticleDialog } from './ArkmeLongArticleDialog.js'
 import { arkmeEmojiTextRuns } from './arkme-emoji.js'
 import { ArkmeVoiceContent, arkmeVoiceMediaUrl } from './ArkmeVoiceContent.js'
@@ -45,6 +47,8 @@ const styles: Record<string, CSSProperties> = {
   forwardTitle: { margin: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 14, lineHeight: '22px', fontWeight: 600 },
   forwardLines: { marginTop: 7, display: 'flex', flexDirection: 'column', gap: 0 },
   forwardLine: { margin: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: arkmeTheme.secondary, fontSize: 13, lineHeight: 1.65 },
+  inlineLink: { display: 'inline-flex', alignItems: 'baseline', gap: 4, maxWidth: '100%', color: 'var(--dsw-alias-state-business-primary, #007aff)', textDecoration: 'none', cursor: 'pointer', verticalAlign: 'baseline' },
+  inlineLinkTitle: { minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
   previewOverlay: { position: 'fixed', inset: 0, zIndex: 1000, display: 'grid', placeItems: 'center', padding: 48, boxSizing: 'border-box', background: 'rgba(0,0,0,.78)' },
   previewBody: { position: 'relative', width: 'min(960px, 90vw)', height: 'min(720px, 82vh)' },
   previewViewport: { width: '100%', height: '100%', overflowX: 'hidden', overscrollBehavior: 'contain', scrollbarGutter: 'stable', touchAction: 'none' },
@@ -55,6 +59,206 @@ const styles: Record<string, CSSProperties> = {
   previewMedia: { display: 'block', width: '100%', height: '100%', objectFit: 'contain', userSelect: 'none' },
   previewClose: { position: 'absolute', top: -36, right: 0, width: 32, height: 32, border: 0, borderRadius: 999, background: 'rgba(255,255,255,.16)', color: '#fff', cursor: 'pointer', fontSize: 20 },
   previewNav: { position: 'absolute', top: '50%', width: 38, height: 48, marginTop: -24, border: 0, borderRadius: 10, background: 'rgba(255,255,255,.16)', color: '#fff', cursor: 'pointer', fontSize: 24 },
+}
+
+export interface ArkmeLinkPreviewProjection {
+  url: string
+  sourceText: string
+  title: string
+  domain: string
+  description?: string
+  isMessageCopyLink: boolean
+  sid?: string
+}
+
+function ensureUrlScheme(value: string): string {
+  return /^https?:\/\//iu.test(value) ? value : `https://${value}`
+}
+
+function trimUrlCandidate(value: string): string {
+  return value.replace(/[),.;:!?，。！？、；：）】》]+$/u, '')
+}
+
+function linkHostCandidates(shareWebsite: string): Set<string> {
+  const shortLinkHost = 'ji' + 'wo.cc'
+  const hosts = new Set([shortLinkHost, `www.${shortLinkHost}`, 'app.arkme.ai'])
+  try {
+    const parsed = new URL(ensureUrlScheme(shareWebsite.trim()))
+    if (parsed.hostname.trim() !== '') hosts.add(parsed.hostname.toLowerCase())
+    if (parsed.host.trim() !== '') hosts.add(parsed.host.toLowerCase())
+  } catch {
+    // Keep the built-in production hosts when the runtime config is unavailable.
+  }
+  return hosts
+}
+
+export function arkmeMessageCopyLinkSidFromUrl(rawUrl: string, shareWebsite = ARKME_DEFAULT_SHARE_WEBSITE): string | undefined {
+  let parsed: URL
+  try {
+    parsed = new URL(ensureUrlScheme(trimUrlCandidate(rawUrl.trim())))
+  } catch {
+    return undefined
+  }
+  if (parsed.protocol !== 'https:' || parsed.search !== '' || parsed.hash !== '' || parsed.username !== '' || parsed.password !== '') return undefined
+  if (!linkHostCandidates(shareWebsite).has(parsed.host.toLowerCase()) && !linkHostCandidates(shareWebsite).has(parsed.hostname.toLowerCase())) return undefined
+  const match = /^\/s\/([0-9A-Za-z]{16})$/u.exec(parsed.pathname)
+  return match?.[1]
+}
+
+export function arkmeExtractLinkPreviews(text: string, shareWebsite = ARKME_DEFAULT_SHARE_WEBSITE): ArkmeLinkPreviewProjection[] {
+  const seen = new Set<string>()
+  const previews: ArkmeLinkPreviewProjection[] = []
+  const pattern = /(?:https?:\/\/|www\.)[^\s<>"'`\\]+/giu
+  for (const match of text.matchAll(pattern)) {
+    const sourceText = trimUrlCandidate(match[0])
+    const candidate = ensureUrlScheme(sourceText)
+    if (seen.has(candidate)) continue
+    seen.add(candidate)
+    let domain = ''
+    try {
+      domain = new URL(candidate).hostname.replace(/^www\./iu, '')
+    } catch {
+      continue
+    }
+    const sid = arkmeMessageCopyLinkSidFromUrl(candidate, shareWebsite)
+    previews.push({
+      url: candidate,
+      sourceText,
+      title: sid === undefined ? '分享链接' : '快记分享链接',
+      domain,
+      isMessageCopyLink: sid !== undefined,
+      ...(sid === undefined ? {} : { sid }),
+    })
+    if (previews.length >= 5) break
+  }
+  return previews
+}
+
+export function arkmeTextWithoutPreviewLinks(text: string, previews: readonly ArkmeLinkPreviewProjection[]): string {
+  let visible = text
+  for (const preview of previews) {
+    visible = visible.replace(preview.sourceText, '').replace(preview.url, '').replace(preview.url.replace(/^https:\/\//iu, 'www.'), '')
+  }
+  return visible.replace(/[ \t]+\n/gu, '\n').replace(/\n{3,}/gu, '\n\n').trim()
+}
+
+function metadataTitleFallback(preview: ArkmeLinkPreviewProjection): string {
+  if (preview.isMessageCopyLink) return '快记分享链接'
+  try {
+    const parsed = new URL(preview.url)
+    const host = parsed.hostname.replace(/^www\./iu, '')
+    const parts = parsed.pathname.split('/').filter(Boolean)
+    if (host === 'github.com' && parts.length >= 4 && parts[2] === 'pull') return `Pull Request #${parts[3]} · ${parts[0]}/${parts[1]}`
+    if ((host === 'codeup.aliyun.com' || host.endsWith('.codeup.aliyun.com')) && parts.includes('change')) {
+      const changeIndex = parts.indexOf('change')
+      const repository = changeIndex >= 2 ? parts[changeIndex - 1] : parts.at(-1)
+      const changeNo = parts[changeIndex + 1]
+      if (repository !== undefined && changeNo !== undefined) return `${repository} · Change #${changeNo}`
+    }
+  } catch {
+    // Keep the generic Flutter fallback below for malformed browser-only candidates.
+  }
+  return preview.title
+}
+
+function ArkmeLinkIcon({ size = 16 }: { size?: number }) {
+  return <svg width={size} height={size} viewBox="0 0 16 16" fill="none" aria-hidden focusable="false">
+    <path d="M6.6 9.4L9.4 6.6" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+    <path d="M6.05 5.1l.8-.8a3 3 0 0 1 4.24 4.24l-.8.8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+    <path d="M9.95 10.9l-.8.8a3 3 0 0 1-4.24-4.24l.8-.8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+  </svg>
+}
+
+function ArkmeInlineLinkPreview({
+  preview,
+  onMessageCopyLinkOpen,
+}: {
+  preview: ArkmeLinkPreviewProjection
+  onMessageCopyLinkOpen?: (sid: string) => void
+}) {
+  const [metadata, setMetadata] = useState<ArkmeLinkMetadata>()
+  useEffect(() => {
+    if (preview.isMessageCopyLink) return
+    const controller = new AbortController()
+    void callArkme<ArkmeLinkMetadata>('source.link-metadata.resolve', { url: preview.url }, controller.signal)
+      .then(value => { setMetadata(value) })
+      .catch(() => { setMetadata({ url: preview.url, title: metadataTitleFallback(preview), siteName: preview.domain }) })
+    return () => { controller.abort() }
+  }, [preview.url, preview.isMessageCopyLink, preview.domain])
+  const title = preview.isMessageCopyLink ? preview.title : (metadata?.title ?? metadataTitleFallback(preview))
+  const open = () => {
+    if (preview.sid !== undefined) {
+      onMessageCopyLinkOpen?.(preview.sid)
+      return
+    }
+    if (typeof window !== 'undefined') window.open(preview.url, '_blank', 'noopener,noreferrer')
+  }
+  return <span
+    role="link"
+    tabIndex={0}
+    style={styles.inlineLink}
+    data-arkme-inline-link={preview.isMessageCopyLink ? 'message-copy-link' : 'web-link'}
+    title={preview.url}
+    onClick={event => {
+      event.stopPropagation()
+      open()
+    }}
+    onKeyDown={event => {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.stopPropagation()
+        event.preventDefault()
+        open()
+      }
+    }}
+  >
+    <ArkmeLinkIcon />
+    <span style={styles.inlineLinkTitle}>{title}</span>
+  </span>
+}
+
+function ArkmeRichTextWithInlineLinks({
+  text,
+  previews,
+  highlightMentions,
+  onMessageCopyLinkOpen,
+}: {
+  text: string
+  previews: ArkmeLinkPreviewProjection[]
+  highlightMentions: boolean
+  onMessageCopyLinkOpen?: (sid: string) => void
+}) {
+  if (previews.length === 0) return <ArkmeRichText text={text} highlightMentions={highlightMentions} />
+  const nodes: ReactNode[] = []
+  const previewByUrl = new Map(previews.map(preview => [preview.url, preview]))
+  const pattern = /(?:https?:\/\/|www\.)[^\s<>"'`\\]+/giu
+  let cursor = 0
+  let index = 0
+  for (const match of text.matchAll(pattern)) {
+    const raw = match[0] ?? ''
+    const sourceText = trimUrlCandidate(raw)
+    const trailingText = raw.slice(sourceText.length)
+    const candidate = ensureUrlScheme(sourceText)
+    const preview = previewByUrl.get(candidate)
+    if (preview === undefined || match.index === undefined) continue
+    if (match.index > cursor) {
+      const before = text.slice(cursor, match.index)
+      nodes.push(<ArkmeRichText key={`text:${String(index)}`} text={before} highlightMentions={highlightMentions} />)
+      index += 1
+    }
+    nodes.push(<ArkmeInlineLinkPreview
+      key={`link:${preview.url}:${String(index)}`}
+      preview={preview}
+      {...(onMessageCopyLinkOpen === undefined ? {} : { onMessageCopyLinkOpen })}
+    />)
+    index += 1
+    if (trailingText !== '') {
+      nodes.push(<ArkmeRichText key={`trail:${String(index)}`} text={trailingText} highlightMentions={highlightMentions} />)
+      index += 1
+    }
+    cursor = match.index + raw.length
+  }
+  if (cursor < text.length) nodes.push(<ArkmeRichText key={`text:${String(index)}`} text={text.slice(cursor)} highlightMentions={highlightMentions} />)
+  return <>{nodes}</>
 }
 
 function mediaUrl(block: ArkmeContentBlock): string {
@@ -126,10 +330,30 @@ export function ArkmeRichText({ text, highlightMentions = false }: { text: strin
     : <span key={`${String(index)}:text`}>{highlightMentions ? <HighlightedText text={run.text} /> : run.text}</span>)}</>
 }
 
-function LongText({ text, highlightMentions = false, collapseText = true, expanded = false }: { text: string; highlightMentions?: boolean; collapseText?: boolean; expanded?: boolean }) {
+function LongText({
+  text,
+  highlightMentions = false,
+  collapseText = true,
+  expanded = false,
+  shareWebsite,
+  onMessageCopyLinkOpen,
+}: {
+  text: string
+  highlightMentions?: boolean
+  collapseText?: boolean
+  expanded?: boolean
+  shareWebsite?: string
+  onMessageCopyLinkOpen?: (sid: string) => void
+}) {
   const collapsible = collapseText && !expanded && shouldCollapseText(text)
   const [collapsed, setCollapsed] = useState(collapsible)
-  const content = <ArkmeRichText text={text} highlightMentions={highlightMentions} />
+  const previews = arkmeExtractLinkPreviews(text, shareWebsite)
+  const content = <ArkmeRichTextWithInlineLinks
+    text={text}
+    previews={previews}
+    highlightMentions={highlightMentions}
+    {...(onMessageCopyLinkOpen === undefined ? {} : { onMessageCopyLinkOpen })}
+  />
   if (!collapsible) return <p style={{ ...styles.text, ...(expanded ? { width: '100%', lineHeight: 1.7 } : {}) }}>{content}</p>
   return <div style={styles.textFrame} data-arkme-text-collapsible="true">
     <p style={{ ...styles.text, ...(collapsed ? styles.collapsedText : {}) }}>{content}</p>
@@ -423,13 +647,15 @@ function splitVisualRuns(blocks: ArkmeContentBlock[]): Array<ArkmeContentBlock |
   return rows
 }
 
-export function ArkmeMessageContent({ item, sourceRef, onLongArticleUpdated, highlightMentions = false, collapseText = true, presentation = 'bubble' }: {
+export function ArkmeMessageContent({ item, sourceRef, onLongArticleUpdated, highlightMentions = false, collapseText = true, presentation = 'bubble', shareWebsite, onMessageCopyLinkOpen }: {
   item: ArkmeTimelineItem
   presentation?: 'bubble' | 'detail'
   sourceRef?: string
   onLongArticleUpdated?: (detail: ArkmeLongArticleDetail) => void
   highlightMentions?: boolean
   collapseText?: boolean
+  shareWebsite?: string
+  onMessageCopyLinkOpen?: (sid: string) => void
 }) {
   const blocks = [...(item.contentBlocks ?? [])].sort((left, right) => left.sortOrder - right.sortOrder)
   const visualBlocks = blocks.filter(block => block.kind === 'image' || block.kind === 'video')
@@ -501,7 +727,14 @@ export function ArkmeMessageContent({ item, sourceRef, onLongArticleUpdated, hig
       {inlineVoice !== undefined ? renderVoice(inlineVoice, true) : <>
         {isArticle && presentation === 'bubble' ? <ArticleCard title={item.title} text={item.textContent} onOpen={() => { setArticleOpen(true) }} /> : <>
           {isArticle && item.title && <h3 style={{ margin: 0, fontSize: 14, lineHeight: 1.7 }}>{item.title}</h3>}
-          {text !== '' && <LongText text={text} highlightMentions={highlightMentions} collapseText={collapseText} expanded={presentation === 'detail'} />}
+          {text !== '' && <LongText
+            text={text}
+            highlightMentions={highlightMentions}
+            collapseText={collapseText}
+            expanded={presentation === 'detail'}
+            {...(shareWebsite === undefined ? {} : { shareWebsite })}
+            {...(onMessageCopyLinkOpen === undefined ? {} : { onMessageCopyLinkOpen })}
+          />}
         </>}
         {renderRows}
       </>}

@@ -85,6 +85,68 @@ describe('Arkme SDK', () => {
     expect(calls).toEqual([{ operation: 'images.list', params: { limit: 24, cursor: 'next-images' } }])
   })
 
+  it('copies and resolves links, then forwards messages through bounded opaque action references', async () => {
+    const calls: Array<{ operation: string; params?: Record<string, unknown> }> = []
+    const sdk = createArkmeSdk({
+      fetchImpl: async (_input, init) => {
+        const request = JSON.parse(String(init?.body)) as { operation: string; params?: Record<string, unknown> }
+        calls.push(request)
+        if (request.operation === 'source.message-copy-link') return success({ sid: 'sid-1', url: 'https://app.arkme.ai/share/sid-1' })
+        if (request.operation === 'source.message-copy-link.resolve') return success({
+          sid: 'U2HQgn1RhPJZaFmx',
+          displayTitle: '实习性的快记',
+          generatedAtMillis: 1,
+          accessMode: 'link_read_only',
+          items: [],
+          presentation: [],
+        })
+        if (request.operation === 'source.message-copy-link.extend') return success({
+          sid: 'U2HQgn1RhPJZaFmx',
+          recordUid: request.params?.recordUid,
+          parentRecordUid: 'parent-record-1',
+          status: 1,
+          localState: 'synced',
+        })
+        if (request.operation === 'source.link-metadata.resolve') return success({
+          url: 'https://github.com/arkme-senx/arkme-dsh-plugin/pull/145',
+          title: 'fix(ui): 补齐快记详情图片展示 by htao-123 · Pull Request #145 · arkme-senx/arkme-dsh-plugin',
+          siteName: 'GitHub',
+        })
+        if (request.operation === 'source.forward-messages') return success({ sourceRef: 'source-ref', itemUid: 'forward-record', status: 1 })
+        throw new Error(`unexpected ${request.operation}`)
+      },
+    })
+
+    await expect(sdk.copyMessageLink('source-ref', [' action-1 ', '', 'action-2']))
+      .resolves.toEqual({ sid: 'sid-1', url: 'https://app.arkme.ai/share/sid-1' })
+    await expect(sdk.resolveMessageCopyLink(' U2HQgn1RhPJZaFmx '))
+      .resolves.toMatchObject({ sid: 'U2HQgn1RhPJZaFmx', displayTitle: '实习性的快记' })
+    await expect(sdk.extendMessageCopyLink(' U2HQgn1RhPJZaFmx ', ' 延展 ', {
+      itemIndex: 1,
+      recordUid: 'record-extension-1',
+    })).resolves.toMatchObject({ recordUid: 'record-extension-1', parentRecordUid: 'parent-record-1' })
+    await expect(sdk.resolveLinkMetadata(' https://github.com/arkme-senx/arkme-dsh-plugin/pull/145 '))
+      .resolves.toMatchObject({ title: 'fix(ui): 补齐快记详情图片展示 by htao-123 · Pull Request #145 · arkme-senx/arkme-dsh-plugin' })
+    await expect(sdk.forwardMessages('source-ref', ['action-1'], {
+      targetSourceRef: 'target-source-ref',
+      recordUid: 'record-1',
+      relationUid: 'rel-1',
+      commentText: ' 附言 ',
+    })).resolves.toMatchObject({ itemUid: 'forward-record' })
+
+    expect(calls).toEqual([
+      { operation: 'source.message-copy-link', params: { sourceRef: 'source-ref', actionRefs: ['action-1', 'action-2'] } },
+      { operation: 'source.message-copy-link.resolve', params: { sid: 'U2HQgn1RhPJZaFmx' } },
+      { operation: 'source.message-copy-link.extend', params: { sid: 'U2HQgn1RhPJZaFmx', itemIndex: 1, textContent: '延展', recordUid: 'record-extension-1' } },
+      { operation: 'source.link-metadata.resolve', params: { url: 'https://github.com/arkme-senx/arkme-dsh-plugin/pull/145' } },
+      { operation: 'source.forward-messages', params: { sourceRef: 'source-ref', targetSourceRef: 'target-source-ref', actionRefs: ['action-1'], recordUid: 'record-1', relationUid: 'rel-1', commentText: '附言' } },
+    ])
+    await expect(sdk.copyMessageLink('source-ref', ['action-1', 'action-1'])).rejects.toThrow('unique')
+    await expect(sdk.resolveMessageCopyLink('bad')).rejects.toThrow('16 alphanumeric')
+    await expect(sdk.extendMessageCopyLink('bad', '延展')).rejects.toThrow('16 alphanumeric')
+    await expect(sdk.resolveLinkMetadata('')).rejects.toThrow('must not be empty')
+  })
+
   it('searches and adds contacts through opaque same-origin contracts', async () => {
     const calls: Array<{ operation: string; params?: Record<string, unknown> }> = []
     const sdk = createArkmeSdk({

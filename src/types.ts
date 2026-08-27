@@ -1259,6 +1259,8 @@ export interface ArkmeTimelineItem {
   itemUid: string
   /** Account-bound opaque reference for reporting this concrete group-chat message. */
   messageRef?: string
+  /** Account- and conversation-bound opaque reference for copy-link and forward actions. */
+  messageActionRef?: string
   /** Account- and conversation-bound opaque reference for actions on the sender. */
   memberRef?: string
   senderName: string
@@ -1529,6 +1531,95 @@ export interface ArkmeMessageReportResult {
   status: number
 }
 
+export interface ArkmeMessageCopyLinkResult {
+  sid: string
+  url: string
+}
+
+export interface ArkmeMessageCopyLinkExtendResult {
+  sid: string
+  recordUid: string
+  parentRecordUid: string
+  status: number
+  localState: 'synced'
+  extension?: ArkmeMessageCopyLinkExtensionItem
+}
+
+export type ArkmeMessageCopyLinkAccessMode = 'normal' | 'link_read_only'
+
+export interface ArkmeMessageCopyLinkMediaItem {
+  fileKind: number
+  fileName: string
+  size: number
+}
+
+export interface ArkmeMessageCopyLinkStructuredContent {
+  structuredKind: number
+  durationMillis: number
+}
+
+export interface ArkmeMessageCopyLinkSnapshotItem {
+  recordUid?: string
+  sourceKind?: string
+  senderDisplayName: string
+  senderAvatarUrl?: string
+  title: string
+  textContent: string
+  sendAtMillis: number
+  templateKind: number
+  displayKind: number
+  officialMark: number
+  mediaItems: ArkmeMessageCopyLinkMediaItem[]
+  structuredContent?: ArkmeMessageCopyLinkStructuredContent
+}
+
+export type ArkmeMessageCopyLinkPresentationNode =
+  | { kind: 'item'; itemIndex: number }
+  | {
+    kind: 'forward_bundle'
+    title: string
+    commentText: string
+    createdAtMillis: number
+    senderDisplayName: string
+    children: ArkmeMessageCopyLinkPresentationNode[]
+  }
+
+export interface ArkmeMessageCopyLinkSourceAnchor {
+  relationUid: string
+  recordUid: string
+  recordOwnerUserId: number
+  sequence: number
+}
+
+export interface ArkmeMessageCopyLinkExtensionItem extends ArkmeMessageCopyLinkSnapshotItem {
+  recordUid: string
+  level: number
+}
+
+export interface ArkmeMessageCopyLinkRecordContext {
+  extensionCount: number
+  extensions: ArkmeMessageCopyLinkExtensionItem[]
+}
+
+export interface ArkmeMessageCopyLinkResolveResult {
+  sid: string
+  displayTitle: string
+  generatedAtMillis: number
+  accessMode: ArkmeMessageCopyLinkAccessMode
+  items: ArkmeMessageCopyLinkSnapshotItem[]
+  presentation: ArkmeMessageCopyLinkPresentationNode[]
+  sourceSessionUid?: string
+  sourceAnchors?: ArkmeMessageCopyLinkSourceAnchor[]
+  recordContext?: ArkmeMessageCopyLinkRecordContext
+}
+
+export interface ArkmeLinkMetadata {
+  url: string
+  title: string
+  description?: string
+  siteName?: string
+}
+
 export interface ArkmeTimelinePage {
   source: ArkmeSourceItem
   items: ArkmeTimelineItem[]
@@ -1580,6 +1671,7 @@ export interface ArkmeSourceSendResult {
   sequence?: number
   localState: 'synced' | 'failed'
   error?: string
+  warningText?: string
   aiPolish?: ArkmeTimelineAiPolish
 }
 
@@ -2482,6 +2574,11 @@ export type ArkmePluginOperation =
   | 'source.mark-read'
   | 'source.read-receipts.summary-list'
   | 'source.read-receipts.detail'
+  | 'source.message-copy-link'
+  | 'source.message-copy-link.resolve'
+  | 'source.message-copy-link.extend'
+  | 'source.link-metadata.resolve'
+  | 'source.forward-messages'
   | 'source.send-text'
   | 'related-recordings.eligibility'
   | 'related-recordings.page'

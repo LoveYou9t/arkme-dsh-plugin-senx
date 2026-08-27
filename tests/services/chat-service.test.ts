@@ -23,6 +23,359 @@ const config: ArkmeServiceConfig = {
 }
 
 describe('ChatService', () => {
+  it('resolves normal message copy links using the Flutter source anchor field names', async () => {
+    const runtime = {
+      requireSession: vi.fn(async () => ({ userId: 42, accessToken: 'access', refreshToken: 'refresh' })),
+      authenticatedChatPost: vi.fn(async (path: string, body: Record<string, unknown>) => {
+        expect(path).toBe('/api/v1/chats/messages/copy-link/resolve')
+        expect(body).toEqual({ sid: 'U2HQgn1RhPJZaFmx' })
+        return {
+          sid: 'U2HQgn1RhPJZaFmx',
+          display_title: '实习性的快记',
+          generated_at: 1_787_733_600_000,
+          access_mode: 'normal',
+          source_context: {
+            chat_session_uid: 'chat-session-1',
+            anchors: [{
+              rel_uid: 'rel-1',
+              record_uid: 'record-1',
+              record_owner_user_id: 42,
+              seq: 18,
+            }],
+          },
+          items: [{
+            source_kind: 'record',
+            sender_display_name: '实习性',
+            title: '快记标题',
+            text_content: '快记正文',
+            send_at: 1_787_733_600_000,
+            template_kind: 1,
+            display_kind: 0,
+            official_mark: 0,
+            media_items: [],
+          }],
+          presentation: [{ kind: 'item', item_index: 0 }],
+        }
+      }),
+    }
+    const chat = new ChatService(
+      runtime as never, {} as never, {} as never, {} as never, {} as never,
+      {} as never, {} as never, {} as never, {} as never,
+    )
+
+    await expect(chat.resolveMessageCopyLink(' U2HQgn1RhPJZaFmx ')).resolves.toMatchObject({
+      sid: 'U2HQgn1RhPJZaFmx',
+      displayTitle: '实习性的快记',
+      accessMode: 'normal',
+      sourceSessionUid: 'chat-session-1',
+      sourceAnchors: [{ relationUid: 'rel-1', recordUid: 'record-1', recordOwnerUserId: 42, sequence: 18 }],
+    })
+  })
+
+  it('loads existing quick-note extensions through the Flutter public-record extend-list service contract', async () => {
+    const worldPostBodies: Record<string, unknown>[] = []
+    const runtime = {
+      requireSession: vi.fn(async () => ({ userId: 42, accessToken: 'access', refreshToken: 'refresh' })),
+      authenticatedChatPost: vi.fn(async () => ({
+        sid: 'U2HQgn1RhPJZaFmx',
+        display_title: '1D3E的快记',
+        generated_at: 1_787_733_600_000,
+        access_mode: 'normal',
+        source_context: {
+          chat_session_uid: 'chat-session-1',
+          anchors: [{
+            rel_uid: 'rel-1',
+            record_uid: 'parent-record-1',
+            record_owner_user_id: 42,
+            seq: 18,
+          }],
+        },
+        items: [{
+          record_uid: 'public-parent-record-1',
+          source_kind: 'record',
+          sender_display_name: '1D3E',
+          title: '',
+          text_content: 'OK',
+          send_at: 1_787_733_600,
+          template_kind: 1,
+          display_kind: 0,
+          official_mark: 0,
+          media_items: [],
+        }],
+        presentation: [{ kind: 'item', item_index: 0 }],
+      })),
+      authenticatedWorldPost: vi.fn(async (path: string, body: Record<string, unknown>) => {
+        worldPostBodies.push({ path, body })
+        return {
+          list: [{
+            record_uid: 'extension-record-1',
+            user_id: 42,
+            nick_name: '睡觉',
+            avatar: 'avatar-ref-42',
+            content: '1',
+            parent_record_uid: 'public-parent-record-1',
+            created_at: 1_787_735_200,
+            published_at: 1_787_735_200,
+          }],
+          total: 1,
+          has_more: false,
+        }
+      }),
+    }
+    const chat = new ChatService(
+      runtime as never, {} as never, {} as never, {} as never, {} as never,
+      {} as never, {} as never, {} as never, {} as never,
+    )
+
+    await expect(chat.resolveMessageCopyLink('U2HQgn1RhPJZaFmx')).resolves.toMatchObject({
+      recordContext: {
+        extensionCount: 1,
+        extensions: [{
+          recordUid: 'extension-record-1',
+          senderDisplayName: '睡觉',
+          senderAvatarUrl: 'avatar-ref-42',
+          textContent: '1',
+          sendAtMillis: 1_787_735_200_000,
+        }],
+      },
+    })
+    expect(worldPostBodies).toEqual([{
+      path: '/api/v1/public-record/extend-list',
+      body: { record_uid: 'public-parent-record-1', limit: 50, offset: 0 },
+    }])
+  })
+
+  it('falls back to the copy-link source anchor when the resolve item does not expose a public record uid', async () => {
+    const worldPostBodies: Record<string, unknown>[] = []
+    const runtime = {
+      requireSession: vi.fn(async () => ({ userId: 42, accessToken: 'access', refreshToken: 'refresh' })),
+      authenticatedChatPost: vi.fn(async () => ({
+        sid: 'U2HQgn1RhPJZaFmx',
+        display_title: '1D3E的快记',
+        generated_at: 1_787_733_600_000,
+        access_mode: 'normal',
+        source_context: {
+          chat_session_uid: 'chat-session-1',
+          anchors: [{
+            rel_uid: 'rel-1',
+            record_uid: 'anchor-record-1',
+            record_owner_user_id: 42,
+            seq: 18,
+          }],
+        },
+        items: [{
+          source_kind: 'record',
+          sender_display_name: '1D3E',
+          title: '',
+          text_content: 'OK',
+          send_at: 1_787_733_600_000,
+          template_kind: 1,
+          display_kind: 0,
+          official_mark: 0,
+          media_items: [],
+        }],
+        presentation: [{ kind: 'item', item_index: 0 }],
+      })),
+      authenticatedWorldPost: vi.fn(async (path: string, body: Record<string, unknown>) => {
+        worldPostBodies.push({ path, body })
+        return {
+          list: [{
+            record_uid: 'extension-record-1',
+            nick_name: '睡觉',
+            content: '1',
+            parent_record_uid: 'anchor-record-1',
+            created_at: 1_787_735_200,
+          }],
+          total: 1,
+          has_more: false,
+        }
+      }),
+    }
+    const chat = new ChatService(
+      runtime as never, {} as never, {} as never, {} as never, {} as never,
+      {} as never, {} as never, {} as never, {} as never,
+    )
+
+    await expect(chat.resolveMessageCopyLink('U2HQgn1RhPJZaFmx')).resolves.toMatchObject({
+      recordContext: {
+        extensionCount: 1,
+        extensions: [{ recordUid: 'extension-record-1', textContent: '1' }],
+      },
+    })
+    expect(worldPostBodies).toEqual([{
+      path: '/api/v1/public-record/extend-list',
+      body: { record_uid: 'anchor-record-1', limit: 50, offset: 0 },
+    }])
+  })
+
+  it('keeps the copied quick-note detail usable when the public extension list is unavailable', async () => {
+    const runtime = {
+      requireSession: vi.fn(async () => ({ userId: 42, accessToken: 'access', refreshToken: 'refresh' })),
+      authenticatedChatPost: vi.fn(async () => ({
+        sid: 'U2HQgn1RhPJZaFmx',
+        display_title: '1D3E的快记',
+        generated_at: 1_787_733_600_000,
+        access_mode: 'normal',
+        source_context: {
+          chat_session_uid: 'chat-session-1',
+          anchors: [{
+            rel_uid: 'rel-1',
+            record_uid: 'parent-record-1',
+            record_owner_user_id: 42,
+            seq: 18,
+          }],
+        },
+        items: [{
+          source_kind: 'record',
+          sender_display_name: '1D3E',
+          title: '',
+          text_content: 'OK',
+          send_at: 1_787_733_600_000,
+          template_kind: 1,
+          display_kind: 0,
+          official_mark: 0,
+          media_items: [],
+        }],
+        presentation: [{ kind: 'item', item_index: 0 }],
+      })),
+      authenticatedWorldPost: vi.fn(async () => { throw new Error('world unavailable') }),
+    }
+    const chat = new ChatService(
+      runtime as never, {} as never, {} as never, {} as never, {} as never,
+      {} as never, {} as never, {} as never, {} as never,
+    )
+
+    await expect(chat.resolveMessageCopyLink('U2HQgn1RhPJZaFmx')).resolves.toMatchObject({
+      displayTitle: '1D3E的快记',
+      items: [{ textContent: 'OK' }],
+    })
+  })
+
+  it('extends a normal message copy link through the Flutter public-record publish owner', async () => {
+    const chatPostBodies: Record<string, unknown>[] = []
+    const worldPostBodies: Record<string, unknown>[] = []
+    const runtime = {
+      config,
+      requireSession: vi.fn(async () => ({ userId: 42, accessToken: 'access', refreshToken: 'refresh' })),
+      authenticatedChatPost: vi.fn(async (path: string, body: Record<string, unknown>) => {
+        chatPostBodies.push({ path, body })
+        return {
+          sid: 'U2HQgn1RhPJZaFmx',
+          display_title: '1D3E的快记',
+          generated_at: 1_787_733_600_000,
+          access_mode: 'normal',
+          source_context: {
+            chat_session_uid: 'chat-session-1',
+            anchors: [{
+              rel_uid: 'rel-1',
+              record_uid: 'parent-record-1',
+              record_owner_user_id: 42,
+              seq: 18,
+            }],
+          },
+          items: [{
+            record_uid: 'public-parent-record-1',
+            source_kind: 'record',
+            sender_display_name: '1D3E',
+            title: '',
+            text_content: 'bot相关接口有点问题，会优化下',
+            send_at: 1_787_733_600_000,
+            template_kind: 1,
+            display_kind: 0,
+            official_mark: 0,
+            media_items: [],
+          }],
+          presentation: [{ kind: 'item', item_index: 0 }],
+        }
+      }),
+      authenticatedWorldPost: vi.fn(async (path: string, body: Record<string, unknown>) => {
+        worldPostBodies.push({ path, body })
+        if (path === '/api/v1/public-record/extend-list') return { list: [], total: 0, has_more: false }
+        return { record_uid: body.record_uid, check_status: 1 }
+      }),
+    }
+    const source = { invalidateSourceListCache: vi.fn() }
+    const profile = {
+      refreshProfile: vi.fn(async () => ({
+        profile: {
+          userId: 42,
+          displayName: '狗才',
+          nickname: '狗才',
+          avatarRef: 'profile-avatar-42',
+          arkmeId: 'doge',
+          accountType: 1,
+          createdAt: 1,
+          bindings: { apple: false, wechat: true, google: false },
+          contact: { phoneMasked: '138****0000' },
+        },
+        cachedAtMillis: 1,
+        revision: 1,
+      })),
+    }
+    const record = {
+      createTextForConversation: vi.fn(async (recordUid: string) => ({ recordUid, status: 1, localState: 'synced' })),
+    }
+    const realtime = {
+      nextChatClientRevision: vi.fn(() => 5),
+      emitChatClientEvent: vi.fn(),
+      scheduleChatSessionProjection: vi.fn(),
+    }
+    const chat = new ChatService(
+      runtime as never, source as never, profile as never, {} as never, record as never,
+      {} as never, {} as never, {} as never, realtime as never,
+    )
+
+    await expect(chat.extendMessageCopyLink(
+      ' U2HQgn1RhPJZaFmx ',
+      0,
+      ' 延展内容 ',
+      '11111111-1111-4111-8111-111111111111',
+    )).resolves.toMatchObject({
+      sid: 'U2HQgn1RhPJZaFmx',
+      recordUid: '11111111-1111-4111-8111-111111111111',
+      parentRecordUid: 'public-parent-record-1',
+      status: 1,
+      localState: 'synced',
+      extension: {
+        recordUid: '11111111-1111-4111-8111-111111111111',
+        senderDisplayName: '狗才',
+        senderAvatarUrl: 'profile-avatar-42',
+        textContent: '延展内容',
+        templateKind: 1,
+      },
+    })
+    expect(chatPostBodies).toEqual([{ path: '/api/v1/chats/messages/copy-link/resolve', body: { sid: 'U2HQgn1RhPJZaFmx' } }])
+    expect(record.createTextForConversation).toHaveBeenCalledWith('11111111-1111-4111-8111-111111111111', '延展内容')
+    expect(worldPostBodies).toEqual([
+      {
+        path: '/api/v1/public-record/extend-list',
+        body: { record_uid: 'public-parent-record-1', limit: 50, offset: 0 },
+      },
+      {
+        path: '/api/v1/public-record/extend-list',
+        body: { record_uid: 'parent-record-1', limit: 50, offset: 0 },
+      },
+      {
+        path: '/api/v1/public-record/publish',
+        body: {
+          record_uid: '11111111-1111-4111-8111-111111111111',
+          content: '延展内容',
+          text_content: '延展内容',
+          tags: [],
+          original_topic_id: 0,
+          created_at: expect.any(Number),
+          nick_name: '狗才',
+          avatar: 'profile-avatar-42',
+          template_kind: 1,
+          parent_record_uid: 'public-parent-record-1',
+        },
+      },
+    ])
+    expect(JSON.stringify(worldPostBodies)).not.toContain('parent_extend_record_uid')
+    expect(source.invalidateSourceListCache).toHaveBeenCalledWith(42, 'send_to_self')
+    expect(realtime.emitChatClientEvent).toHaveBeenCalledWith({ type: 'projection-invalidated', revision: 5, projection: 'record' })
+  })
+
   it('moves and deletes favorite stickers while preserving only stable server fields', async () => {
     let items: Record<string, unknown>[] = [
       { file_asset_uid: 'asset-first-1234', file_name: 'first.png', mime_type: 'image/png', file_kind: 1, file_size: 10, signed_url: 'drop-me' },

@@ -1,9 +1,13 @@
 import { renderToStaticMarkup } from 'react-dom/server'
-import { describe, expect, it } from 'vitest'
-import { ArkmeAttachmentDraftTile, ArkmeMediaPreview, ArkmeMessageContent, ArkmeRecordDetailContent, arkmeContainedImageRect, arkmeImagePreviewAnchoredTop, arkmeImagePreviewDragTop, arkmeNextImagePreviewMode } from '../src/client/ArkmeRichContent.js'
+import { describe, expect, it, vi } from 'vitest'
+import {
+  ArkmeAttachmentDraftTile, ArkmeMediaPreview, ArkmeMessageContent, ArkmeRecordDetailContent,
+  arkmeContainedImageRect, arkmeExtractLinkPreviews, arkmeImagePreviewAnchoredTop,
+  arkmeImagePreviewDragTop, arkmeMessageCopyLinkSidFromUrl, arkmeNextImagePreviewMode,
+} from '../src/client/ArkmeRichContent.js'
 import { ArkmeLongArticleDialog } from '../src/client/ArkmeLongArticleDialog.js'
 import { ForwardRecordsDetail } from '../src/client/ArkmeNoteDetails.js'
-import { arkmeClipboardImageFiles, arkmeShouldDismissAnchoredMenu } from '../src/client/ArkmeSidebar.js'
+import { arkmeClipboardImageFiles, arkmeShouldDismissAnchoredMenu, arkmeShouldToggleMessageSelectFromRowClick } from '../src/client/ArkmeSidebar.js'
 
 describe('Arkme rich content presentation', () => {
   it('gives every forwarded transcript segment its own avatar, including consecutive turns by the same speaker', () => {
@@ -53,6 +57,39 @@ describe('Arkme rich content presentation', () => {
     expect(html).toContain('font-size:14px')
     expect(html).not.toContain('border:1px solid')
     expect(html).not.toContain('background:')
+  })
+
+  it('renders copied quick links and normal urls as Flutter-style inline link previews', () => {
+    const sid = 'U2HQgn1RhPJZaFmx'
+    expect(arkmeMessageCopyLinkSidFromUrl(`https://jiwo.cc/s/${sid}`, 'https://jiwo.cc')).toBe(sid)
+    expect(arkmeExtractLinkPreviews(`https://jiwo.cc/s/${sid}`, 'https://jiwo.cc')[0]).toMatchObject({
+      title: '快记分享链接',
+      isMessageCopyLink: true,
+      sid,
+    })
+    const copyLinkHtml = renderToStaticMarkup(<ArkmeMessageContent
+      item={{
+        itemUid: 'link-1', senderName: '我', isMe: true, sendAtMillis: 1, status: 1, title: '',
+        textContent: `https://jiwo.cc/s/${sid}`,
+      }}
+      shareWebsite="https://jiwo.cc"
+      onMessageCopyLinkOpen={() => undefined}
+    />)
+    expect(copyLinkHtml).toContain('data-arkme-inline-link="message-copy-link"')
+    expect(copyLinkHtml).toContain('快记分享链接')
+    expect(copyLinkHtml).not.toContain(`https://jiwo.cc/s/${sid}</p>`)
+
+    const webLinkHtml = renderToStaticMarkup(<ArkmeMessageContent
+      item={{
+        itemUid: 'link-2', senderName: '我', isMe: true, sendAtMillis: 1, status: 1, title: '',
+        textContent: '看看 https://example.com/a\\n@Lucis',
+      }}
+    />)
+    expect(webLinkHtml).toContain('data-arkme-inline-link="web-link"')
+    expect(webLinkHtml).toContain('分享链接')
+    expect(webLinkHtml).toContain('@Lucis')
+    expect(webLinkHtml).toContain('title="https://example.com/a"')
+    expect(webLinkHtml).not.toContain('看看 https://example.com/a')
   })
 
   it('keeps the complete text and article body readable in detail presentation', () => {
@@ -339,6 +376,22 @@ describe('Arkme rich content presentation', () => {
     expect(arkmeShouldDismissAnchoredMenu(insideMenu, menu, null)).toBe(false)
     expect(arkmeShouldDismissAnchoredMenu(outside, menu, null)).toBe(true)
   })
+
+  it('toggles multi-select from the whole message row except the checkbox itself', () => {
+    class RowTarget {
+      constructor(private readonly selectorMatch: string | null) {}
+      closest(selector: string) { return selector === this.selectorMatch ? this : null }
+    }
+    try {
+      vi.stubGlobal('Element', RowTarget)
+      expect(arkmeShouldToggleMessageSelectFromRowClick(new RowTarget(null) as unknown as EventTarget)).toBe(true)
+      expect(arkmeShouldToggleMessageSelectFromRowClick(new RowTarget('[data-arkme-select-check]') as unknown as EventTarget)).toBe(false)
+      expect(arkmeShouldToggleMessageSelectFromRowClick(null)).toBe(true)
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
 
   it('renders a separate long-article composer with title, body, timer, count, and publish action', () => {
     const html = renderToStaticMarkup(<ArkmeLongArticleDialog sourceRef="source-1" onClose={() => undefined} />)
