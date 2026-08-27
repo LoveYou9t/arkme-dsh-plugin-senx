@@ -37,6 +37,11 @@ function fakeService() {
     openOfficialAuthorPrivateChat: vi.fn(async () => ({ source: { sourceRef: 'official-author-source' } })),
     openPrivateChatFromContact: vi.fn(async (contactRef: string) => ({ source: { sourceRef: `source:${contactRef}` } })),
     openPrivateChatFromMember: vi.fn(async (sourceRef: string, memberRef: string) => ({ sourceRef, memberRef })),
+    copySourceMessageLink: vi.fn(async (sourceRef: string, actionRefs: unknown, options: unknown) => ({ sourceRef, actionRefs, options })),
+    resolveMessageCopyLink: vi.fn(async (sid: string, options: unknown) => ({ sid, options })),
+    extendMessageCopyLink: vi.fn(async (sid: string, itemIndex: number, textContent: string, recordUid: string, options: unknown) => ({ sid, itemIndex, textContent, recordUid, options })),
+    resolveLinkMetadata: vi.fn(async (url: string, options: unknown) => ({ url, title: '分享链接', options })),
+    forwardSourceMessages: vi.fn(async (sourceRef: string, actionRefs: unknown, options: unknown) => ({ sourceRef, actionRefs, options })),
     sendSourceText: vi.fn(async (_sourceRef: string, _text: string, options: unknown) => options),
     sendSourceRich: vi.fn(async () => undefined),
     favoriteStickers: vi.fn(async () => ({ items: [], itemCount: 0, updatedAtMillis: 0 })),
@@ -413,6 +418,40 @@ describe('message read receipt Host API dispatch', () => {
       sourceRef: 'source-ref', items: { itemUid: 'record-1', sequence: 8 },
     })).rejects.toMatchObject({ code: 'message-read-receipt-items-invalid' })
     expect(service.messageReadReceiptSummaries).not.toHaveBeenCalled()
+  })
+})
+
+describe('message action Host API dispatch', () => {
+  it('forwards only opaque message action references and bounded send identifiers', async () => {
+    const service = fakeService()
+    await dispatchArkmeHostOperation(service as never, 'source.message-copy-link', {
+      sourceRef: 'source-ref', actionRefs: ['action-1', '', 'action-2'], relationUid: 'must-not-forward',
+    })
+    await dispatchArkmeHostOperation(service as never, 'source.message-copy-link.resolve', {
+      sid: 'U2HQgn1RhPJZaFmx', sourceRef: 'must-not-forward',
+    })
+    await dispatchArkmeHostOperation(service as never, 'source.message-copy-link.extend', {
+      sid: 'U2HQgn1RhPJZaFmx', itemIndex: 1, textContent: ' 延展 ', recordUid: 'record-1', relationUid: 'must-not-forward',
+    })
+    await dispatchArkmeHostOperation(service as never, 'source.link-metadata.resolve', {
+      url: ' https://example.com/a ', cookie: 'must-not-forward',
+    })
+    await dispatchArkmeHostOperation(service as never, 'source.forward-messages', {
+      sourceRef: 'source-ref', actionRefs: ['action-1'], recordUid: 'record-1', relationUid: 'rel-1',
+      targetSourceRef: 'target-source-ref', commentText: ' 附言 ',
+      textContent: 'must-not-forward',
+    })
+
+    expect(service.copySourceMessageLink).toHaveBeenCalledWith('source-ref', ['action-1', 'action-2'], expect.any(Object))
+    expect(service.resolveMessageCopyLink).toHaveBeenCalledWith('U2HQgn1RhPJZaFmx', expect.any(Object))
+    expect(service.extendMessageCopyLink).toHaveBeenCalledWith('U2HQgn1RhPJZaFmx', 1, ' 延展 ', 'record-1', expect.any(Object))
+    expect(service.resolveLinkMetadata).toHaveBeenCalledWith(' https://example.com/a ', expect.any(Object))
+    expect(service.forwardSourceMessages).toHaveBeenCalledWith('source-ref', ['action-1'], {
+      recordUid: 'record-1',
+      relationUid: 'rel-1',
+      targetSourceRef: 'target-source-ref',
+      commentText: ' 附言 ',
+    })
   })
 })
 

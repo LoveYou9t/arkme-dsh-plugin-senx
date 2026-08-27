@@ -1,6 +1,8 @@
 import type { CSSProperties } from 'react'
+import { ARKME_HARNESS_EMBED_PATH } from '../harness-embed-contract.js'
 
 export const DEEPSEEK_HARNESS_EMBED_QUERY = 'arkme-harness-embed'
+export const DEEPSEEK_HARNESS_NATIVE_SETTINGS_QUERY = 'arkme-harness-native-settings'
 
 const styles: Record<string, CSSProperties> = {
   root: {
@@ -17,22 +19,22 @@ export function deepSeekHarnessEmbedRequested(search?: string): boolean {
   return new URLSearchParams(resolvedSearch).get(DEEPSEEK_HARNESS_EMBED_QUERY) === '1'
 }
 
-export function deepSeekHarnessEmbedUrl(): string {
-  if (typeof window === 'undefined' || window.location === undefined) {
-    return `/?${DEEPSEEK_HARNESS_EMBED_QUERY}=1`
-  }
-  const url = new URL(window.location.pathname, window.location.origin)
-  url.searchParams.set(DEEPSEEK_HARNESS_EMBED_QUERY, '1')
-  return `${url.pathname}${url.search}`
+export function deepSeekHarnessNativeSettingsRequested(search?: string): boolean {
+  const resolvedSearch = search ?? (typeof window === 'undefined' ? '' : window.location?.search ?? '')
+  return new URLSearchParams(resolvedSearch).get(DEEPSEEK_HARNESS_NATIVE_SETTINGS_QUERY) === '1'
+}
+
+export function deepSeekHarnessEmbedUrl(nativeSettings = false): string {
+  return `${ARKME_HARNESS_EMBED_PATH}?${DEEPSEEK_HARNESS_EMBED_QUERY}=1${nativeSettings ? `&${DEEPSEEK_HARNESS_NATIVE_SETTINGS_QUERY}=1` : ''}`
 }
 
 /**
- * Same-origin native DSH client embedded inside Arkme's existing conversation region.
+ * Same-origin core-only DSH client embedded inside Arkme's existing conversation region.
  *
  * It stays mounted while another Arkme conversation is visible so the native client can
- * finish its own plugin boot independently of the Arkme directory request lifecycle.
+ * finish its own core boot independently of the Arkme directory request lifecycle.
  */
-export function DeepSeekHarnessSurface({ visible = true }: { visible?: boolean }) {
+export function DeepSeekHarnessSurface({ visible = true, nativeSettings = false }: { visible?: boolean; nativeSettings?: boolean }) {
   return <section
     data-arkme-owned="deepseek-harness-surface"
     data-arkme-preload="true"
@@ -48,7 +50,7 @@ export function DeepSeekHarnessSurface({ visible = true }: { visible?: boolean }
   >
     <iframe
       title="DeepSeek Harness"
-      src={deepSeekHarnessEmbedUrl()}
+      src={deepSeekHarnessEmbedUrl(nativeSettings)}
       style={styles.frame}
       loading="eager"
       allow="clipboard-read; clipboard-write; microphone"

@@ -118,6 +118,17 @@ describe('ArkmeUiController', () => {
     unsubscribe()
   })
 
+  it('opens and closes the Web login dialog without replacing the Harness conversation', () => {
+    const controller = new ArkmeUiController()
+    controller.showHarness()
+
+    controller.openWebLoginDialog()
+    expect(controller.getSnapshot()).toMatchObject({ mode: 'harness', webLoginDialogOpen: true })
+
+    controller.closeWebLoginDialog()
+    expect(controller.getSnapshot()).toEqual({ authRevision: 0, chatRevision: 0, recordRevision: 0, mode: 'harness' })
+  })
+
   it('opens search without retaining a conversation source', () => {
     const controller = new ArkmeUiController()
     controller.selectSource({

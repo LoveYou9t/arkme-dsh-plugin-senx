@@ -4439,6 +4439,10 @@ describe('ArkmeService', () => {
       const url = String(input)
       const body = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>
       requests.push({ url, body })
+      if (url === 'https://chat.test/api/v1/chats/list') {
+        expect(body).toEqual({ limit: 50 })
+        return json({ code: 200, data: { items: [], has_more: false } })
+      }
       if (url === 'https://subject.test/api/v1/private/create-chat-ref-asen') {
         expect(String(body.subject_uid)).toMatch(/^dsh_official_author_[0-9a-f]+$/)
         expect(body).toMatchObject({ network: 'dsh', client_name: 'DSH', locs: [] })
@@ -4480,16 +4484,53 @@ describe('ArkmeService', () => {
       latestSequence: 1,
     })
     expect(requests.map(item => new URL(item.url).pathname)).toEqual([
+      '/api/v1/chats/list',
       '/api/v1/private/create-chat-ref-asen',
       '/api/v1/private/get-partner-info-v2',
       '/api/v1/auth/get-public-users-by-ids',
       '/api/v1/chats/create-private',
     ])
-    expect(requests[3]?.body).toMatchObject({
+    expect(requests[4]?.body).toMatchObject({
       peer_user_id: 11,
       title: '即我作者真名',
       peer_display_name_snapshot: '即我作者真名',
     })
+  })
+
+  it('reuses an existing author private chat instead of creating a second one', async () => {
+    const sessions = new MemorySessionStore()
+    sessions.session = { userId: 10001, accessToken: 'access', refreshToken: 'refresh' }
+    const state = new MemoryStateStore()
+    const requests: Array<{ url: string; body: Record<string, unknown> }> = []
+    const service = new ArkmeService(config, sessions, state, async (input, init) => {
+      const url = String(input)
+      const body = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>
+      requests.push({ url, body })
+      if (url === 'https://chat.test/api/v1/chats/list') {
+        expect(body).toEqual({ limit: 50 })
+        return json({ code: 200, data: {
+          items: [{
+            session: { chat_session_uid: 'author-existing', session_kind: 1, last_active_at: 1700000001000, last_seq: 2 },
+            private_counterpart: { user_id: 11, display_name_snapshot: '即我作者' },
+            private_supplement: {}, latest_preview: {}, unread_snapshot: { unread_count: 0, session_last_seq: 2 }, current_policy: {},
+          }],
+          has_more: false,
+        } })
+      }
+      if (url === 'https://auth.test/api/v1/auth/get-public-users-by-ids') {
+        expect(body).toEqual({ user_ids: [11] })
+        return json({ code: 200, data: { items: [{ user_id: 11, nick_name: '即我作者', name_slug: 'author', head_img: '' }] } })
+      }
+      throw new Error(`unexpected URL ${url}`)
+    })
+
+    await expect(service.openOfficialAuthorPrivateChat()).resolves.toMatchObject({
+      source: { kind: 'private_chat', displayName: '即我作者', peerUserId: 11 },
+    })
+    expect(requests.map(item => new URL(item.url).pathname)).toEqual([
+      '/api/v1/chats/list',
+      '/api/v1/auth/get-public-users-by-ids',
+    ])
   })
 
   it('reads the official author public profile without creating a private chat', async () => {

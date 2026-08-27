@@ -250,6 +250,10 @@ function stringListParam(params: Record<string, unknown>, key: string): string[]
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : []
 }
 
+function messageActionRefsParam(params: Record<string, unknown>): string[] {
+  return stringListParam(params, 'actionRefs').map(value => value.trim()).filter(value => value !== '')
+}
+
 function optionalPositiveIntegerParam(params: Record<string, unknown>, key: string): number | undefined {
   const value = params[key]
   return typeof value === 'number' && Number.isSafeInteger(value) && value > 0 ? value : undefined
@@ -1055,6 +1059,37 @@ export async function dispatchArkmeHostOperation(
       stringParam(params, 'itemUid'),
       numberParam(params, 'sequence', 0),
       requestSignal === undefined ? {} : { signal: requestSignal },
+    )
+    case 'source.message-copy-link': return await service.copySourceMessageLink(
+      stringParam(params, 'sourceRef'),
+      messageActionRefsParam(params),
+      requestSignal === undefined ? {} : { signal: requestSignal },
+    )
+    case 'source.message-copy-link.resolve': return await service.resolveMessageCopyLink(
+      stringParam(params, 'sid'),
+      requestSignal === undefined ? {} : { signal: requestSignal },
+    )
+    case 'source.message-copy-link.extend': return await service.extendMessageCopyLink(
+      stringParam(params, 'sid'),
+      numberParam(params, 'itemIndex', 0),
+      stringParam(params, 'textContent'),
+      stringParam(params, 'recordUid'),
+      requestSignal === undefined ? {} : { signal: requestSignal },
+    )
+    case 'source.link-metadata.resolve': return await service.resolveLinkMetadata(
+      stringParam(params, 'url'),
+      requestSignal === undefined ? {} : { signal: requestSignal },
+    )
+    case 'source.forward-messages': return await service.forwardSourceMessages(
+      stringParam(params, 'sourceRef'),
+      messageActionRefsParam(params),
+      {
+        ...(stringParam(params, 'targetSourceRef') === '' ? {} : { targetSourceRef: stringParam(params, 'targetSourceRef') }),
+        ...(stringParam(params, 'recordUid') === '' ? {} : { recordUid: stringParam(params, 'recordUid') }),
+        ...(stringParam(params, 'relationUid') === '' ? {} : { relationUid: stringParam(params, 'relationUid') }),
+        ...(stringParam(params, 'commentText') === '' ? {} : { commentText: stringParam(params, 'commentText') }),
+        ...(requestSignal === undefined ? {} : { signal: requestSignal }),
+      },
     )
     case 'source.send-text': {
       const botRefs = botRefsParam(params)

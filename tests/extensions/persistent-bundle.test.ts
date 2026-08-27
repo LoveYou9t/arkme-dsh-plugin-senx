@@ -276,6 +276,59 @@ describe('persistent extension profile bundle', () => {
     ])
   })
 
+  it('mounts a marketplace Client in the top-level shell but not in the embedded Harness document', async () => {
+    const requests: string[] = []
+    const rendered = renderPersistentClientBundle('@arkme-local/ext-overlay', {
+      extensionId: 'ext_overlay', version: '1.0.0', name: 'Overlay',
+      code: 'return { apply() {} }', apiPath: '/arkme-self/api',
+    })
+    const load = (search: string) => {
+      let loaded: { factory: (requireModule: (id: string) => unknown) => unknown } | undefined
+      const plugin = vi.fn((clientPlugin: { apply(ctx: unknown): unknown }) => Object.assign(
+        Promise.resolve(clientPlugin.apply({ fiber: { inject: {} }, get: vi.fn(() => undefined) })),
+        { dispose: vi.fn() },
+      ))
+      runInNewContext(rendered, {
+        window: { __ModuleLoader__: { load: (entry: typeof loaded) => { loaded = entry } } },
+        document: {
+          location: { search },
+          createElement: vi.fn(),
+          head: { append: vi.fn() },
+        },
+        fetch: vi.fn(async (_input: string, init: { body?: string }) => {
+          const request = JSON.parse(init.body ?? '{}') as { operation: string }
+          requests.push(request.operation)
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              ok: true,
+              value: {
+                mount: true,
+                extension_id: 'ext_overlay',
+                instance_key: 'instance-overlay',
+                generation: 7,
+              },
+            }),
+          }
+        }),
+        console,
+      })
+      return { loaded: loaded!, plugin }
+    }
+    const topLevel = load('')
+    const embeddedHarness = load('?arkme-harness-embed=1')
+
+    await (topLevel.loaded.factory(() => ({})) as { apply(ctx: unknown): Promise<void> })
+      .apply({ effect: vi.fn(), plugin: topLevel.plugin })
+    await (embeddedHarness.loaded.factory(() => ({})) as { apply(ctx: unknown): Promise<void> })
+      .apply({ effect: vi.fn(), plugin: embeddedHarness.plugin })
+
+    expect(topLevel.plugin).toHaveBeenCalledOnce()
+    expect(embeddedHarness.plugin).not.toHaveBeenCalled()
+    expect(requests).toEqual(['extensions.persistent.client-state'])
+  })
+
   it('materializes one immutable DSH bundle with Host and Client wrappers', () => {
     const { root, artifact, artifactPath } = fixture()
     const result = materializePersistentExtensionBundle({
@@ -310,7 +363,7 @@ describe('persistent extension profile bundle', () => {
     expect(readFileSync(join(result.bundleDirectory, 'lib', 'index.js'), 'utf8')).toContain('applyPersistentArkmeHostExtension')
     expect(readFileSync(join(result.bundleDirectory, 'lib', 'client.js'), 'utf8')).toContain('extensions.persistent.invoke')
     expect(readFileSync(join(result.bundleDirectory, 'lib', 'client.js'), 'utf8')).toContain('extensions.persistent.client-state')
-    expect(readFileSync(join(result.bundleDirectory, 'lib', 'client.js'), 'utf8')).toContain('"wrapperVersion":3')
+    expect(readFileSync(join(result.bundleDirectory, 'lib', 'client.js'), 'utf8')).toContain('"wrapperVersion":4')
     expect(readFileSync(join(result.bundleDirectory, 'lib', 'client.js'), 'utf8')).toContain('version: spec.version')
     expect(JSON.parse(readFileSync(join(result.bundleDirectory, 'activation.json'), 'utf8'))).toEqual({
       schema_version: 1, extension_id: 'ext_test', enabled: true,
@@ -423,8 +476,11 @@ describe('persistent extension profile bundle', () => {
       dshHome: root, profileName: 'web', execPath: process.execPath, dshBinPath: '/dsh/bin', run,
     })
     const tarball = join(root, 'bundle with spaces.tgz')
+    const portableBundle = join(root, 'profiles', 'web', 'arkme-extensions', 'bundle with spaces', '1.0.0')
     writeFileSync(tarball, 'fixture')
+    mkdirSync(portableBundle, { recursive: true })
     await installer.install(root)
+    await installer.install(portableBundle)
     await installer.installTarball(tarball)
     await installer.remove('@arkme-local/ext-0123456789abcdef')
     await installer.remove('@example/install-bundle')
@@ -433,17 +489,21 @@ describe('persistent extension profile bundle', () => {
       'plugin', '--profile', 'web', '--config.minimum-release-age=0', 'add', `link:${root}`,
     ])
     expect(run).toHaveBeenNthCalledWith(2, [
-      'plugin', '--profile', 'web', '--config.minimum-release-age=0', 'add', tarball,
+      'plugin', '--profile', 'web', '--config.minimum-release-age=0',
+      'add', 'link:arkme-extensions/bundle with spaces/1.0.0',
     ])
     expect(run).toHaveBeenNthCalledWith(3, [
-      'plugin', '--profile', 'web', '--config.minimum-release-age=0',
-      'remove', '@arkme-local/ext-0123456789abcdef',
+      'plugin', '--profile', 'web', '--config.minimum-release-age=0', 'add', tarball,
     ])
     expect(run).toHaveBeenNthCalledWith(4, [
       'plugin', '--profile', 'web', '--config.minimum-release-age=0',
-      'remove', '@example/install-bundle',
+      'remove', '@arkme-local/ext-0123456789abcdef',
     ])
     expect(run).toHaveBeenNthCalledWith(5, [
+      'plugin', '--profile', 'web', '--config.minimum-release-age=0',
+      'remove', '@example/install-bundle',
+    ])
+    expect(run).toHaveBeenNthCalledWith(6, [
       'plugin', '--profile', 'web', '--config.minimum-release-age=0',
       'remove', 'dsh-snake-draggable', '@example/duplicate',
     ])

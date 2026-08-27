@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { renderToStaticMarkup } from 'react-dom/server'
+import { act, create, type ReactTestRenderer } from 'react-test-renderer'
 import { describe, expect, it } from 'vitest'
 import { ArkmeCallSurface } from '../src/client/ArkmeCallSurface.js'
 import { ArkmeProductNavigation } from '../src/client/ArkmeProductNavigation.js'
@@ -79,6 +80,35 @@ describe('Arkme product navigation', () => {
     expect(markup).toContain('height:33px')
     expect(markup).not.toContain('data-slot="conversation"')
     expect(markup).not.toContain('data-slot="sidebar.footer.action"')
+  })
+
+  it('keeps every product entry visible in the locked Web workspace and routes restricted entries to login', () => {
+    const markup = renderToStaticMarkup(<ArkmeProductNavigation compact={false} hosted locked />)
+    for (const label of ['对话', '联系人', '通话', '录音', '日历', '世界', '市集']) {
+      expect(markup).toContain(`>${label}<`)
+    }
+    expect(markup).toContain('aria-current="page"')
+    expect(productNavigationSource).toContain("if (locked) {")
+    expect(productNavigationSource).toContain("if (id === 'conversations') arkmeUi.showHarness()")
+    expect(productNavigationSource).toContain('else arkmeUi.openWebLoginDialog()')
+  })
+
+  it('opens login from locked utility entries while conversations stays on Harness', () => {
+    let renderer: ReactTestRenderer
+    act(() => { renderer = create(<ArkmeProductNavigation compact={false} hosted locked />) })
+    const buttonFor = (label: string) => renderer!.root.findAllByType('button').find(button => button
+      .findAllByType('span').some(span => span.children.join('') === label))
+
+    arkmeUi.showLogin()
+    act(() => { buttonFor('录音')!.props.onClick() })
+    expect(arkmeUi.getSnapshot()).toMatchObject({ mode: 'login', webLoginDialogOpen: true })
+
+    arkmeUi.closeWebLoginDialog()
+    act(() => { buttonFor('对话')!.props.onClick() })
+    expect(arkmeUi.getSnapshot()).toMatchObject({ mode: 'harness' })
+    expect(arkmeUi.getSnapshot().webLoginDialogOpen).toBeUndefined()
+    act(() => { renderer!.unmount() })
+    arkmeUi.authChanged(false)
   })
 
   it('removes the standalone Search tab from product navigation', () => {

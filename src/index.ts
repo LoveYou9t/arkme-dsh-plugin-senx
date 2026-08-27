@@ -12,6 +12,11 @@ import { createOpenClawCliAdapter, createOpenClawCommandRunner, createOpenClawFi
 import type {} from '@deepseek-ai/dsh-host-webserver'
 import { registerDSHAgentInputRecordSync } from './dsh-agent-input-sync.js'
 import { createArkmeHostApi } from './host-api.js'
+import { ARKME_HARNESS_EMBED_PATH } from './harness-embed-contract.js'
+import {
+  createHarnessEmbedRouteHandler,
+  type DshWebBootGraph,
+} from './harness-embed-route.js'
 import { createOutgoingCallAssetHandler } from './outgoing-call-assets.js'
 import { createArkmeMediaHandler, createArkmeUploadHandler } from './rich-media-routes.js'
 import { createArkmeVoiceprintEnrollmentHandler } from './voiceprint-routes.js'
@@ -141,7 +146,11 @@ export const Config: Schema<Config> = Schema.object({
 })
 
 export const name = 'dsh-arkme'
-export const inject = ['webServer', 'tools', 'systemPrompt', 'pluginInventory']
+export const inject = ['webServer', 'tools', 'systemPrompt', 'pluginInventory', 'clientModules']
+
+interface DshClientModulesLike {
+  graph(): DshWebBootGraph
+}
 
 export function readDshRuntimeVersion(dshBinPath: string): string | undefined {
   if (dshBinPath.trim() === '') return undefined
@@ -204,6 +213,7 @@ export function apply(ctx: Context, config: Config): void {
   }))
   const extensionDirectory = config.extensionArtifactDirectory.trim() || join(dshHome, 'arkme-self', 'extensions')
   const extensionStore = new ArkmeExtensionInstallStore(extensionDirectory)
+  const clientModules = (ctx as Context & { clientModules: DshClientModulesLike }).clientModules
   const updateManager = new ArkmePluginUpdateManager({
     enabled: config.updateCheckEnabled,
     channel: config.updateChannel,
@@ -379,6 +389,22 @@ export function apply(ctx: Context, config: Config): void {
     expectedPort: ctx.webServer.port,
     allowNonLoopback: config.allowNonLoopback,
   })
+  const harnessEmbedHandler = createHarnessEmbedRouteHandler({
+    getGraph: () => clientModules.graph(),
+    installedPackageNames: () => extensionStore.list().flatMap(item =>
+      item.profilePackageName === undefined ? [] : [item.profilePackageName]),
+    readRootHtml: async () => {
+      const response = await fetch(`http://127.0.0.1:${String(ctx.webServer.port)}/`, {
+        headers: { Accept: 'text/html' },
+        signal: AbortSignal.timeout(Math.min(config.requestTimeoutMs, 5_000)),
+      })
+      if (!response.ok) throw new Error(`DSH root document returned HTTP ${String(response.status)}`)
+      return await response.text()
+    },
+    onError: error => {
+      ctx.logger.warn('dsh-arkme: core-only Harness document failed: %s', error instanceof Error ? error.message : String(error))
+    },
+  })
   ctx.effect(() => () => {
     service.dispose()
     localDatabase.close()
@@ -396,6 +422,11 @@ export function apply(ctx: Context, config: Config): void {
     path: config.routePath,
     handler,
   }), 'dsh-arkme: local BFF route')
+  ctx.effect(() => ctx.webServer.register({
+    kind: 'exact',
+    path: ARKME_HARNESS_EMBED_PATH,
+    handler: harnessEmbedHandler,
+  }), 'dsh-arkme: core-only DeepSeek Harness iframe route')
   ctx.effect(() => ctx.webServer.register({
     kind: 'prefix',
     path: `${config.routePath}/call`,
