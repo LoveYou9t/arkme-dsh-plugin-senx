@@ -1,3 +1,12 @@
+import { ArrowLeft } from '@phosphor-icons/react/dist/icons/ArrowLeft'
+import { Check } from '@phosphor-icons/react/dist/icons/Check'
+import { Copy } from '@phosphor-icons/react/dist/icons/Copy'
+import { DesktopTower } from '@phosphor-icons/react/dist/icons/DesktopTower'
+import { DeviceMobile } from '@phosphor-icons/react/dist/icons/DeviceMobile'
+import { PencilSimple } from '@phosphor-icons/react/dist/icons/PencilSimple'
+import { QrCode } from '@phosphor-icons/react/dist/icons/QrCode'
+import { ShieldCheck } from '@phosphor-icons/react/dist/icons/ShieldCheck'
+import { Trash } from '@phosphor-icons/react/dist/icons/Trash'
 import qrcode from 'qrcode-generator'
 import { useEffect, useMemo, useState } from 'react'
 import type { DshRemoteBindingProjection, DshRemotePairingTicket, DshRemoteStatus } from '../dsh-remote/types.js'
@@ -20,6 +29,43 @@ export function buildDshRemotePairingQr(payload: string): {
   }
 }
 
+function platformLabel(platform: string): string {
+  const normalized = platform.trim().toLowerCase()
+  if (normalized === 'android') return 'Android'
+  if (normalized === 'ios') return 'iPhone'
+  return platform.trim() || '移动设备'
+}
+
+export function formatDshRemoteDeviceActivity(binding: DshRemoteBindingProjection, now = Date.now()): string {
+  const timestamp = binding.lastUsedAtMillis ?? binding.boundAtMillis
+  const suffix = binding.lastUsedAtMillis === undefined ? '绑定' : '使用'
+  const elapsed = Math.max(0, now - timestamp)
+  if (elapsed < 60_000) return binding.lastUsedAtMillis === undefined ? '刚刚绑定' : '刚刚使用'
+  if (elapsed < 60 * 60_000) return `${String(Math.floor(elapsed / 60_000))} 分钟前${suffix}`
+  if (elapsed < 24 * 60 * 60_000) return `${String(Math.floor(elapsed / (60 * 60_000)))} 小时前${suffix}`
+  if (elapsed < 7 * 24 * 60 * 60_000) return `${String(Math.floor(elapsed / (24 * 60 * 60_000)))} 天前${suffix}`
+  const date = new Date(timestamp)
+  return `${String(date.getMonth() + 1)} 月 ${String(date.getDate())} 日${suffix}`
+}
+
+interface RemoteStatusPresentation {
+  label: string
+  description: string
+  tone: 'online' | 'pending' | 'offline'
+}
+
+function remoteStatusPresentation(status: DshRemoteStatus | undefined): RemoteStatusPresentation {
+  if (status === undefined) return { label: '正在读取状态', description: '正在连接这台电脑', tone: 'pending' }
+  if (!status.available) return {
+    label: '当前不可用',
+    description: status.unavailableReason ?? '远控服务暂不可用',
+    tone: 'offline',
+  }
+  if (!status.enabled) return { label: '远程控制已关闭', description: '开启后，已绑定手机可访问这台电脑', tone: 'offline' }
+  if (!status.connected) return { label: '正在连接远控服务', description: '连接恢复后即可从手机访问', tone: 'pending' }
+  return { label: '这台电脑可远程访问', description: '仅已绑定手机可以控制 DSH 会话', tone: 'online' }
+}
+
 export function ArkmeRemoteSettingsPanel({ onBack }: { onBack: () => void }) {
   const [status, setStatus] = useState<DshRemoteStatus>()
   const [pairing, setPairing] = useState<DshRemotePairingTicket>()
@@ -27,6 +73,9 @@ export function ArkmeRemoteSettingsPanel({ onBack }: { onBack: () => void }) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [now, setNow] = useState(Date.now())
+  const [copied, setCopied] = useState(false)
+  const [renaming, setRenaming] = useState(false)
+  const [desktopName, setDesktopName] = useState('')
   const qr = useMemo(
     () => pairing === undefined ? undefined : buildDshRemotePairingQr(pairing.qrPayload),
     [pairing?.qrPayload],
@@ -70,15 +119,21 @@ export function ArkmeRemoteSettingsPanel({ onBack }: { onBack: () => void }) {
   const createPairing = () => { void run(async () => {
     const ticket = await callArkme<DshRemotePairingTicket>('remote.createPairingAttempt')
     setPairing(ticket)
+    setCopied(false)
   }) }
   const cancelPairing = () => { if (pairing !== undefined) void run(async () => {
     await callArkme('remote.cancelPairingAttempt', { pairingRef: pairing.pairingRef })
     setPairing(undefined)
+    setCopied(false)
   }) }
   const rename = () => {
-    const displayName = window.prompt('电脑名称', '')?.trim() ?? ''
+    const displayName = desktopName.trim()
     if (displayName === '') return
-    void run(async () => { setStatus(await callArkme<DshRemoteStatus>('remote.renameDesktop', { displayName })) })
+    void run(async () => {
+      setStatus(await callArkme<DshRemoteStatus>('remote.renameDesktop', { displayName }))
+      setRenaming(false)
+      setDesktopName('')
+    })
   }
   const revoke = (binding: DshRemoteBindingProjection) => {
     if (!window.confirm(`撤销“${binding.controllerDisplayName}”的远控权限？`)) return
@@ -87,32 +142,107 @@ export function ArkmeRemoteSettingsPanel({ onBack }: { onBack: () => void }) {
       setBindings(await callArkme<DshRemoteBindingProjection[]>('remote.listBindings'))
     })
   }
+  const copyPairingCode = () => { if (pairing !== undefined) void run(async () => {
+    if (navigator.clipboard?.writeText === undefined) throw new Error('当前环境不支持复制，请手动输入配对码')
+    await navigator.clipboard.writeText(pairing.pairingCode)
+    setCopied(true)
+  }) }
 
   const seconds = pairing === undefined ? 0 : Math.max(0, Math.ceil((pairing.expiresAtMillis - now) / 1000))
+  const pairingExpired = pairing !== undefined && seconds === 0
+  const visibleBindings = bindings.filter(binding => binding.status !== 'revoked')
+  const presentation = remoteStatusPresentation(status)
+  const canPair = !busy && status?.connected === true
+
   return <div className="arkme-redesign-settings-surface" data-arkme-remote-settings aria-label="远程控制设置">
-    <div className="arkme-redesign-settings-shell">
-      <button type="button" className="arkme-redesign-setting-row" onClick={onBack}><strong>返回设置</strong><span /></button>
-      <section className="arkme-redesign-settings-group"><h2>远程控制</h2><div>
-        <div className="arkme-redesign-setting-row"><strong>{status?.enabled === true ? '已开启' : '未开启'}</strong><span className="arkme-redesign-setting-summary">{status?.connected === true ? '电脑已连接远控服务' : status?.unavailableReason ?? '开启后可与移动端长期绑定'}</span><button type="button" disabled={busy || status?.available !== true} onClick={toggle}>{status?.enabled === true ? '关闭' : '开启'}</button></div>
-        <button type="button" className="arkme-redesign-setting-row" disabled={busy || status?.connected !== true} onClick={createPairing}><strong>{pairing === undefined ? '绑定新手机' : '刷新配对票据'}</strong><span className="arkme-redesign-setting-summary">二维码或 8 位一次性配对码</span></button>
-        <button type="button" className="arkme-redesign-setting-row" disabled={busy} onClick={rename}><strong>电脑名称</strong><span className="arkme-redesign-setting-summary">修改移动端显示名称</span></button>
-      </div></section>
-      {pairing !== undefined && seconds > 0 && <section className="arkme-redesign-settings-group"><h2>配对（{String(seconds)} 秒后失效）</h2><div style={{ padding: 16, textAlign: 'center' }}>
-        {qr !== undefined && <img
-          src={qr.dataUrl}
-          width={qr.displaySize}
-          height={qr.displaySize}
-          style={{ maxWidth: '100%', height: 'auto', imageRendering: 'pixelated', background: '#fff' }}
-          alt="远控配对二维码"
-        />}
-        <p style={{ fontSize: 20, letterSpacing: 2, userSelect: 'all' }}>{pairing.pairingCode}</p>
-        <button type="button" disabled={busy} onClick={cancelPairing}>取消本次配对</button>
-      </div></section>}
-      <section className="arkme-redesign-settings-group"><h2>已绑定设备</h2><div>
-        {bindings.length === 0 && <div className="arkme-redesign-setting-row"><strong>暂无设备</strong><span className="arkme-redesign-setting-summary">完成一次配对后将长期保留，可随时撤销</span></div>}
-        {bindings.map(binding => <div key={binding.bindingRef} className="arkme-redesign-setting-row"><strong>{binding.controllerDisplayName}</strong><span className="arkme-redesign-setting-summary">{binding.controllerPlatform} · {binding.status === 'active' ? '已授权' : '已撤销'}</span>{binding.status === 'active' && <button type="button" disabled={busy} onClick={() => { revoke(binding) }}>撤销</button>}</div>)}
-      </div></section>
-      {error !== '' && <div className="arkme-redesign-settings-error" role="alert">{error}</div>}
+    <div className="arkme-redesign-settings-shell arkme-remote-settings-shell">
+      <header className="arkme-remote-page-header">
+        <button type="button" className="arkme-remote-back" aria-label="返回 Arkme 设置" onClick={onBack}>
+          <ArrowLeft size={17} aria-hidden /><span>设置</span>
+        </button>
+        <div><h1>移动端远控</h1><p>在手机上继续这台电脑里的 DSH 会话</p></div>
+      </header>
+
+      <section className="arkme-remote-overview" aria-label="远控状态">
+        <div className={`arkme-remote-status-icon is-${presentation.tone}`}><DesktopTower size={24} weight="duotone" aria-hidden /></div>
+        <div className="arkme-remote-status-copy">
+          <span className={`arkme-remote-status-label is-${presentation.tone}`}><i aria-hidden />{presentation.label}</span>
+          <p>{presentation.description}</p>
+        </div>
+        <button
+          type="button"
+          className="arkme-remote-switch"
+          role="switch"
+          aria-label="允许移动端远程控制"
+          aria-checked={status?.enabled === true}
+          disabled={busy || status?.available !== true}
+          onClick={toggle}
+        ><span aria-hidden /></button>
+        <div className="arkme-remote-overview-actions">
+          <button type="button" className="arkme-remote-primary-button" disabled={!canPair} onClick={createPairing}>
+            <DeviceMobile size={16} aria-hidden />{pairing === undefined ? '添加手机' : '生成新配对码'}
+          </button>
+          <button type="button" className="arkme-remote-secondary-button" disabled={busy} onClick={() => { setRenaming(value => !value) }}>
+            <PencilSimple size={15} aria-hidden />电脑名称
+          </button>
+        </div>
+        {renaming && <form className="arkme-remote-rename" onSubmit={event => { event.preventDefault(); rename() }}>
+          <label htmlFor="arkme-remote-desktop-name">在手机上显示为</label>
+          <div><input id="arkme-remote-desktop-name" autoFocus value={desktopName} maxLength={48} placeholder="例如：办公室 Mac" disabled={busy} onChange={event => { setDesktopName(event.currentTarget.value) }} />
+            <button type="submit" disabled={busy || desktopName.trim() === ''}>保存</button>
+            <button type="button" disabled={busy} onClick={() => { setRenaming(false); setDesktopName('') }}>取消</button>
+          </div>
+        </form>}
+      </section>
+
+      {pairing !== undefined && <section className="arkme-remote-pairing-card" aria-labelledby="arkme-remote-pairing-title">
+        <header>
+          <span className="arkme-remote-section-icon"><QrCode size={20} weight="duotone" aria-hidden /></span>
+          <div><h2 id="arkme-remote-pairing-title">连接新手机</h2><p>打开 Arkme 移动端，进入「设置 → DSH 远控」完成配对</p></div>
+          <span className={`arkme-remote-expiry${pairingExpired ? ' is-expired' : ''}`} aria-live="polite">
+            {pairingExpired ? '已失效' : `${String(seconds)} 秒后失效`}
+          </span>
+        </header>
+        {pairingExpired ? <div className="arkme-remote-pairing-expired">
+          <p>本次配对已结束，没有产生新的设备授权。</p>
+          <button type="button" className="arkme-remote-primary-button" disabled={busy || status?.connected !== true} onClick={createPairing}>重新生成</button>
+        </div> : <div className="arkme-remote-pairing-content">
+          <div className="arkme-remote-qr-frame">
+            {qr !== undefined && <img src={qr.dataUrl} width={qr.displaySize} height={qr.displaySize} alt="远控配对二维码" />}
+          </div>
+          <div className="arkme-remote-pairing-guide">
+            <ol><li><span>1</span><p><strong>打开手机端</strong><small>在 Arkme 设置中选择 DSH 远控</small></p></li>
+              <li><span>2</span><p><strong>扫描二维码</strong><small>确认电脑名称后即可长期使用</small></p></li></ol>
+            <div className="arkme-remote-code-block">
+              <span>无法扫码？输入 8 位配对码</span>
+              <button type="button" disabled={busy} aria-label={copied ? '配对码已复制' : `复制配对码 ${pairing.pairingCode}`} onClick={copyPairingCode}>
+                <strong>{pairing.pairingCode}</strong>{copied ? <Check size={17} weight="bold" aria-hidden /> : <Copy size={17} aria-hidden />}
+              </button>
+            </div>
+            <p className="arkme-remote-security-note"><ShieldCheck size={16} aria-hidden />配对码仅本次有效。绑定后只有你的账号和已授权设备可以访问。</p>
+          </div>
+        </div>}
+        <footer>
+          {!pairingExpired && <button type="button" disabled={busy || status?.connected !== true} onClick={createPairing}>换一个配对码</button>}
+          <button type="button" disabled={busy} onClick={cancelPairing}>取消配对</button>
+        </footer>
+      </section>}
+
+      <section className="arkme-remote-devices" aria-labelledby="arkme-remote-devices-title">
+        <header><div><h2 id="arkme-remote-devices-title">已绑定手机</h2><p>这些设备无需再次配对，随时可以撤销权限</p></div>{visibleBindings.length > 0 && <span>{String(visibleBindings.length)} 台</span>}</header>
+        {visibleBindings.length === 0 ? <div className="arkme-remote-empty">
+          <span><DeviceMobile size={22} weight="duotone" aria-hidden /></span><strong>还没有绑定手机</strong><p>开启远控并添加手机后，即可随时继续 DSH 会话。</p>
+        </div> : <div className="arkme-remote-device-list">
+          {visibleBindings.map(binding => <article key={binding.bindingRef} className="arkme-remote-device-row">
+            <span className="arkme-remote-device-icon"><DeviceMobile size={20} weight="duotone" aria-hidden /></span>
+            <div><strong>{binding.controllerDisplayName}</strong><span>{platformLabel(binding.controllerPlatform)} · {formatDshRemoteDeviceActivity(binding, now)}</span></div>
+            <span className={`arkme-remote-device-state is-${binding.status}`}>{binding.status === 'active' ? '已授权' : '已暂停'}</span>
+            <button type="button" disabled={busy} aria-label={`撤销 ${binding.controllerDisplayName} 的远控权限`} title="撤销权限" onClick={() => { revoke(binding) }}><Trash size={16} aria-hidden /></button>
+          </article>)}
+        </div>}
+      </section>
+
+      {error !== '' && <div className="arkme-redesign-settings-error arkme-remote-error" role="alert">{error}</div>}
     </div>
   </div>
 }
