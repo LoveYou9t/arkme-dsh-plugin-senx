@@ -9,8 +9,14 @@ import type {
   ArkmeExtensionReviewPage,
 } from './extensions/types.js'
 import type { ArkmeSessionStore } from './keychain-store.js'
+import { resolveManagedAccessCredential } from './managed-ai/credential.js'
 import type { createOpenClawProvisioner, OpenClawProvisionResult } from './openclaw/index.js'
 import { ArkmeOutgoingCallBroker } from './outgoing-call-broker.js'
+import {
+  ArkmeBillingUnavailableError,
+  HttpArkmeBillingGateway,
+  type ArkmeBillingGateway,
+} from './billing-gateway.js'
 import type {
   ArkmeOutgoingCallIntentClaim,
   ArkmeOutgoingCallIntentResolutionInput,
@@ -27,7 +33,7 @@ import {
 import { AiVideoService } from './services/ai-video-service.js'
 import { ArkoService } from './services/arko-service.js'
 import { ArrangementService } from './services/arrangement-service.js'
-import { AuthService } from './services/auth-service.js'
+import { AuthService, jiwoScanLoginAvailable } from './services/auth-service.js'
 import { BotService, type ArkmeBotManageUpdateInput, type ArkmeBotRefPayload } from './services/bot-service.js'
 import { CalendarService } from './services/calendar-service.js'
 import { CallHistoryService } from './services/call-history-service.js'
@@ -107,6 +113,9 @@ import type {
   ArkmeBotSummary,
   ArkmeCalendarBucketPage,
   ArkmeCalendarDayRecordPage,
+  ArkmeBillingOrderCreateInput,
+  ArkmeBillingOrderSnapshot,
+  ArkmeBillingProductList,
   ArkmeCallDetail,
   ArkmeCallHistoryOptions,
   ArkmeCallHistoryPage,
@@ -158,6 +167,7 @@ import type {
   ArkmePendingWrite,
   ArkmeProviderCapabilities,
   ArkmeProviderState,
+  ArkmeQuotaSnapshot,
   ArkmeRecordCursor,
   ArkmeRecordSearchResult,
   ArkmeRecordingCalendarMonth,
@@ -235,10 +245,11 @@ export {
   MAX_ARKME_RELATED_RECORDING_CURSOR_LENGTH,
   MAX_ARKME_RELATED_RECORDING_PAGE_SIZE,
 } from './services/related-recording-service.js'
-export { ArkmePluginError, type ArkmeServiceConfig } from './services/service.js'
+export { ArkmePluginError, type ArkmeServiceConfig }
 
 export class ArkmeService {
   private readonly runtime: ServiceRuntime
+  private readonly billingGateway: ArkmeBillingGateway
   private readonly aiVideo: AiVideoService
   private readonly arrangement: ArrangementService
   private readonly calendar: CalendarService
@@ -277,8 +288,10 @@ export class ArkmeService {
     private readonly fetchImpl: FetchLike = fetch,
     private readonly pendingSessionStore?: ArkmeSessionStore,
     outgoingCallBroker = new ArkmeOutgoingCallBroker(),
+    billingGateway?: ArkmeBillingGateway,
   ) {
     this.runtime = new ServiceRuntime(config, sessionStore, stateStore, fetchImpl, pendingSessionStore)
+    this.billingGateway = billingGateway ?? new HttpArkmeBillingGateway(this.runtime)
     this.privacy = new ArkmePrivacyVisibilityService(this.runtime)
     this.aiVideo = new AiVideoService(this.runtime)
     this.arrangement = new ArrangementService(this.runtime)
@@ -382,6 +395,8 @@ export class ArkmeService {
   chatRealtimeState(): ArkmeChatRealtimeState {
     return this.realtime.chatRealtimeState()
   }
+
+  async resolveManagedAccessCredential(): Promise<SecretValue> { return await resolveManagedAccessCredential(this.runtime) }
 
   subscribeChatRealtime(listener: (event: ArkmeChatClientEvent) => void): () => void {
     return this.realtime.subscribeChatRealtime(listener)
@@ -511,9 +526,40 @@ export class ArkmeService {
       captchaId: this.config.geetestCaptchaId,
       environment: this.config.environment,
       testLoginEnabled: this.config.environment === 'test',
+      jiwoScanLoginEnabled: jiwoScanLoginAvailable(this.config),
       callAssetBasePath: `${this.config.routePath}/call`,
       voiceprintEnrollmentPath: `${this.config.routePath}/voiceprint/enroll`,
       shareWebsite: this.config.shareWebsite ?? ARKME_DEFAULT_SHARE_WEBSITE,
+    }
+  }
+
+  async billingQuota(signal?: AbortSignal): Promise<ArkmeQuotaSnapshot> {
+    return await this.callBillingGateway(() => this.billingGateway.quota(signal))
+  }
+
+  async billingProducts(signal?: AbortSignal): Promise<ArkmeBillingProductList> {
+    return await this.callBillingGateway(() => this.billingGateway.products(signal))
+  }
+
+  async createBillingOrder(
+    input: ArkmeBillingOrderCreateInput,
+    signal?: AbortSignal,
+  ): Promise<ArkmeBillingOrderSnapshot> {
+    return await this.callBillingGateway(() => this.billingGateway.createOrder(input, signal))
+  }
+
+  async billingOrderStatus(orderId: string, signal?: AbortSignal): Promise<ArkmeBillingOrderSnapshot> {
+    return await this.callBillingGateway(() => this.billingGateway.orderStatus(orderId, signal))
+  }
+
+  private async callBillingGateway<T>(operation: () => Promise<T>): Promise<T> {
+    try {
+      return await operation()
+    } catch (error) {
+      if (error instanceof ArkmeBillingUnavailableError) {
+        throw new ArkmePluginError('billing-unavailable', error.message, true, 503, { cause: error })
+      }
+      throw error
     }
   }
 
@@ -1300,13 +1346,11 @@ export class ArkmeService {
     return await this.media.readImage(imageRef, options)
   }
 
-  async beginWechatLogin(): Promise<ArkmeAuthSnapshot> {
-    return await this.auth.beginWechatLogin()
-  }
-
-  async pollWechatLogin(attemptId: string): Promise<ArkmeAuthSnapshot> {
-    return await this.auth.pollWechatLogin(attemptId)
-  }
+  async beginWechatLogin(): Promise<ArkmeAuthSnapshot> { return await this.auth.beginWechatLogin() }
+  async pollWechatLogin(attemptId: string): Promise<ArkmeAuthSnapshot> { return await this.auth.pollWechatLogin(attemptId) }
+  async beginJiwoLogin(): Promise<ArkmeAuthSnapshot> { return await this.auth.beginJiwoLogin() }
+  async pollJiwoLogin(attemptId: string): Promise<ArkmeAuthSnapshot> { return await this.auth.pollJiwoLogin(attemptId) }
+  async cancelJiwoLogin(attemptId: string): Promise<{ canceled: true }> { return await this.auth.cancelJiwoLogin(attemptId) }
 
   async testLogin(userId: number): Promise<ArkmeAuthSnapshot> {
     return await this.auth.testLogin(userId)

@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { Context } from '@deepseek-ai/cordis'
+import type {} from '@deepseek-ai/dsh-llm'
 import Schema from '@deepseek-ai/schemastery'
 
 export { createOpenClawCliAdapter } from './openclaw/index.js'
@@ -16,6 +17,7 @@ import { createArkmeMediaHandler, createArkmeUploadHandler } from './rich-media-
 import { createArkmeVoiceprintEnrollmentHandler } from './voiceprint-routes.js'
 import { createArkmeSessionStore } from './keychain-store.js'
 import { ArkmeLocalDatabase } from './local-database.js'
+import { registerManagedAiProvider } from './managed-ai/adapter.js'
 import {
   ArkmePluginUpdateManager,
   validatePluginUpdateArtifactOrigin,
@@ -224,6 +226,9 @@ export function apply(ctx: Context, config: Config): void {
         ? {
             supervisedExitCode: ARKME_DESKTOP_MANAGED_RESTART_EXIT_CODE,
             supervisedPlanPath: process.env.ARKME_DESKTOP_MANAGED_RESTART_PLAN_PATH,
+            ...(process.env.ARKME_HARNESS_LOG_PATH === undefined
+              ? {}
+              : { harnessLogPath: process.env.ARKME_HARNESS_LOG_PATH }),
           }
         : {}),
     },
@@ -266,6 +271,12 @@ export function apply(ctx: Context, config: Config): void {
   let extensionInstallTasks: ArkmeExtensionInstallTasks | undefined
   let ownedExtensionInventory: ArkmeOwnedExtensionInventory | undefined
   ctx.provide('arkmeData', service)
+  ctx.inject(['llm'], modelCtx => {
+    registerManagedAiProvider(modelCtx, {
+      intelligentBaseUrl: config.intelligentBaseUrl,
+      credentialOwner: service,
+    })
+  })
   registerDSHAgentInputRecordSync(ctx, service)
   registerArkmeTools(ctx, service, config.toolProfile)
   ctx.inject(['dynamicCordisRunner', 'agents'], dynamicCtx => {

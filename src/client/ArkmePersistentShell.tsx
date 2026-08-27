@@ -344,7 +344,7 @@ export function ArkmePersistentWorkspace({
           t={t}
           productChrome={false}
           productNavigation={false}
-          ownsWechatLogin={!startupAuthGateEnabled()}
+          ownsQrLogin={!startupAuthGateEnabled()}
           currentSessionId={sessionId}
           onActivateSurface={() => undefined}
         />
