@@ -29,6 +29,7 @@ export interface ArkmeProductNavigationProps {
   hosted?: boolean
   taskExpanded?: boolean
   hidden?: boolean
+  locked?: boolean
   currentSessionId?: string | undefined
 }
 
@@ -129,7 +130,7 @@ const styles: Record<string, CSSProperties> = {
 
 /** Arkme-owned navigation rendered wholly inside the plugin surface. */
 export function ArkmeProductNavigation({
-  compact, hosted = false, taskExpanded = false, hidden = false, currentSessionId,
+  compact, hosted = false, taskExpanded = false, hidden = false, locked = false, currentSessionId,
 }: ArkmeProductNavigationProps) {
   const ui = useSyncExternalStore(arkmeUi.subscribe, arkmeUi.getSnapshot, arkmeUi.getSnapshot)
   const authState = useSyncExternalStore(arkmeAuthStore.subscribe, arkmeAuthStore.getSnapshot, arkmeAuthStore.getSnapshot)
@@ -176,7 +177,8 @@ export function ArkmeProductNavigation({
       document.removeEventListener('keydown', dismissOnEscape)
     }
   }, [profileOpen])
-  const activeId = ui.mode === 'login' ? undefined
+  const activeId = locked ? 'conversations'
+    : ui.mode === 'login' ? undefined
     : ui.calendarOpen === true ? 'calendar'
     : ui.mode === 'extensions' ? 'extensions'
     : ui.mode === 'world' ? 'world'
@@ -189,6 +191,7 @@ export function ArkmeProductNavigation({
     ? arkmeChatDirectory.totalUnreadCount({ excludeMuted: true })
     : 0
   const conversationUnreadLabel = conversationUnreadCount > 99 ? '99+' : String(conversationUnreadCount)
+  const navigationItems = locked ? items.filter(item => item.id === 'conversations') : items
 
   const activate = (id: NavigationItem['id']) => {
     if (id === 'extensions') {
@@ -235,7 +238,7 @@ export function ArkmeProductNavigation({
         </span>
       </div>}
       <div style={{ ...styles.primary, ...(compact ? { flexDirection: 'row' as const } : {}) }}>
-      {items.map(item => {
+      {navigationItems.map(item => {
         const ItemIcon = item.icon
         const active = item.id === activeId
         const showsUnread = item.id === 'conversations' && conversationUnreadCount > 0
@@ -275,7 +278,7 @@ export function ArkmeProductNavigation({
         anchor="product-rail"
         onClose={() => { arkmeUi.hideCalendar() }}
       />, document.body)}
-      {!compact && <div className="arkme-redesign-rail-footer">
+      {!compact && !locked && <div className="arkme-redesign-rail-footer">
         <ArkmeUpdateRailSlot />
         {authState.auth?.status === 'authenticated' && <>
         {profileOpen && typeof document !== 'undefined' && createPortal(<div ref={profilePopoverRef} className="arkme-redesign-profile-popover" role="menu" aria-label="个人菜单">

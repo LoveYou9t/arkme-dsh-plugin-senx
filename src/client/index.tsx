@@ -8,6 +8,7 @@ import './composer-draft-auth-binding.js'
 import { callArkme } from './api.js'
 import { ArkmeSettingsSurface } from './ArkmeSettingsSurface.js'
 import { ArkmeStartupAuthGate, startupAuthGateEnabled } from './ArkmeStartupAuthGate.js'
+import { ArkmeWebLoginOverlay } from './ArkmeWebLoginOverlay.js'
 import {
   ArkmePersistentDetails, ArkmePersistentSidebar, ArkmePersistentWorkspace,
 } from './ArkmePersistentShell.js'
@@ -18,7 +19,7 @@ import { arkmeNotificationActivation } from './notification-activation-store.js'
 import { arkmePluginUpdateStore } from './plugin-update-store.js'
 import { arkmeUi } from './ui-controller.js'
 import { observeExtensionShareDeepLinks } from './extension-share-deeplink.js'
-import { deepSeekHarnessEmbedRequested } from './DeepSeekHarnessSurface.js'
+import { deepSeekHarnessEmbedRequested, deepSeekHarnessNativeSettingsRequested } from './DeepSeekHarnessSurface.js'
 import { installArkmeRedesignStyles } from './redesign/styles.js'
 import { installArkmeAccountSettingsNavIcon } from './account-settings-nav-icon.js'
 import {
@@ -58,10 +59,12 @@ async function resolveNotificationSource(
 /** Keep Arkme's shell resident and embed the native DSH client only in its conversation region. */
 export function apply(ctx: ClientContext): void {
 	if (deepSeekHarnessEmbedRequested()) {
-		ctx.slots.inject('sidebar.settings', () => ctx.slots.register({
-			name: 'sidebar.settings',
-			priority: -100,
-		}, () => null))
+		if (!deepSeekHarnessNativeSettingsRequested()) {
+			ctx.slots.inject('sidebar.settings', () => ctx.slots.register({
+				name: 'sidebar.settings',
+				priority: -100,
+			}, () => null))
+		}
 		return
 	}
 	if (typeof window !== 'undefined' && window.location !== undefined && window.history !== undefined) {
@@ -249,6 +252,16 @@ export function apply(ctx: ClientContext): void {
     label: '我的账户',
   }, ArkmeDshSettingsSection))
 
+  if (!startupAuthGateEnabled()) {
+    ctx.slots.inject('shell.overlay', () => ctx.slots.register({
+      name: 'shell.overlay',
+      id: 'arkme-web-login-overlay',
+      order: 100,
+      label: () => loginT('gate.dialog'),
+      locale: ARKME_LOGIN_LOCALE_NAMESPACE,
+    }, ArkmeWebLoginOverlay))
+  }
+
   if (startupAuthGateEnabled()) {
     ctx.slots.inject('shell.overlay', () => ctx.slots.register({
       name: 'shell.overlay',
@@ -275,6 +288,7 @@ export { ArkmeAppUpdateDialog } from './ArkmeAppUpdateDialog.js'
 export { ArkmeUpdateRailSlot, ArkmeUpdateTopCapsule, deriveArkmeUpdatePresentation } from './ArkmeUpdateSurfaces.js'
 export { ArkmePluginUpdateDialog } from './ArkmePluginUpdateDialog.js'
 export { ArkmeStartupAuthGate } from './ArkmeStartupAuthGate.js'
+export { ArkmeWebLoginOverlay } from './ArkmeWebLoginOverlay.js'
 export {
   ArkmePersistentClientRuntime, ArkmePersistentDetails,
   ArkmePersistentSidebar, ArkmePersistentWorkspace,

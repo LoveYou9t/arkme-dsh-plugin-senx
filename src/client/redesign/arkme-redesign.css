@@ -350,7 +350,7 @@ button.arkme-update-rail.is-error { background: #fff0ee !important; color: #b548
   [data-slot="root"] > div[data-details-collapsed="true"]:has([data-arkme-owned="persistent-sidebar"][data-arkme-directory-visible="false"]) {
     grid-template-columns: 72px minmax(0, 1fr) 0 !important;
   }
-  [data-slot="root"] > div[data-details-collapsed="true"]:has([data-arkme-owned="persistent-sidebar"][data-arkme-login-mode="true"]:not([data-arkme-login-entry])) {
+  [data-slot="root"] > div[data-details-collapsed="true"]:has([data-arkme-owned="persistent-sidebar"][data-arkme-login-mode="true"]:not([data-arkme-web-locked])) {
     grid-template-columns: 0 minmax(0, 1fr) 0 !important;
   }
 }
