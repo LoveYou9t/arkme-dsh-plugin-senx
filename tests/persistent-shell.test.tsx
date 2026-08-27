@@ -68,7 +68,7 @@ describe('Arkme persistent DSH shell', () => {
     expect(markup).not.toContain('aria-label="Arkme 会话列表"')
   })
 
-  it('removes all plugin navigation chrome from the login screen', () => {
+  it('keeps a compact Arkme login entry on the Web login screen', () => {
     arkmeUi.showLogin()
     const markup = renderToStaticMarkup(<ArkmePersistentSidebar {...({
       collapsed: false,
@@ -81,7 +81,10 @@ describe('Arkme persistent DSH shell', () => {
     } as never)} />)
 
     expect(markup).toContain('data-arkme-login-mode="true"')
-    expect(markup).toContain('width:0')
+    expect(markup).toContain('data-arkme-login-entry="true"')
+    expect(markup).toContain('aria-label="Arkme 登录入口"')
+    expect(markup).toContain('登录 Arkme')
+    expect(markup).toContain('width:72px')
     expect(markup).not.toContain('data-arkme-owned="product-navigation"')
     expect(markup).not.toContain('aria-label="Arkme 会话列表"')
   })

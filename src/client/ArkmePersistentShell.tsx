@@ -11,6 +11,8 @@ import { ArkmeOutgoingCallHost } from './ArkmeOutgoingCallHost.js'
 import { ArkmeProductNavigation } from './ArkmeProductNavigation.js'
 import { ArkmeSurface } from './ArkmeSidebar.js'
 import { ArkmeNavigation } from './ArkmeVirtualWorkspace.js'
+import arkmeNavigationLogoBase64 from '../../assets/branding/arkme-navigation-logo.png'
+import arkmeNavigationLogoDarkBase64 from '../../assets/branding/arkme-navigation-logo-dark.png'
 import type { ArkmeDshMessageSearchResult } from './ArkmeSearchSurface.js'
 import { ContactDirectorySurface } from './redesign/contacts/ContactDirectorySurface.js'
 import { DirectoryDetailPane } from './redesign/contacts/DirectoryDetailPane.js'
@@ -29,6 +31,18 @@ const styles: Record<string, CSSProperties> = {
   sidebar: {
     position: 'relative', width: '100%', height: '100%', minWidth: 0, minHeight: 0,
     display: 'flex', overflow: 'hidden', background: '#fff',
+  },
+  webLoginSidebar: {
+    width: 72, minWidth: 72, height: '100%', padding: '28px 8px 14px', boxSizing: 'border-box',
+    display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 18,
+    borderRight: '1px solid #e7e7e9', background: '#fff', color: '#3e4149',
+  },
+  webLoginBrand: { display: 'grid', width: 48, height: 28, placeItems: 'center' },
+  webLoginBrandImage: { display: 'block', width: 48, height: 28, objectFit: 'cover' },
+  webLoginButton: {
+    width: '100%', minHeight: 57, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+    gap: 5, padding: '7px 4px', border: 0, borderRadius: 15, background: '#f1f2f6', color: '#151722',
+    cursor: 'pointer', font: 'inherit', fontSize: 11, lineHeight: '15px', fontWeight: 500,
   },
   taskDirectory: { minWidth: 0, flex: 1, overflow: 'hidden', borderLeft: '1px solid #ececef', background: '#fff' },
   sidebarResizeHandle: {
@@ -86,6 +100,7 @@ export function ArkmePersistentSidebar({
   const harnessMode = ui.mode === 'harness'
   const loginMode = ui.mode === 'login'
     || (authState.auth !== undefined && authState.auth.status !== 'authenticated')
+  const webLoginMode = loginMode && !startupAuthGateEnabled()
   const authenticatedUserId = authState.auth?.status === 'authenticated' ? authState.auth.userId : undefined
   const contactsAccountKey = authState.auth?.status === 'authenticated' ? `${authState.auth.environment}:${String(authState.auth.userId)}` : undefined
   const contacts = useSyncExternalStore(arkmeContactsTab.subscribe, arkmeContactsTab.getSnapshot, arkmeContactsTab.getSnapshot)
@@ -169,7 +184,32 @@ export function ArkmePersistentSidebar({
     setSidebarResizing(false)
   }, [])
 
-  if (loginMode) return <aside
+  if (loginMode) return webLoginMode ? <aside
+    data-arkme-owned="persistent-sidebar"
+    data-arkme-login-mode="true"
+    data-arkme-login-entry
+    data-arkme-directory-visible="false"
+    style={styles.webLoginSidebar}
+    aria-label="Arkme 登录入口"
+  >
+    <span style={styles.webLoginBrand} aria-hidden>
+      <img
+        src={`data:image/png;base64,${arkmeNavigationLogoBase64}`}
+        data-arkme-theme-image="light"
+        draggable={false}
+        style={styles.webLoginBrandImage}
+      />
+      <img
+        src={`data:image/png;base64,${arkmeNavigationLogoDarkBase64}`}
+        data-arkme-theme-image="dark"
+        draggable={false}
+        style={styles.webLoginBrandImage}
+      />
+    </span>
+    <button type="button" style={styles.webLoginButton} onClick={() => { arkmeUi.showLogin() }}>
+      登录 Arkme
+    </button>
+  </aside> : <aside
     data-arkme-owned="persistent-sidebar"
     data-arkme-login-mode="true"
     data-arkme-directory-visible="false"
