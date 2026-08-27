@@ -134,4 +134,12 @@ describe('Arkme service architecture', () => {
     expect(enrollmentClient).toContain('export interface ArkmeVoiceprintEnrollmentClient')
     expect(enrollmentClient).toContain('class SameOriginArkmeVoiceprintEnrollmentClient')
   })
+
+  it('keeps the default-off DSH remote feature ahead of platform secret-store construction', () => {
+    const source = readFileSync(join(root, 'src/index.ts'), 'utf8')
+    const guard = source.indexOf('if (!config.dshRemoteFeatureEnabled) return')
+    const secretStore = source.indexOf('createArkmeSecureValueStore(', guard)
+    expect(guard).toBeGreaterThanOrEqual(0)
+    expect(secretStore).toBeGreaterThan(guard)
+  })
 })

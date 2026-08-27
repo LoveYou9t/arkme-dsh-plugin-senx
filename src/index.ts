@@ -243,7 +243,9 @@ export function apply(ctx: Context, config: Config): void {
   const sessionStore = createArkmeSessionStore(`${config.keychainServicePrefix}.${config.environment}`)
   const pendingSessionStore = createArkmeSessionStore(`${config.keychainServicePrefix}.${config.environment}.pending-binding`)
   const service = new ArkmeService(config, sessionStore, localDatabase, fetch, pendingSessionStore)
-  const grantSigningKeys = dshRemoteGrantSigningKeys(config.dshRemoteGrantSigningKeys)
+  const grantSigningKeys = config.dshRemoteFeatureEnabled
+    ? dshRemoteGrantSigningKeys(config.dshRemoteGrantSigningKeys)
+    : {}
   let remoteHost: DshRemoteHostFacade | undefined
   const openClawStateDirectory = join(stateDirectory, 'openclaw')
   const openClawCli = createOpenClawCliAdapter({
@@ -400,6 +402,9 @@ export function apply(ctx: Context, config: Config): void {
     }, 'dsh-arkme: marketplace dynamic runner bridge')
   })
   ctx.inject(['apiProxy'], apiCtx => {
+    // The default-off feature must not construct platform credential stores,
+    // open DSH muxes or otherwise affect the existing Arkme plugin lifecycle.
+    if (!config.dshRemoteFeatureEnabled) return
     const authenticatedSocketFactory = apiCtx.get('arkmeRemoteSocketFactory') as ArkmeRemoteAuthenticatedSocketFactory | undefined
     const profileRefValue = process.env.DSH_PROFILE?.trim() || 'web'
     const profileRef = /^[A-Za-z0-9._:-]{1,128}$/.test(profileRefValue) ? profileRefValue : 'web'
