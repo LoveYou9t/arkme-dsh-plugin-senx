@@ -145,7 +145,14 @@ export class ArkmeRemoteRealtimeTransport implements DshRemoteRealtimeTransport 
   private onMessage: ((event: SocketEventLike) => void) | undefined
   private onClose: ((event: SocketEventLike) => void) | undefined
 
-  constructor(private readonly createSocket: DshRemoteSocketFactory) {}
+  constructor(
+    private readonly createSocket: DshRemoteSocketFactory,
+    private readonly requestTimeoutMillis = 10_000,
+  ) {
+    if (!Number.isSafeInteger(requestTimeoutMillis) || requestTimeoutMillis < 1_000 || requestTimeoutMillis > 60_000) {
+      throw new TypeError('Realtime request timeout must be between 1000 and 60000 milliseconds')
+    }
+  }
 
   async connect(input: { profileRef: string; clientRef: string; signal: AbortSignal }): Promise<void> {
     await this.disconnect()
@@ -169,14 +176,24 @@ export class ArkmeRemoteRealtimeTransport implements DshRemoteRealtimeTransport 
     const opened = await new Promise<void>((resolve, reject) => {
       const onOpen = () => { cleanup(); resolve() }
       const onError = () => { cleanup(); reject(new DshRemoteError('REMOTE_TRANSPORT_FAILED', 'Realtime 连接失败', true)) }
+      const onEarlyClose = () => { cleanup(); reject(new DshRemoteError('REMOTE_TRANSPORT_FAILED', 'Realtime 在握手前关闭', true)) }
       const onAbort = () => { cleanup(); socket.close(1000, 'aborted'); reject(input.signal.reason) }
       const cleanup = () => {
+        clearTimeout(timer)
         socket.removeEventListener('open', onOpen)
         socket.removeEventListener('error', onError)
+        socket.removeEventListener('close', onEarlyClose)
         input.signal.removeEventListener('abort', onAbort)
       }
+      const timer = setTimeout(() => {
+        cleanup()
+        socket.close(1000, 'handshake timeout')
+        reject(new DshRemoteError('REMOTE_TRANSPORT_FAILED', 'Realtime 连接握手超时', true))
+      }, this.requestTimeoutMillis)
+      timer.unref()
       socket.addEventListener('open', onOpen)
       socket.addEventListener('error', onError)
+      socket.addEventListener('close', onEarlyClose)
       input.signal.addEventListener('abort', onAbort, { once: true })
     })
     void opened
@@ -342,15 +359,25 @@ export class ArkmeRemoteRealtimeTransport implements DshRemoteRealtimeTransport 
 
   private waitForRequest(requestId: string, expectedType: string, signal: AbortSignal): Promise<ServerFrame> {
     return new Promise((resolve, reject) => {
-      const onAbort = () => { this.waiters.delete(requestId); reject(signal.reason) }
+      const cleanup = () => {
+        clearTimeout(timer)
+        signal.removeEventListener('abort', onAbort)
+      }
+      const onAbort = () => { this.waiters.delete(requestId); cleanup(); reject(signal.reason) }
+      const timer = setTimeout(() => {
+        this.waiters.delete(requestId)
+        cleanup()
+        reject(new DshRemoteError('REMOTE_TRANSPORT_FAILED', `Realtime ${expectedType} 响应超时`, true))
+      }, this.requestTimeoutMillis)
+      timer.unref()
       signal.addEventListener('abort', onAbort, { once: true })
       this.waiters.set(requestId, {
         resolve: frame => {
-          signal.removeEventListener('abort', onAbort)
+          cleanup()
           if (frame.type !== expectedType) reject(remoteError(frame))
           else resolve(frame)
         },
-        reject: error => { signal.removeEventListener('abort', onAbort); reject(error) },
+        reject: error => { cleanup(); reject(error) },
       })
     })
   }

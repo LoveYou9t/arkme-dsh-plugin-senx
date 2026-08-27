@@ -72,6 +72,15 @@ const claims: DshRemoteGrantClaims = {
 }
 
 describe('Realtime remote transport wire', () => {
+  it('fails a silent pre-open socket instead of blocking the Host lifecycle forever', async () => {
+    const socket = new FakeSocket()
+    const transport = new ArkmeRemoteRealtimeTransport(() => socket, 1_000)
+    await expect(transport.connect({
+      profileRef: 'profile-test', clientRef: 'host-client-test', signal: new AbortController().signal,
+    })).rejects.toMatchObject({ code: 'REMOTE_TRANSPORT_FAILED', retryable: true })
+    expect(socket.readyState).toBe(3)
+  })
+
   it('sends the frozen channel_ref in authorize.start and does not depend on it in authorized', async () => {
     const socket = new FakeSocket()
     const transport = new ArkmeRemoteRealtimeTransport(() => socket)
