@@ -476,8 +476,11 @@ describe('persistent extension profile bundle', () => {
       dshHome: root, profileName: 'web', execPath: process.execPath, dshBinPath: '/dsh/bin', run,
     })
     const tarball = join(root, 'bundle with spaces.tgz')
+    const portableBundle = join(root, 'profiles', 'web', 'arkme-extensions', 'bundle with spaces', '1.0.0')
     writeFileSync(tarball, 'fixture')
+    mkdirSync(portableBundle, { recursive: true })
     await installer.install(root)
+    await installer.install(portableBundle)
     await installer.installTarball(tarball)
     await installer.remove('@arkme-local/ext-0123456789abcdef')
     await installer.remove('@example/install-bundle')
@@ -486,17 +489,21 @@ describe('persistent extension profile bundle', () => {
       'plugin', '--profile', 'web', '--config.minimum-release-age=0', 'add', `link:${root}`,
     ])
     expect(run).toHaveBeenNthCalledWith(2, [
-      'plugin', '--profile', 'web', '--config.minimum-release-age=0', 'add', tarball,
+      'plugin', '--profile', 'web', '--config.minimum-release-age=0',
+      'add', 'link:arkme-extensions/bundle with spaces/1.0.0',
     ])
     expect(run).toHaveBeenNthCalledWith(3, [
-      'plugin', '--profile', 'web', '--config.minimum-release-age=0',
-      'remove', '@arkme-local/ext-0123456789abcdef',
+      'plugin', '--profile', 'web', '--config.minimum-release-age=0', 'add', tarball,
     ])
     expect(run).toHaveBeenNthCalledWith(4, [
       'plugin', '--profile', 'web', '--config.minimum-release-age=0',
-      'remove', '@example/install-bundle',
+      'remove', '@arkme-local/ext-0123456789abcdef',
     ])
     expect(run).toHaveBeenNthCalledWith(5, [
+      'plugin', '--profile', 'web', '--config.minimum-release-age=0',
+      'remove', '@example/install-bundle',
+    ])
+    expect(run).toHaveBeenNthCalledWith(6, [
       'plugin', '--profile', 'web', '--config.minimum-release-age=0',
       'remove', 'dsh-snake-draggable', '@example/duplicate',
     ])
