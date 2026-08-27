@@ -132,12 +132,46 @@ export interface ArkmeSecureValueStore {
 
 export type ArkmeMacOSSecureValueWriter = (args: readonly string[], payload: string) => Promise<void>
 
+const MACOS_KEYCHAIN_EXPECT_SCRIPT = String.raw`
+set timeout 5
+log_user 0
+package require base64
+if {[gets stdin accountBase64] < 0 || [gets stdin serviceBase64] < 0 || [gets stdin passwordBase64] < 0} { exit 90 }
+set account [::base64::decode $accountBase64]
+set service [::base64::decode $serviceBase64]
+set password [::base64::decode $passwordBase64]
+spawn -noecho /usr/bin/security add-generic-password -a $account -s $service -U -w
+expect {
+  -exact "password data for new item:" { send -- "$password\r"; exp_continue }
+  -exact "retype password for new item:" { send -- "$password\r"; exp_continue }
+  -exact "password data for item:" { send -- "$password\r"; exp_continue }
+  -exact "retype password for item:" { send -- "$password\r"; exp_continue }
+  timeout { exit 91 }
+  eof { set status [wait]; exit [lindex $status 3] }
+}
+`
+
+function macOSSecureValueCoordinates(args: readonly string[]): { account: string; service: string } {
+  if (args.length !== 7 || args[0] !== 'add-generic-password' || args[1] !== '-a'
+    || args[3] !== '-s' || args[5] !== '-U' || args[6] !== '-w'
+    || args[2]?.trim() === '' || args[4]?.trim() === '') {
+    throw new Error('macOS Keychain 写入参数无效')
+  }
+  return { account: args[2]!, service: args[4]! }
+}
+
 export async function writeArkmeMacOSSecureValue(
   args: readonly string[],
   payload: string,
 ): Promise<void> {
+  const coordinates = macOSSecureValueCoordinates(args)
   await new Promise<void>((resolve, reject) => {
-    const child = spawn('/usr/bin/security', [...args], {
+    // `security ... -w` explicitly reads from a terminal and asks for the
+    // value twice; piping to its stdin leaves a stuck process. `expect` owns a
+    // private pseudo-terminal while the secret itself still arrives only over
+    // stdin, never argv or a persisted file.
+    const child = spawn('/usr/bin/expect', ['-c', MACOS_KEYCHAIN_EXPECT_SCRIPT], {
+      detached: true,
       shell: false,
       stdio: ['pipe', 'ignore', 'pipe'],
     })
@@ -151,7 +185,10 @@ export async function writeArkmeMacOSSecureValue(
       else reject(error)
     }
     const timer = setTimeout(() => {
-      child.kill('SIGKILL')
+      if (child.pid !== undefined) {
+        try { process.kill(-child.pid, 'SIGKILL') }
+        catch { child.kill('SIGKILL') }
+      } else child.kill('SIGKILL')
       finish(new Error('写入 macOS Keychain 超时'))
     }, 5_000)
     timer.unref()
@@ -165,9 +202,12 @@ export async function writeArkmeMacOSSecureValue(
       else finish(new Error(`macOS Keychain 写入失败（退出码 ${String(code)}）：${stderr.trim().slice(0, 512)}`))
     })
     child.stdin.once('error', error => finish(new Error('无法向 macOS Keychain 安全输入凭据', { cause: error })))
-    // `security add-generic-password ... -w` reads the password from stdin when
-    // -w is the final argument. The secret must never be observable in argv.
-    child.stdin.end(payload)
+    child.stdin.end([
+      Buffer.from(coordinates.account, 'utf8').toString('base64'),
+      Buffer.from(coordinates.service, 'utf8').toString('base64'),
+      Buffer.from(payload, 'utf8').toString('base64'),
+      '',
+    ].join('\n'), 'utf8')
   })
 }
 
