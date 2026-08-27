@@ -74,25 +74,27 @@ describe('public DSH ApiProxy remote adapter', () => {
   it('preallocates a stable SessionId and never accepts cwd from the controller', async () => {
     const { api } = await fakeApi()
     const adapter = new DshApiProxyAdapter(api)
-    const first = await adapter.createSession({ workspaceId: 'workspace-1', requestRef: 'request-1', dshRpcId: 'rpc-1' })
-    const second = await adapter.createSession({ workspaceId: 'workspace-1', requestRef: 'request-1', dshRpcId: 'rpc-1' })
+    const first = await adapter.createSession({ workspaceId: 'workspace-1', dshRpcId: 'rpc-1' })
+    const second = await adapter.createSession({ workspaceId: 'workspace-1', dshRpcId: 'rpc-1' })
     expect(second.sessionId).toBe(first.sessionId)
     expect(first.sessionId).toMatch(/^[a-f0-9-]{36}$/)
+    await expect(adapter.createSession({ workspaceId: 'workspace-1', dshRpcId: 'rpc-other-binding' }))
+      .resolves.not.toEqual(first)
   })
 
   it('reconciles a created Session by its deterministic request identity', async () => {
     const { api } = await fakeApi()
     const adapter = new DshApiProxyAdapter(api)
-    const created = await adapter.createSession({ workspaceId: 'workspace-1', requestRef: 'request-1', dshRpcId: 'rpc-1' })
+    const created = await adapter.createSession({ workspaceId: 'workspace-1', dshRpcId: 'rpc-1' })
     api.workspace!.list = async request => ok({
       items: [{ workspaceId: 'workspace-1', path: process.cwd(), title: 'Project', sessionIds: [created.sessionId] }],
     }, request.rpcId)
     api.sessions!.list = async request => ok({ items: [{
       sessionId: created.sessionId, updatedAt: 100, running: false, blank: true,
     }] }, request.rpcId)
-    await expect(adapter.reconcileCreatedSession({ workspaceId: 'workspace-1', requestRef: 'request-1' }))
+    await expect(adapter.reconcileCreatedSession({ workspaceId: 'workspace-1', dshRpcId: 'rpc-1' }))
       .resolves.toEqual({ sessionId: created.sessionId })
-    await expect(adapter.reconcileCreatedSession({ workspaceId: 'workspace-1', requestRef: 'other-request' }))
+    await expect(adapter.reconcileCreatedSession({ workspaceId: 'workspace-1', dshRpcId: 'other-rpc' }))
       .resolves.toBeUndefined()
   })
 
@@ -238,5 +240,44 @@ describe('public DSH ApiProxy remote adapter', () => {
     stop()
     await new Promise(resolve => { setTimeout(resolve, 30) })
     expect(calls).toBe(2)
+  })
+
+  it('projects real mux session events, baselines and full pending interaction state without mixing their cursors', async () => {
+    const { api } = await fakeApi()
+    async function* mux() {
+      yield { rpcId: 'subscribed-session-01', payload: {
+        type: 'session/subscribed', sessionId: 'session-1', lastSeq: 7,
+      } }
+      yield { rpcId: 'session-event-01', payload: {
+        type: 'session/event', sessionId: 'session-1',
+        event: { type: 'assistant/message', seq: 8, time: 101, data: {
+          content: [{ type: 'text', text: 'live answer' }], source: { kind: 'assistant' }, private: 'hidden',
+        } },
+      } }
+      yield { rpcId: 'question-live-01', payload: {
+        type: 'question/requested', sessionId: 'session-1', questions: [{ id: 'q', question: '继续吗？' }],
+      } }
+      await new Promise(() => undefined)
+    }
+    api.events = { mux: () => mux() }
+    const adapter = new DshApiProxyAdapter(api)
+    const projected: unknown[] = []
+    adapter.subscribeProjectionEvents(event => { projected.push(event) })
+    const stop = adapter.startEvents()
+    await vi.waitFor(() => { expect(projected).toHaveLength(3) })
+    expect(projected[0]).toEqual({
+      kind: 'mux-baseline', sessionId: 'session-1', lastSeq: 7, pendingInteractions: [],
+    })
+    expect(projected[1]).toMatchObject({
+      kind: 'session-event', sessionId: 'session-1',
+      entry: { event: { type: 'assistant/message', seq: 8, data: { content: [{ type: 'text', text: 'live answer' }] } } },
+    })
+    expect(JSON.stringify(projected[1])).not.toContain('hidden')
+    expect(projected[2]).toMatchObject({
+      kind: 'interactions', pendingInteractions: [{
+        kind: 'question', interactionRpcRef: 'question-live-01', sessionId: 'session-1',
+      }],
+    })
+    stop()
   })
 })

@@ -1,6 +1,6 @@
 import { hostname } from 'node:os'
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
-import { DshApiProxyAdapter } from './api-proxy-adapter.js'
+import { DshApiProxyAdapter, type DshRemoteApiProjectionEvent } from './api-proxy-adapter.js'
 import { DshRemoteCommandLedger, type DshRemoteLedgerEntry } from './command-ledger.js'
 import { DshRemoteHostChannelManager } from './channel-manager.js'
 import { DesktopCredentialBroker } from './desktop-credential-broker.js'
@@ -24,6 +24,7 @@ import { DshRemotePairingCoordinator } from './pairing.js'
 import { parseDshRemoteRequest } from './protocol-v1.js'
 import { DshRemoteRuntimeStore } from './runtime-store.js'
 import {
+  DSH_REMOTE_MAX_PAGE_RESULT_BYTES,
   DSH_REMOTE_PROTOCOL,
   DSH_REMOTE_PROTOCOL_MAJOR,
   type DshRemoteBindingProjection,
@@ -163,6 +164,7 @@ export class ArkmeRemoteRealtimeHost implements DshRemoteHostFacade {
   private bindings: DshRemoteBindingProjection[] = []
   private revision = 0
   private stopEvents: (() => void) | undefined
+  private stopProjectionEvents: (() => void) | undefined
   private channelManager: DshRemoteHostChannelManager | undefined
   private pairingChannel: HostPairingChannel | undefined
   private stopTransportDisconnect: (() => void) | undefined
@@ -271,12 +273,54 @@ export class ArkmeRemoteRealtimeHost implements DshRemoteHostFacade {
   }
 
   private startApiProxyEvents(): void {
+    if (this.stopProjectionEvents === undefined) {
+      this.stopProjectionEvents = this.options.apiProxy.subscribeProjectionEvents(event => {
+        void this.publishProjectionEvent(event)
+      })
+    }
     if (this.stopEvents === undefined) this.stopEvents = this.options.apiProxy.startEvents()
   }
 
   private stopApiProxyEvents(): void {
     this.stopEvents?.()
     this.stopEvents = undefined
+    this.stopProjectionEvents?.()
+    this.stopProjectionEvents = undefined
+  }
+
+  private async publishProjectionEvent(event: DshRemoteApiProjectionEvent): Promise<void> {
+    const manager = this.channelManager
+    const runtime = this.runtime
+    if (!this.started || !this.connected || runtime?.remoteEnabled !== true || manager === undefined) return
+    const issuedAt = this.now()
+    if (event.kind === 'session-event') {
+      const seq = event.entry.event.seq
+      const requestRef = `event_${createHash('sha256').update([
+        'dsh-remote-session-event-v1', runtime.runtimeRef, String(runtime.hostGeneration), event.sessionId,
+        String(seq), event.entry.event.type,
+      ].join('\n')).digest('base64url').slice(0, 40)}`
+      await manager.publishProjectionEvent({
+        protocol: DSH_REMOTE_PROTOCOL, protocol_major: DSH_REMOTE_PROTOCOL_MAJOR, kind: 'event',
+        request_ref: requestRef, host_generation: runtime.hostGeneration, issued_at: issuedAt,
+        operation: 'session.history', body: { session_ref: event.sessionId, entries: [event.entry] },
+        session_seq: seq, projection_as_of_seq: seq,
+      }, requestRef)
+      return
+    }
+    const baseline = event.kind === 'mux-baseline'
+    const requestRef = `projection_${randomUUID()}`
+    const pendingFits = Buffer.byteLength(JSON.stringify(event.pendingInteractions)) <= DSH_REMOTE_MAX_PAGE_RESULT_BYTES
+    await manager.publishProjectionEvent({
+      protocol: DSH_REMOTE_PROTOCOL, protocol_major: DSH_REMOTE_PROTOCOL_MAJOR, kind: 'event',
+      request_ref: requestRef, host_generation: runtime.hostGeneration, issued_at: issuedAt,
+      operation: 'snapshot.get',
+      body: {
+        ...(pendingFits ? { pending_interactions: event.pendingInteractions } : {}),
+        ...(baseline ? { reason: 'mux-generation', session_ref: event.sessionId, last_seq: event.lastSeq } : {}),
+        ...(!pendingFits && !baseline ? { reason: 'projection-overflow' } : {}),
+      },
+      ...(baseline && event.lastSeq >= 0 ? { projection_as_of_seq: event.lastSeq } : {}),
+    }, requestRef)
   }
 
   private handleTransportDisconnect(error?: unknown): void {
@@ -752,7 +796,7 @@ export class ArkmeRemoteRealtimeHost implements DshRemoteHostFacade {
         || controlClaims.credential_ref !== this.credentialRef || controlClaims.cnf.public_key !== this.identity!.publicKey
         || controlClaims.cnf.key_fingerprint !== this.identity!.keyFingerprint
         || controlClaims.subject_revisions.binding !== confirmed.binding.revision
-        || !controlClaims.allowed_directions.includes('response')
+        || !controlClaims.allowed_directions.includes('response') || !controlClaims.allowed_directions.includes('event')
         || controlClaims.scope.length !== confirmed.binding.scopes.length
         || controlClaims.scope.some(scope => !confirmed.binding.scopes.includes(scope))
         || confirmed.grant.channelRef !== undefined && confirmed.grant.channelRef !== controlClaims.channel_ref) {
@@ -859,7 +903,7 @@ export class ArkmeRemoteRealtimeHost implements DshRemoteHostFacade {
     try {
       switch (request.operation) {
       case 'session.create': value = await this.options.apiProxy.createSession({
-        workspaceId: stringBody(request.body, 'workspace_ref'), requestRef: request.request_ref, dshRpcId: begun.entry.dshRpcId,
+        workspaceId: stringBody(request.body, 'workspace_ref'), dshRpcId: begun.entry.dshRpcId,
       }); break
       case 'session.prompt': value = await this.options.apiProxy.prompt({
         sessionId: stringBody(request.body, 'session_ref'),
@@ -906,7 +950,7 @@ export class ArkmeRemoteRealtimeHost implements DshRemoteHostFacade {
         try {
           const created = await this.options.apiProxy.reconcileCreatedSession({
             workspaceId: argumentsRecord.workspace_ref,
-            requestRef: entry.requestRef,
+            dshRpcId: entry.dshRpcId,
           })
           if (created !== undefined) {
             proven = true

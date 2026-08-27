@@ -37,6 +37,7 @@ function parseSecrets(raw: string, accountId: string): PersistedDesktopSecrets {
 /** Installation-level credential broker: the secure service namespace is shared across DSH Profiles. */
 export class DesktopCredentialBroker {
   private readonly inFlight = new Map<string, Promise<PersistedDesktopSecrets>>()
+  private readonly channelWrites = new Map<string, Promise<void>>()
 
   constructor(private readonly store: ArkmeSecureValueStore) {}
 
@@ -75,21 +76,37 @@ export class DesktopCredentialBroker {
     controllerKeyFingerprint: string
     controllerToHost: Uint8Array
     hostToController: Uint8Array
+    lastTransportSequence?: number
   }): Promise<void> {
     if (input.rootSecret.length !== 32 || input.controllerToHost.length !== 32 || input.hostToController.length !== 32
       || !/^[A-Za-z0-9_-]{43}$/.test(input.controllerPublicKey) || input.controllerKeyFingerprint.length < 32
       || !Number.isSafeInteger(input.keyEpoch) || input.keyEpoch <= 0) {
       throw new DshRemoteError('REMOTE_REQUEST_INVALID', '远控频道密钥无效')
     }
-    await this.store.write(this.channelAccount(input), JSON.stringify({
-      schemaVersion: 1, accountId: input.accountId, bindingRef: input.bindingRef,
-      runtimeRef: input.runtimeRef, channelRef: input.channelRef, keyEpoch: input.keyEpoch,
-      rootSecret: encodeBase64Url(input.rootSecret), controllerPublicKey: input.controllerPublicKey,
-      controllerKeyFingerprint: input.controllerKeyFingerprint,
-      controllerToHost: encodeBase64Url(input.controllerToHost),
-      hostToController: encodeBase64Url(input.hostToController),
-    }))
-    await this.store.write(this.channelIndexAccount(input), input.channelRef)
+    if (input.lastTransportSequence !== undefined
+      && (!Number.isSafeInteger(input.lastTransportSequence) || input.lastTransportSequence < 0)) {
+      throw new DshRemoteError('REMOTE_REQUEST_INVALID', '远控频道 transport sequence 无效')
+    }
+    const account = this.channelAccount(input)
+    const previous = this.channelWrites.get(account) ?? Promise.resolve()
+    const writing = previous.catch(() => undefined).then(async () => {
+      // Publish the revocation index before the secret. A crash may leave a
+      // harmless missing secret behind the index, never an unindexed key that
+      // a later Binding revoke cannot find and purge.
+      await this.store.write(this.channelIndexAccount(input), input.channelRef)
+      await this.store.write(account, JSON.stringify({
+        schemaVersion: 1, accountId: input.accountId, bindingRef: input.bindingRef,
+        runtimeRef: input.runtimeRef, channelRef: input.channelRef, keyEpoch: input.keyEpoch,
+        rootSecret: encodeBase64Url(input.rootSecret), controllerPublicKey: input.controllerPublicKey,
+        controllerKeyFingerprint: input.controllerKeyFingerprint,
+        controllerToHost: encodeBase64Url(input.controllerToHost),
+        hostToController: encodeBase64Url(input.hostToController),
+        ...(input.lastTransportSequence === undefined ? {} : { lastTransportSequence: input.lastTransportSequence }),
+      }))
+    })
+    this.channelWrites.set(account, writing)
+    try { await writing }
+    finally { if (this.channelWrites.get(account) === writing) this.channelWrites.delete(account) }
   }
 
   async channelKeys(input: { accountId: string; bindingRef: string; runtimeRef: string; channelRef: string }): Promise<{
@@ -99,8 +116,11 @@ export class DesktopCredentialBroker {
     controllerKeyFingerprint: string
     controllerToHost: Buffer
     hostToController: Buffer
+    lastTransportSequence: number
   } | undefined> {
-    const raw = await this.store.read(this.channelAccount(input))
+    const account = this.channelAccount(input)
+    await this.channelWrites.get(account)?.catch(() => undefined)
+    const raw = await this.store.read(account)
     if (raw === undefined) return undefined
     let source: Record<string, unknown>
     try { source = JSON.parse(raw) as Record<string, unknown> }
@@ -110,7 +130,10 @@ export class DesktopCredentialBroker {
       || typeof source.keyEpoch !== 'number' || !Number.isSafeInteger(source.keyEpoch) || source.keyEpoch <= 0
       || typeof source.rootSecret !== 'string' || typeof source.controllerPublicKey !== 'string'
       || typeof source.controllerKeyFingerprint !== 'string'
-      || typeof source.controllerToHost !== 'string' || typeof source.hostToController !== 'string') {
+      || typeof source.controllerToHost !== 'string' || typeof source.hostToController !== 'string'
+      || (source.lastTransportSequence !== undefined
+        && (typeof source.lastTransportSequence !== 'number' || !Number.isSafeInteger(source.lastTransportSequence)
+          || source.lastTransportSequence < 0))) {
       throw new DshRemoteError('REMOTE_STORAGE_FAILED', '远控频道密钥路由不匹配')
     }
     const rootSecret = decodeBase64Url(source.rootSecret)
@@ -120,11 +143,14 @@ export class DesktopCredentialBroker {
     return {
       keyEpoch: source.keyEpoch, rootSecret, controllerPublicKey: source.controllerPublicKey,
       controllerKeyFingerprint: source.controllerKeyFingerprint, controllerToHost, hostToController,
+      lastTransportSequence: typeof source.lastTransportSequence === 'number' ? source.lastTransportSequence : 0,
     }
   }
 
   async deleteChannelKeys(input: { accountId: string; bindingRef: string; runtimeRef: string; channelRef: string }): Promise<void> {
-    await this.store.delete(this.channelAccount(input))
+    const account = this.channelAccount(input)
+    await this.channelWrites.get(account)?.catch(() => undefined)
+    await this.store.delete(account)
     await this.store.delete(this.channelIndexAccount(input))
   }
 
@@ -132,7 +158,9 @@ export class DesktopCredentialBroker {
     const indexAccount = this.channelIndexAccount(input)
     const channelRef = await this.store.read(indexAccount)
     if (channelRef !== undefined) {
-      await this.store.delete(this.channelAccount({ ...input, channelRef }))
+      const account = this.channelAccount({ ...input, channelRef })
+      await this.channelWrites.get(account)?.catch(() => undefined)
+      await this.store.delete(account)
     }
     await this.store.delete(indexAccount)
   }

@@ -141,14 +141,19 @@ describe('Realtime remote transport wire', () => {
     setTimeout(() => { socket.open() }, 0)
     await connected
     await transport.authorizeChannel({ grant: 'g'.repeat(80), claims, signProof: async () => 's'.repeat(86), signal: controller.signal })
-    const received: Record<string, unknown>[] = []
+    const received: Array<{ payload: Record<string, unknown>; sequence?: number }> = []
     await transport.subscribe({
       channelRef: claims.channel_ref, authorizationRef: 'authorization-test-01',
-      onEvent: payload => { received.push(payload) }, signal: controller.signal,
+      afterSequence: 1,
+      onEvent: (payload, metadata) => { received.push({ payload, sequence: metadata.transportSequence }) }, signal: controller.signal,
     })
     socket.remoteEvent({ ciphertext: 'encrypted' })
-    expect(received).toEqual([{ ciphertext: 'encrypted' }])
-    expect(socket.sent.map(value => JSON.parse(value) as Record<string, unknown>))
+    expect(received).toEqual([{ payload: { ciphertext: 'encrypted' }, sequence: 2 }])
+    const sent = socket.sent.map(value => JSON.parse(value) as Record<string, unknown>)
+    expect(sent).toContainEqual(expect.objectContaining({
+      type: 'channel.subscribe', channel_ref: claims.channel_ref, after_seq: 1,
+    }))
+    expect(sent)
       .toContainEqual(expect.objectContaining({ type: 'channel.ack', request_id: expect.any(String), seq: 2 }))
   })
 })

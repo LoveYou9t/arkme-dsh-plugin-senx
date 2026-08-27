@@ -68,6 +68,23 @@ export interface DshRemoteHistoryEntry {
   }
 }
 
+export type DshRemoteApiProjectionEvent =
+  | {
+      kind: 'session-event'
+      sessionId: string
+      entry: DshRemoteHistoryEntry
+    }
+  | {
+      kind: 'interactions'
+      pendingInteractions: DshRemotePendingInteraction[]
+    }
+  | {
+      kind: 'mux-baseline'
+      sessionId: string
+      lastSeq: number
+      pendingInteractions: DshRemotePendingInteraction[]
+    }
+
 export interface DshPublicApiProxyLike {
   workspace?: WorkspaceApiLike
   sessions?: SessionsApiLike
@@ -194,6 +211,7 @@ function projectQuestions(value: unknown[]): unknown[] {
 export class DshApiProxyAdapter {
   private readonly pendingInteractions = new Map<string, DshRemotePendingInteraction>()
   private readonly interactionListeners = new Set<(interactions: DshRemotePendingInteraction[]) => void>()
+  private readonly projectionListeners = new Set<(event: DshRemoteApiProjectionEvent) => void>()
   private eventController: AbortController | undefined
   private eventLoop: Promise<void> | undefined
 
@@ -337,12 +355,14 @@ export class DshApiProxyAdapter {
     return entries.some(entry => entry.event.type === 'user/message' && entry.event.data.source?.rpcId === rpcIdValue)
   }
 
-  async createSession(input: { workspaceId: string; requestRef: string; dshRpcId: string }): Promise<{ sessionId: string }> {
+  async createSession(input: { workspaceId: string; dshRpcId: string }): Promise<{ sessionId: string }> {
     const workspace = (await this.workspaces()).find(item => item.workspaceId === input.workspaceId)
     if (workspace === undefined || !workspace.available) throw new DshRemoteError('WORKSPACE_UNAVAILABLE', '工作目录已经删除或不可访问')
     const create = this.api.sessions?.create
     if (typeof create !== 'function') this.unsupported('session.create')
-    const sessionId = stableSessionId(input.requestRef)
+    // request_ref is only controller-scoped. The Host ledger's rpc id also
+    // binds Binding+Runtime, so two trusted phones cannot collide on a Session.
+    const sessionId = stableSessionId(input.dshRpcId)
     const created = unwrap(await create.call(this.api.sessions, {
       rpcId: input.dshRpcId,
       payload: { workspaceId: input.workspaceId, sessionId },
@@ -353,8 +373,8 @@ export class DshApiProxyAdapter {
     return created
   }
 
-  async reconcileCreatedSession(input: { workspaceId: string; requestRef: string }): Promise<{ sessionId: string } | undefined> {
-    const expected = stableSessionId(input.requestRef)
+  async reconcileCreatedSession(input: { workspaceId: string; dshRpcId: string }): Promise<{ sessionId: string } | undefined> {
+    const expected = stableSessionId(input.dshRpcId)
     let cursor: string | undefined
     do {
       const page = await this.sessions({
@@ -420,6 +440,11 @@ export class DshApiProxyAdapter {
   subscribeInteractions(listener: (interactions: DshRemotePendingInteraction[]) => void): () => void {
     this.interactionListeners.add(listener)
     return () => { this.interactionListeners.delete(listener) }
+  }
+
+  subscribeProjectionEvents(listener: (event: DshRemoteApiProjectionEvent) => void): () => void {
+    this.projectionListeners.add(listener)
+    return () => { this.projectionListeners.delete(listener) }
   }
 
   startEvents(): () => void {
@@ -510,11 +535,29 @@ export class DshApiProxyAdapter {
       if (signal.aborted) return
       const payload = frame.payload
       const type = payload.type
-      if (type === 'question/requested' && typeof payload.sessionId === 'string' && Array.isArray(payload.questions)) {
+      let interactionsChanged = false
+      if (type === 'session/event' && typeof payload.sessionId === 'string'
+        && payload.event !== null && typeof payload.event === 'object' && !Array.isArray(payload.event)) {
+        const event = payload.event as Record<string, unknown>
+        if (typeof event.type === 'string' && typeof event.seq === 'number' && Number.isSafeInteger(event.seq) && event.seq >= 0
+          && typeof event.time === 'number' && Number.isSafeInteger(event.time) && event.time >= 0) {
+          this.emitProjection({
+            kind: 'session-event', sessionId: payload.sessionId,
+            entry: this.projectHistoryEvent({ type: event.type, seq: event.seq, time: event.time, data: event.data }),
+          })
+        }
+      } else if (type === 'session/subscribed' && typeof payload.sessionId === 'string'
+        && typeof payload.lastSeq === 'number' && Number.isSafeInteger(payload.lastSeq) && payload.lastSeq >= -1) {
+        this.emitProjection({
+          kind: 'mux-baseline', sessionId: payload.sessionId, lastSeq: payload.lastSeq,
+          pendingInteractions: this.pending(),
+        })
+      } else if (type === 'question/requested' && typeof payload.sessionId === 'string' && Array.isArray(payload.questions)) {
         this.pendingInteractions.set(frame.rpcId, {
           kind: 'question', interactionRpcRef: frame.rpcId, sessionId: payload.sessionId,
           questions: projectQuestions(payload.questions),
         })
+        interactionsChanged = true
       } else if (type === 'approval/requested' && typeof payload.sessionId === 'string'
         && typeof payload.approvalId === 'string' && typeof payload.toolName === 'string') {
         const reason = typeof payload.reason === 'string' && payload.reason.trim() !== '' ? payload.reason.trim().slice(0, 500) : undefined
@@ -525,16 +568,18 @@ export class DshApiProxyAdapter {
           // rc.7 does not carry a complete workspace + operation summary. Fail closed for allow-once.
           canAllowOnce: false,
         })
+        interactionsChanged = true
       } else if (type === 'question/resolved' && typeof payload.questionRpcId === 'string') {
-        this.pendingInteractions.delete(payload.questionRpcId)
+        interactionsChanged = this.pendingInteractions.delete(payload.questionRpcId)
       } else if (type === 'approval/resolved') {
         for (const [key, pending] of this.pendingInteractions) {
           if (pending.kind === 'approval' && pending.sessionId === payload.sessionId && pending.approvalId === payload.approvalId) {
             this.pendingInteractions.delete(key)
+            interactionsChanged = true
           }
         }
       }
-      this.emitInteractions()
+      if (interactionsChanged) this.emitInteractions()
     }
   }
 
@@ -625,6 +670,11 @@ export class DshApiProxyAdapter {
   private emitInteractions(): void {
     const snapshot = this.pending()
     for (const listener of this.interactionListeners) listener(snapshot)
+    this.emitProjection({ kind: 'interactions', pendingInteractions: snapshot })
+  }
+
+  private emitProjection(event: DshRemoteApiProjectionEvent): void {
+    for (const listener of this.projectionListeners) listener(event)
   }
 
   private unsupported(capability: string): never {

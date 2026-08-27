@@ -46,6 +46,8 @@ interface ActiveChannel {
   controllerKeyFingerprint: string
   controllerToHost: Buffer
   hostToController: Buffer
+  lastTransportSequence: number
+  persistedTransportSequence: number
   unsubscribe: () => void
   renewTimer?: ReturnType<typeof setTimeout>
   rotateTimer?: ReturnType<typeof setTimeout>
@@ -157,7 +159,7 @@ export class DshRemoteHostChannelManager {
       || claims.runtime_ref !== this.options.runtimeRef || claims.credential_ref !== this.options.credentialRef
       || claims.subject_revisions.binding !== binding.revision
       || claims.cnf.key_fingerprint !== this.options.identity.keyFingerprint || claims.cnf.public_key !== this.options.identity.publicKey
-      || !claims.allowed_directions.includes('response')
+      || !claims.allowed_directions.includes('response') || !claims.allowed_directions.includes('event')
       || claims.scope.length !== binding.scopes.length || claims.scope.some(scope => !binding.scopes.includes(scope))) {
       throw new DshRemoteError('DEVICE_PROOF_INVALID', 'Host Control Grant 与本机 Binding/Runtime 不匹配')
     }
@@ -165,12 +167,12 @@ export class DshRemoteHostChannelManager {
       throw new DshRemoteError('DEVICE_PROOF_INVALID', 'Backend Control Grant 频道摘要与签名 claims 不匹配')
     }
     // The signed Grant's final pairwise channel is the only routing owner.
+    await this.close(binding.bindingRef)
     const material = await this.options.credentialBroker.channelKeys({
       accountId: this.options.accountId, bindingRef: binding.bindingRef,
       runtimeRef: this.options.runtimeRef, channelRef: claims.channel_ref,
     })
     if (material === undefined) throw new DshRemoteError('HOST_CHANNEL_NOT_READY', '该 Binding/Runtime 尚未由配对流程提升方向密钥', true)
-    await this.close(binding.bindingRef)
     const controller = new AbortController()
     const authorization = await this.options.realtime.authorizeChannel({
       grant: issued.grant, claims,
@@ -187,10 +189,13 @@ export class DshRemoteHostChannelManager {
       keyEpoch: material.keyEpoch, rootSecret: material.rootSecret,
       controllerPublicKey: material.controllerPublicKey, controllerKeyFingerprint: material.controllerKeyFingerprint,
       controllerToHost: material.controllerToHost, hostToController: material.hostToController,
+      lastTransportSequence: material.lastTransportSequence,
+      persistedTransportSequence: material.lastTransportSequence,
       unsubscribe: () => undefined, ready: false, controller,
     }
     channel.unsubscribe = await this.options.realtime.subscribe({
       channelRef: claims.channel_ref, authorizationRef: authorization.authorizationRef,
+      afterSequence: channel.lastTransportSequence,
       onEvent: (payload, metadata) => {
         void this.handle(channel, payload as DshRemoteCipherEnvelope, metadata).catch(() => {
           void this.close(channel.binding.bindingRef)
@@ -220,6 +225,9 @@ export class DshRemoteHostChannelManager {
     if (channel.renewTimer !== undefined) clearTimeout(channel.renewTimer)
     if (channel.rotateTimer !== undefined) clearTimeout(channel.rotateTimer)
     if (channel.agreement !== undefined) clearTimeout(channel.agreement.timer)
+    if (channel.lastTransportSequence > channel.persistedTransportSequence) {
+      await this.persistChannel(channel).catch(() => undefined)
+    }
   }
 
   async closeAll(): Promise<void> {
@@ -235,8 +243,36 @@ export class DshRemoteHostChannelManager {
     })
   }
 
+  async publishProjectionEvent(envelope: Record<string, unknown>, commandId: string): Promise<void> {
+    await Promise.all([...this.channels.values()].map(async channel => {
+      if (!channel.ready || this.channels.get(channel.binding.bindingRef) !== channel) return
+      try {
+        await this.options.realtime.publish({
+          channelRef: channel.claims.channel_ref,
+          authorizationRef: channel.authorizationRef,
+          commandId,
+          direction: 'event',
+          payload: encryptDshRemotePayload(channel.hostToController, envelope, {
+            keyEpoch: channel.keyEpoch,
+            direction: 'host-to-controller',
+          }),
+          signal: channel.controller.signal,
+        })
+      } catch {
+        await this.close(channel.binding.bindingRef)
+      }
+    }))
+  }
+
   private async handle(channel: ActiveChannel, payload: DshRemoteCipherEnvelope, metadata: DshRemoteTrustedEventMetadata): Promise<void> {
     if (this.channels.get(channel.binding.bindingRef) !== channel) return
+    if (metadata.transportSequence !== undefined && metadata.transportSequence > channel.lastTransportSequence) {
+      channel.lastTransportSequence = metadata.transportSequence
+      if (channel.lastTransportSequence - channel.persistedTransportSequence >= 16) {
+        channel.persistedTransportSequence = channel.lastTransportSequence
+        void this.persistChannel(channel).catch(() => { void this.close(channel.binding.bindingRef) })
+      }
+    }
     // Realtime broadcasts every Channel event to every subscriber, including
     // the publisher. Host key-init/confirmation/response echoes are transport
     // evidence only and must never tear down the Host's own control channel.
@@ -341,7 +377,9 @@ export class DshRemoteHostChannelManager {
       keyEpoch: channel.keyEpoch, rootSecret: channel.rootSecret,
       controllerPublicKey: channel.controllerPublicKey, controllerKeyFingerprint: channel.controllerKeyFingerprint,
       controllerToHost: channel.controllerToHost, hostToController: channel.hostToController,
+      lastTransportSequence: channel.lastTransportSequence,
     })
+    channel.persistedTransportSequence = channel.lastTransportSequence
     const hostConfirmation = {
       protocol: 'dsh.remote-key', protocol_major: 1, kind: 'host-key-confirm', direction: 'host-to-controller',
       binding_ref: channel.binding.bindingRef, runtime_ref: this.options.runtimeRef, channel_ref: channel.claims.channel_ref,
@@ -366,6 +404,18 @@ export class DshRemoteHostChannelManager {
       }
     }, Math.max(1_000, Math.floor(lifetimeMillis * 0.6)))
     channel.renewTimer.unref()
+  }
+
+  private async persistChannel(channel: ActiveChannel): Promise<void> {
+    await this.options.credentialBroker.putChannelKeys({
+      accountId: this.options.accountId, bindingRef: channel.binding.bindingRef,
+      runtimeRef: this.options.runtimeRef, channelRef: channel.claims.channel_ref,
+      keyEpoch: channel.keyEpoch, rootSecret: channel.rootSecret,
+      controllerPublicKey: channel.controllerPublicKey,
+      controllerKeyFingerprint: channel.controllerKeyFingerprint,
+      controllerToHost: channel.controllerToHost, hostToController: channel.hostToController,
+      lastTransportSequence: channel.lastTransportSequence,
+    })
   }
 }
 

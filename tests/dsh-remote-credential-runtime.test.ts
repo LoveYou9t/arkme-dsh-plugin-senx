@@ -42,6 +42,7 @@ describe('Desktop Credential Broker', () => {
       accountId: 'account-1', bindingRef: 'binding-1', runtimeRef: 'runtime-1', channelRef: 'remotech-one',
       keyEpoch: 1, rootSecret: Buffer.alloc(32, 8), controllerPublicKey: 'A'.repeat(43), controllerKeyFingerprint: 'F'.repeat(43),
       controllerToHost: Buffer.alloc(32, 1), hostToController: Buffer.alloc(32, 2),
+      lastTransportSequence: 257,
     })
     await broker.putChannelKeys({
       accountId: 'account-1', bindingRef: 'binding-1', runtimeRef: 'runtime-2', channelRef: 'remotech-two',
@@ -50,10 +51,10 @@ describe('Desktop Credential Broker', () => {
     })
     expect((await broker.channelKeys({
       accountId: 'account-1', bindingRef: 'binding-1', runtimeRef: 'runtime-1', channelRef: 'remotech-one',
-    }))?.controllerToHost).toEqual(Buffer.alloc(32, 1))
+    }))).toMatchObject({ controllerToHost: Buffer.alloc(32, 1), lastTransportSequence: 257 })
     expect((await broker.channelKeys({
       accountId: 'account-1', bindingRef: 'binding-1', runtimeRef: 'runtime-2', channelRef: 'remotech-two',
-    }))?.controllerToHost).toEqual(Buffer.alloc(32, 3))
+    }))).toMatchObject({ controllerToHost: Buffer.alloc(32, 3), lastTransportSequence: 0 })
     expect(await broker.channelKeys({
       accountId: 'account-1', bindingRef: 'binding-1', runtimeRef: 'runtime-1', channelRef: 'remotech-two',
     })).toBeUndefined()

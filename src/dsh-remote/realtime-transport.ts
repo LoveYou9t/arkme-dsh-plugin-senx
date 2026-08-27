@@ -276,12 +276,18 @@ export class ArkmeRemoteRealtimeTransport implements DshRemoteRealtimeTransport 
   async subscribe(input: {
     channelRef: string
     authorizationRef: string
+    afterSequence?: number
     onEvent: (payload: DshRemoteRealtimePayload, metadata: DshRemoteTrustedEventMetadata) => void
     signal: AbortSignal
   }): Promise<() => void> {
+    if (input.afterSequence !== undefined
+      && (!Number.isSafeInteger(input.afterSequence) || input.afterSequence < 0)) {
+      throw new DshRemoteError('REMOTE_REQUEST_INVALID', 'Realtime after_seq 无效')
+    }
     await this.request({
       type: 'channel.subscribe', namespace: 'dsh_remote', channel_ref: input.channelRef,
       authorization_ref: input.authorizationRef,
+      ...(input.afterSequence === undefined ? {} : { after_seq: input.afterSequence }),
     }, 'channel.subscribed', input.signal)
     this.channelListeners.set(input.channelRef, frame => {
       const event = frame.event
@@ -304,6 +310,8 @@ export class ArkmeRemoteRealtimeTransport implements DshRemoteRealtimeTransport 
         remoteAuthEpoch: source.remote_auth_epoch,
         acceptedAtMillis: source.accepted_at,
         targetHostLeaseGeneration: source.target_host_lease_generation,
+        ...(typeof source.seq === 'number' && Number.isSafeInteger(source.seq) && source.seq > 0
+          ? { transportSequence: source.seq } : {}),
       })
       if (typeof source.seq === 'number') this.send({
         type: 'channel.ack', request_id: randomUUID(), namespace: 'dsh_remote', channel_ref: input.channelRef, seq: source.seq,

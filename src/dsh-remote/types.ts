@@ -213,6 +213,7 @@ export interface DshRemoteTrustedEventMetadata {
   remoteAuthEpoch: number
   acceptedAtMillis: number
   targetHostLeaseGeneration: number
+  transportSequence?: number
 }
 
 export interface DshRemoteCipherEnvelope {
@@ -277,6 +278,7 @@ export interface DshRemoteRealtimeTransport {
   subscribe(input: {
     channelRef: string
     authorizationRef: string
+    afterSequence?: number
     onEvent: (payload: DshRemoteRealtimePayload, metadata: DshRemoteTrustedEventMetadata) => void
     signal: AbortSignal
   }): Promise<() => void>

@@ -36,6 +36,7 @@ function compactGrant(claims: DshRemoteGrantClaims, kid: string, privateJwk: Jso
 
 class FakeRealtime implements DshRemoteRealtimeTransport {
   readonly published: Array<{ channelRef: string; direction: string; payload: DshRemoteRealtimePayload }> = []
+  readonly afterSequences: Array<number | undefined> = []
   onEvent: ((payload: DshRemoteRealtimePayload, metadata: DshRemoteTrustedEventMetadata) => void) | undefined
   subscribeDisconnect() { return () => undefined }
   async connect() {}
@@ -46,6 +47,7 @@ class FakeRealtime implements DshRemoteRealtimeTransport {
     return { authorizationRef: 'host-authorization-01', remoteAuthEpoch: 3, serviceLeaseGeneration: 9, expiresAtMillis: 1_120_000 }
   }
   async subscribe(input: Parameters<DshRemoteRealtimeTransport['subscribe']>[0]) {
+    this.afterSequences.push(input.afterSequence)
     this.onEvent = input.onEvent
     return () => { this.onEvent = undefined }
   }
@@ -108,7 +110,7 @@ describe('Host control Channel key lifecycle', () => {
     realtime.onEvent?.(firstInit, {
       senderRole: 'host', senderCredentialRef: claims.credential_ref,
       authorizationRef: 'host-authorization-01', subjectRevision: 1, remoteAuthEpoch: 3,
-      acceptedAtMillis: nowMillis, targetHostLeaseGeneration: 9,
+      acceptedAtMillis: nowMillis, targetHostLeaseGeneration: 9, transportSequence: 1,
     })
     await vi.waitFor(() => { expect(manager.status(binding.bindingRef)).toBeDefined() })
 
@@ -135,9 +137,20 @@ describe('Host control Channel key lifecycle', () => {
     realtime.onEvent?.({ ...unsigned, signature: signEd25519(controller.privateJwk, canonicalJson(unsigned)) }, {
       senderRole: 'controller', senderCredentialRef: binding.controllerCredentialRef,
       authorizationRef: 'controller-authorization-01', subjectRevision: 1, remoteAuthEpoch: 4,
-      acceptedAtMillis: nowMillis, targetHostLeaseGeneration: 9,
+      acceptedAtMillis: nowMillis, targetHostLeaseGeneration: 9, transportSequence: 2,
     })
     await vi.waitFor(() => { expect(manager.status(binding.bindingRef)?.ready).toBe(true) })
+
+    const liveProjection = {
+      protocol: 'dsh.remote', protocol_major: 1, kind: 'event', request_ref: 'event-live-test-01',
+      host_generation: 1, issued_at: nowMillis, operation: 'session.history',
+      body: { session_ref: 'session-test-01', entries: [] }, session_seq: 8,
+    }
+    await manager.publishProjectionEvent(liveProjection, 'event-live-test-01')
+    expect(realtime.published.at(-1)?.direction).toBe('event')
+    expect(decryptDshRemotePayload(keys.hostToController, realtime.published.at(-1)!.payload as never, {
+      keyEpoch: 2, direction: 'host-to-controller',
+    })).toEqual(liveProjection)
 
     const request = { request_ref: 'request-test-01' }
     realtime.onEvent?.(encryptDshRemotePayload(keys.controllerToHost, request, {
@@ -145,7 +158,7 @@ describe('Host control Channel key lifecycle', () => {
     }), {
       senderRole: 'controller', senderCredentialRef: binding.controllerCredentialRef,
       authorizationRef: 'controller-authorization-01', subjectRevision: 1, remoteAuthEpoch: 4,
-      acceptedAtMillis: nowMillis, targetHostLeaseGeneration: 9,
+      acceptedAtMillis: nowMillis, targetHostLeaseGeneration: 9, transportSequence: 3,
     })
     await vi.waitFor(() => { expect(dispatch).toHaveBeenCalledTimes(1) })
     const response = realtime.published.at(-1)!.payload
@@ -154,6 +167,7 @@ describe('Host control Channel key lifecycle', () => {
     })).toMatchObject({ request_ref: 'request-test-01', status: 'completed' })
 
     await manager.open(binding)
+    expect(realtime.afterSequences).toEqual([0, 3])
     const secondInit = realtime.published.at(-1)!.payload as Record<string, unknown>
     expect(secondInit.host_ephemeral_public_key).not.toBe(firstInit.host_ephemeral_public_key)
     await manager.closeAll()

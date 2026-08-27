@@ -2,7 +2,11 @@ import { mkdir, mkdtemp } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
-import { DshApiProxyAdapter, type DshPublicApiProxyLike } from '../src/dsh-remote/api-proxy-adapter.js'
+import {
+  DshApiProxyAdapter,
+  type DshPublicApiProxyLike,
+  type DshRemoteApiProjectionEvent,
+} from '../src/dsh-remote/api-proxy-adapter.js'
 import { DshRemoteCommandLedger } from '../src/dsh-remote/command-ledger.js'
 import { DesktopCredentialBroker } from '../src/dsh-remote/desktop-credential-broker.js'
 import { generateEd25519DeviceKey } from '../src/dsh-remote/crypto.js'
@@ -26,6 +30,57 @@ class MemorySecrets implements ArkmeSecureValueStore {
 function ok<T>(value: T, rpcId: string) { return { rpcId, result: { ok: true as const, value } } }
 
 describe('Arkme remote Host canonical operation contract', () => {
+  it('maps public ApiProxy mux state to the frozen encrypted inner event shapes', async () => {
+    const publishProjectionEvent = vi.fn(async () => undefined)
+    const host = new ArkmeRemoteRealtimeHost({
+      featureEnabled: true, environment: 'test', profileRef: 'web', hostClientRef: 'host-client-test',
+      readSession: async () => undefined, credentialBroker: {} as DesktopCredentialBroker,
+      runtimeStore: {} as DshRemoteRuntimeStore, controlPlane: {} as DshRemoteControlPlane,
+      realtime: {} as DshRemoteRealtimeTransport, apiProxy: new DshApiProxyAdapter({}),
+      ledgerForAccount: () => { throw new Error('unused') }, grantSigningKeys: {}, now: () => 1_500,
+    })
+    Object.assign(host, {
+      started: true, connected: true, channelManager: { publishProjectionEvent },
+      runtime: {
+        runtimeRef: 'runtime-test-01', profileRef: 'web', accountId: '1', remoteEnabled: true,
+        hostGeneration: 7, capabilities: ['session.events'], updatedAtMillis: 1,
+      },
+    })
+    const project = async (event: DshRemoteApiProjectionEvent) => {
+      await (host as unknown as { publishProjectionEvent(value: DshRemoteApiProjectionEvent): Promise<void> })
+        .publishProjectionEvent(event)
+    }
+    await project({
+      kind: 'session-event', sessionId: 'session-test-01',
+      entry: { event: { type: 'assistant/message', seq: 8, time: 1_400, data: {
+        content: [{ type: 'text', text: 'answer' }], source: { kind: 'assistant' },
+      } } },
+    })
+    expect(publishProjectionEvent.mock.calls[0]![0]).toMatchObject({
+      kind: 'event', host_generation: 7, operation: 'session.history', session_seq: 8,
+      projection_as_of_seq: 8,
+      body: { session_ref: 'session-test-01', entries: [{ event: { seq: 8 } }] },
+    })
+    await project({
+      kind: 'mux-baseline', sessionId: 'session-test-01', lastSeq: 8, pendingInteractions: [],
+    })
+    expect(publishProjectionEvent.mock.calls[1]![0]).toMatchObject({
+      kind: 'event', operation: 'snapshot.get', projection_as_of_seq: 8,
+      body: { pending_interactions: [], reason: 'mux-generation', session_ref: 'session-test-01', last_seq: 8 },
+    })
+    await project({
+      kind: 'interactions',
+      pendingInteractions: [{
+        kind: 'question', interactionRpcRef: 'question-overflow-test-01', sessionId: 'session-test-01',
+        questions: [{ id: 'large', question: '四'.repeat(50_000) }],
+      }],
+    })
+    expect(publishProjectionEvent.mock.calls[2]![0]).toMatchObject({
+      kind: 'event', operation: 'snapshot.get', body: { reason: 'projection-overflow' },
+    })
+    expect(publishProjectionEvent.mock.calls[2]![0]).not.toHaveProperty('body.pending_interactions')
+  })
+
   it('maps snake_case prompt bodies to ApiProxy and replays a known rejection without re-execution', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'arkme remote host contract '))
     const workspace = join(directory, 'workspace')
