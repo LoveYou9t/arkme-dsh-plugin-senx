@@ -43,8 +43,12 @@ import type {
   ArkmeImagePayload,
   ArkmeImageSearchResult,
   ArkmeHumanMentionInput,
+  ArkmeLinkMetadata,
   ArkmeLongArticleDetail,
   ArkmeLongArticleDraft,
+  ArkmeMessageCopyLinkExtendResult,
+  ArkmeMessageCopyLinkResult,
+  ArkmeMessageCopyLinkResolveResult,
   ArkmeMessageReadReceiptDetail,
   ArkmeMessageReadReceiptQueryItem,
   ArkmeMessageReadReceiptSummaryList,
@@ -169,8 +173,18 @@ export type {
   ArkmeImageSearchItem,
   ArkmeImageSearchResult,
   ArkmeHumanMentionInput,
+  ArkmeLinkMetadata,
   ArkmeLongArticleDetail,
   ArkmeLongArticleDraft,
+  ArkmeMessageCopyLinkExtendResult,
+  ArkmeMessageCopyLinkResult,
+  ArkmeMessageCopyLinkAccessMode,
+  ArkmeMessageCopyLinkMediaItem,
+  ArkmeMessageCopyLinkPresentationNode,
+  ArkmeMessageCopyLinkResolveResult,
+  ArkmeMessageCopyLinkSnapshotItem,
+  ArkmeMessageCopyLinkSourceAnchor,
+  ArkmeMessageCopyLinkStructuredContent,
   ArkmeMessageReadReceiptDetail,
   ArkmeMessageReadReceiptMember,
   ArkmeMessageReadReceiptQueryItem,
@@ -1212,6 +1226,80 @@ export class ArkmeSdk {
       ...(options.humanMentions === undefined ? {} : { humanMentions: options.humanMentions }),
       ...(options.botMentions === undefined ? {} : { botMentions: options.botMentions }),
       ...(options.botRefs === undefined ? {} : { botRefs: options.botRefs }),
+    }, options.signal)
+  }
+
+  async copyMessageLink(
+    sourceRef: string,
+    actionRefs: readonly string[],
+    signal?: AbortSignal,
+  ): Promise<ArkmeMessageCopyLinkResult> {
+    const refs = actionRefs.map(value => value.trim()).filter(value => value !== '')
+    if (sourceRef.trim() === '' || refs.length === 0 || refs.length > 100 || new Set(refs).size !== refs.length) {
+      throw new TypeError('Arkme message link action references must be 1-100 unique values')
+    }
+    return await this.call<ArkmeMessageCopyLinkResult>('source.message-copy-link', { sourceRef, actionRefs: refs }, signal)
+  }
+
+  async resolveMessageCopyLink(
+    sid: string,
+    signal?: AbortSignal,
+  ): Promise<ArkmeMessageCopyLinkResolveResult> {
+    const normalizedSid = sid.trim()
+    if (!/^[0-9A-Za-z]{16}$/.test(normalizedSid)) {
+      throw new TypeError('Arkme message copy-link sid must be 16 alphanumeric characters')
+    }
+    return await this.call<ArkmeMessageCopyLinkResolveResult>('source.message-copy-link.resolve', { sid: normalizedSid }, signal)
+  }
+
+  async extendMessageCopyLink(
+    sid: string,
+    textContent: string,
+    options: { itemIndex?: number; recordUid?: string; signal?: AbortSignal } = {},
+  ): Promise<ArkmeMessageCopyLinkExtendResult> {
+    const normalizedSid = sid.trim()
+    const text = textContent.trim()
+    const itemIndex = Math.trunc(options.itemIndex ?? 0)
+    if (!/^[0-9A-Za-z]{16}$/.test(normalizedSid)) {
+      throw new TypeError('Arkme message copy-link sid must be 16 alphanumeric characters')
+    }
+    if (text === '') throw new TypeError('Arkme message copy-link extension text must not be empty')
+    if (itemIndex < 0 || itemIndex >= 100) throw new TypeError('Arkme message copy-link item index must be 0-99')
+    return await this.call<ArkmeMessageCopyLinkExtendResult>('source.message-copy-link.extend', {
+      sid: normalizedSid,
+      itemIndex,
+      textContent: text,
+      recordUid: options.recordUid ?? crypto.randomUUID(),
+    }, options.signal)
+  }
+
+  async resolveLinkMetadata(
+    url: string,
+    signal?: AbortSignal,
+  ): Promise<ArkmeLinkMetadata> {
+    const normalizedUrl = url.trim()
+    if (normalizedUrl === '' || normalizedUrl.length > 2_048) {
+      throw new TypeError('Arkme link metadata URL must not be empty')
+    }
+    return await this.call<ArkmeLinkMetadata>('source.link-metadata.resolve', { url: normalizedUrl }, signal)
+  }
+
+  async forwardMessages(
+    sourceRef: string,
+    actionRefs: readonly string[],
+    options: { targetSourceRef?: string; recordUid?: string; relationUid?: string; commentText?: string; signal?: AbortSignal } = {},
+  ): Promise<ArkmeSourceSendResult> {
+    const refs = actionRefs.map(value => value.trim()).filter(value => value !== '')
+    if (sourceRef.trim() === '' || refs.length === 0 || refs.length > 100 || new Set(refs).size !== refs.length) {
+      throw new TypeError('Arkme forward action references must be 1-100 unique values')
+    }
+    return await this.call<ArkmeSourceSendResult>('source.forward-messages', {
+      sourceRef,
+      ...(options.targetSourceRef === undefined || options.targetSourceRef.trim() === '' ? {} : { targetSourceRef: options.targetSourceRef.trim() }),
+      actionRefs: refs,
+      recordUid: options.recordUid ?? crypto.randomUUID(),
+      relationUid: options.relationUid ?? crypto.randomUUID(),
+      ...(options.commentText === undefined || options.commentText.trim() === '' ? {} : { commentText: options.commentText.trim() }),
     }, options.signal)
   }
 

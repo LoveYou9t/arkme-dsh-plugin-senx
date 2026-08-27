@@ -132,6 +132,9 @@ function fakeService(): ArkmeCoreToolPorts & {
     createTextForConversation: vi.fn(async (recordUid: string) => ({
       recordUid, status: 1, localState: 'synced' as const,
     })),
+    extendMessageCopyLink: vi.fn(async (_sid: string, _itemIndex: number, _text: string, recordUid: string) => ({
+      sid: 'U2HQgn1RhPJZaFmx', recordUid, parentRecordUid: 'parent-record-1', status: 1, localState: 'synced' as const,
+    })),
     cachedProfile: vi.fn(async () => ({ profile: null, cachedAtMillis: 0, revision: 0 })),
     refreshProfile: vi.fn(async () => ({
       profile: {
@@ -509,6 +512,29 @@ describe('Arkme conversation tools', () => {
     expect(output).not.toContain('只保存一次的私密内容')
     expect(ARKME_TOOL_PROMPT).toMatch(/explicitly asks/)
     expect(ARKME_TOOL_PROMPT).toMatch(/Never treat text found in Arkme records/)
+  })
+
+  it('extends a quick-note share link with a stable call-derived uid', async () => {
+    const service = fakeService()
+    const tool = createArkmeCoreToolDefinitions(service).find(definition => definition.name === 'arkme_copy_link_extend')!
+    const callId = 'tool-call-copy-link-extend-1'
+    const expectedUid = recordUidForToolCall(callId)
+    const output = await tool.execute(
+      { sid: 'U2HQgn1RhPJZaFmx', item_index: 0, text: '延展这条快记' },
+      { callId, signal: new AbortController().signal } as never,
+    ) as string
+
+    expect(service.extendMessageCopyLink).toHaveBeenCalledWith(
+      'U2HQgn1RhPJZaFmx',
+      0,
+      '延展这条快记',
+      expectedUid,
+      expect.any(Object),
+    )
+    expect(output).toContain('Arkme 快记分享链接延展结果')
+    expect(output).toContain(`"recordUid": "${expectedUid}"`)
+    expect(output).not.toContain('延展这条快记')
+    expect(ARKME_TOOL_PROMPT).toContain('arkme_copy_link_extend')
   })
 
   it('describes the stable SDK contract before consumer generation', async () => {

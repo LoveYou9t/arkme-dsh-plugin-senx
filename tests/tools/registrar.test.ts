@@ -139,6 +139,7 @@ describe('registerArkmeTools', () => {
       'arkme_group_member_candidates',
       'arkme_group_member_add',
       'arkme_source_read',
+      'arkme_copy_link_extend',
       'arkme_source_members',
       'arkme_source_member_records',
       'arkme_message_read_statuses',

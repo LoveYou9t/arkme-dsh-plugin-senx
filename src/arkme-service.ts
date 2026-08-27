@@ -156,8 +156,12 @@ import type {
   ArkmeImageSearchResult,
   ArkmeInterwovenBootstrap,
   ArkmeInterwovenDetail,
+  ArkmeLinkMetadata,
   ArkmeLongArticleDetail,
   ArkmeLongArticleDraft,
+  ArkmeMessageCopyLinkResult,
+  ArkmeMessageCopyLinkExtendResult,
+  ArkmeMessageCopyLinkResolveResult,
   ArkmeMessageReadReceiptDetail,
   ArkmeMessageReadReceiptQueryItem,
   ArkmeMessageReadReceiptSummaryList,
@@ -1187,14 +1191,14 @@ export class ArkmeService {
   }): void {
     this.relatedRecording.recordRelatedRecordingsToolEvent(event)
   }
-
-  async reportMessage(
-    messageRef: string,
-    reportType: 1 | 2 | 3 | 4,
-    options: { reason?: string; requestUid?: string; signal?: AbortSignal } = {},
-  ): Promise<ArkmeMessageReportResult> {
+  async reportMessage(messageRef: string, reportType: 1 | 2 | 3 | 4, options: { reason?: string; requestUid?: string; signal?: AbortSignal } = {}): Promise<ArkmeMessageReportResult> {
     return await this.chat.reportMessage(messageRef, reportType, options)
   }
+  async copySourceMessageLink(sourceRef: string, actionRefs: readonly string[], options: { signal?: AbortSignal } = {}): Promise<ArkmeMessageCopyLinkResult> { return await this.chat.copySourceMessageLink(sourceRef, actionRefs, options) }
+  async resolveMessageCopyLink(sid: string, options: { signal?: AbortSignal } = {}): Promise<ArkmeMessageCopyLinkResolveResult> { return await this.chat.resolveMessageCopyLink(sid, options) }
+  async extendMessageCopyLink(sid: string, itemIndex: number, textContent: string, recordUid: string, options: { signal?: AbortSignal } = {}): Promise<ArkmeMessageCopyLinkExtendResult> { return await this.chat.extendMessageCopyLink(sid, itemIndex, textContent, recordUid, options) }
+  async resolveLinkMetadata(rawUrl: string, options: { signal?: AbortSignal } = {}): Promise<ArkmeLinkMetadata> { return await this.chat.resolveLinkMetadata(rawUrl, options) }
+  async forwardSourceMessages(sourceRef: string, actionRefs: readonly string[], options: { targetSourceRef?: string; recordUid?: string; relationUid?: string; commentText?: string; signal?: AbortSignal } = {}): Promise<ArkmeSourceSendResult> { return await this.chat.forwardSourceMessages(sourceRef, actionRefs, options) }
 
   async sendSourceText(
     sourceRef: string,
