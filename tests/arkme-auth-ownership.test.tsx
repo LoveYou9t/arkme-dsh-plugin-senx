@@ -36,6 +36,7 @@ import { ArkmeSettingsSurface } from '../src/client/ArkmeSettingsSurface.js'
 import { ArkmeLogin } from '../src/client/ArkmeLogin.js'
 import { useArkmeAuthFlow } from '../src/client/arkme-auth-flow.js'
 import { ArkmeStartupAuthGateView, startupAuthGateScreen } from '../src/client/ArkmeStartupAuthGate.js'
+import { arkmeUi } from '../src/client/ui-controller.js'
 import {
   arkmeLoginEn, defaultArkmeLoginTranslate, type ArkmeLoginLocaleKey, type ArkmeLoginTranslate,
 } from '../src/client/arkme-login-locales.js'
@@ -59,12 +60,25 @@ describe('Arkme WeChat login ownership', () => {
     testState.jiwoScanLoginEnabled = false
     testState.testLoginEnabled = false
     arkmeAuthStore.setAuth(testState.pending)
+    arkmeUi.showLogin()
   })
 
   afterEach(async () => {
     await act(async () => { renderer?.unmount() })
     renderer = undefined
     vi.useRealTimers()
+  })
+
+  it('keeps the login UI when the startup auth snapshot is logged out', async () => {
+    arkmeAuthStore.setAuth({ status: 'logged-out', environment: 'prod' })
+
+    await act(async () => {
+      renderer = create(<ArkmeSurface ownsQrLogin />)
+      await vi.advanceTimersByTimeAsync(0)
+    })
+
+    expect(arkmeUi.getSnapshot().mode).toBe('login')
+    expect(renderer!.root.findAllByType(ArkmeLogin)).toHaveLength(1)
   })
 
   it.each([

@@ -616,7 +616,7 @@ describe('extension desired enable state owner', () => {
 
     const wrapper = readFileSync(join(bundle, 'lib', 'client.js'), 'utf8')
     expect(wrapper).toContain('extensions.client.failure')
-    expect(wrapper).toContain('"wrapperVersion":3')
+    expect(wrapper).toContain('"wrapperVersion":4')
     expect(wrapper).toContain(arkmeClientContentDigest(clientCode))
     expect(removeMany).toHaveBeenCalledWith(['dsh-snake-draggable'])
     await expect(manager.reportClientFailure({

@@ -12,7 +12,7 @@ interface PersistentClientSpec {
   wrapperVersion?: number
 }
 
-export const ARKME_CLIENT_WRAPPER_VERSION = 3
+export const ARKME_CLIENT_WRAPPER_VERSION = 4
 
 /** This function is serialized into each generated browser bundle. It must stay closure-free. */
 function persistentClientFactory(requireModule: (id: string) => unknown, spec: PersistentClientSpec): unknown {
@@ -134,6 +134,9 @@ function persistentClientFactory(requireModule: (id: string) => unknown, spec: P
   return {
     name: `arkme-extension-client:${spec.extensionId}`,
     async apply(ctx: any) {
+      const locationSearch = typeof document.location?.search === 'string' ? document.location.search : ''
+      const embeddedHarness = locationSearch.split(/[?&]/).includes('arkme-harness-embed=1')
+      if (embeddedHarness) return
       const styles = new Styles()
       const taggedConsole = {
         ...console,
