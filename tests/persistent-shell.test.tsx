@@ -1,11 +1,24 @@
 import { renderToStaticMarkup } from 'react-dom/server'
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
-  ArkmePersistentDetails, ArkmePersistentSidebar, ArkmePersistentWorkspace,
+  ArkmePersistentDetails, ArkmePersistentSidebar, ArkmePersistentWorkspace, shouldRestoreWebAuthenticatedWorkspace,
 } from '../src/client/ArkmePersistentShell.js'
+import { ArkmeWebLoginOverlay } from '../src/client/ArkmeWebLoginOverlay.js'
 import { arkmeUi } from '../src/client/ui-controller.js'
+import { arkmeAuthStore } from '../src/client/auth-store.js'
 
 describe('Arkme persistent DSH shell', () => {
+  beforeEach(() => {
+    arkmeAuthStore.setAuth({ status: 'authenticated', environment: 'prod', userId: 10001 })
+  })
+  it('restores the Web workspace if authentication completes after the login dialog unmounts', () => {
+    const authenticated = { status: 'authenticated' as const, environment: 'prod' as const, userId: 10002 }
+
+    expect(shouldRestoreWebAuthenticatedWorkspace(authenticated, 'login', false)).toBe(true)
+    expect(shouldRestoreWebAuthenticatedWorkspace(authenticated, 'harness', false)).toBe(false)
+    expect(shouldRestoreWebAuthenticatedWorkspace(authenticated, 'login', true)).toBe(false)
+  })
+
   it('renders an Arkme-owned sidebar rail for the lifetime of the plugin', () => {
     arkmeUi.showConversations()
     const markup = renderToStaticMarkup(<ArkmePersistentSidebar {...({
@@ -68,7 +81,7 @@ describe('Arkme persistent DSH shell', () => {
     expect(markup).not.toContain('aria-label="Arkme 会话列表"')
   })
 
-  it('removes all plugin navigation chrome from the login screen', () => {
+  it('keeps a constrained Arkme workspace on the Web login screen', () => {
     arkmeUi.showLogin()
     const markup = renderToStaticMarkup(<ArkmePersistentSidebar {...({
       collapsed: false,
@@ -81,9 +94,18 @@ describe('Arkme persistent DSH shell', () => {
     } as never)} />)
 
     expect(markup).toContain('data-arkme-login-mode="true"')
-    expect(markup).toContain('width:0')
-    expect(markup).not.toContain('data-arkme-owned="product-navigation"')
-    expect(markup).not.toContain('aria-label="Arkme 会话列表"')
+    expect(markup).toContain('data-arkme-web-locked="true"')
+    expect(markup).toContain('data-arkme-workspace="true"')
+    expect(markup).toContain('aria-label="Arkme 受限工作区导航"')
+    expect(markup).toContain('DeepSeek Harness')
+    expect(markup).toContain('登录解锁更多功能')
+    expect(markup).toContain('加入 DSH 内测群')
+    expect(markup).toContain('联系作者')
+    expect(markup).toContain('原生 DeepSeek 开发环境')
+    expect(markup).toContain('width:72px')
+    expect(markup).toContain('data-arkme-owned="product-navigation"')
+    expect(markup).toContain('data-arkme-plugin-version=')
+    expect(markup).toContain('对话')
   })
 
   it('renders Arkme as the permanent conversation owner without its old floating card', () => {
@@ -121,6 +143,40 @@ describe('Arkme persistent DSH shell', () => {
     expect(markup).toContain('data-arkme-owned="arkme-conversation-layer"')
     expect(markup).toContain('aria-hidden="true"')
     arkmeUi.showConversations()
+  })
+
+  it('keeps a logged-out Web user inside Harness with native settings available', () => {
+    arkmeAuthStore.setAuth({ status: 'logged-out', environment: 'prod' })
+    arkmeUi.showConversations()
+    const markup = renderToStaticMarkup(<ArkmePersistentWorkspace {...({
+      sessionId: 'session-1',
+      useSessions: (selector: (state: { current?: string; ids: string[]; byId: Record<string, never> }) => unknown) => selector({ current: 'session-1', ids: [], byId: {} }),
+      closeDetails: vi.fn(),
+    } as never)} />)
+
+    expect(markup).toContain('data-arkme-visible="true"')
+    expect(markup).toContain('arkme-harness-native-settings=1')
+  })
+
+  it('renders the Web login above the entire app while the Harness stays mounted below', () => {
+    arkmeAuthStore.setAuth({ status: 'logged-out', environment: 'prod' })
+    arkmeUi.showHarness()
+    arkmeUi.openWebLoginDialog()
+    const workspaceMarkup = renderToStaticMarkup(<ArkmePersistentWorkspace {...({
+      sessionId: 'session-1',
+      useSessions: (selector: (state: { current?: string; ids: string[]; byId: Record<string, never> }) => unknown) => selector({ current: 'session-1', ids: [], byId: {} }),
+      closeDetails: vi.fn(),
+    } as never)} />)
+    const overlayMarkup = renderToStaticMarkup(<ArkmeWebLoginOverlay {...({ t: (key: string) => key } as never)} />)
+
+    expect(overlayMarkup).toContain('data-arkme-web-login-dialog="true"')
+    expect(overlayMarkup).toContain('role="dialog"')
+    expect(overlayMarkup).toContain('aria-label="Arkme 登录"')
+    expect(overlayMarkup).toContain('aria-label="关闭登录"')
+    expect(overlayMarkup).toContain('aria-modal="true"')
+    expect(overlayMarkup).toContain('position:fixed')
+    expect(workspaceMarkup).toContain('data-arkme-visible="true"')
+    arkmeUi.closeWebLoginDialog()
   })
 
   it('claims the details seat with an empty Arkme owner', () => {

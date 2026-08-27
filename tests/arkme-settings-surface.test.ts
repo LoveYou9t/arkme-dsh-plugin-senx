@@ -76,6 +76,7 @@ describe('ArkmeSettingsSurface', () => {
     expect(redesignCss).toContain('grid-template-columns: var(--arkme-persistent-sidebar-width, 356px) minmax(0, 1fr) 0 !important')
     expect(redesignCss).toContain('[data-arkme-avatar-only="true"]')
     expect(redesignCss).toContain('grid-template-columns: 72px minmax(0, 1fr) 0 !important')
+    expect(redesignCss).toContain('[data-arkme-login-mode="true"]:not([data-arkme-web-locked])')
     expect(redesignCss).toContain('overflow-y: auto')
     expect(redesignCss).toContain('.arkme-redesign-profile-menu button')
     expect(redesignCss).toContain('background: transparent')
@@ -90,6 +91,9 @@ describe('ArkmeSettingsSurface', () => {
     expect(adapterSource).toContain("label: '我的账户'")
     expect(adapterSource).toContain('[data-slot="sidebar.settings"] button[aria-haspopup="dialog"]')
     expect(adapterSource).toContain('[data-arkme-owned="persistent-sidebar"]')
+    expect(adapterSource).toContain('const unsubscribeLogoutRestore = arkmeUi.subscribe')
+    expect(adapterSource).toContain("if (arkmeUi.getSnapshot().mode === 'login') restoreArkmeSidebar()")
+    expect(adapterSource).toContain('unsubscribeLogoutRestore()')
     expect(adapterSource).not.toContain("document.querySelector<HTMLButtonElement>('button[aria-haspopup=\"dialog\"]')")
   })
 

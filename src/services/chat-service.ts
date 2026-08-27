@@ -937,6 +937,8 @@ export class ChatService {
     options: { signal?: AbortSignal } = {},
   ): Promise<ArkmeOpenPrivateChatResult> {
     const session = await this.runtime.requireSession()
+    const existing = await this.findPrivateChatByPeerUserId(OFFICIAL_AUTHOR_USER_ID, session, options.signal)
+    if (existing !== undefined) return { source: existing }
     const created = await this.runtime.authenticatedSubjectPost<OfficialAuthorPrivateChatCreateResult>(
       '/api/v1/private/create-chat-ref-asen',
       {
@@ -978,6 +980,31 @@ export class ChatService {
       displayName,
       ...(options.signal === undefined ? {} : { signal: options.signal }),
     })
+  }
+
+  /**
+   * Contact-author is an entry point, not a second conversation type. Scan the
+   * ordinary directory first so repeated clicks always reuse the existing chat.
+   */
+  private async findPrivateChatByPeerUserId(
+    peerUserId: number,
+    session: ArkmeSessionCredentials,
+    signal?: AbortSignal,
+  ): Promise<ArkmeSourceItem | undefined> {
+    let cursor: string | undefined
+    for (let pageIndex = 0; pageIndex < 10; pageIndex += 1) {
+      const page = await this.source.listSources('root', {
+        limit: 50,
+        refresh: true,
+        ...(cursor === undefined ? {} : { cursor }),
+        ...(signal === undefined ? {} : { signal }),
+      })
+      const existing = page.items.find(source => source.kind === 'private_chat' && source.peerUserId === peerUserId)
+      if (existing !== undefined) return existing
+      if (!page.hasMore || page.nextCursor === undefined) return undefined
+      cursor = page.nextCursor
+    }
+    return undefined
   }
 
   async officialAuthorProfile(

@@ -5,16 +5,16 @@ import { Plus } from '@phosphor-icons/react/dist/icons/Plus'
 import { RobotIcon } from '@phosphor-icons/react/dist/csr/Robot'
 import type {
   ArkmeArkoHistoryPage, ArkmeArkoProfile, ArkmeAuthSnapshot, ArkmeBotSummary, ArkmeSourceDirectory, ArkmeSourceItem, ArkmeSourceList,
-  ArkmeTopicCreateResult,
+  ArkmeOfficialAuthorProfile, ArkmeOpenPrivateChatResult, ArkmeTopicCreateResult,
 } from '../types.js'
 import type { ArkmeDirectoryEntryOwnerProps, ArkmeDirectoryRowProps } from './slots-contract.js'
 import { callArkme } from './api.js'
-import { ArkmeSourceAvatar, clearArkmeAvatarCache } from './ArkmeAvatar.js'
+import { ArkmeSourceAvatar, ArkmeUserAvatar, clearArkmeAvatarCache } from './ArkmeAvatar.js'
 import { ArkmeArkoAvatar } from './ArkmeArkoAvatar.js'
 import { ArkmeMark } from './ArkmeFooterAction.js'
 import { ArkmeMuteIcon } from './ArkmeMuteIcon.js'
 import { ArkmeSendToSelfIcon } from './ArkmeSendToSelfIcon.js'
-import { ArkmeDSHBetaCommunityEntry } from './ArkmeDSHBetaCommunityEntry.js'
+import { ArkmeDSHBetaCommunityEntry, ArkmeDSHBetaCommunityEntryContent } from './ArkmeDSHBetaCommunityEntry.js'
 import { ARKME_EXTENSION_BRAND_GREEN } from './ArkmeMarketplace.js'
 import { ArkmeTopicTagBadge } from './ArkmeTopicTagBadge.js'
 import { ArkmeGlobalSearchDialog, type ArkmeDshMessageSearchResult } from './ArkmeSearchSurface.js'
@@ -60,6 +60,7 @@ export interface ArkmeNavigationProps {
   onClose?: () => void
   onActivateSurface?: () => void
   showHarnessEntry?: boolean
+  lockedDirectory?: boolean
   sendToSelfSource?: ArkmeSourceItem
   directoryLead?: ReactNode
   onCreateTask?: () => void
@@ -538,6 +539,43 @@ export function DeepSeekHarnessRow({ selected, onClick }: { selected: boolean; o
   </button>
 }
 
+/** The Host owns the official author identity; this fallback only avoids a transient duplicate entry while it loads. */
+const OFFICIAL_AUTHOR_USER_ID = 11
+
+export function arkmeOfficialAuthorSource(
+  sources: readonly ArkmeSourceItem[],
+  authorUserId: number | undefined,
+): ArkmeSourceItem | undefined {
+  if (!Number.isSafeInteger(authorUserId) || (authorUserId ?? 0) <= 0) return undefined
+  return sources.find(source => source.kind === 'private_chat' && source.peerUserId === authorUserId)
+}
+
+export function ArkmeOfficialAuthorRow({
+  profile,
+  busy = false,
+  onClick,
+}: {
+  profile?: ArkmeOfficialAuthorProfile
+  busy?: boolean
+  onClick(): void
+}) {
+  return <ArkmeDirectoryRow
+    avatar={profile === undefined
+      ? <ArkmeMark size={38} />
+      : <ArkmeUserAvatar
+          size={38}
+          label={`${profile.displayName}的头像`}
+          {...(profile.avatarRef === undefined ? {} : { avatarRef: profile.avatarRef })}
+        />}
+    title="联系作者"
+    preview={busy ? '正在打开私聊…' : '问题反馈与使用建议'}
+    selected={false}
+    disabled={busy}
+    ariaLabel="联系作者"
+    onClick={onClick}
+  />
+}
+
 function timeLabel(value: number): string {
   if (!Number.isFinite(value) || value <= 0) return ''
   const date = new Date(value)
@@ -815,7 +853,7 @@ export function ArkmeSourceSortControl({
 
 export function ArkmeNavigation({
   wide = true, avatarOnly = false, currentSessionId, embeddedProductShell = false, onClose, onActivateSurface, showHarnessEntry = false,
-  sendToSelfSource, directoryLead, onCreateTask, searchDshMessages, onOpenDshSession, renderSlot,
+  lockedDirectory = false, sendToSelfSource, directoryLead, onCreateTask, searchDshMessages, onOpenDshSession, renderSlot,
 }: ArkmeNavigationProps) {
   const ui = useSyncExternalStore(arkmeUi.subscribe, arkmeUi.getSnapshot, arkmeUi.getSnapshot)
   const authState = useSyncExternalStore(
@@ -866,6 +904,8 @@ export function ArkmeNavigation({
   const [directoryRemoveFeedbackSourceRef, setDirectoryRemoveFeedbackSourceRef] = useState<string>()
   const [directoryRemoveFeedbackBotRef, setDirectoryRemoveFeedbackBotRef] = useState<string>()
   const [directoryActionFeedback, setDirectoryActionFeedback] = useState<string>()
+  const [officialAuthorOpening, setOfficialAuthorOpening] = useState(false)
+  const [officialAuthorProfile, setOfficialAuthorProfile] = useState<ArkmeOfficialAuthorProfile>()
   const arkoProfileSnapshot = useSyncExternalStore(
     arkmeArkoProfileStore.subscribe,
     arkmeArkoProfileStore.getSnapshot,
@@ -915,6 +955,10 @@ export function ArkmeNavigation({
   const cardMode = sourceSort !== 'default'
   const bindingRequired = auth?.status === 'binding-required'
   const rootSources = sources
+  const officialAuthorSource = useMemo(
+    () => arkmeOfficialAuthorSource(rootSources, officialAuthorProfile?.userId ?? OFFICIAL_AUTHOR_USER_ID),
+    [officialAuthorProfile?.userId, rootSources],
+  )
   const rootConversationRows = useMemo(() => [
     ...rootSources.map(source => ({ kind: 'source' as const, source, activeAtMillis: source.activeAtMillis, pinned: source.isPinned === true })),
     ...bots
@@ -1079,6 +1123,17 @@ export function ArkmeNavigation({
     void callArkme<{ items: ArkmeBotSummary[] }>('bots.private-chat.directory', undefined, controller.signal)
       .then(value => { if (!controller.signal.aborted) setBots(sortArkmeBotsByCreatedAt(value.items)) })
       .catch(() => undefined)
+    return () => { controller.abort() }
+  }, [authenticated, auth?.userId])
+  useEffect(() => {
+    if (!authenticated) {
+      setOfficialAuthorProfile(undefined)
+      return
+    }
+    const controller = new AbortController()
+    void callArkme<ArkmeOfficialAuthorProfile>('chat.official-author.profile', undefined, controller.signal)
+      .then(profile => { if (!controller.signal.aborted) setOfficialAuthorProfile(profile) })
+      .catch(() => { if (!controller.signal.aborted) setOfficialAuthorProfile(undefined) })
     return () => { controller.abort() }
   }, [authenticated, auth?.userId])
   useEffect(() => {
@@ -1253,7 +1308,12 @@ export function ArkmeNavigation({
   }, [directory, pendingRevealSourceRef, stopCreatedHighlightAnimation, visibleSourceRows])
   useEffect(() => () => { stopCreatedHighlightAnimation() }, [stopCreatedHighlightAnimation])
 
-  const showLogin = () => { activateNativeEntry(); arkmeUi.showLogin(); onActivateSurface?.() }
+  const showLogin = () => {
+    activateNativeEntry()
+    if (lockedDirectory) arkmeUi.openWebLoginDialog()
+    else arkmeUi.showLogin()
+    onActivateSurface?.()
+  }
   const showCalls = () => { activateNativeEntry(); arkmeUi.showCalls(); onActivateSurface?.() }
   const showRecordings = () => { activateNativeEntry(); arkmeUi.showRecordings(); onActivateSurface?.() }
   const showCalendar = () => { activateNativeEntry(); arkmeUi.showCalendar(); onActivateSurface?.() }
@@ -1406,6 +1466,46 @@ export function ArkmeNavigation({
     setSources(refreshed)
   }
 
+  const openOfficialAuthor = async (): Promise<void> => {
+    if (!authenticated) {
+      showLogin()
+      return
+    }
+    if (officialAuthorOpening) return
+    setOfficialAuthorOpening(true)
+    setError('')
+    try {
+      const sharedSources = arkmeChatDirectory.getSnapshot().sources
+      const currentSources = sharedSources.length > 0 ? sharedSources : sources
+      const existing = arkmeOfficialAuthorSource(
+        currentSources,
+        officialAuthorProfile?.userId ?? OFFICIAL_AUTHOR_USER_ID,
+      )
+      if (existing !== undefined) {
+        activateNativeEntry()
+        setDirectory('root')
+        arkmeUi.selectSource(existing)
+        persistCache({ directory: 'root', sources: { root: currentSources }, selectedSourceRef: existing.sourceRef })
+        onActivateSurface?.()
+        return
+      }
+      const result = await callArkme<ArkmeOpenPrivateChatResult>('chat.official-author.private.open')
+      const source = result.source
+      activateNativeEntry()
+      const nextSources = [source, ...currentSources.filter(item => item.sourceRef !== source.sourceRef)]
+      setDirectory('root')
+      setSources(nextSources)
+      arkmeChatDirectory.publish(nextSources)
+      arkmeUi.selectSource(source)
+      persistCache({ directory: 'root', sources: { root: nextSources }, selectedSourceRef: source.sourceRef })
+      onActivateSurface?.()
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : '暂时无法联系作者，请稍后重试')
+    } finally {
+      setOfficialAuthorOpening(false)
+    }
+  }
+
   const createdQuickAddSource = async (source: ArkmeSourceItem): Promise<void> => {
     activateNativeEntry()
     const sharedSources = arkmeChatDirectory.getSnapshot().sources
@@ -1481,11 +1581,11 @@ export function ArkmeNavigation({
           placeholder="搜索对话或消息"
           aria-label="搜索对话或消息"
           aria-haspopup="dialog"
-          onClick={() => { setGlobalSearchOpen(true) }}
+          onClick={() => { if (lockedDirectory) showLogin(); else setGlobalSearchOpen(true) }}
           onKeyDown={event => {
             if (event.key !== 'Enter' && event.key !== ' ') return
             event.preventDefault()
-            setGlobalSearchOpen(true)
+            if (lockedDirectory) showLogin(); else setGlobalSearchOpen(true)
           }}
         />
       </label>
@@ -1494,6 +1594,7 @@ export function ArkmeNavigation({
         onSourceCreated={createdQuickAddSource}
         onBotCreated={createdQuickAddBot}
       />}
+      {lockedDirectory && <button type="button" style={styles.createTaskButton} aria-label="添加联系人、群聊或 Bot" onClick={showLogin}><Plus size={19} /></button>}
       {onCreateTask !== undefined && <button type="button" style={styles.createTaskButton} aria-label="新任务" onClick={onCreateTask}><Plus size={19} /></button>}
     </div>}
     {directory === 'root' && embeddedProductShell && authenticated && rootDirectoryState === 'loading' && <div style={styles.rootDirectoryStatus} role="status">
@@ -1506,7 +1607,21 @@ export function ArkmeNavigation({
       <span aria-hidden>!</span><span>加载失败</span><button type="button" style={styles.rootDirectoryStatusRetry} onClick={() => { void loadDirectory('root', undefined, true) }}>重试</button>
     </div>}
 
-    {!authenticated && auth !== undefined ? <button type="button" style={styles.loginButton} onClick={showLogin}>
+    {lockedDirectory ? <>
+      <div style={styles.list} role="tree" aria-label="Arkme 会话">
+        {showHarnessEntry && <DeepSeekHarnessRow
+          selected
+          onClick={() => {
+            activateNativeEntry()
+            arkmeUi.showHarness()
+            onActivateSurface?.()
+          }}
+        />}
+        <ArkmeDSHBetaCommunityEntryContent avatarUrls={[]} joining={false} onActivate={showLogin} />
+        <ArkmeOfficialAuthorRow onClick={showLogin} />
+      </div>
+      <button type="button" style={styles.loginButton} onClick={showLogin}>登录解锁更多功能</button>
+    </> : !authenticated && auth !== undefined ? <button type="button" style={styles.loginButton} onClick={showLogin}>
       {bindingRequired ? '完成登录' : '登录 Arkme'}
     </button> : <>
     {directory === 'root' && embeddedProductShell && directoryLead}
@@ -1520,7 +1635,6 @@ export function ArkmeNavigation({
       aria-label={directory === 'send_to_self' ? '发给自己分类' : 'Arkme 会话'}
     >
       {directory === 'root' && <>
-        {authenticated && <ArkmeDSHBetaCommunityEntry onJoined={joinedDSHBetaCommunity} />}
         {showHarnessEntry && showHarnessInSearch && <DeepSeekHarnessRow
           selected={activeDirectoryEntryId === undefined && ui.mode === 'harness'}
           onClick={() => {
@@ -1528,6 +1642,12 @@ export function ArkmeNavigation({
             arkmeUi.showHarness()
             onActivateSurface?.()
           }}
+        />}
+        {authenticated && <ArkmeDSHBetaCommunityEntry onJoined={joinedDSHBetaCommunity} />}
+        {authenticated && officialAuthorSource === undefined && <ArkmeOfficialAuthorRow
+          {...(officialAuthorProfile === undefined ? {} : { profile: officialAuthorProfile })}
+          busy={officialAuthorOpening}
+          onClick={() => { void openOfficialAuthor() }}
         />}
         {showArkoInSearch && <ArkmeArkoRow
           selected={activeDirectoryEntryId === undefined && ui.mode === 'arko'}

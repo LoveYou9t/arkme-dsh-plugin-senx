@@ -93,6 +93,7 @@ describe('official DSH client adapter', () => {
       'conversation',
       'details',
       'settings.section',
+      'shell.overlay',
     ])
     expect(registered).toEqual(expect.arrayContaining([
       expect.objectContaining({
@@ -107,6 +108,11 @@ describe('official DSH client adapter', () => {
         priority: -100,
       }),
       expect.objectContaining({ name: 'details', priority: -100 }),
+      expect.objectContaining({
+        name: 'shell.overlay',
+        id: 'arkme-web-login-overlay',
+        order: 100,
+      }),
       expect.objectContaining({
         name: 'settings.section',
         id: 'arkme-account',
@@ -260,6 +266,10 @@ describe('official DSH client adapter', () => {
     expect(registered).toContainEqual(expect.objectContaining({
       name: 'shell.overlay',
       id: 'arkme-startup-auth-gate',
+    }))
+    expect(registered).not.toContainEqual(expect.objectContaining({
+      name: 'shell.overlay',
+      id: 'arkme-web-login-overlay',
     }))
   })
 

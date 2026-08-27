@@ -2,6 +2,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import {
   DeepSeekHarnessSurface, deepSeekHarnessEmbedRequested, deepSeekHarnessEmbedUrl,
+  deepSeekHarnessNativeSettingsRequested,
 } from '../src/client/DeepSeekHarnessSurface.js'
 
 describe('DeepSeekHarnessSurface', () => {
@@ -30,6 +31,9 @@ describe('DeepSeekHarnessSurface', () => {
     expect(deepSeekHarnessEmbedRequested('?arkme-harness-embed=1')).toBe(true)
     expect(deepSeekHarnessEmbedRequested('?arkme-harness-embed=0')).toBe(false)
     expect(deepSeekHarnessEmbedRequested('')).toBe(false)
+    expect(deepSeekHarnessNativeSettingsRequested('?arkme-harness-native-settings=1')).toBe(true)
+    expect(deepSeekHarnessNativeSettingsRequested('?arkme-harness-native-settings=0')).toBe(false)
     expect(deepSeekHarnessEmbedUrl()).toBe('/arkme-self/harness-frame?arkme-harness-embed=1')
+    expect(deepSeekHarnessEmbedUrl(true)).toBe('/arkme-self/harness-frame?arkme-harness-embed=1&arkme-harness-native-settings=1')
   })
 })

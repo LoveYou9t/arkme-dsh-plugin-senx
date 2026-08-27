@@ -6,7 +6,7 @@ import type { PropsLocale, PropsRenderSlots, PropsRuntime } from '@deepseek-ai/d
 import type { SessionSearchResultItem } from '@deepseek-ai/dsh-client-runtime/client'
 import type {} from '@deepseek-ai/dsh-client-ui-layout/client'
 import type {} from './slots-contract.js'
-import type { ArkmeSourceItem, ArkmeSourceList } from '../types.js'
+import type { ArkmeAuthSnapshot, ArkmeSourceItem, ArkmeSourceList } from '../types.js'
 import { ArkmeOutgoingCallHost } from './ArkmeOutgoingCallHost.js'
 import { ArkmeProductNavigation } from './ArkmeProductNavigation.js'
 import { ArkmeSurface } from './ArkmeSidebar.js'
@@ -63,7 +63,21 @@ export function ArkmePersistentClientRuntime() {
 
   useArkmeRealtimeClientEvents(auth, ui.authRevision, true)
 
+  useEffect(() => {
+    if (!shouldRestoreWebAuthenticatedWorkspace(auth, ui.mode)) return
+    arkmeUi.authChanged(true, true)
+  }, [auth, ui.mode])
+
   return <ArkmeOutgoingCallHost />
+}
+
+/** The persistent shell remains mounted even when a transient Web login dialog has already unmounted. */
+export function shouldRestoreWebAuthenticatedWorkspace(
+  auth: ArkmeAuthSnapshot | undefined,
+  mode: string,
+  desktopStartupGate = startupAuthGateEnabled(),
+): boolean {
+  return !desktopStartupGate && auth?.status === 'authenticated' && mode === 'login'
 }
 
 export type ArkmePersistentSidebarProps = PropsRuntime<'sidebar'>
@@ -86,6 +100,7 @@ export function ArkmePersistentSidebar({
   const harnessMode = ui.mode === 'harness'
   const loginMode = ui.mode === 'login'
     || (authState.auth !== undefined && authState.auth.status !== 'authenticated')
+  const webLockedMode = loginMode && !startupAuthGateEnabled()
   const authenticatedUserId = authState.auth?.status === 'authenticated' ? authState.auth.userId : undefined
   const contactsAccountKey = authState.auth?.status === 'authenticated' ? `${authState.auth.environment}:${String(authState.auth.userId)}` : undefined
   const contacts = useSyncExternalStore(arkmeContactsTab.subscribe, arkmeContactsTab.getSnapshot, arkmeContactsTab.getSnapshot)
@@ -169,7 +184,20 @@ export function ArkmePersistentSidebar({
     setSidebarResizing(false)
   }, [])
 
-  if (loginMode) return <aside
+  if (loginMode) return webLockedMode ? <aside
+    data-arkme-owned="persistent-sidebar"
+    data-arkme-workspace
+    data-arkme-login-mode="true"
+    data-arkme-web-locked
+    data-arkme-directory-visible="true"
+    style={styles.sidebar}
+    aria-label="Arkme 受限工作区导航"
+  >
+    <ArkmeProductNavigation compact={false} hosted taskExpanded locked />
+    <div style={styles.taskDirectory} data-arkme-directory-mode="web-locked">
+      <ArkmeNavigation wide embeddedProductShell showHarnessEntry lockedDirectory />
+    </div>
+  </aside> : <aside
     data-arkme-owned="persistent-sidebar"
     data-arkme-login-mode="true"
     data-arkme-directory-visible="false"
@@ -301,6 +329,8 @@ export function ArkmePersistentWorkspace({
   const contactsAccountKey = authState.auth?.status === 'authenticated' ? `${authState.auth.environment}:${String(authState.auth.userId)}` : undefined
   const scopedContacts = arkmeContactsTab.getSnapshotForAccount(contactsAccountKey)
   const contactsMode = ui.mode === 'source' && ui.productMode === 'contacts'
+  const webLockedHarness = !startupAuthGateEnabled() && authState.auth?.status !== 'authenticated'
+  const harnessVisible = ui.mode === 'harness' || webLockedHarness
   const contactsContextRef = useRef({ accountKey: contactsAccountKey, contactsMode })
   contactsContextRef.current = { accountKey: contactsAccountKey, contactsMode }
   useLayoutEffect(() => { closeDetails() }, [closeDetails])
@@ -311,7 +341,10 @@ export function ArkmePersistentWorkspace({
 
   return <main data-arkme-owned="persistent-workspace" data-arkme-workspace {...(contactsMode ? { 'data-arkme-contacts-mobile-view': scopedContacts.selection.kind !== 'none' ? 'content' : 'directory' } : {})} style={styles.workspace} aria-label="Arkme 主界面">
     <ArkmePersistentClientRuntime />
-    <DeepSeekHarnessSurface visible={ui.mode === 'harness'} />
+    <DeepSeekHarnessSurface
+      visible={harnessVisible}
+      nativeSettings={webLockedHarness}
+    />
     {contactsMode ? <div className="arkme-directory-detail-pane" data-arkme-contacts-workspace>
       {scopedContacts.selection.kind !== 'none' && <button type="button" className="arkme-directory-mobile-back" onClick={() => { arkmeContactsTab.clear() }}>返回联系人目录</button>}
       <DirectoryDetailPane
@@ -330,15 +363,15 @@ export function ArkmePersistentWorkspace({
           onCandidateCleared={() => { arkmeContactsTab.clear() }} onDirectoryRefresh={() => { arkmeContactsTab.activateAccount(contactsAccountKey); arkmeContactsTab.refresh() }}
         />}
       />
-    </div> : <div
+    </div> : !webLockedHarness && <div
         data-arkme-owned="arkme-conversation-layer"
         style={{
           ...styles.conversationLayer,
-          visibility: ui.mode === 'harness' ? 'hidden' : 'visible',
-          pointerEvents: ui.mode === 'harness' ? 'none' : 'auto',
-          zIndex: ui.mode === 'harness' ? 0 : 1,
+          visibility: harnessVisible ? 'hidden' : 'visible',
+          pointerEvents: harnessVisible ? 'none' : 'auto',
+          zIndex: harnessVisible ? 0 : 1,
         }}
-        aria-hidden={ui.mode === 'harness' ? true : undefined}
+        aria-hidden={harnessVisible ? true : undefined}
       >
         <ArkmeSurface
           t={t}

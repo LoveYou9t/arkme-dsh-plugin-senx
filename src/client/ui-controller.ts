@@ -38,6 +38,8 @@ export interface ArkmeUiState {
   extensionAuthorFilter?: ArkmeExtensionAuthorFilter
   calendarOpen?: boolean
   worldTarget?: ArkmeWorldTarget
+  /** Web-only login is an overlay so a logged-out Harness view remains in place. */
+  webLoginDialogOpen?: boolean
 }
 
 export interface ArkmeExtensionAuthorFilter {
@@ -99,8 +101,8 @@ export class ArkmeUiController {
     this.leaveContacts()
     if (authenticated) {
       if (resetSelection) this.lastConversationDestination = undefined
-      const { selectedSource: _selectedSource, calendarOpen: _calendarOpen, productMode: _productMode, ...stateWithoutSelection } = this.state
-      const { calendarOpen: _activeCalendar, productMode: _activeProductMode, ...stateWithoutCalendar } = this.state
+      const { selectedSource: _selectedSource, calendarOpen: _calendarOpen, productMode: _productMode, webLoginDialogOpen: _dialogFromSelection, ...stateWithoutSelection } = this.state
+      const { calendarOpen: _activeCalendar, productMode: _activeProductMode, webLoginDialogOpen: _dialogFromCalendar, ...stateWithoutCalendar } = this.state
       const state = resetSelection ? stateWithoutSelection : stateWithoutCalendar
       const startsClientConversation = state.mode === 'login'
       if (startsClientConversation) this.lastConversationDestination = { kind: 'harness' }
@@ -112,7 +114,7 @@ export class ArkmeUiController {
       return
     }
     this.lastConversationDestination = undefined
-    const { selectedSource: _selectedSource, calendarOpen: _calendarOpen, productMode: _productMode, ...rest } = this.state
+    const { selectedSource: _selectedSource, calendarOpen: _calendarOpen, productMode: _productMode, webLoginDialogOpen: _webLoginDialogOpen, ...rest } = this.state
     this.publish({
       ...rest,
       mode: 'login',
@@ -130,8 +132,19 @@ export class ArkmeUiController {
 
   showLogin(): void {
     this.leaveContacts()
-    const { selectedSource: _selectedSource, calendarOpen: _calendarOpen, productMode: _productMode, ...rest } = this.state
+    const { selectedSource: _selectedSource, calendarOpen: _calendarOpen, productMode: _productMode, webLoginDialogOpen: _webLoginDialogOpen, ...rest } = this.state
     this.publish({ ...rest, mode: 'login' })
+  }
+
+  openWebLoginDialog(): void {
+    if (this.state.webLoginDialogOpen === true) return
+    this.publish({ ...this.state, webLoginDialogOpen: true })
+  }
+
+  closeWebLoginDialog(): void {
+    if (this.state.webLoginDialogOpen !== true) return
+    const { webLoginDialogOpen: _webLoginDialogOpen, ...rest } = this.state
+    this.publish(rest)
   }
 
   showRecordings(): void {
@@ -268,7 +281,7 @@ export class ArkmeUiController {
   showHarness(): void {
     this.leaveContacts()
     this.lastConversationDestination = { kind: 'harness' }
-    const { selectedSource: _selectedSource, recordingTarget: _recordingTarget, calendarOpen: _calendarOpen, productMode: _productMode, ...rest } = this.state
+    const { selectedSource: _selectedSource, recordingTarget: _recordingTarget, calendarOpen: _calendarOpen, productMode: _productMode, webLoginDialogOpen: _webLoginDialogOpen, ...rest } = this.state
     this.publish({ ...rest, mode: 'harness' })
   }
 
@@ -344,6 +357,7 @@ export class ArkmeUiController {
       && next.extensionDetailId === this.state.extensionDetailId
       && next.extensionAuthorFilter?.ownerUserId === this.state.extensionAuthorFilter?.ownerUserId
       && next.extensionAuthorFilter?.ownerName === this.state.extensionAuthorFilter?.ownerName
+      && next.webLoginDialogOpen === this.state.webLoginDialogOpen
       && sameWorldTarget(next.worldTarget, this.state.worldTarget)
       && sameSource(next.selectedSource, this.state.selectedSource)
       && sameBot(next.selectedBot, this.state.selectedBot)) return

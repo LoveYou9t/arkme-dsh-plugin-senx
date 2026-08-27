@@ -34,7 +34,7 @@ import { arkmeAuthStore } from '../src/client/auth-store.js'
 import { callArkme } from '../src/client/api.js'
 import { ArkmeSettingsSurface } from '../src/client/ArkmeSettingsSurface.js'
 import { ArkmeLogin } from '../src/client/ArkmeLogin.js'
-import { useArkmeAuthFlow } from '../src/client/arkme-auth-flow.js'
+import { arkmePendingWechatQrDataUrl, useArkmeAuthFlow } from '../src/client/arkme-auth-flow.js'
 import { ArkmeStartupAuthGateView, startupAuthGateScreen } from '../src/client/ArkmeStartupAuthGate.js'
 import { arkmeUi } from '../src/client/ui-controller.js'
 import {
@@ -51,6 +51,11 @@ function LoginAfterLogout({ t }: { t: ArkmeLoginTranslate }) {
   />
 }
 
+function BindingDialogFlowProbe({ t }: { t: ArkmeLoginTranslate }) {
+  useArkmeAuthFlow({ retainWebLoginDialogOnBindingRequired: true }, t)
+  return null
+}
+
 describe('Arkme WeChat login ownership', () => {
   let renderer: ReactTestRenderer | undefined
 
@@ -59,6 +64,17 @@ describe('Arkme WeChat login ownership', () => {
     testState.calls = []
     testState.jiwoScanLoginEnabled = false
     testState.testLoginEnabled = false
+    vi.mocked(callArkme).mockImplementation(async (method: string) => {
+      testState.calls.push(method)
+      if (method === 'auth.status') return { status: 'logged-out', environment: 'prod' } as never
+      if (method === 'auth.config') return {
+        captchaId: '', testLoginEnabled: testState.testLoginEnabled, jiwoScanLoginEnabled: testState.jiwoScanLoginEnabled,
+      } as never
+      if (method === 'auth.begin' || method === 'auth.app.begin') return testState.pending as never
+      if (method === 'auth.app.cancel') return { status: 'logged-out', environment: 'prod' } as never
+      if (method === 'auth.poll' || method === 'auth.app.poll') return testState.pending as never
+      throw new Error(`unexpected method ${method}`)
+    })
     arkmeAuthStore.setAuth(testState.pending)
     arkmeUi.showLogin()
   })
@@ -79,6 +95,35 @@ describe('Arkme WeChat login ownership', () => {
 
     expect(arkmeUi.getSnapshot().mode).toBe('login')
     expect(renderer!.root.findAllByType(ArkmeLogin)).toHaveLength(1)
+  })
+
+  it('restores the active WeChat QR from a pending shared login attempt', () => {
+    const restored = arkmePendingWechatQrDataUrl({
+      status: 'pending', environment: 'prod', attemptId: 'resume-attempt', qrContent: 'weixin://resume-qr',
+    })
+
+    expect(restored.startsWith('data:image/gif;base64,')).toBe(true)
+    expect(arkmePendingWechatQrDataUrl({ status: 'logged-out', environment: 'prod' })).toBe('')
+  })
+
+  it('keeps the Web dialog open when a newly signed-in account requires phone binding', async () => {
+    const bindingRequired: ArkmeAuthSnapshot = { status: 'binding-required', environment: 'prod', userId: 10003 }
+    vi.mocked(callArkme).mockImplementation(async method => {
+      if (method === 'auth.status') return bindingRequired as never
+      if (method === 'auth.config') return { captchaId: '', testLoginEnabled: false, jiwoScanLoginEnabled: false } as never
+      throw new Error(`unexpected method ${method}`)
+    })
+    arkmeAuthStore.setAuth(bindingRequired)
+    arkmeUi.showLogin()
+    arkmeUi.openWebLoginDialog()
+
+    await act(async () => {
+      renderer = create(<BindingDialogFlowProbe t={defaultArkmeLoginTranslate} />)
+      await Promise.resolve()
+    })
+
+    expect(arkmeUi.getSnapshot().mode).toBe('login')
+    expect(arkmeUi.getSnapshot().webLoginDialogOpen).toBe(true)
   })
 
   it.each([

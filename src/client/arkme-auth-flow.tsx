@@ -20,6 +20,8 @@ export type ArkmePhoneBindingGate = 'unknown' | 'checking' | 'ready' | 'required
 export interface ArkmeAuthFlowOptions {
   initialAuth?: ArkmeAuthSnapshot | undefined
   initialPhoneBindingGate?: ArkmePhoneBindingGate
+  /** Web login is a dismissible dialog, so phone binding must remain inside that dialog. */
+  retainWebLoginDialogOnBindingRequired?: boolean
 }
 
 export interface ArkmeAuthFlowController {
@@ -164,6 +166,12 @@ function qrDataUrl(content: string): string {
   return qr.createDataURL(6, 12)
 }
 
+/** Restore the active QR after a transient Web login dialog is closed and reopened. */
+export function arkmePendingWechatQrDataUrl(auth: ArkmeAuthSnapshot | undefined): string {
+  if (auth?.status !== 'pending' || auth.qrContent === undefined || auth.qrContent === '') return ''
+  return qrDataUrl(auth.qrContent)
+}
+
 function initialPhoneBindingGate(auth: ArkmeAuthSnapshot | undefined): ArkmePhoneBindingGate {
   return auth?.status === 'binding-required' ? 'required' : 'unknown'
 }
@@ -172,7 +180,7 @@ export function useArkmeAuthFlow(
   options: ArkmeAuthFlowOptions = {},
   t: ArkmeLoginTranslate = defaultArkmeLoginTranslate,
 ): ArkmeAuthFlowController {
-  const { initialAuth, initialPhoneBindingGate: initialGate } = options
+  const { initialAuth, initialPhoneBindingGate: initialGate, retainWebLoginDialogOnBindingRequired = false } = options
   const storeSnapshot = useSyncExternalStore(
     arkmeAuthStore.subscribe,
     arkmeAuthStore.getSnapshot,
@@ -231,7 +239,7 @@ export function useArkmeAuthFlow(
       setError(t('error.binding.required'))
       if (bindingNotifiedUserIdRef.current !== snapshot.userId) {
         bindingNotifiedUserIdRef.current = snapshot.userId
-        arkmeUi.authChanged(false)
+        if (!retainWebLoginDialogOnBindingRequired) arkmeUi.authChanged(false)
       }
       return
     }
@@ -428,6 +436,15 @@ export function useArkmeAuthFlow(
       auth?.status,
     )
   }, [auth?.status])
+
+  useEffect(() => {
+    const restoredQr = arkmePendingWechatQrDataUrl(auth)
+    if (restoredQr !== '') {
+      setQr(restoredQr)
+      return
+    }
+    if (auth?.status !== 'pending') setQr('')
+  }, [auth?.attemptId, auth?.qrContent, auth?.status])
 
   useEffect(() => {
     if (!arkmeShouldBeginQrLogin(
