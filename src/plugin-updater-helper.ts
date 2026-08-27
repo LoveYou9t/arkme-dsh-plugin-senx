@@ -6,8 +6,13 @@ import { dirname, isAbsolute, join } from 'node:path'
 import semver from 'semver'
 import { PluginUpdateInstallStateStore } from './plugin-update-install-state.js'
 import { writePluginUpdateInstallReceipt } from './plugin-update-install-receipt.js'
+import {
+  writePluginUpdateLifecycleLog,
+  type PluginUpdateLifecycleDetails,
+} from './plugin-update-lifecycle-log.js'
 import { ARKME_PLUGIN_PACKAGE_NAME } from './plugin-update-artifact.js'
 import { prepareProfilePackageManager } from './profile-package-manager.js'
+import { detachManagedProfilePluginLink } from './profile-plugin-entry.js'
 import {
   applyArkmeProfileBundlePolicy, isArkmeProfilePackageName, type ArkmeProfileBundlePolicyResult,
 } from './extensions/profile-bundle-policy.js'
@@ -223,7 +228,8 @@ function runTargetInstall(plan: PluginUpdaterPlan): boolean {
   return result.status === 0
 }
 
-function runTargetRemove(plan: PluginUpdaterPlan): boolean {
+async function runTargetRemove(plan: PluginUpdaterPlan): Promise<boolean> {
+  await detachManagedProfilePluginLink({ dshHome: plan.dshHome, profileName: plan.profileName })
   const result = spawnSync(plan.execPath, buildTargetRemoveArgs(plan), {
     env: { ...process.env, DSH_HOME: plan.dshHome },
     stdio: 'inherit',
@@ -237,13 +243,14 @@ export interface PluginRollbackInstallResult {
   profilePolicyRestored: boolean
 }
 
-function runRollbackInstall(plan: PluginUpdaterPlan): PluginRollbackInstallResult {
+async function runRollbackInstall(plan: PluginUpdaterPlan): Promise<PluginRollbackInstallResult> {
   const fallbackSpec = plan.previousArtifactPath === undefined
     ? plan.previousSpec
     : `file:${plan.previousArtifactPath}`
   if (plan.previousArtifactPath === undefined && !isLocalPackageSpec(fallbackSpec)) {
     return { packageRestored: false, profilePolicyRestored: false }
   }
+  await detachManagedProfilePluginLink({ dshHome: plan.dshHome, profileName: plan.profileName })
   spawnSync(plan.execPath, buildTargetRemoveArgs(plan), {
     env: { ...process.env, DSH_HOME: plan.dshHome },
     stdio: 'inherit',
@@ -320,13 +327,32 @@ async function waitForHealthy(plan: PluginUpdaterPlan, expectedVersion: string):
 }
 
 export interface ManagedPluginUpdateOperations {
-  runRollbackInstall: typeof runRollbackInstall
+  runRollbackInstall: (
+    plan: PluginUpdaterPlan,
+  ) => PluginRollbackInstallResult | Promise<PluginRollbackInstallResult>
   waitForHealthy: typeof waitForHealthy
   writeInstallReceipt: typeof writePluginUpdateInstallReceipt
 }
 
 function managedOperations(overrides: Partial<ManagedPluginUpdateOperations>): ManagedPluginUpdateOperations {
   return { runRollbackInstall, waitForHealthy, writeInstallReceipt: writePluginUpdateInstallReceipt, ...overrides }
+}
+
+function logStage(
+  plan: PluginUpdaterPlan,
+  stage: string,
+  details: PluginUpdateLifecycleDetails = {},
+): void {
+  const written = writePluginUpdateLifecycleLog(plan.logPath, {
+    jobId: plan.jobId,
+    previousVersion: plan.previousVersion,
+    targetVersion: plan.targetVersion,
+  }, stage, details)
+  if (!written) {
+    try {
+      process.stderr.write(`dsh-arkme: unable to append plugin update lifecycle log stage=${stage}\n`)
+    } catch { /* Diagnostic logging must never interrupt an update. */ }
+  }
 }
 
 function planWithReplacementHealthUrl(plan: PluginUpdaterPlan, replacementUrl: string): PluginUpdaterPlan {
@@ -363,6 +389,7 @@ async function writePhase(
     updatedAtMillis: Date.now(),
   }
   await store.write(snapshot)
+  logStage(plan, phase)
   return snapshot
 }
 
@@ -371,13 +398,27 @@ async function rollbackAndRestart(
   store: PluginUpdateInstallStateStore,
   rolledBackMessage: string,
 ): Promise<void> {
-  const rollback = runRollbackInstall(plan)
-  if (!rollback.packageRestored) {
+  logStage(plan, 'rollback-started')
+  let rollback: PluginRollbackInstallResult
+  try {
+    rollback = await runRollbackInstall(plan)
+  } catch (error) {
+    logStage(plan, 'rollback-failed', {
+      error: error instanceof Error ? error.message : String(error),
+    })
     await writePhase(store, plan, 'failed', '更新失败，旧版本恢复也失败；请使用更新命令手动修复。')
     return
   }
+  if (!rollback.packageRestored) {
+    logStage(plan, 'rollback-failed', { error: 'rollback install command failed' })
+    await writePhase(store, plan, 'failed', '更新失败，旧版本恢复也失败；请使用更新命令手动修复。')
+    return
+  }
+  logStage(plan, 'rollback-completed')
   restartDsh(plan)
+  logStage(plan, 'rollback-health-check-started')
   const healthy = await waitForHealthy(plan, plan.previousVersion)
+  logStage(plan, healthy ? 'rollback-health-check-passed' : 'rollback-health-check-failed')
   const policyWarning = rollback.profilePolicyRestored
     ? ''
     : '；部分已关闭扩展的 Profile 状态未能收敛'
@@ -395,14 +436,22 @@ export async function runPluginUpdater(planPath: string): Promise<void> {
   )
   await unlink(planPath).catch(() => undefined)
   const store = new PluginUpdateInstallStateStore(plan.stateDirectory)
+  logStage(plan, 'parent-exit-wait-started')
   if (!await waitForProcessExit(plan.parentPid, PARENT_EXIT_TIMEOUT_MS)) {
+    logStage(plan, 'parent-exit-wait-timed-out')
     await writePhase(store, plan, 'failed', '旧 DSH 进程未能退出，更新已取消。')
     return
   }
+  logStage(plan, 'parent-exit-wait-completed')
 
+  logStage(plan, 'package-manager-preflight-started')
   try {
     prepareProfilePackageManager(plan.dshHome, plan.profileName)
+    logStage(plan, 'package-manager-preflight-completed')
   } catch (error) {
+    logStage(plan, 'package-manager-preflight-failed', {
+      error: error instanceof Error ? error.message : String(error),
+    })
     restartDsh(plan)
     const detail = error instanceof Error ? error.message : String(error)
     const healthy = await waitForHealthy(plan, plan.previousVersion)
@@ -417,9 +466,14 @@ export async function runPluginUpdater(planPath: string): Promise<void> {
     return
   }
 
+  logStage(plan, 'artifact-verification-started')
   try {
     assertTargetArtifactIntegrity(plan)
+    logStage(plan, 'artifact-verification-completed')
   } catch (error) {
+    logStage(plan, 'artifact-verification-failed', {
+      error: error instanceof Error ? error.message : String(error),
+    })
     restartDsh(plan)
     const healthy = await waitForHealthy(plan, plan.previousVersion)
     const detail = error instanceof Error ? error.message : String(error)
@@ -435,16 +489,24 @@ export async function runPluginUpdater(planPath: string): Promise<void> {
   }
 
   await writePhase(store, plan, 'installing', `正在安装 ${plan.targetVersion}…`)
-  if (!runTargetRemove(plan)) {
+  const removeStartedAt = Date.now()
+  logStage(plan, 'profile-remove-started')
+  if (!await runTargetRemove(plan)) {
+    logStage(plan, 'profile-remove-failed', { error: 'profile remove command failed' })
     await writePhase(store, plan, 'failed', '旧版本清理失败，正在恢复旧版本…')
     await rollbackAndRestart(plan, store, '旧版本清理失败，已自动恢复旧版本。')
     return
   }
+  logStage(plan, 'profile-remove-completed', { durationMs: Date.now() - removeStartedAt })
+  const addStartedAt = Date.now()
+  logStage(plan, 'profile-add-started')
   if (!runTargetInstall(plan)) {
+    logStage(plan, 'profile-add-failed', { error: 'profile add command failed' })
     await writePhase(store, plan, 'failed', '新版本安装失败，正在恢复旧版本…')
     await rollbackAndRestart(plan, store, '新版本安装失败，已自动恢复旧版本。')
     return
   }
+  logStage(plan, 'profile-add-completed', { durationMs: Date.now() - addStartedAt })
   try {
     reconcilePluginUpdaterProfilePolicy(plan)
   } catch (error) {
@@ -454,7 +516,9 @@ export async function runPluginUpdater(planPath: string): Promise<void> {
     return
   }
   const installedVersion = installedProfileVersion(plan)
+  logStage(plan, 'installed-version-checked', { installedVersion })
   if (semver.valid(installedVersion) === null || semver.lt(installedVersion, plan.targetVersion)) {
+    logStage(plan, 'installed-version-mismatch', { installedVersion })
     await writePhase(store, plan, 'failed', '未安装预期插件版本，正在恢复旧版本…')
     await rollbackAndRestart(plan, store, '插件版本不符合预期，已自动恢复旧版本。')
     return
@@ -462,12 +526,23 @@ export async function runPluginUpdater(planPath: string): Promise<void> {
   plan.targetVersion = installedVersion
 
   await writePhase(store, plan, 'restarting', '安装完成，正在重启 DSH…')
+  logStage(plan, 'replacement-spawn-started')
   const child = restartDsh(plan)
+  logStage(plan, 'replacement-spawned', {
+    ...(child.pid === undefined ? {} : { replacementPid: child.pid }),
+  })
+  logStage(plan, 'replacement-health-check-started')
   if (await waitForHealthy(plan, plan.targetVersion)) {
+    logStage(plan, 'replacement-health-check-passed')
     try {
       assertTargetArtifactIntegrity(plan)
+      logStage(plan, 'receipt-writing')
       await writePluginUpdateInstallReceipt(plan)
+      logStage(plan, 'receipt-written')
     } catch (error) {
+      logStage(plan, 'receipt-write-failed', {
+        error: error instanceof Error ? error.message : String(error),
+      })
       child.kill('SIGTERM')
       if (child.pid !== undefined) await waitForProcessExit(child.pid, 10_000)
       const detail = error instanceof Error ? error.message : String(error)
@@ -480,6 +555,7 @@ export async function runPluginUpdater(planPath: string): Promise<void> {
     return
   }
 
+  logStage(plan, 'replacement-health-check-failed', { error: 'replacement did not become healthy' })
   child.kill('SIGTERM')
   if (child.pid !== undefined) await waitForProcessExit(child.pid, 10_000)
   await writePhase(store, plan, 'failed', '新版本健康检查失败，正在恢复旧版本…')
@@ -499,12 +575,42 @@ export async function finalizeManagedPluginUpdate(
   )
   const store = new PluginUpdateInstallStateStore(plan.stateDirectory)
   const ops = managedOperations(overrides)
-  assertTargetArtifactIntegrity(plan)
+  logStage(plan, 'artifact-verification-started')
+  try {
+    assertTargetArtifactIntegrity(plan)
+    logStage(plan, 'artifact-verification-completed')
+  } catch (error) {
+    logStage(plan, 'artifact-verification-failed', {
+      error: error instanceof Error ? error.message : String(error),
+    })
+    throw error
+  }
+  logStage(plan, 'replacement-health-check-started')
   if (!await ops.waitForHealthy(plan, plan.targetVersion)) {
+    logStage(plan, 'replacement-health-check-failed', { error: 'replacement did not become healthy' })
     throw new Error('managed plugin update did not become healthy')
   }
-  assertTargetArtifactIntegrity(plan)
-  await ops.writeInstallReceipt(plan)
+  logStage(plan, 'replacement-health-check-passed')
+  logStage(plan, 'artifact-reverification-started')
+  try {
+    assertTargetArtifactIntegrity(plan)
+    logStage(plan, 'artifact-reverification-completed')
+  } catch (error) {
+    logStage(plan, 'artifact-reverification-failed', {
+      error: error instanceof Error ? error.message : String(error),
+    })
+    throw error
+  }
+  logStage(plan, 'receipt-writing')
+  try {
+    await ops.writeInstallReceipt(plan)
+    logStage(plan, 'receipt-written')
+  } catch (error) {
+    logStage(plan, 'receipt-write-failed', {
+      error: error instanceof Error ? error.message : String(error),
+    })
+    throw error
+  }
   await writePhase(store, plan, 'succeeded', `已更新到 ${plan.targetVersion}。`)
   await unlink(planPath)
 }
@@ -516,11 +622,23 @@ export async function rollbackManagedPluginUpdate(
   const plan = parsePluginUpdaterPlan(JSON.parse(await readFile(planPath, 'utf8')) as unknown)
   const store = new PluginUpdateInstallStateStore(plan.stateDirectory)
   const ops = managedOperations(overrides)
-  const rollback = ops.runRollbackInstall(plan)
+  logStage(plan, 'rollback-started')
+  let rollback: PluginRollbackInstallResult
+  try {
+    rollback = await ops.runRollbackInstall(plan)
+  } catch (error) {
+    logStage(plan, 'rollback-failed', {
+      error: error instanceof Error ? error.message : String(error),
+    })
+    await writePhase(store, plan, 'failed', '更新失败，旧版本恢复也失败；请使用更新命令手动修复。')
+    throw new Error('managed plugin update rollback failed', { cause: error })
+  }
   if (!rollback.packageRestored) {
+    logStage(plan, 'rollback-failed', { error: 'rollback install command failed' })
     await writePhase(store, plan, 'failed', '更新失败，旧版本恢复也失败；请使用更新命令手动修复。')
     throw new Error('managed plugin update rollback failed')
   }
+  logStage(plan, 'rollback-completed')
   await writePhase(store, plan, 'rolled-back', rollback.profilePolicyRestored
     ? '已恢复旧版本文件，正在由 Arkme 重启 DSH…'
     : '已恢复旧版本文件；部分已关闭扩展的 Profile 状态未能收敛，正在由 Arkme 重启 DSH…')
