@@ -28,6 +28,7 @@ import { ArkmeSettingsSurface } from '../src/client/ArkmeSettingsSurface.js'
 import { ArkmeLogin } from '../src/client/ArkmeLogin.js'
 import { useArkmeAuthFlow } from '../src/client/arkme-auth-flow.js'
 import { ArkmeStartupAuthGateView, startupAuthGateScreen } from '../src/client/ArkmeStartupAuthGate.js'
+import { arkmeUi } from '../src/client/ui-controller.js'
 import {
   arkmeLoginEn, defaultArkmeLoginTranslate, type ArkmeLoginLocaleKey, type ArkmeLoginTranslate,
 } from '../src/client/arkme-login-locales.js'
@@ -64,6 +65,16 @@ describe('Arkme WeChat login ownership', () => {
     })
 
     expect(testState.calls.filter(method => method === 'auth.poll')).toHaveLength(0)
+  })
+
+  it('keeps a logged-out Web user on the Arkme login surface', async () => {
+    arkmeAuthStore.setAuth({ status: 'logged-out', environment: 'prod' })
+    arkmeUi.showLogin()
+
+    await act(async () => { renderer = create(<ArkmeSurface ownsWechatLogin={false} />) })
+
+    expect(arkmeUi.getSnapshot().mode).toBe('login')
+    expect(renderer!.root.findByType(ArkmeLogin)).toBeDefined()
   })
 
   it.each([

@@ -1156,7 +1156,7 @@ export function ArkmeSurface({
       return
     }
     bindingNotifiedUserIdRef.current = undefined
-    if (accountChanged || arkmeUi.getSnapshot().mode === 'login') {
+    if (snapshot.status === 'authenticated' && (accountChanged || arkmeUi.getSnapshot().mode === 'login')) {
       arkmeUi.authChanged(true, accountChanged)
     }
   }, [t])
