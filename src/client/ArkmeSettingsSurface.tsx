@@ -262,8 +262,12 @@ export function ArkmeSettingsSurface() {
     let active = true
     const controller = new AbortController()
     void callArkme<DshRemoteStatus>('remote.getStatus', undefined, controller.signal)
-      .then(status => {
-        if (active) setRemoteVisible(status.available || status.enabled || status.bindings.length > 0)
+      .then(() => {
+        // A successful Host operation means this plugin version owns the remote
+        // settings surface. Keep the entry visible even when server-side keys or
+        // feature flags are unavailable so the user can see the exact diagnosis
+        // instead of losing the only route to recover the configuration.
+        if (active) setRemoteVisible(true)
       })
       .catch(() => { if (active && !controller.signal.aborted) setRemoteVisible(false) })
     return () => { active = false; controller.abort() }

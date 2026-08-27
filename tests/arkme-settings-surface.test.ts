@@ -34,6 +34,12 @@ describe('ArkmeSettingsSurface', () => {
     expect(source).toMatch(/const controller = new AbortController\(\)\s*setProfile\(undefined\)\s*setError\(''\)\s*void callArkme<ArkmeUserProfileSnapshot>\('user.profile'/)
   })
 
+  it('keeps remote settings discoverable when the Host reports an unavailable runtime', () => {
+    expect(source).toMatch(/callArkme<DshRemoteStatus>\('remote\.getStatus'[\s\S]*?\.then\(\(\) => \{[\s\S]*?setRemoteVisible\(true\)/)
+    expect(source).not.toContain('status.available || status.enabled || status.bindings.length > 0')
+    expect(source).toContain('{authenticated && remoteVisible && <SettingsGroup title="远程控制">')
+  })
+
   it('positions the DSH account section at the top before paint', () => {
     expect(source).toMatch(/useLayoutEffect\(\(\) => \{\s*scrollArkmeSettingsSurface\(surfaceRef\.current\)/)
     expect(source).not.toContain('document.getElementById')
