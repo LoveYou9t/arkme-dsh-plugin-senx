@@ -52,6 +52,7 @@ import { DshApiProxyAdapter, type DshPublicApiProxyLike } from './dsh-remote/api
 import { DshRemoteCommandLedger } from './dsh-remote/command-ledger.js'
 import { DshRemoteHttpControlPlane } from './dsh-remote/control-plane.js'
 import { DesktopCredentialBroker } from './dsh-remote/desktop-credential-broker.js'
+import { createDefaultDshRemoteSocket } from './dsh-remote/default-socket-factory.js'
 import { decodeBase64Url } from './dsh-remote/crypto.js'
 import { ArkmeRemoteRealtimeHost } from './dsh-remote/host.js'
 import { ArkmeRemoteRealtimeTransport, type DshRemoteSocketLike } from './dsh-remote/realtime-transport.js'
@@ -405,12 +406,17 @@ export function apply(ctx: Context, config: Config): void {
     // The default-off feature must not construct platform credential stores,
     // open DSH muxes or otherwise affect the existing Arkme plugin lifecycle.
     if (!config.dshRemoteFeatureEnabled) return
-    const authenticatedSocketFactory = apiCtx.get('arkmeRemoteSocketFactory') as ArkmeRemoteAuthenticatedSocketFactory | undefined
+    const injectedSocketFactory = apiCtx.get('arkmeRemoteSocketFactory') as ArkmeRemoteAuthenticatedSocketFactory | undefined
+    const authenticatedSocketFactory: ArkmeRemoteAuthenticatedSocketFactory = injectedSocketFactory
+      ?? (input => createDefaultDshRemoteSocket({
+        authBaseUrl: config.authBaseUrl,
+        accessToken: input.accessToken,
+        signal: input.signal,
+      }))
     const profileRefValue = process.env.DSH_PROFILE?.trim() || 'web'
     const profileRef = /^[A-Za-z0-9._:-]{1,128}$/.test(profileRefValue) ? profileRefValue : 'web'
     const hostClientRef = `host_${createHash('sha256').update(`dsh-remote-host-client-v1\n${stateDirectory}\n${profileRef}`).digest('base64url')}`
     const realtime = new ArkmeRemoteRealtimeTransport(async input => {
-      if (authenticatedSocketFactory === undefined) throw new Error('authenticated Realtime Socket Factory is unavailable')
       const session = await sessionStore.read()
       if (session === undefined) throw new Error('Arkme session is unavailable')
       return await authenticatedSocketFactory({ ...input, accessToken: session.accessToken })
@@ -421,7 +427,7 @@ export function apply(ctx: Context, config: Config): void {
     ))
     const host = new ArkmeRemoteRealtimeHost({
       featureEnabled: config.dshRemoteFeatureEnabled,
-      transportAvailable: authenticatedSocketFactory !== undefined,
+      transportAvailable: true,
       environment: config.environment === 'prod' ? 'production' : 'test',
       profileRef, hostClientRef, credentialBroker,
       runtimeStore: new DshRemoteRuntimeStore(stateDirectory),
