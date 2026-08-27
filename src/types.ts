@@ -25,9 +25,68 @@ export interface ArkmeClientConfig {
   captchaId: string
   environment: ArkmeEnvironment
   testLoginEnabled: boolean
+  jiwoScanLoginEnabled: boolean
   callAssetBasePath: string
   voiceprintEnrollmentPath: string
   shareWebsite: string
+}
+
+export type ArkmeBillingPaymentMethod = 'alipay_pc_web' | 'wechat_native'
+export type ArkmeBillingPaymentProvider = 'alipay' | 'wechat'
+export type ArkmeBillingPaymentActionType = 'open_url' | 'display_qr'
+
+export interface ArkmeBillingPaymentMethodOption {
+  id: ArkmeBillingPaymentMethod
+  provider: ArkmeBillingPaymentProvider
+  actionType: ArkmeBillingPaymentActionType
+}
+
+export type ArkmeBillingPaymentAction =
+  | { type: 'open_url'; url: string }
+  | { type: 'display_qr'; qrContent: string }
+export type ArkmeBillingOrderStatus = 'pending' | 'crediting' | 'paid' | 'expired' | 'closed' | 'failed'
+
+export interface ArkmeQuotaSnapshot {
+  availableNanoCny: string
+  totalNanoCny: string
+  reservedNanoCny: string
+  currency: 'CNY'
+}
+
+export interface ArkmeBillingProduct {
+  productId: string
+  title: string
+  description?: string
+  creditNanoCny: string
+  priceMinor: number
+  currency: 'CNY'
+  paymentMethods: ArkmeBillingPaymentMethodOption[]
+  enabled: boolean
+}
+
+export interface ArkmeBillingProductList {
+  items: ArkmeBillingProduct[]
+}
+
+export interface ArkmeBillingOrderCreateInput {
+  productId: string
+  paymentMethod: ArkmeBillingPaymentMethod
+  clientRequestId: string
+}
+
+export interface ArkmeBillingOrderSnapshot {
+  orderId: string
+  paymentProvider: ArkmeBillingPaymentProvider
+  paymentMethod: ArkmeBillingPaymentMethod
+  status: ArkmeBillingOrderStatus
+  amountMinor: number
+  currency: 'CNY'
+  creditNanoCny: string
+  expiresAtMillis: number
+  paymentAction?: ArkmeBillingPaymentAction
+  pollIntervalMillis?: number
+  paidAtMillis?: number
+  creditedAtMillis?: number
 }
 
 export type ArkmeContactIdentifierKind = 'phone' | 'arkme_id'
@@ -2347,6 +2406,9 @@ export type ArkmePluginOperation =
   | 'auth.config'
   | 'auth.begin'
   | 'auth.poll'
+  | 'auth.app.begin'
+  | 'auth.app.poll'
+  | 'auth.app.cancel'
   | 'auth.test.login'
   | 'auth.phone.send'
   | 'auth.phone.verify'
@@ -2358,6 +2420,10 @@ export type ArkmePluginOperation =
   | 'remote.listBindings'
   | 'remote.revokeBinding'
   | 'remote.renameDesktop'
+  | 'billing.quota'
+  | 'billing.products'
+  | 'billing.order.create'
+  | 'billing.order.status'
   | 'contacts.search'
   | 'contacts.add'
   | 'chat.private.open-from-contact'
