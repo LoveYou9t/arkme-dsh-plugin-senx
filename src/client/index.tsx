@@ -182,10 +182,18 @@ export function apply(ctx: ClientContext): void {
     }
 
     const unbindSettings = arkmeUi.bindSettingsOpener(openOfficialSettings)
+    // Account logout is performed inside the native settings surface.  It can
+    // replace the active sidebar before the settings-popover polling sees a
+    // close event, so restore Arkme immediately when authentication returns to
+    // its login state.
+    const unsubscribeLogoutRestore = arkmeUi.subscribe(() => {
+      if (arkmeUi.getSnapshot().mode === 'login') restoreArkmeSidebar()
+    })
     mountArkmeSidebar()
     return () => {
       disposed = true
       unbindSettings()
+      unsubscribeLogoutRestore()
       stopSettingsTimer()
       disposeSidebar?.()
       disposeSidebar = undefined
