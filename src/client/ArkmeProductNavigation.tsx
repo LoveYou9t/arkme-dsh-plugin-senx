@@ -191,9 +191,14 @@ export function ArkmeProductNavigation({
     ? arkmeChatDirectory.totalUnreadCount({ excludeMuted: true })
     : 0
   const conversationUnreadLabel = conversationUnreadCount > 99 ? '99+' : String(conversationUnreadCount)
-  const navigationItems = locked ? items.filter(item => item.id === 'conversations') : items
+  const navigationItems = items
 
   const activate = (id: NavigationItem['id']) => {
+    if (locked) {
+      if (id === 'conversations') arkmeUi.showHarness()
+      else arkmeUi.openWebLoginDialog()
+      return
+    }
     if (id === 'extensions') {
       arkmeUi.showExtensions()
       return
