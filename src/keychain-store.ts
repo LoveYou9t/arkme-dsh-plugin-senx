@@ -132,22 +132,24 @@ export interface ArkmeSecureValueStore {
 
 export type ArkmeMacOSSecureValueWriter = (args: readonly string[], payload: string) => Promise<void>
 
-const MACOS_KEYCHAIN_EXPECT_SCRIPT = String.raw`
-set timeout 5
-log_user 0
-package require base64
-if {[gets stdin accountBase64] < 0 || [gets stdin serviceBase64] < 0 || [gets stdin passwordBase64] < 0} { exit 90 }
-set account [::base64::decode $accountBase64]
-set service [::base64::decode $serviceBase64]
-set password [::base64::decode $passwordBase64]
-spawn -noecho /usr/bin/security add-generic-password -a $account -s $service -U -w
-expect {
-  -exact "password data for new item:" { send -- "$password\r"; exp_continue }
-  -exact "retype password for new item:" { send -- "$password\r"; exp_continue }
-  -exact "password data for item:" { send -- "$password\r"; exp_continue }
-  -exact "retype password for item:" { send -- "$password\r"; exp_continue }
-  timeout { exit 91 }
-  eof { set status [wait]; exit [lindex $status 3] }
+const MACOS_KEYCHAIN_JXA_SCRIPT = String.raw`
+ObjC.import('Foundation')
+ObjC.import('Security')
+function run(argv) {
+  if (argv.length !== 2) throw new Error('invalid Keychain coordinates')
+  const query = $.NSMutableDictionary.dictionary
+  query.setObjectForKey($("genp"), $("class"))
+  query.setObjectForKey($(argv[0]), $("acct"))
+  query.setObjectForKey($(argv[1]), $("svce"))
+  const payload = $.NSFileHandle.fileHandleWithStandardInput.readDataToEndOfFile
+  const update = $.NSMutableDictionary.dictionary
+  update.setObjectForKey(payload, $("v_Data"))
+  let status = Number($.SecItemUpdate(query, update))
+  if (status === -25300) {
+    query.setObjectForKey(payload, $("v_Data"))
+    status = Number($.SecItemAdd(query, null))
+  }
+  if (status !== 0) throw new Error('Keychain write failed with status ' + String(status))
 }
 `
 
@@ -166,11 +168,13 @@ export async function writeArkmeMacOSSecureValue(
 ): Promise<void> {
   const coordinates = macOSSecureValueCoordinates(args)
   await new Promise<void>((resolve, reject) => {
-    // `security ... -w` explicitly reads from a terminal and asks for the
-    // value twice; piping to its stdin leaves a stuck process. `expect` owns a
-    // private pseudo-terminal while the secret itself still arrives only over
-    // stdin, never argv or a persisted file.
-    const child = spawn('/usr/bin/expect', ['-c', MACOS_KEYCHAIN_EXPECT_SCRIPT], {
+    // `security ... -w` reads a terminal password field that truncates long
+    // JSON credentials. JXA calls the native Security Framework and receives
+    // the complete secret as NSData over stdin, never argv or a persisted file.
+    const child = spawn('/usr/bin/osascript', [
+      '-l', 'JavaScript', '-e', MACOS_KEYCHAIN_JXA_SCRIPT,
+      coordinates.account, coordinates.service,
+    ], {
       detached: true,
       shell: false,
       stdio: ['pipe', 'ignore', 'pipe'],
@@ -202,12 +206,7 @@ export async function writeArkmeMacOSSecureValue(
       else finish(new Error(`macOS Keychain 写入失败（退出码 ${String(code)}）：${stderr.trim().slice(0, 512)}`))
     })
     child.stdin.once('error', error => finish(new Error('无法向 macOS Keychain 安全输入凭据', { cause: error })))
-    child.stdin.end([
-      Buffer.from(coordinates.account, 'utf8').toString('base64'),
-      Buffer.from(coordinates.service, 'utf8').toString('base64'),
-      Buffer.from(payload, 'utf8').toString('base64'),
-      '',
-    ].join('\n'), 'utf8')
+    child.stdin.end(payload, 'utf8')
   })
 }
 

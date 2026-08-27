@@ -23,9 +23,12 @@ describe('remote Desktop Credential macOS storage', () => {
     expect(payload).toBe(secret)
   })
 
-  it('feeds the macOS security prompts through a private pseudo-terminal', () => {
-    expect(source).toContain("spawn('/usr/bin/expect', ['-c', MACOS_KEYCHAIN_EXPECT_SCRIPT]")
-    expect(source).toContain('retype password for new item:')
+  it('writes complete macOS credentials through Security Framework stdin', () => {
+    expect(source).toContain("spawn('/usr/bin/osascript'")
+    expect(source).toContain('readDataToEndOfFile')
+    expect(source).toContain('SecItemUpdate')
+    expect(source).toContain('SecItemAdd')
+    expect(source).not.toContain("spawn('/usr/bin/expect'")
     expect(source).not.toContain("spawn('/usr/bin/security', [...args]")
   })
 })
