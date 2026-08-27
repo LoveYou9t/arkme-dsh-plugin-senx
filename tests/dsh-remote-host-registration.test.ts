@@ -6,11 +6,11 @@ import type { ArkmeSecureValueStore } from '../src/keychain-store.js'
 import { DshApiProxyAdapter } from '../src/dsh-remote/api-proxy-adapter.js'
 import { DshRemoteCommandLedger } from '../src/dsh-remote/command-ledger.js'
 import { DesktopCredentialBroker } from '../src/dsh-remote/desktop-credential-broker.js'
-import { verifyEd25519 } from '../src/dsh-remote/crypto.js'
+import { generateEd25519DeviceKey, verifyEd25519 } from '../src/dsh-remote/crypto.js'
 import { DshRemoteError } from '../src/dsh-remote/errors.js'
 import { ArkmeRemoteRealtimeHost } from '../src/dsh-remote/host.js'
 import { DshRemoteRuntimeStore } from '../src/dsh-remote/runtime-store.js'
-import type { DshRemoteControlPlane, DshRemoteRealtimeTransport } from '../src/dsh-remote/types.js'
+import type { DshRemoteBindingProjection, DshRemoteControlPlane, DshRemoteRealtimeTransport } from '../src/dsh-remote/types.js'
 
 class MemorySecrets implements ArkmeSecureValueStore {
   private readonly values = new Map<string, string>()
@@ -45,6 +45,44 @@ describe('Host durable registration lifecycle', () => {
     expect(localOff.getStatus().enabled).toBe(false)
     expect(mux).not.toHaveBeenCalled()
     await localOff.stop()
+  })
+
+  it('purges persisted pairwise keys when a binding projection becomes revoked', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'arkme remote revoked binding '))
+    const broker = new DesktopCredentialBroker(new MemorySecrets())
+    const active: DshRemoteBindingProjection = {
+      bindingRef: 'binding-revoked-test-01', controllerCredentialRef: 'controller-revoked-test-01',
+      controllerDisplayName: 'Phone', controllerPlatform: 'ios', revision: 1, status: 'active',
+      scopes: ['session.read'], boundAtMillis: 1,
+    }
+    await broker.putChannelKeys({
+      accountId: '42', bindingRef: active.bindingRef, runtimeRef: 'runtime-revoked-test-01',
+      channelRef: 'remotech-revoked-test-01', keyEpoch: 2, rootSecret: Buffer.alloc(32, 1),
+      controllerPublicKey: 'A'.repeat(43), controllerKeyFingerprint: 'B'.repeat(43),
+      controllerToHost: Buffer.alloc(32, 2), hostToController: Buffer.alloc(32, 3),
+    })
+    const host = new ArkmeRemoteRealtimeHost({
+      featureEnabled: true, environment: 'test', profileRef: 'web', hostClientRef: 'host-client-test',
+      readSession: async () => ({ userId: 42, clientId: 9 }), credentialBroker: broker,
+      runtimeStore: new DshRemoteRuntimeStore(directory),
+      controlPlane: { listBindings: async () => [{ ...active, status: 'revoked' }] } as unknown as DshRemoteControlPlane,
+      realtime: { disconnect: async () => undefined } as unknown as DshRemoteRealtimeTransport,
+      apiProxy: new DshApiProxyAdapter({}), grantSigningKeys: {}, ledgerForAccount: () => { throw new Error('unused') },
+    })
+    Object.assign(host, {
+      started: true, accountId: '42', userId: 42, clientId: 9, identity: generateEd25519DeviceKey('42'),
+      runtime: {
+        runtimeRef: 'runtime-revoked-test-01', profileRef: 'web', accountId: '42', remoteEnabled: true,
+        hostGeneration: 1, capabilities: [], updatedAtMillis: 1,
+      },
+      bindings: [active],
+    })
+    await host.listBindings()
+    expect(await broker.channelKeys({
+      accountId: '42', bindingRef: active.bindingRef, runtimeRef: 'runtime-revoked-test-01',
+      channelRef: 'remotech-revoked-test-01',
+    })).toBeUndefined()
+    await host.stop()
   })
 
   it('uses the exact Backend device -> desktop -> runtime -> policy wire before Realtime registration', async () => {
