@@ -55,6 +55,11 @@ describe('Host durable registration lifecycle', () => {
       controllerDisplayName: 'Phone', controllerPlatform: 'ios', revision: 1, status: 'active',
       scopes: ['session.read'], boundAtMillis: 1,
     }
+    await broker.putBindingRoot({
+      accountId: '42', bindingRef: active.bindingRef, rootSecret: Buffer.alloc(32, 1),
+      controllerPublicKey: 'A'.repeat(43), controllerKeyFingerprint: 'B'.repeat(43),
+      controllerToHost: Buffer.alloc(32, 2), hostToController: Buffer.alloc(32, 3),
+    })
     await broker.putChannelKeys({
       accountId: '42', bindingRef: active.bindingRef, runtimeRef: 'runtime-revoked-test-01',
       channelRef: 'remotech-revoked-test-01', keyEpoch: 2, rootSecret: Buffer.alloc(32, 1),

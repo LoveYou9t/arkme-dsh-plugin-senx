@@ -802,6 +802,13 @@ export class ArkmeRemoteRealtimeHost implements DshRemoteHostFacade {
         || confirmed.grant.channelRef !== undefined && confirmed.grant.channelRef !== controlClaims.channel_ref) {
         throw new DshRemoteError('DEVICE_PROOF_INVALID', 'Backend host-confirm 返回的 Binding/Grant 不匹配')
       }
+      await this.options.credentialBroker.putBindingRoot({
+        accountId: this.accountId!, bindingRef: confirmed.binding.bindingRef,
+        rootSecret: keys.confirmation,
+        controllerPublicKey: controllerClaims.cnf.public_key,
+        controllerKeyFingerprint: controllerClaims.cnf.key_fingerprint,
+        controllerToHost: keys.controllerToHost, hostToController: keys.hostToController,
+      })
       await this.options.credentialBroker.putChannelKeys({
         accountId: this.accountId!, bindingRef: confirmed.binding.bindingRef,
         runtimeRef: this.runtime!.runtimeRef, channelRef: controlClaims.channel_ref,

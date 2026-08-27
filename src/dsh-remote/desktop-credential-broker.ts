@@ -11,6 +11,17 @@ interface PersistedDesktopSecrets {
   ledgerKey: string
 }
 
+interface PersistedBindingRoot {
+  schemaVersion: 1
+  accountId: string
+  bindingRef: string
+  rootSecret: string
+  controllerPublicKey: string
+  controllerKeyFingerprint: string
+  controllerToHost: string
+  hostToController: string
+}
+
 function accountKey(accountId: string): string {
   const normalized = accountId.trim()
   if (!/^[A-Za-z0-9._:-]{1,128}$/.test(normalized)) {
@@ -65,6 +76,49 @@ export class DesktopCredentialBroker {
     await this.store.delete(accountKey(accountId))
   }
 
+  /**
+   * Installs the immutable Desktop-wide trust root created by one explicit
+   * pairing. Runtime channels derive fresh keys from this root, but transport
+   * cursors and directional session keys remain isolated per Runtime.
+   */
+  async putBindingRoot(input: {
+    accountId: string
+    bindingRef: string
+    rootSecret: Uint8Array
+    controllerPublicKey: string
+    controllerKeyFingerprint: string
+    controllerToHost: Uint8Array
+    hostToController: Uint8Array
+  }): Promise<void> {
+    this.validateRootMaterial(input)
+    const account = this.bindingAccount(input)
+    const encoded: PersistedBindingRoot = {
+      schemaVersion: 1, accountId: input.accountId, bindingRef: input.bindingRef,
+      rootSecret: encodeBase64Url(input.rootSecret), controllerPublicKey: input.controllerPublicKey,
+      controllerKeyFingerprint: input.controllerKeyFingerprint,
+      controllerToHost: encodeBase64Url(input.controllerToHost), hostToController: encodeBase64Url(input.hostToController),
+    }
+    const previous = this.channelWrites.get(account) ?? Promise.resolve()
+    const writing = previous.catch(() => undefined).then(async () => {
+      const existing = await this.store.read(account)
+      if (existing !== undefined) {
+        const current = this.parseBindingRoot(existing, input.accountId, input.bindingRef)
+        if (current.rootSecret !== encoded.rootSecret
+          || current.controllerPublicKey !== encoded.controllerPublicKey
+          || current.controllerKeyFingerprint !== encoded.controllerKeyFingerprint
+          || current.controllerToHost !== encoded.controllerToHost
+          || current.hostToController !== encoded.hostToController) {
+          throw new DshRemoteError('DEVICE_PROOF_INVALID', '同一 Binding 的桌面信任根不可替换')
+        }
+        return
+      }
+      await this.store.write(account, JSON.stringify(encoded))
+    })
+    this.channelWrites.set(account, writing)
+    try { await writing }
+    finally { if (this.channelWrites.get(account) === writing) this.channelWrites.delete(account) }
+  }
+
   async putChannelKeys(input: {
     accountId: string
     bindingRef: string
@@ -78,14 +132,20 @@ export class DesktopCredentialBroker {
     hostToController: Uint8Array
     lastTransportSequence?: number
   }): Promise<void> {
-    if (input.rootSecret.length !== 32 || input.controllerToHost.length !== 32 || input.hostToController.length !== 32
-      || !/^[A-Za-z0-9_-]{43}$/.test(input.controllerPublicKey) || input.controllerKeyFingerprint.length < 32
-      || !Number.isSafeInteger(input.keyEpoch) || input.keyEpoch <= 0) {
+    this.validateRootMaterial(input)
+    if (!Number.isSafeInteger(input.keyEpoch) || input.keyEpoch <= 0) {
       throw new DshRemoteError('REMOTE_REQUEST_INVALID', '远控频道密钥无效')
     }
     if (input.lastTransportSequence !== undefined
       && (!Number.isSafeInteger(input.lastTransportSequence) || input.lastTransportSequence < 0)) {
       throw new DshRemoteError('REMOTE_REQUEST_INVALID', '远控频道 transport sequence 无效')
+    }
+    const root = await this.readBindingRoot(input)
+    if (root === undefined) throw new DshRemoteError('BINDING_REVOKED', '远控 Binding 信任根不存在或已撤销')
+    if (root.rootSecret !== encodeBase64Url(input.rootSecret)
+      || root.controllerPublicKey !== input.controllerPublicKey
+      || root.controllerKeyFingerprint !== input.controllerKeyFingerprint) {
+      throw new DshRemoteError('DEVICE_PROOF_INVALID', 'Runtime 频道与 Binding 信任根不匹配')
     }
     const account = this.channelAccount(input)
     const previous = this.channelWrites.get(account) ?? Promise.resolve()
@@ -118,10 +178,20 @@ export class DesktopCredentialBroker {
     hostToController: Buffer
     lastTransportSequence: number
   } | undefined> {
+    const binding = await this.readBindingRoot(input)
+    if (binding === undefined) return undefined
     const account = this.channelAccount(input)
     await this.channelWrites.get(account)?.catch(() => undefined)
     const raw = await this.store.read(account)
-    if (raw === undefined) return undefined
+    if (raw === undefined) return {
+      keyEpoch: 1,
+      rootSecret: decodeBase64Url(binding.rootSecret),
+      controllerPublicKey: binding.controllerPublicKey,
+      controllerKeyFingerprint: binding.controllerKeyFingerprint,
+      controllerToHost: decodeBase64Url(binding.controllerToHost),
+      hostToController: decodeBase64Url(binding.hostToController),
+      lastTransportSequence: 0,
+    }
     let source: Record<string, unknown>
     try { source = JSON.parse(raw) as Record<string, unknown> }
     catch (error) { throw new DshRemoteError('REMOTE_STORAGE_FAILED', '远控频道密钥已损坏', false, {}, { cause: error }) }
@@ -135,6 +205,10 @@ export class DesktopCredentialBroker {
         && (typeof source.lastTransportSequence !== 'number' || !Number.isSafeInteger(source.lastTransportSequence)
           || source.lastTransportSequence < 0))) {
       throw new DshRemoteError('REMOTE_STORAGE_FAILED', '远控频道密钥路由不匹配')
+    }
+    if (source.rootSecret !== binding.rootSecret || source.controllerPublicKey !== binding.controllerPublicKey
+      || source.controllerKeyFingerprint !== binding.controllerKeyFingerprint) {
+      throw new DshRemoteError('REMOTE_STORAGE_FAILED', 'Runtime 频道密钥不属于当前 Binding 信任根')
     }
     const rootSecret = decodeBase64Url(source.rootSecret)
     const controllerToHost = decodeBase64Url(source.controllerToHost)
@@ -155,6 +229,11 @@ export class DesktopCredentialBroker {
   }
 
   async deleteBindingChannelKeys(input: { accountId: string; bindingRef: string; runtimeRef: string }): Promise<void> {
+    const bindingAccount = this.bindingAccount(input)
+    await this.channelWrites.get(bindingAccount)?.catch(() => undefined)
+    // Delete the Desktop-wide root first. Any stale per-Runtime record then
+    // becomes unusable immediately and cannot recreate the revoked trust root.
+    await this.store.delete(bindingAccount)
     const indexAccount = this.channelIndexAccount(input)
     const channelRef = await this.store.read(indexAccount)
     if (channelRef !== undefined) {
@@ -190,6 +269,51 @@ export class DesktopCredentialBroker {
     }
     await this.store.write(key, JSON.stringify(created))
     return created
+  }
+
+  private validateRootMaterial(input: {
+    rootSecret: Uint8Array
+    controllerPublicKey: string
+    controllerKeyFingerprint: string
+    controllerToHost: Uint8Array
+    hostToController: Uint8Array
+  }): void {
+    if (input.rootSecret.length !== 32 || input.controllerToHost.length !== 32 || input.hostToController.length !== 32
+      || !/^[A-Za-z0-9_-]{43}$/.test(input.controllerPublicKey) || input.controllerKeyFingerprint.length < 32) {
+      throw new DshRemoteError('REMOTE_REQUEST_INVALID', '远控 Binding 根密钥无效')
+    }
+  }
+
+  private async readBindingRoot(input: { accountId: string; bindingRef: string }): Promise<PersistedBindingRoot | undefined> {
+    const account = this.bindingAccount(input)
+    await this.channelWrites.get(account)?.catch(() => undefined)
+    const raw = await this.store.read(account)
+    return raw === undefined ? undefined : this.parseBindingRoot(raw, input.accountId, input.bindingRef)
+  }
+
+  private parseBindingRoot(raw: string, accountId: string, bindingRef: string): PersistedBindingRoot {
+    let source: Partial<PersistedBindingRoot>
+    try { source = JSON.parse(raw) as Partial<PersistedBindingRoot> }
+    catch (error) { throw new DshRemoteError('REMOTE_STORAGE_FAILED', '远控 Binding 信任根已损坏', false, {}, { cause: error }) }
+    if (source.schemaVersion !== 1 || source.accountId !== accountId || source.bindingRef !== bindingRef
+      || typeof source.rootSecret !== 'string' || decodeBase64Url(source.rootSecret).length !== 32
+      || typeof source.controllerPublicKey !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(source.controllerPublicKey)
+      || typeof source.controllerKeyFingerprint !== 'string' || source.controllerKeyFingerprint.length < 32
+      || typeof source.controllerToHost !== 'string' || decodeBase64Url(source.controllerToHost).length !== 32
+      || typeof source.hostToController !== 'string' || decodeBase64Url(source.hostToController).length !== 32) {
+      throw new DshRemoteError('REMOTE_STORAGE_FAILED', '远控 Binding 信任根合同不兼容')
+    }
+    return source as PersistedBindingRoot
+  }
+
+  private bindingAccount(input: { accountId: string; bindingRef: string }): string {
+    for (const value of [input.accountId, input.bindingRef]) {
+      if (value.trim() === '' || value.length > 256) throw new DshRemoteError('REMOTE_REQUEST_INVALID', '远控 Binding 密钥路由无效')
+    }
+    const digest = createHash('sha256').update([
+      'dsh-remote-binding-root-v1', input.accountId, input.bindingRef,
+    ].join('\n')).digest('base64url')
+    return `dsh-remote-binding-root:${digest}`
   }
 
   private channelAccount(input: { accountId: string; bindingRef: string; runtimeRef: string; channelRef: string }): string {

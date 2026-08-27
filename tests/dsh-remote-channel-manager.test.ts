@@ -80,12 +80,14 @@ describe('Host control Channel key lifecycle', () => {
     const grant = compactGrant(claims, 'issuer-test', issuer.privateJwk)
     const broker = new DesktopCredentialBroker(new MemorySecrets())
     const rootSecret = Buffer.alloc(32, 7)
-    await broker.putChannelKeys({
-      accountId: '1', bindingRef: binding.bindingRef, runtimeRef: claims.runtime_ref, channelRef: claims.channel_ref,
-      keyEpoch: 1, rootSecret, controllerPublicKey: controller.publicKey,
-      controllerKeyFingerprint: controller.keyFingerprint,
+    await broker.putBindingRoot({
+      accountId: '1', bindingRef: binding.bindingRef, rootSecret,
+      controllerPublicKey: controller.publicKey, controllerKeyFingerprint: controller.keyFingerprint,
       controllerToHost: Buffer.alloc(32, 1), hostToController: Buffer.alloc(32, 2),
     })
+    // This Runtime did not perform the original pairing. It must bootstrap its
+    // pairwise channel from the Desktop-wide Binding root, not require a second
+    // QR/code flow or reuse another Runtime's transport cursor.
     const realtime = new FakeRealtime()
     const dispatch = vi.fn(async request => ({
       protocol: 'dsh.remote' as const, protocol_major: 1 as const, kind: 'response' as const,

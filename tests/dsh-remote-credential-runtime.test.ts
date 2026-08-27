@@ -35,18 +35,26 @@ describe('Desktop Credential Broker', () => {
     expect(rotated.publicKey).not.toBe(before.publicKey)
   })
 
-  it('isolates direction keys by Binding, Runtime and final signed-Grant channel', async () => {
+  it('shares immutable Binding trust across Profiles while isolating Runtime channel state', async () => {
     const secrets = new MemorySecrets()
     const broker = new DesktopCredentialBroker(secrets)
+    const rootSecret = Buffer.alloc(32, 8)
+    const controllerPublicKey = 'A'.repeat(43)
+    const controllerKeyFingerprint = 'F'.repeat(43)
+    await broker.putBindingRoot({
+      accountId: 'account-1', bindingRef: 'binding-1', rootSecret,
+      controllerPublicKey, controllerKeyFingerprint,
+      controllerToHost: Buffer.alloc(32, 1), hostToController: Buffer.alloc(32, 2),
+    })
     await broker.putChannelKeys({
       accountId: 'account-1', bindingRef: 'binding-1', runtimeRef: 'runtime-1', channelRef: 'remotech-one',
-      keyEpoch: 1, rootSecret: Buffer.alloc(32, 8), controllerPublicKey: 'A'.repeat(43), controllerKeyFingerprint: 'F'.repeat(43),
+      keyEpoch: 2, rootSecret, controllerPublicKey, controllerKeyFingerprint,
       controllerToHost: Buffer.alloc(32, 1), hostToController: Buffer.alloc(32, 2),
       lastTransportSequence: 257,
     })
     await broker.putChannelKeys({
       accountId: 'account-1', bindingRef: 'binding-1', runtimeRef: 'runtime-2', channelRef: 'remotech-two',
-      keyEpoch: 1, rootSecret: Buffer.alloc(32, 9), controllerPublicKey: 'B'.repeat(43), controllerKeyFingerprint: 'G'.repeat(43),
+      keyEpoch: 3, rootSecret, controllerPublicKey, controllerKeyFingerprint,
       controllerToHost: Buffer.alloc(32, 3), hostToController: Buffer.alloc(32, 4),
     })
     expect((await broker.channelKeys({
@@ -57,14 +65,24 @@ describe('Desktop Credential Broker', () => {
     }))).toMatchObject({ controllerToHost: Buffer.alloc(32, 3), lastTransportSequence: 0 })
     expect(await broker.channelKeys({
       accountId: 'account-1', bindingRef: 'binding-1', runtimeRef: 'runtime-1', channelRef: 'remotech-two',
-    })).toBeUndefined()
+    })).toMatchObject({ keyEpoch: 1, rootSecret, lastTransportSequence: 0 })
+    await expect(broker.putBindingRoot({
+      accountId: 'account-1', bindingRef: 'binding-1', rootSecret: Buffer.alloc(32, 9),
+      controllerPublicKey, controllerKeyFingerprint,
+      controllerToHost: Buffer.alloc(32, 1), hostToController: Buffer.alloc(32, 2),
+    })).rejects.toMatchObject({ code: 'DEVICE_PROOF_INVALID' })
     await broker.deleteBindingChannelKeys({ accountId: 'account-1', bindingRef: 'binding-1', runtimeRef: 'runtime-1' })
     expect(await broker.channelKeys({
       accountId: 'account-1', bindingRef: 'binding-1', runtimeRef: 'runtime-1', channelRef: 'remotech-one',
     })).toBeUndefined()
     expect(await broker.channelKeys({
       accountId: 'account-1', bindingRef: 'binding-1', runtimeRef: 'runtime-2', channelRef: 'remotech-two',
-    })).toBeDefined()
+    })).toBeUndefined()
+    await expect(broker.putChannelKeys({
+      accountId: 'account-1', bindingRef: 'binding-1', runtimeRef: 'runtime-2', channelRef: 'remotech-two',
+      keyEpoch: 4, rootSecret, controllerPublicKey, controllerKeyFingerprint,
+      controllerToHost: Buffer.alloc(32, 5), hostToController: Buffer.alloc(32, 6),
+    })).rejects.toMatchObject({ code: 'BINDING_REVOKED' })
   })
 })
 
