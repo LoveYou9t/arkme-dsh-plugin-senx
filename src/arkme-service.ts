@@ -506,6 +506,14 @@ export class ArkmeService {
     return await this.auth.authStatus()
   }
 
+  async dshRemoteGet<T>(path: string, signal?: AbortSignal): Promise<T> {
+    return await this.runtime.authenticatedDshRemoteGet<T>(path, signal)
+  }
+
+  async dshRemotePost<T>(path: string, body: Record<string, unknown>, signal?: AbortSignal): Promise<T> {
+    return await this.runtime.authenticatedDshRemotePost<T>(path, body, undefined, signal)
+  }
+
   clientConfig(): ArkmeClientConfig {
     return {
       captchaId: this.config.geetestCaptchaId,

@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://jotmo.dev/contracts/dsh-remote/v1/channel-authorization.schema.json",
+  "title": "Ready-after Remote Channel authorization frames",
+  "oneOf": [
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "request_id", "channel_ref", "grant"],
+      "properties": {
+        "type": {"const": "channel.authorize.start"},
+        "request_id": {"type": "string", "minLength": 1, "maxLength": 128},
+        "channel_ref": {"type": "string", "minLength": 8, "maxLength": 128},
+        "grant": {"type": "string", "minLength": 64, "maxLength": 8192}
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "request_id", "authorization_ref", "nonce", "expires_at"],
+      "properties": {
+        "type": {"const": "channel.authorize.challenge"},
+        "request_id": {"type": "string", "minLength": 1, "maxLength": 128},
+        "authorization_ref": {"type": "string", "minLength": 8, "maxLength": 128},
+        "nonce": {"type": "string", "pattern": "^[A-Za-z0-9_-]{43}$"},
+        "expires_at": {"type": "integer", "minimum": 1}
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "request_id", "authorization_ref", "proof"],
+      "properties": {
+        "type": {"const": "channel.authorize.prove"},
+        "request_id": {"type": "string", "minLength": 1, "maxLength": 128},
+        "authorization_ref": {"type": "string", "minLength": 8, "maxLength": 128},
+        "proof": {"type": "string", "pattern": "^[A-Za-z0-9_-]{86}$"}
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "request_id", "authorization_ref", "remote_auth_epoch", "expires_at", "sender_role", "fence_revisions"],
+      "properties": {
+        "type": {"const": "channel.authorized"},
+        "request_id": {"type": "string", "minLength": 1, "maxLength": 128},
+        "authorization_ref": {"type": "string", "minLength": 8, "maxLength": 128},
+        "remote_auth_epoch": {"type": "integer", "minimum": 1},
+        "expires_at": {"type": "integer", "minimum": 1},
+        "sender_role": {"enum": ["host", "controller"]},
+        "fence_revisions": {"type": "object", "additionalProperties": {"type": "integer", "minimum": 0}}
+      }
+    }
+  ]
+}

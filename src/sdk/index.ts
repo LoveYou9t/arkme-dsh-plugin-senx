@@ -257,6 +257,17 @@ export type {
 export { ARKME_EXTENSION_RUNTIME_UNAVAILABLE_MESSAGE } from '../extensions/types.js'
 export { ARKME_PROVIDER_CONTRACT_VERSION } from '../types.js'
 export type {
+  DshRemoteBindingProjection,
+  DshRemoteCapability,
+  DshRemotePairingTicket,
+  DshRemoteStatus,
+} from '../dsh-remote/types.js'
+import type {
+  DshRemoteBindingProjection,
+  DshRemotePairingTicket,
+  DshRemoteStatus,
+} from '../dsh-remote/types.js'
+export type {
   ArkmeOutgoingCallFailureCode,
   ArkmeOutgoingCallMediaType,
   ArkmeOutgoingCallToolResult,
@@ -1448,6 +1459,59 @@ export class ArkmeSdk {
       stopped = true
       if (timeout !== undefined) clearTimeout(timeout)
     }
+  }
+
+  async remoteStatus(signal?: AbortSignal): Promise<DshRemoteStatus> {
+    return await this.call<DshRemoteStatus>('remote.getStatus', undefined, signal)
+  }
+
+  async setRemoteEnabled(enabled: boolean, signal?: AbortSignal): Promise<DshRemoteStatus> {
+    return await this.call<DshRemoteStatus>('remote.setEnabled', { enabled }, signal)
+  }
+
+  async createRemotePairingAttempt(signal?: AbortSignal): Promise<DshRemotePairingTicket> {
+    return await this.call<DshRemotePairingTicket>('remote.createPairingAttempt', undefined, signal)
+  }
+
+  async cancelRemotePairingAttempt(pairingRef: string, signal?: AbortSignal): Promise<void> {
+    if (pairingRef.trim() === '') throw new TypeError('Remote pairing reference must not be empty')
+    await this.call('remote.cancelPairingAttempt', { pairingRef: pairingRef.trim() }, signal)
+  }
+
+  async remoteBindings(signal?: AbortSignal): Promise<DshRemoteBindingProjection[]> {
+    return await this.call<DshRemoteBindingProjection[]>('remote.listBindings', undefined, signal)
+  }
+
+  async revokeRemoteBinding(bindingRef: string, signal?: AbortSignal): Promise<void> {
+    if (bindingRef.trim() === '') throw new TypeError('Remote binding reference must not be empty')
+    await this.call('remote.revokeBinding', { bindingRef: bindingRef.trim() }, signal)
+  }
+
+  async renameRemoteDesktop(displayName: string, signal?: AbortSignal): Promise<DshRemoteStatus> {
+    const normalized = displayName.trim()
+    if (normalized === '' || [...normalized].length > 80) throw new TypeError('Remote desktop name must contain 1 to 80 characters')
+    return await this.call<DshRemoteStatus>('remote.renameDesktop', { displayName: normalized }, signal)
+  }
+
+  subscribeRemote(
+    listener: (status: DshRemoteStatus) => void,
+    options: ArkmeSubscribeOptions = {},
+  ): () => void {
+    const intervalMs = Math.min(60_000, Math.max(1_000, Math.trunc(options.intervalMs ?? 2_000)))
+    let stopped = false
+    let timer: ReturnType<typeof setTimeout> | undefined
+    let revision = -1
+    const poll = async (): Promise<void> => {
+      if (stopped) return
+      try {
+        const status = await this.remoteStatus()
+        if (!stopped && status.revision !== revision) { revision = status.revision; listener(status) }
+      } catch (error) { options.onError?.(error) }
+      finally { if (!stopped) timer = setTimeout(() => { void poll() }, intervalMs) }
+    }
+    if (options.immediate === false) timer = setTimeout(() => { void poll() }, intervalMs)
+    else void poll()
+    return () => { stopped = true; if (timer !== undefined) clearTimeout(timer) }
   }
 
   async call<T>(

@@ -15,6 +15,7 @@ import { clearLastNavigationCache } from './navigation-cache.js'
 import { arkmePluginUpdateStore } from './plugin-update-store.js'
 import { arkmeUi } from './ui-controller.js'
 import { arkmeUpdateUi } from './update-ui-controller.js'
+import { ArkmeRemoteSettingsPanel } from './ArkmeRemoteSettingsPanel.js'
 
 interface SettingsRowProps {
   title: string
@@ -164,6 +165,7 @@ export function ArkmeSettingsSurface() {
   const [notificationBusy, setNotificationBusy] = useState(false)
   const [error, setError] = useState('')
   const [notificationPermission, setNotificationPermission] = useState(() => arkmeDesktopNotifications.permission())
+  const [remoteOpen, setRemoteOpen] = useState(false)
 
   useEffect(() => {
     if (authState.auth?.status !== 'authenticated') {
@@ -251,6 +253,8 @@ export function ArkmeSettingsSurface() {
     else void arkmeAppUpdateStore.refresh(true)
   }
 
+  if (remoteOpen) return <ArkmeRemoteSettingsPanel onBack={() => { setRemoteOpen(false) }} />
+
   return <div ref={surfaceRef} className="arkme-redesign-settings-surface" data-arkme-settings-surface aria-label="Arkme 设置">
     <div className="arkme-redesign-settings-shell">
       <div className="arkme-redesign-settings-profile">
@@ -276,6 +280,10 @@ export function ArkmeSettingsSurface() {
           {...(notificationPermission === 'default' ? { onClick: () => { void enableNotifications() } } : {})}
         />
       </SettingsGroup>
+
+      {authenticated && <SettingsGroup title="远程控制">
+        <SettingsRow title="移动端远控 DSH" description="管理远程开关、配对二维码和已绑定手机" onClick={() => { setRemoteOpen(true) }} />
+      </SettingsGroup>}
 
       <SettingsGroup title="更新">
         <SettingsRow

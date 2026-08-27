@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://jotmo.dev/contracts/dsh-remote/v1/channel-grant-claims.schema.json",
+  "title": "Sender-constrained remote Channel Grant claims",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "iss", "aud", "sub", "jti", "iat", "nbf", "exp", "user_id", "client_id",
+    "grant_kind", "channel_ref", "runtime_ref", "host_profile_ref", "host_client_ref",
+    "credential_ref", "key_epoch", "sender_role", "allowed_directions", "scope",
+    "subject_revisions", "cnf"
+  ],
+  "properties": {
+    "iss": {"const": "jotmo-backend/dsh-remote"},
+    "aud": {"const": "jotmo-realtime/remote-channel"},
+    "sub": {"type": "string", "minLength": 8, "maxLength": 128},
+    "jti": {"type": "string", "minLength": 8, "maxLength": 128},
+    "iat": {"type": "integer"},
+    "nbf": {"type": "integer"},
+    "exp": {"type": "integer"},
+    "user_id": {"type": "integer", "minimum": 1},
+    "client_id": {"type": "integer", "minimum": 1},
+    "grant_kind": {"enum": ["pairing", "control"]},
+    "channel_ref": {"type": "string", "minLength": 8, "maxLength": 128},
+    "runtime_ref": {"type": "string", "minLength": 8, "maxLength": 128},
+    "host_profile_ref": {"type": "string", "minLength": 1, "maxLength": 128},
+    "host_client_ref": {"type": "string", "minLength": 1, "maxLength": 128},
+    "credential_ref": {"type": "string", "minLength": 8, "maxLength": 128},
+    "key_epoch": {"type": "integer", "minimum": 1},
+    "sender_role": {"enum": ["host", "controller"]},
+    "allowed_directions": {
+      "type": "array",
+      "uniqueItems": true,
+      "minItems": 1,
+      "items": {"enum": ["request", "response", "snapshot", "event", "pairing_claim", "pairing_confirm"]}
+    },
+    "scope": {"type": "array", "uniqueItems": true, "items": {"type": "string", "maxLength": 64}},
+    "subject_revisions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["credential", "runtime", "global"],
+      "properties": {
+        "credential": {"type": "integer", "minimum": 1},
+        "binding": {"type": "integer", "minimum": 1},
+        "runtime": {"type": "integer", "minimum": 1},
+        "pairing": {"type": "integer", "minimum": 1},
+        "global": {"type": "integer", "minimum": 1}
+      }
+    },
+    "cnf": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["key_fingerprint", "public_key"],
+      "properties": {
+        "key_fingerprint": {"type": "string", "pattern": "^[A-Za-z0-9_-]{32,128}$"},
+        "public_key": {"type": "string", "pattern": "^[A-Za-z0-9_-]{43}$"}
+      }
+    }
+  }
+}

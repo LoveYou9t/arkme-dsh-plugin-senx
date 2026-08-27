@@ -24,6 +24,8 @@ import type { ArkmeExtensionCatalogItem, ArkmeExtensionCatalogPage, ArkmeExtensi
 import { effectiveExtensionPublisherRole } from './extensions/publisher-role.js'
 import { invokePersistentArkmeExtension } from './extensions/persistent-runtime.js'
 import { invokeArkmeBundle } from './extensions/bundle-runtime.js'
+import { DshRemoteError } from './dsh-remote/errors.js'
+import type { DshRemoteHostFacade } from './dsh-remote/types.js'
 
 const MAX_REQUEST_BYTES = 128 * 1024
 const ARKME_HOST_INSTANCE_ID = randomUUID()
@@ -487,6 +489,7 @@ export interface ArkmeHostApiOptions {
   extensionManager?: () => ArkmeExtensionManager | undefined
   extensionInstallTasks?: () => ArkmeExtensionInstallTasks | undefined
   ownedExtensionInventory?: () => ArkmeOwnedExtensionInventory | undefined
+  remoteHost?: () => DshRemoteHostFacade | undefined
 }
 
 export function createArkmeHostApi(service: ArkmeService, options: ArkmeHostApiOptions) {
@@ -518,7 +521,7 @@ export function createArkmeHostApi(service: ArkmeService, options: ArkmeHostApiO
       }
       const request = await readRequest(req)
       const params = request.params ?? {}
-      if (['extensions.delete', 'extensions.reviews.create', 'extensions.audit.check', 'extensions.install.start', 'extensions.install.pause', 'extensions.install.resume', 'extensions.enabled.set', 'extensions.metadata.update', 'extensions.share.rotate', 'extensions.preview.delete', 'extensions.preview.reorder', 'extensions.uninstall', 'extensions.restart', 'extensions.client.failure', 'extensions.persistent.invoke', 'extensions.bundle.invoke', 'extensions.mine.publish']
+      if (['extensions.delete', 'extensions.reviews.create', 'extensions.audit.check', 'extensions.install.start', 'extensions.install.pause', 'extensions.install.resume', 'extensions.enabled.set', 'extensions.metadata.update', 'extensions.share.rotate', 'extensions.preview.delete', 'extensions.preview.reorder', 'extensions.uninstall', 'extensions.restart', 'extensions.client.failure', 'extensions.persistent.invoke', 'extensions.bundle.invoke', 'extensions.mine.publish', 'remote.setEnabled', 'remote.createPairingAttempt', 'remote.cancelPairingAttempt', 'remote.revokeBinding', 'remote.renameDesktop']
         .includes(request.operation) && origin === undefined) {
         throw new ArkmePluginError('origin-required', '扩展变更必须从当前 DSH 页面发起', false, 403)
       }
@@ -531,6 +534,7 @@ export function createArkmeHostApi(service: ArkmeService, options: ArkmeHostApiO
         options.extensionInstallTasks?.(),
         options.ownedExtensionInventory?.(),
         controller.signal,
+        options.remoteHost?.(),
       )
       writeJson(res, 200, { ok: true, value })
     } catch (error) {
@@ -541,6 +545,8 @@ export function createArkmeHostApi(service: ArkmeService, options: ArkmeHostApiO
           ? new ArkmePluginError(error.code, error.message, error.retryable, error.retryable ? 503 : 409)
         : error instanceof ArkmeOutgoingCallError
           ? new ArkmePluginError(error.code, error.message, error.retryable, error.code === 'call-active' ? 409 : 400)
+        : error instanceof DshRemoteError
+          ? new ArkmePluginError(error.code, error.message, error.retryable, error.retryable ? 503 : 409)
           : new ArkmePluginError('internal-error', 'Arkme 插件处理失败', true, 500, { cause: error })
       writeJson(res, known.httpStatus, {
         ok: false,
@@ -564,6 +570,7 @@ export async function dispatchArkmeHostOperation(
   extensionInstallTasks?: ArkmeExtensionInstallTasks,
   ownedExtensionInventory?: ArkmeOwnedExtensionInventory,
   requestSignal?: AbortSignal,
+  remoteHost?: DshRemoteHostFacade,
 ): Promise<unknown> {
   switch (operation) {
     case 'provider.capabilities': return service.providerCapabilities()
@@ -595,6 +602,13 @@ export async function dispatchArkmeHostOperation(
       stringParam(params, 'code'),
     )
     case 'auth.logout': return await service.logout()
+    case 'remote.getStatus': return requireRemoteHost(remoteHost).getStatus()
+    case 'remote.setEnabled': return await requireRemoteHost(remoteHost).setEnabled(requiredBooleanParam(params, 'enabled'))
+    case 'remote.createPairingAttempt': return await requireRemoteHost(remoteHost).createPairingAttempt()
+    case 'remote.cancelPairingAttempt': return await requireRemoteHost(remoteHost).cancelPairingAttempt(stringParam(params, 'pairingRef').trim())
+    case 'remote.listBindings': return await requireRemoteHost(remoteHost).listBindings()
+    case 'remote.revokeBinding': return await requireRemoteHost(remoteHost).revokeBinding(stringParam(params, 'bindingRef').trim())
+    case 'remote.renameDesktop': return await requireRemoteHost(remoteHost).renameDesktop(stringParam(params, 'displayName'))
     case 'voiceprint.status': return await service.myVoiceprint()
     case 'voiceprint.grants': return await service.outboundVoiceprintGrants({
       cursor: stringParam(params, 'cursor').trim(),
@@ -1411,6 +1425,11 @@ function requireUpdateManager(
     throw new ArkmePluginError('plugin-update-unavailable', '插件更新检查暂不可用', true, 503)
   }
   return updateManager
+}
+
+function requireRemoteHost(host: DshRemoteHostFacade | undefined): DshRemoteHostFacade {
+  if (host === undefined) throw new ArkmePluginError('CAPABILITY_UNSUPPORTED', '当前 DSH 未加载远控 Host', false, 503)
+  return host
 }
 
 function requireExtensionInstallTasks(tasks: ArkmeExtensionInstallTasks | undefined): ArkmeExtensionInstallTasks {
