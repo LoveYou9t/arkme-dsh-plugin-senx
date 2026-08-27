@@ -258,7 +258,9 @@ export class DshRemoteHostChannelManager {
           }),
           signal: channel.controller.signal,
         })
-      } catch {
+      } catch (error) {
+        if (error instanceof DshRemoteError && error.code === 'REMOTE_REQUEST_INVALID'
+          && error.details.frameTooLarge === true) return
         await this.close(channel.binding.bindingRef)
       }
     }))

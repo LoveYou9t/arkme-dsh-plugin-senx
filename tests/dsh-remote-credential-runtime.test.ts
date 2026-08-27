@@ -83,6 +83,11 @@ describe('Desktop Credential Broker', () => {
       keyEpoch: 4, rootSecret, controllerPublicKey, controllerKeyFingerprint,
       controllerToHost: Buffer.alloc(32, 5), hostToController: Buffer.alloc(32, 6),
     })).rejects.toMatchObject({ code: 'BINDING_REVOKED' })
+    await expect(new DesktopCredentialBroker(secrets).putBindingRoot({
+      accountId: 'account-1', bindingRef: 'binding-1', rootSecret,
+      controllerPublicKey, controllerKeyFingerprint,
+      controllerToHost: Buffer.alloc(32, 1), hostToController: Buffer.alloc(32, 2),
+    })).rejects.toMatchObject({ code: 'BINDING_REVOKED' })
   })
 })
 
@@ -100,6 +105,10 @@ describe('DSH remote Runtime store', () => {
     expect(restarted.runtimeRef).toBe(first.runtimeRef)
     expect(restarted.remoteEnabled).toBe(true)
     expect(restarted.hostGeneration).toBe(2)
+    const adopted = await store.adoptRuntimeRef('account-1', 'profile-a', 'runtime-backend-01', 7)
+    expect(adopted.hostGeneration).toBe(7)
+    await expect(store.adoptRuntimeRef('account-1', 'profile-a', 'runtime-backend-01', 6))
+      .rejects.toMatchObject({ code: 'REMOTE_STORAGE_FAILED' })
   })
 
   it('keeps account namespaces independent', async () => {

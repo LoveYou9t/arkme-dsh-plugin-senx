@@ -19,16 +19,19 @@ export function ArkmeRemoteSettingsPanel({ onBack }: { onBack: () => void }) {
   const [now, setNow] = useState(Date.now())
   const qr = useMemo(() => pairing === undefined ? undefined : qrData(pairing.qrPayload), [pairing?.qrPayload])
 
-  const refresh = async (signal?: AbortSignal) => {
+  const refresh = async (signal?: AbortSignal, forceBindingRefresh = false) => {
     const next = await callArkme<DshRemoteStatus>('remote.getStatus', undefined, signal)
     setStatus(next)
     setPairing(next.pairingAttempt)
-    if (next.available) setBindings(await callArkme<DshRemoteBindingProjection[]>('remote.listBindings', undefined, signal))
+    setBindings(next.bindings)
+    if (next.available && forceBindingRefresh) {
+      setBindings(await callArkme<DshRemoteBindingProjection[]>('remote.listBindings', undefined, signal))
+    }
   }
 
   useEffect(() => {
     const controller = new AbortController()
-    void refresh(controller.signal).catch(caught => {
+    void refresh(controller.signal, true).catch(caught => {
       if (!controller.signal.aborted) setError(caught instanceof Error ? caught.message : String(caught))
     })
     const timer = setInterval(() => { setNow(Date.now()) }, 1_000)

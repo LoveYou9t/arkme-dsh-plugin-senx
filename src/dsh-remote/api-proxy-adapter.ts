@@ -139,6 +139,12 @@ function codePointLength(value: string): number { return [...value].length }
 
 function jsonBytes(value: unknown): number { return Buffer.byteLength(JSON.stringify(value)) }
 
+// A live session event or one pending interaction is not itself pageable. Keep
+// each atomic projection well below the 40 KiB page-result budget so the
+// encrypted event and both Realtime wrappers remain below 60 KiB.
+const MAX_ATOMIC_PROJECTION_BYTES = 24 * 1024
+const MAX_HISTORY_CONTENT_BYTES = 20 * 1024
+
 function boundedUtf8(value: string, maxBytes: number): string {
   if (Buffer.byteLength(value) <= maxBytes) return value
   let result = ''
@@ -178,11 +184,12 @@ function pageByBytes<T, R>(input: {
   return input.build(items, consumed < input.all.length ? offsetCursor(consumed) : undefined)
 }
 
-function projectQuestions(value: unknown[]): unknown[] {
-  return value.slice(0, 16).flatMap(raw => {
-    if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return []
+function projectQuestions(value: unknown[]): unknown[] | undefined {
+  const result: unknown[] = []
+  for (const raw of value.slice(0, 16)) {
+    if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) continue
     const source = raw as Record<string, unknown>
-    if (typeof source.id !== 'string' || typeof source.question !== 'string') return []
+    if (typeof source.id !== 'string' || typeof source.question !== 'string') continue
     const options = Array.isArray(source.options) ? source.options.slice(0, 16).flatMap(option => {
       if (option === null || typeof option !== 'object' || Array.isArray(option)) return []
       const item = option as Record<string, unknown>
@@ -192,7 +199,7 @@ function projectQuestions(value: unknown[]): unknown[] {
         ...(typeof item.description === 'string' ? { description: boundedUtf8(item.description, 2 * 1024) } : {}),
       }]
     }) : undefined
-    return [{
+    const projected = {
       id: boundedUtf8(source.id, 256),
       question: boundedUtf8(source.question, 4 * 1024),
       ...(typeof source.header === 'string' ? { header: boundedUtf8(source.header, 512) } : {}),
@@ -204,8 +211,11 @@ function projectQuestions(value: unknown[]): unknown[] {
         && typeof (source.intent as Record<string, unknown>).approve === 'string'
         ? { intent: { kind: 'plan-review', approve: boundedUtf8((source.intent as { approve: string }).approve, 512) } }
         : {}),
-    }]
-  })
+    }
+    if (jsonBytes([...result, projected]) > MAX_ATOMIC_PROJECTION_BYTES) return undefined
+    result.push(projected)
+  }
+  return result
 }
 
 export class DshApiProxyAdapter {
@@ -553,11 +563,13 @@ export class DshApiProxyAdapter {
           pendingInteractions: this.pending(),
         })
       } else if (type === 'question/requested' && typeof payload.sessionId === 'string' && Array.isArray(payload.questions)) {
-        this.pendingInteractions.set(frame.rpcId, {
-          kind: 'question', interactionRpcRef: frame.rpcId, sessionId: payload.sessionId,
-          questions: projectQuestions(payload.questions),
-        })
-        interactionsChanged = true
+        const questions = projectQuestions(payload.questions)
+        if (questions !== undefined && questions.length > 0) {
+          this.pendingInteractions.set(frame.rpcId, {
+            kind: 'question', interactionRpcRef: frame.rpcId, sessionId: payload.sessionId, questions,
+          })
+          interactionsChanged = true
+        }
       } else if (type === 'approval/requested' && typeof payload.sessionId === 'string'
         && typeof payload.approvalId === 'string' && typeof payload.toolName === 'string') {
         const reason = typeof payload.reason === 'string' && payload.reason.trim() !== '' ? payload.reason.trim().slice(0, 500) : undefined
@@ -635,17 +647,26 @@ export class DshApiProxyAdapter {
         ? event.data as Record<string, unknown> : {}
       const rawContent = Array.isArray(data.content) ? data.content : []
       const content: NonNullable<DshRemoteHistoryEntry['event']['data']['content']> = []
+      let contentTruncated = false
       for (const raw of rawContent.slice(0, 32)) {
+        let projected: NonNullable<DshRemoteHistoryEntry['event']['data']['content']>[number]
         if (raw !== null && typeof raw === 'object' && !Array.isArray(raw)
           && (raw as Record<string, unknown>).type === 'text' && typeof (raw as Record<string, unknown>).text === 'string') {
           const text = [...(raw as { text: string }).text].slice(0, DSH_REMOTE_MAX_TEXT_CODE_POINTS).join('')
-          content.push({ type: 'text', text: boundedUtf8(text, 12 * 1024) })
+          projected = { type: 'text', text: boundedUtf8(text, 12 * 1024) }
         } else if (raw !== null && typeof raw === 'object' && !Array.isArray(raw)
           && ['image', 'file', 'attachment'].includes(String((raw as Record<string, unknown>).type))) {
-          content.push({ type: 'unsupported', reason: 'attachment' })
+          projected = { type: 'unsupported', reason: 'attachment' }
         } else {
-          content.push({ type: 'unsupported', reason: 'unknown-content' })
+          projected = { type: 'unsupported', reason: 'unknown-content' }
         }
+        if (jsonBytes([...content, projected]) > MAX_HISTORY_CONTENT_BYTES) { contentTruncated = true; break }
+        content.push(projected)
+      }
+      if (rawContent.length > 32) contentTruncated = true
+      if (contentTruncated) {
+        const marker = { type: 'unsupported' as const, reason: 'unknown-content' as const }
+        if (jsonBytes([...content, marker]) <= MAX_HISTORY_CONTENT_BYTES) content.push(marker)
       }
       const rawSource = data.source !== null && typeof data.source === 'object' && !Array.isArray(data.source)
         ? data.source as Record<string, unknown> : undefined
@@ -656,7 +677,11 @@ export class DshApiProxyAdapter {
           ? { rpcId: rawSource.rpcId }
           : {}),
       }
-      return { event: { ...base, data: { content, source } } }
+      const projected = { event: { ...base, data: { content, source } } }
+      if (jsonBytes(projected) > MAX_ATOMIC_PROJECTION_BYTES) {
+        return { event: { ...base, data: { summary: '消息内容过大，请在桌面端查看', source } } }
+      }
+      return projected
     }
     if (event.type.startsWith('tool/')) {
       return { event: { ...base, data: { summary: '工具活动仅可在桌面端查看' } } }

@@ -18,6 +18,14 @@ class FakeSocket implements DshRemoteSocketLike {
     const frame = JSON.parse(data) as Record<string, unknown>
     const requestId = frame.request_id
     if (frame.type === 'connection.open') this.reply({ type: 'connection.ready', connection_generation: 11 })
+    else if (frame.type === 'service.register') this.reply({
+      type: 'service.registered', request_id: requestId, namespace: 'dsh_remote', service: 'host',
+      protocol: 'dsh.remote', protocol_major: 1, connection_generation: 11, service_lease_generation: 29,
+    })
+    else if (frame.type === 'service.unregister') this.reply({
+      type: 'service.unregistered', request_id: requestId, namespace: 'dsh_remote', service: 'host',
+      protocol: 'dsh.remote', protocol_major: 1,
+    })
     else if (frame.type === 'channel.authorize.start') this.reply({
       type: 'channel.authorize.challenge', request_id: requestId,
       authorization_ref: 'authorization-test-01', nonce: 'n'.repeat(43), expires_at: 120_000,
@@ -43,7 +51,7 @@ class FakeSocket implements DshRemoteSocketLike {
         channel_ref: claims.channel_ref, command_id: 'command-controller-01', seq: 2,
         sender_role: 'controller', sender_credential_ref: claims.credential_ref,
         authorization_ref: 'authorization-controller-01', subject_revision: 1,
-        remote_auth_epoch: 2, accepted_at: 1_000, target_host_lease_generation: 11,
+        remote_auth_epoch: 2, accepted_at: 1_000, target_host_lease_generation: 29,
         payload, created_at: 1_000,
       },
     }) })
@@ -88,7 +96,15 @@ describe('Realtime remote transport wire', () => {
     const connected = transport.connect({ profileRef: 'profile-test', clientRef: 'host-client-test', signal: controller.signal })
     setTimeout(() => { socket.open() }, 0)
     await connected
-    await transport.authorizeChannel({ grant: 'g'.repeat(80), claims, signProof: async () => 's'.repeat(86), signal: controller.signal })
+    await expect(transport.authorizeChannel({
+      grant: 'g'.repeat(80), claims, signProof: async () => 's'.repeat(86), signal: controller.signal,
+    })).rejects.toMatchObject({ code: 'HOST_CHANNEL_NOT_READY' })
+    const registered = await transport.registerHost({ runtimeRef: claims.runtime_ref, capabilities: [], signal: controller.signal })
+    expect(registered.serviceLeaseGeneration).toBe(29)
+    const authorized = await transport.authorizeChannel({
+      grant: 'g'.repeat(80), claims, signProof: async () => 's'.repeat(86), signal: controller.signal,
+    })
+    expect(authorized.serviceLeaseGeneration).toBe(29)
     const start = socket.sent.map(value => JSON.parse(value) as Record<string, unknown>)
       .find(frame => frame.type === 'channel.authorize.start')
     expect(start).toMatchObject({ grant: 'g'.repeat(80), channel_ref: 'channel-test-01' })
@@ -101,6 +117,7 @@ describe('Realtime remote transport wire', () => {
     const connected = transport.connect({ profileRef: 'profile-test', clientRef: 'host-client-test', signal: controller.signal })
     setTimeout(() => { socket.open() }, 0)
     await connected
+    await transport.registerHost({ runtimeRef: claims.runtime_ref, capabilities: [], signal: controller.signal })
     await transport.authorizeChannel({ grant: 'g'.repeat(80), claims, signProof: async () => 's'.repeat(86), signal: controller.signal })
     await expect(transport.publish({
       channelRef: claims.channel_ref, authorizationRef: 'authorization-test-01', commandId: 'command-small',
@@ -140,6 +157,7 @@ describe('Realtime remote transport wire', () => {
     const connected = transport.connect({ profileRef: 'profile-test', clientRef: 'host-client-test', signal: controller.signal })
     setTimeout(() => { socket.open() }, 0)
     await connected
+    await transport.registerHost({ runtimeRef: claims.runtime_ref, capabilities: [], signal: controller.signal })
     await transport.authorizeChannel({ grant: 'g'.repeat(80), claims, signProof: async () => 's'.repeat(86), signal: controller.signal })
     const received: Array<{ payload: Record<string, unknown>; sequence?: number }> = []
     await transport.subscribe({

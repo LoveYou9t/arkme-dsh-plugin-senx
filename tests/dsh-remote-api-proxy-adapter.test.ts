@@ -280,4 +280,34 @@ describe('public DSH ApiProxy remote adapter', () => {
     })
     stop()
   })
+
+  it('bounds atomic live events and does not expose a partial oversized question batch', async () => {
+    const { api } = await fakeApi()
+    async function* mux() {
+      yield { rpcId: 'large-event-01', payload: {
+        type: 'session/event', sessionId: 'session-1',
+        event: { type: 'assistant/message', seq: 9, time: 102, data: {
+          content: Array.from({ length: 32 }, (_, index) => ({
+            type: 'text', text: `${String(index)}-${'四'.repeat(20_000)}`,
+          })),
+        } },
+      } }
+      yield { rpcId: 'large-question-01', payload: {
+        type: 'question/requested', sessionId: 'session-1',
+        questions: Array.from({ length: 16 }, (_, index) => ({
+          id: `question-${String(index)}`, question: '问'.repeat(4_000), detail: '详'.repeat(8_000),
+        })),
+      } }
+      await new Promise(() => undefined)
+    }
+    api.events = { mux: () => mux() }
+    const adapter = new DshApiProxyAdapter(api)
+    const projected: unknown[] = []
+    adapter.subscribeProjectionEvents(event => { projected.push(event) })
+    const stop = adapter.startEvents()
+    await vi.waitFor(() => { expect(projected).toHaveLength(1) })
+    expect(Buffer.byteLength(JSON.stringify(projected[0]))).toBeLessThanOrEqual(24 * 1024)
+    expect(adapter.pending()).toEqual([])
+    stop()
+  })
 })

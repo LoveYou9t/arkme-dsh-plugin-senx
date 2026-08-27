@@ -22,6 +22,13 @@ interface PersistedBindingRoot {
   hostToController: string
 }
 
+interface PersistedBindingRevocation {
+  schemaVersion: 1
+  accountId: string
+  bindingRef: string
+  revoked: true
+}
+
 function accountKey(accountId: string): string {
   const normalized = accountId.trim()
   if (!/^[A-Za-z0-9._:-]{1,128}$/.test(normalized)) {
@@ -100,6 +107,9 @@ export class DesktopCredentialBroker {
     }
     const previous = this.channelWrites.get(account) ?? Promise.resolve()
     const writing = previous.catch(() => undefined).then(async () => {
+      if (await this.store.read(this.bindingRevocationAccount(input)) !== undefined) {
+        throw new DshRemoteError('BINDING_REVOKED', '远控 Binding 信任根已撤销')
+      }
       const existing = await this.store.read(account)
       if (existing !== undefined) {
         const current = this.parseBindingRoot(existing, input.accountId, input.bindingRef)
@@ -231,8 +241,13 @@ export class DesktopCredentialBroker {
   async deleteBindingChannelKeys(input: { accountId: string; bindingRef: string; runtimeRef: string }): Promise<void> {
     const bindingAccount = this.bindingAccount(input)
     await this.channelWrites.get(bindingAccount)?.catch(() => undefined)
-    // Delete the Desktop-wide root first. Any stale per-Runtime record then
-    // becomes unusable immediately and cannot recreate the revoked trust root.
+    const revocation: PersistedBindingRevocation = {
+      schemaVersion: 1, accountId: input.accountId, bindingRef: input.bindingRef, revoked: true,
+    }
+    // The installation-wide tombstone is written before any deletion. Other
+    // Profiles therefore reject a late pairing/root write even when their
+    // process-local serialization queue cannot observe this process.
+    await this.store.write(this.bindingRevocationAccount(input), JSON.stringify(revocation))
     await this.store.delete(bindingAccount)
     const indexAccount = this.channelIndexAccount(input)
     const channelRef = await this.store.read(indexAccount)
@@ -287,6 +302,7 @@ export class DesktopCredentialBroker {
   private async readBindingRoot(input: { accountId: string; bindingRef: string }): Promise<PersistedBindingRoot | undefined> {
     const account = this.bindingAccount(input)
     await this.channelWrites.get(account)?.catch(() => undefined)
+    if (await this.store.read(this.bindingRevocationAccount(input)) !== undefined) return undefined
     const raw = await this.store.read(account)
     return raw === undefined ? undefined : this.parseBindingRoot(raw, input.accountId, input.bindingRef)
   }
@@ -314,6 +330,16 @@ export class DesktopCredentialBroker {
       'dsh-remote-binding-root-v1', input.accountId, input.bindingRef,
     ].join('\n')).digest('base64url')
     return `dsh-remote-binding-root:${digest}`
+  }
+
+  private bindingRevocationAccount(input: { accountId: string; bindingRef: string }): string {
+    for (const value of [input.accountId, input.bindingRef]) {
+      if (value.trim() === '' || value.length > 256) throw new DshRemoteError('REMOTE_REQUEST_INVALID', '远控 Binding 撤销路由无效')
+    }
+    const digest = createHash('sha256').update([
+      'dsh-remote-binding-revocation-v1', input.accountId, input.bindingRef,
+    ].join('\n')).digest('base64url')
+    return `dsh-remote-binding-revocation:${digest}`
   }
 
   private channelAccount(input: { accountId: string; bindingRef: string; runtimeRef: string; channelRef: string }): string {

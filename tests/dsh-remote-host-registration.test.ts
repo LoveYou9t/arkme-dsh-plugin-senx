@@ -90,6 +90,80 @@ describe('Host durable registration lifecycle', () => {
     await host.stop()
   })
 
+  it('purges local trust when Backend recorded revoke but its Realtime fence is still propagating', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'arkme remote propagating revoke '))
+    const broker = new DesktopCredentialBroker(new MemorySecrets())
+    const binding: DshRemoteBindingProjection = {
+      bindingRef: 'binding-propagating-test-01', controllerCredentialRef: 'controller-propagating-test-01',
+      controllerDisplayName: 'Phone', controllerPlatform: 'ios', revision: 1, status: 'active',
+      scopes: ['session.read'], boundAtMillis: 1,
+    }
+    await broker.putBindingRoot({
+      accountId: '42', bindingRef: binding.bindingRef, rootSecret: Buffer.alloc(32, 1),
+      controllerPublicKey: 'A'.repeat(43), controllerKeyFingerprint: 'B'.repeat(43),
+      controllerToHost: Buffer.alloc(32, 2), hostToController: Buffer.alloc(32, 3),
+    })
+    const runtimeStore = new DshRemoteRuntimeStore(directory)
+    const host = new ArkmeRemoteRealtimeHost({
+      featureEnabled: true, environment: 'test', profileRef: 'web', hostClientRef: 'host-client-test',
+      readSession: async () => ({ userId: 42, clientId: 9 }), credentialBroker: broker, runtimeStore,
+      controlPlane: {
+        revokeBinding: async () => { throw new DshRemoteError('REVOCATION_PROPAGATING', '撤销已记录、传播中', true) },
+      } as unknown as DshRemoteControlPlane,
+      realtime: { disconnect: async () => undefined } as unknown as DshRemoteRealtimeTransport,
+      apiProxy: new DshApiProxyAdapter({}), grantSigningKeys: {}, ledgerForAccount: () => { throw new Error('unused') },
+    })
+    Object.assign(host, {
+      started: true, accountId: '42', userId: 42, clientId: 9, credentialRef: 'credential-host-test-01',
+      identity: generateEd25519DeviceKey('42'), bindings: [binding],
+      runtime: {
+        runtimeRef: 'runtime-propagating-test-01', profileRef: 'web', accountId: '42', remoteEnabled: true,
+        hostGeneration: 1, capabilities: [], updatedAtMillis: 1,
+      },
+    })
+
+    await expect(host.revokeBinding(binding.bindingRef)).rejects.toMatchObject({ code: 'REVOCATION_PROPAGATING' })
+    expect(host.getStatus().bindings).toEqual([{ ...binding, status: 'revoked' }])
+    expect(await broker.channelKeys({
+      accountId: '42', bindingRef: binding.bindingRef, runtimeRef: 'runtime-propagating-test-01',
+      channelRef: 'remotech-propagating-test-01',
+    })).toBeUndefined()
+    await host.stop()
+  })
+
+  it('restores the persisted desktop credential so an offline Runtime can revoke a Binding', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'arkme remote offline revoke '))
+    const runtimeStore = new DshRemoteRuntimeStore(directory)
+    const binding: DshRemoteBindingProjection = {
+      bindingRef: 'binding-offline-revoke-01', controllerCredentialRef: 'controller-offline-revoke-01',
+      controllerDisplayName: 'Phone', controllerPlatform: 'ios', revision: 1, status: 'active',
+      scopes: ['session.read'], boundAtMillis: 1,
+    }
+    await runtimeStore.activateRuntime({ accountId: '42', profileRef: 'web', capabilities: [] })
+    await runtimeStore.bindDesktop('42', {
+      desktopRef: 'desktop-offline-revoke-01', credentialRef: 'credential-offline-revoke-01',
+    })
+    await runtimeStore.upsertBindings('42', [binding])
+    const revokeBinding = vi.fn(async () => ({}))
+    const host = new ArkmeRemoteRealtimeHost({
+      featureEnabled: true, transportAvailable: true, environment: 'test', profileRef: 'web',
+      hostClientRef: 'host-client-test', readSession: async () => ({ userId: 42, clientId: 9 }),
+      credentialBroker: new DesktopCredentialBroker(new MemorySecrets()), runtimeStore,
+      controlPlane: { revokeBinding } as unknown as DshRemoteControlPlane,
+      realtime: { subscribeDisconnect: () => () => undefined, disconnect: async () => undefined } as unknown as DshRemoteRealtimeTransport,
+      apiProxy: new DshApiProxyAdapter({}), grantSigningKeys: {},
+      ledgerForAccount: (_accountId, key) => new DshRemoteCommandLedger(join(directory, 'ledger'), key),
+    })
+
+    await host.start()
+    expect(host.getStatus()).toMatchObject({ enabled: false, connected: false, bindings: [binding] })
+    await host.revokeBinding(binding.bindingRef)
+    expect(revokeBinding).toHaveBeenCalledWith(binding.bindingRef, {
+      actor_credential_ref: 'credential-offline-revoke-01',
+    })
+    await host.stop()
+  })
+
   it('uses the exact Backend device -> desktop -> runtime -> policy wire before Realtime registration', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'arkme remote registration '))
     const calls: Array<{ name: string; value: Record<string, unknown> }> = []
@@ -104,7 +178,7 @@ describe('Host durable registration lifecycle', () => {
       },
       registerRuntime: async (_desktopRef: string, value: Record<string, unknown>) => {
         calls.push({ name: 'runtime', value })
-        return { runtime_ref: 'runtime-host-test-01', runtime_revision: 1 }
+        return { runtime_ref: 'runtime-host-test-01', host_generation: 7, runtime_revision: 1 }
       },
       updateRuntimePolicy: async (_desktopRef: string, _runtimeRef: string, value: Record<string, unknown>) => {
         calls.push({ name: 'policy', value })
@@ -154,6 +228,7 @@ describe('Host durable registration lifecycle', () => {
     ])
     expect(calls[3]!.value).toMatchObject({ expected_revision: 1, remote_enabled: true })
     expect(realtime.registerHost).toHaveBeenCalledWith(expect.objectContaining({ runtimeRef: 'runtime-host-test-01' }))
+    expect(host.getStatus().hostGeneration).toBe(7)
     await host.stop()
   })
 
@@ -163,7 +238,7 @@ describe('Host durable registration lifecycle', () => {
     const controlPlane = {
       registerDeviceCredential: vi.fn(async () => ({ credential_ref: 'credential-host-test-02' })),
       registerDesktop: vi.fn(async () => ({ desktop_ref: 'desktop-host-test-02', credential_ref: 'credential-host-test-02' })),
-      registerRuntime: vi.fn(async () => ({ runtime_ref: 'runtime-host-test-02', runtime_revision: 1 })),
+      registerRuntime: vi.fn(async () => ({ runtime_ref: 'runtime-host-test-02', host_generation: 1, runtime_revision: 1 })),
       updateRuntimePolicy: vi.fn(async () => ({ runtime_revision: 2 })),
       listBindings: vi.fn(async () => []),
     } as unknown as DshRemoteControlPlane
@@ -229,6 +304,91 @@ describe('Host durable registration lifecycle', () => {
     expect(host.getStatus()).toMatchObject({ connected: false, unavailableReason: '该电脑已达 Runtime 上限' })
     await vi.advanceTimersByTimeAsync(5_000)
     expect(registerRuntime).toHaveBeenCalledTimes(1)
+    await host.stop()
+  })
+
+  it('discovers a Desktop Binding in another Profile and purges shared trust after Backend revoke', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'arkme remote cross profile binding '))
+    const secrets = new MemorySecrets()
+    const pairedProfile = new DesktopCredentialBroker(secrets)
+    const currentProfile = new DesktopCredentialBroker(secrets)
+    const binding: DshRemoteBindingProjection = {
+      bindingRef: 'binding-cross-profile-01', controllerCredentialRef: 'controller-cross-profile-01',
+      controllerDisplayName: 'Phone', controllerPlatform: 'ios', revision: 1, status: 'active',
+      scopes: ['session.read'], boundAtMillis: 1,
+    }
+    const rootSecret = Buffer.alloc(32, 11)
+    await pairedProfile.putBindingRoot({
+      accountId: '42', bindingRef: binding.bindingRef, rootSecret,
+      controllerPublicKey: 'A'.repeat(43), controllerKeyFingerprint: 'F'.repeat(43),
+      controllerToHost: Buffer.alloc(32, 12), hostToController: Buffer.alloc(32, 13),
+    })
+    let backendProjection: DshRemoteBindingProjection[] = [binding]
+    let nowMillis = 100_000
+    let opened = false
+    const open = vi.fn(async () => {
+      expect(await currentProfile.channelKeys({
+        accountId: '42', bindingRef: binding.bindingRef, runtimeRef: 'runtime-profile-b-01',
+        channelRef: 'remotech-profile-b-01',
+      })).toMatchObject({ keyEpoch: 1, rootSecret })
+      opened = true
+    })
+    const revoke = vi.fn(async (bindingRef: string) => {
+      await currentProfile.deleteBindingChannelKeys({
+        accountId: '42', bindingRef, runtimeRef: 'runtime-profile-b-01',
+      })
+      opened = false
+    })
+    const controlPlane = {
+      listBindings: vi.fn(async () => backendProjection.map(item => ({ ...item }))),
+    } as unknown as DshRemoteControlPlane
+    const host = new ArkmeRemoteRealtimeHost({
+      featureEnabled: true, environment: 'test', profileRef: 'profile-b', hostClientRef: 'host-client-profile-b',
+      readSession: async () => ({ userId: 42, clientId: 9 }), credentialBroker: currentProfile,
+      runtimeStore: new DshRemoteRuntimeStore(directory), controlPlane,
+      realtime: { disconnect: async () => undefined } as unknown as DshRemoteRealtimeTransport,
+      apiProxy: new DshApiProxyAdapter({}), grantSigningKeys: {}, ledgerForAccount: () => { throw new Error('unused') },
+      now: () => nowMillis,
+    })
+    Object.assign(host, {
+      started: true, connected: true, accountId: '42', userId: 42, clientId: 9,
+      identity: generateEd25519DeviceKey('42'),
+      runtime: {
+        runtimeRef: 'runtime-profile-b-01', profileRef: 'profile-b', accountId: '42', remoteEnabled: true,
+        hostGeneration: 1, capabilities: [], updatedAtMillis: 1,
+      },
+      channelManager: {
+        status: () => opened ? { channelRef: 'remotech-profile-b-01', runtimeRef: 'runtime-profile-b-01', ready: false, keyEpoch: 1 } : undefined,
+        open, revoke, closeAll: async () => undefined,
+      },
+    })
+
+    await (host as unknown as { syncSession(): Promise<void> }).syncSession()
+    expect(open).toHaveBeenCalledWith(binding)
+    expect(host.getStatus().bindings).toEqual([binding])
+    const firstRefreshCount = vi.mocked(controlPlane.listBindings).mock.calls.length
+    await (host as unknown as { syncSession(): Promise<void> }).syncSession()
+    expect(controlPlane.listBindings).toHaveBeenCalledTimes(firstRefreshCount)
+
+    controlPlane.listBindings = vi.fn(async () => { throw new DshRemoteError('REMOTE_NETWORK_UNAVAILABLE', 'temporary', true) })
+    nowMillis += 30_000
+    await (host as unknown as { syncSession(): Promise<void> }).syncSession()
+    expect(revoke).not.toHaveBeenCalled()
+    expect(host.getStatus().bindings).toEqual([binding])
+
+    backendProjection = [{ ...binding, status: 'revoked', revision: 2 }]
+    controlPlane.listBindings = vi.fn(async () => backendProjection)
+    nowMillis += 30_000
+    await (host as unknown as { syncSession(): Promise<void> }).syncSession()
+    expect(revoke).toHaveBeenCalledWith(binding.bindingRef)
+    expect(await pairedProfile.channelKeys({
+      accountId: '42', bindingRef: binding.bindingRef, runtimeRef: 'runtime-profile-a-01',
+      channelRef: 'remotech-profile-a-01',
+    })).toBeUndefined()
+    expect(await currentProfile.channelKeys({
+      accountId: '42', bindingRef: binding.bindingRef, runtimeRef: 'runtime-profile-b-01',
+      channelRef: 'remotech-profile-b-01',
+    })).toBeUndefined()
     await host.stop()
   })
 })

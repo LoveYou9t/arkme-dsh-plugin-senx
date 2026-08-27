@@ -172,6 +172,7 @@ export class ArkmeRemoteRealtimeHost implements DshRemoteHostFacade {
   private reconnecting = false
   private sessionTimer: ReturnType<typeof setTimeout> | undefined
   private connectionError: DshRemoteError | undefined
+  private lastBindingRefreshAttemptMillis = 0
 
   constructor(private readonly options: ArkmeRemoteRealtimeHostOptions) {
     this.now = options.now ?? Date.now
@@ -205,7 +206,12 @@ export class ArkmeRemoteRealtimeHost implements DshRemoteHostFacade {
       return
     }
     const accountId = String(session.userId)
-    if (this.accountId === accountId && this.clientId === session.clientId && this.runtime !== undefined) return
+    if (this.accountId === accountId && this.clientId === session.clientId && this.runtime !== undefined) {
+      if (this.runtime.remoteEnabled && this.connected && this.channelManager !== undefined) {
+        await this.refreshBindingsSafely()
+      }
+      return
+    }
     if (this.accountId !== undefined) await this.deactivateAccount()
     this.userId = session.userId
     this.clientId = session.clientId
@@ -216,7 +222,9 @@ export class ArkmeRemoteRealtimeHost implements DshRemoteHostFacade {
     })
     this.ledger = await this.options.ledgerForAccount(accountId, await this.options.credentialBroker.ledgerKey(accountId))
     await this.reconcileUnsettled()
+    this.ledger.cleanup({ retentionMillis: 7 * 24 * 60 * 60_000, maxCommands: 10_000 })
     const state = await this.options.runtimeStore.account(accountId)
+    this.credentialRef = state.credentialRef
     this.bindings = state.bindings
     if (this.runtime.remoteEnabled && this.options.transportAvailable !== false) {
       this.startApiProxyEvents()
@@ -270,6 +278,7 @@ export class ArkmeRemoteRealtimeHost implements DshRemoteHostFacade {
     this.backendRuntimeRevision = 0
     this.bindings = []
     this.connectionError = undefined
+    this.lastBindingRefreshAttemptMillis = 0
   }
 
   private startApiProxyEvents(): void {
@@ -436,31 +445,76 @@ export class ArkmeRemoteRealtimeHost implements DshRemoteHostFacade {
   async listBindings(): Promise<DshRemoteBindingProjection[]> {
     this.requireReady()
     const items = await this.options.controlPlane.listBindings()
+    this.lastBindingRefreshAttemptMillis = this.now()
+    await this.applyBindings(items)
+    return items.map(item => ({ ...item }))
+  }
+
+  private async refreshBindingsSafely(force = false): Promise<boolean> {
+    const now = this.now()
+    if (!force && now - this.lastBindingRefreshAttemptMillis < 30_000) return true
+    this.lastBindingRefreshAttemptMillis = now
+    try {
+      await this.applyBindings(await this.options.controlPlane.listBindings())
+      this.connectionError = undefined
+      return true
+    } catch (error) {
+      // Binding refresh is a control-plane projection. A short Backend outage
+      // must not tear down an already fenced Realtime channel or erase the
+      // last durable projection; a later session tick retries after the bounded
+      // 30-second refresh interval.
+      this.connectionError = asDshRemoteError(error)
+      this.bump()
+      return false
+    }
+  }
+
+  private async applyBindings(items: DshRemoteBindingProjection[]): Promise<void> {
+    const previousByRef = new Map(this.bindings.map(binding => [binding.bindingRef, binding]))
     const active = new Set(items.filter(item => item.status === 'active').map(item => item.bindingRef))
     for (const previous of this.bindings) {
       if (!active.has(previous.bindingRef)) await this.purgeBindingChannel(previous.bindingRef)
     }
-    this.bindings = items
-    await this.options.runtimeStore.upsertBindings(this.accountId!, items)
-    this.bump()
+    this.bindings = items.map(item => ({ ...item }))
+    await this.options.runtimeStore.upsertBindings(this.accountId!, this.bindings)
     if (this.channelManager !== undefined) {
-      for (const binding of items) {
-        if (binding.status === 'active') await this.channelManager.open(binding).catch(() => undefined)
+      for (const binding of this.bindings) {
+        if (binding.status !== 'active') continue
+        const previous = previousByRef.get(binding.bindingRef)
+        const requiresFreshGrant = previous === undefined || previous.status !== 'active'
+          || previous.revision !== binding.revision
+          || previous.controllerCredentialRef !== binding.controllerCredentialRef
+          || previous.scopes.length !== binding.scopes.length
+          || previous.scopes.some(scope => !binding.scopes.includes(scope))
+        if (requiresFreshGrant || this.channelManager.status(binding.bindingRef) === undefined) {
+          await this.channelManager.open(binding).catch(() => undefined)
+        }
       }
     }
-    return items.map(item => ({ ...item }))
+    this.bump()
   }
 
   async revokeBinding(bindingRef: string): Promise<void> {
     this.requireReady()
     const normalized = bindingRef.trim()
-    await this.options.controlPlane.revokeBinding(normalized, {
-      actor_credential_ref: this.credentialRef,
-    })
+    let propagationError: DshRemoteError | undefined
+    try {
+      await this.options.controlPlane.revokeBinding(normalized, {
+        actor_credential_ref: this.credentialRef,
+      })
+    } catch (error) {
+      const remote = asDshRemoteError(error)
+      // Backend only emits REVOCATION_PROPAGATING after the durable revoke
+      // fact and outbox are committed. Stop trusting the Binding locally even
+      // while the shared Realtime fence is still converging.
+      if (remote.code !== 'REVOCATION_PROPAGATING') throw remote
+      propagationError = remote
+    }
     this.bindings = this.bindings.map(item => item.bindingRef === normalized ? { ...item, status: 'revoked' } : item)
     await this.purgeBindingChannel(normalized)
     await this.options.runtimeStore.upsertBindings(this.accountId!, this.bindings)
     this.bump()
+    if (propagationError !== undefined) throw propagationError
   }
 
   private async purgeBindingChannel(bindingRef: string): Promise<void> {
@@ -572,10 +626,20 @@ export class ArkmeRemoteRealtimeHost implements DshRemoteHostFacade {
       ].join('\n')),
     })
     const backendRuntimeRef = typeof registeredRuntime.runtime_ref === 'string' ? registeredRuntime.runtime_ref : ''
-    if (backendRuntimeRef === '') throw new DshRemoteError('REMOTE_TRANSPORT_FAILED', 'Backend 未返回 Runtime 引用', true)
+    const backendHostGeneration = typeof registeredRuntime.host_generation === 'number'
+      && Number.isSafeInteger(registeredRuntime.host_generation) && registeredRuntime.host_generation > 0
+      ? registeredRuntime.host_generation : 0
+    if (backendRuntimeRef === '' || backendHostGeneration < runtime.hostGeneration) {
+      throw new DshRemoteError('REMOTE_TRANSPORT_FAILED', 'Backend 未返回匹配的 Runtime 引用与 Host generation', true)
+    }
     this.backendRuntimeRevision = typeof registeredRuntime.runtime_revision === 'number' && Number.isSafeInteger(registeredRuntime.runtime_revision)
       ? registeredRuntime.runtime_revision : 1
-    this.runtime = { ...(await this.options.runtimeStore.adoptRuntimeRef(accountId, this.options.profileRef, backendRuntimeRef)), desktopRef }
+    this.runtime = {
+      ...(await this.options.runtimeStore.adoptRuntimeRef(
+        accountId, this.options.profileRef, backendRuntimeRef, backendHostGeneration,
+      )),
+      desktopRef,
+    }
     const policy = await this.options.controlPlane.updateRuntimePolicy(desktopRef, backendRuntimeRef, this.signedPolicy(true))
     if (typeof policy.runtime_revision === 'number' && Number.isSafeInteger(policy.runtime_revision)) {
       this.backendRuntimeRevision = policy.runtime_revision
@@ -597,8 +661,10 @@ export class ArkmeRemoteRealtimeHost implements DshRemoteHostFacade {
       dispatch: async (request, context) => await this.dispatchAuthorizedRequest(request, context),
       now: this.now,
     })
-    for (const binding of this.bindings) {
-      if (binding.status === 'active') await this.channelManager.open(binding).catch(() => undefined)
+    if (!await this.refreshBindingsSafely(true)) {
+      for (const binding of this.bindings) {
+        if (binding.status === 'active') await this.channelManager.open(binding).catch(() => undefined)
+      }
     }
   }
 

@@ -79,9 +79,17 @@ export class DshRemoteRuntimeStore {
     return result
   }
 
-  async adoptRuntimeRef(accountId: string, profileRef: string, runtimeRef: string): Promise<DshRemoteRuntimeProjection> {
+  async adoptRuntimeRef(
+    accountId: string,
+    profileRef: string,
+    runtimeRef: string,
+    hostGeneration?: number,
+  ): Promise<DshRemoteRuntimeProjection> {
     const normalized = runtimeRef.trim()
     if (!/^[A-Za-z0-9._:-]{8,256}$/.test(normalized)) throw new DshRemoteError('REMOTE_STORAGE_FAILED', 'Backend Runtime 引用无效')
+    if (hostGeneration !== undefined && (!Number.isSafeInteger(hostGeneration) || hostGeneration <= 0)) {
+      throw new DshRemoteError('REMOTE_STORAGE_FAILED', 'Backend Host generation 无效')
+    }
     let result!: DshRemoteRuntimeProjection
     await this.update(state => {
       const account = accountState(state, accountId)
@@ -89,7 +97,15 @@ export class DshRemoteRuntimeStore {
       if (runtime === undefined) throw new DshRemoteError('REMOTE_STORAGE_FAILED', '远控 Runtime 尚未注册')
       const collision = Object.entries(account.runtimes).some(([otherProfile, other]) => otherProfile !== profileRef && other.runtimeRef === normalized)
       if (collision) throw new DshRemoteError('REMOTE_STORAGE_FAILED', 'Backend Runtime 引用与其他 Profile 冲突')
-      result = { ...runtime, runtimeRef: normalized, updatedAtMillis: Date.now() }
+      if (hostGeneration !== undefined && hostGeneration < runtime.hostGeneration) {
+        throw new DshRemoteError('REMOTE_STORAGE_FAILED', 'Backend Host generation 发生回退')
+      }
+      result = {
+        ...runtime,
+        runtimeRef: normalized,
+        hostGeneration: hostGeneration ?? runtime.hostGeneration,
+        updatedAtMillis: Date.now(),
+      }
       account.runtimes[profileRef] = result
       state.accounts[accountId] = account
     })

@@ -81,14 +81,19 @@ export function dshRemoteFrameByteLengths(input: DshRemoteFrameSizingInput): { p
 export function assertDshRemoteFramesFit(input: DshRemoteFrameSizingInput): void {
   const sizes = dshRemoteFrameByteLengths(input)
   if (sizes.publish > DSH_REMOTE_MAX_FRAME_BYTES || sizes.event > DSH_REMOTE_MAX_FRAME_BYTES) {
-    throw new DshRemoteError('REMOTE_REQUEST_INVALID', 'Realtime 加密 publish/event frame 超过 60KiB')
+    throw new DshRemoteError(
+      'REMOTE_REQUEST_INVALID',
+      'Realtime 加密 publish/event frame 超过 60KiB',
+      false,
+      { frameTooLarge: true, publishBytes: sizes.publish, eventBytes: sizes.event },
+    )
   }
 }
 
 const SERVER_FIELDS: Readonly<Record<string, ReadonlySet<string>>> = {
   'connection.ready': new Set(['type', 'connection_generation']),
   'connection.replaced': new Set(['type', 'connection_generation']),
-  'service.registered': new Set(['type', 'request_id', 'namespace', 'service', 'protocol', 'protocol_major', 'connection_generation', 'duplicate']),
+  'service.registered': new Set(['type', 'request_id', 'namespace', 'service', 'protocol', 'protocol_major', 'connection_generation', 'service_lease_generation', 'duplicate']),
   'service.unregistered': new Set(['type', 'request_id', 'namespace', 'service', 'protocol', 'protocol_major', 'duplicate']),
   'channel.authorize.challenge': new Set(['type', 'request_id', 'authorization_ref', 'nonce', 'expires_at']),
   'channel.authorized': new Set(['type', 'request_id', 'authorization_ref', 'sender_role', 'remote_auth_epoch', 'expires_at', 'fence_revisions']),
@@ -138,6 +143,7 @@ function positive(frame: ServerFrame, key: string): number {
 export class ArkmeRemoteRealtimeTransport implements DshRemoteRealtimeTransport {
   private socket: DshRemoteSocketLike | undefined
   private connectionGeneration = 0
+  private serviceLeaseGeneration = 0
   private readonly waiters = new Map<string, { resolve: (frame: ServerFrame) => void; reject: (error: Error) => void }>()
   private readonly channelListeners = new Map<string, (frame: ServerFrame) => void>()
   private readonly disconnectListeners = new Set<(error: Error) => void>()
@@ -164,6 +170,7 @@ export class ArkmeRemoteRealtimeTransport implements DshRemoteRealtimeTransport 
       if (this.socket !== socket) return
       this.socket = undefined
       this.connectionGeneration = 0
+      this.serviceLeaseGeneration = 0
       const error = new DshRemoteError('REMOTE_TRANSPORT_FAILED', 'Realtime 连接意外关闭', true)
       for (const waiter of this.waiters.values()) waiter.reject(error)
       this.waiters.clear()
@@ -210,6 +217,7 @@ export class ArkmeRemoteRealtimeTransport implements DshRemoteRealtimeTransport 
     this.onMessage = undefined
     this.onClose = undefined
     this.connectionGeneration = 0
+    this.serviceLeaseGeneration = 0
     socket?.close(1000, 'remote host stopped')
     const error = new DshRemoteError('REMOTE_TRANSPORT_FAILED', 'Realtime 连接已关闭', true)
     for (const waiter of this.waiters.values()) waiter.reject(error)
@@ -230,14 +238,19 @@ export class ArkmeRemoteRealtimeTransport implements DshRemoteRealtimeTransport 
       type: 'service.register', namespace: 'dsh_remote', service: 'host', protocol: 'dsh.remote', protocol_major: 1,
       participant_min: 2, participant_max: 2,
     }, 'service.registered', input.signal)
-    return { serviceLeaseGeneration: positive(frame, 'connection_generation') }
+    this.serviceLeaseGeneration = positive(frame, 'service_lease_generation')
+    return { serviceLeaseGeneration: this.serviceLeaseGeneration }
   }
 
   async unregisterHost(signal?: AbortSignal): Promise<void> {
-    if (this.socket === undefined) return
-    await this.request({
-      type: 'service.unregister', namespace: 'dsh_remote', service: 'host', protocol: 'dsh.remote', protocol_major: 1,
-    }, 'service.unregistered', signal ?? new AbortController().signal)
+    if (this.socket === undefined) { this.serviceLeaseGeneration = 0; return }
+    try {
+      await this.request({
+        type: 'service.unregister', namespace: 'dsh_remote', service: 'host', protocol: 'dsh.remote', protocol_major: 1,
+      }, 'service.unregistered', signal ?? new AbortController().signal)
+    } finally {
+      this.serviceLeaseGeneration = 0
+    }
   }
 
   async authorizeChannel(input: {
@@ -246,6 +259,9 @@ export class ArkmeRemoteRealtimeTransport implements DshRemoteRealtimeTransport 
     signProof: (transcript: string) => Promise<string>
     signal: AbortSignal
   }): Promise<DshRemoteChannelAuthorization> {
+    if (this.serviceLeaseGeneration <= 0) {
+      throw new DshRemoteError('HOST_CHANNEL_NOT_READY', 'Realtime Host service 尚未注册', true)
+    }
     const start = await this.request({
       type: 'channel.authorize.start', grant: input.grant, channel_ref: input.claims.channel_ref,
     }, 'channel.authorize.challenge', input.signal)
@@ -268,7 +284,7 @@ export class ArkmeRemoteRealtimeTransport implements DshRemoteRealtimeTransport 
     return {
       authorizationRef,
       remoteAuthEpoch,
-      serviceLeaseGeneration: this.connectionGeneration,
+      serviceLeaseGeneration: this.serviceLeaseGeneration,
       expiresAtMillis: positive(authorized, 'expires_at'),
     }
   }
@@ -348,7 +364,7 @@ export class ArkmeRemoteRealtimeTransport implements DshRemoteRealtimeTransport 
       senderRole: authorization.claims.sender_role,
       senderCredentialRef: authorization.claims.credential_ref,
       subjectRevision: subjectRevision!, remoteAuthEpoch: authorization.remoteAuthEpoch,
-      targetHostLeaseGeneration: this.connectionGeneration,
+      targetHostLeaseGeneration: this.serviceLeaseGeneration,
     })
     const frame = await this.request({
       type: 'channel.publish', namespace: 'dsh_remote', channel_ref: input.channelRef,

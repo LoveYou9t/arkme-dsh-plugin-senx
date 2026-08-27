@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import type { ArkmeSecureValueStore } from '../src/keychain-store.js'
 import { DshRemoteHostChannelManager, dshRemoteControlAgreementTranscript } from '../src/dsh-remote/channel-manager.js'
 import { DesktopCredentialBroker } from '../src/dsh-remote/desktop-credential-broker.js'
+import { DshRemoteError } from '../src/dsh-remote/errors.js'
 import {
   canonicalJson,
   deriveDirectionalKeys,
@@ -38,6 +39,7 @@ class FakeRealtime implements DshRemoteRealtimeTransport {
   readonly published: Array<{ channelRef: string; direction: string; payload: DshRemoteRealtimePayload }> = []
   readonly afterSequences: Array<number | undefined> = []
   onEvent: ((payload: DshRemoteRealtimePayload, metadata: DshRemoteTrustedEventMetadata) => void) | undefined
+  rejectNextOversizedProjection = false
   subscribeDisconnect() { return () => undefined }
   async connect() {}
   async disconnect() {}
@@ -52,6 +54,10 @@ class FakeRealtime implements DshRemoteRealtimeTransport {
     return () => { this.onEvent = undefined }
   }
   async publish(input: Parameters<DshRemoteRealtimeTransport['publish']>[0]) {
+    if (this.rejectNextOversizedProjection) {
+      this.rejectNextOversizedProjection = false
+      throw new DshRemoteError('REMOTE_REQUEST_INVALID', 'frame too large', false, { frameTooLarge: true })
+    }
     this.published.push({ channelRef: input.channelRef, direction: input.direction, payload: input.payload })
     return { sequence: this.published.length }
   }
@@ -153,6 +159,10 @@ describe('Host control Channel key lifecycle', () => {
     expect(decryptDshRemotePayload(keys.hostToController, realtime.published.at(-1)!.payload as never, {
       keyEpoch: 2, direction: 'host-to-controller',
     })).toEqual(liveProjection)
+
+    realtime.rejectNextOversizedProjection = true
+    await manager.publishProjectionEvent({ ...liveProjection, request_ref: 'event-oversized-test-01' }, 'event-oversized-test-01')
+    expect(manager.status(binding.bindingRef)?.ready).toBe(true)
 
     const request = { request_ref: 'request-test-01' }
     realtime.onEvent?.(encryptDshRemotePayload(keys.controllerToHost, request, {
