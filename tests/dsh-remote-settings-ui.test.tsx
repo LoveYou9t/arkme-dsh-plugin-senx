@@ -4,23 +4,58 @@ import sharp from 'sharp'
 import { describe, expect, it } from 'vitest'
 import {
   ArkmeRemoteSettingsPanel,
+  DshRemotePairingDialog,
   buildDshRemotePairingQr,
   formatDshRemoteDeviceActivity,
 } from '../src/client/ArkmeRemoteSettingsPanel.js'
+
+const pairing = {
+  pairingRef: 'pair_84748e7aae6f47ff90734f397fa14fdc',
+  pairingChannelRef: 'pairing-channel-test',
+  qrPayload: JSON.stringify({ scheme: 'jotmo-dsh-remote', version: 1, challenge: 'test' }),
+  pairingCode: 'AT5Y-AZRD',
+  hostKeyFingerprint: 'host-fingerprint',
+  expiresAtMillis: 1_787_820_000_000,
+  runtimeRef: 'runtime-test',
+}
 
 describe('DSH remote desktop settings', () => {
   it('provides the v4 remote switch, pairing and long-lived binding management entry points', () => {
     const markup = renderToStaticMarkup(<ArkmeRemoteSettingsPanel onBack={() => undefined} />)
     expect(markup).toContain('aria-label="远程控制设置"')
     expect(markup).toContain('移动端远控')
-    expect(markup).toContain('在手机上继续这台电脑里的 DSH 会话')
+    expect(markup).toContain('可控制这台电脑的设备')
     expect(markup).toContain('role="switch"')
     expect(markup).toContain('aria-label="允许移动端远程控制"')
-    expect(markup).toContain('添加手机')
-    expect(markup).toContain('已绑定手机')
-    expect(markup).toContain('这些设备无需再次配对，随时可以撤销权限')
-    expect(markup).toContain('还没有绑定手机')
+    expect(markup).toContain('添加')
+    expect(markup).toContain('尚未添加设备')
+    expect(markup).toContain('其他设置')
+    expect(markup).toContain('电脑名称')
     expect(markup).not.toContain('ApiProxy')
+  })
+
+  it('keeps QR and manual code in a focused modal instead of the settings page', () => {
+    const shared = {
+      pairing,
+      now: pairing.expiresAtMillis - 60_000,
+      copied: false,
+      busy: false,
+      onModeChange: () => undefined,
+      onCopy: () => undefined,
+      onRegenerate: () => undefined,
+      onClose: () => undefined,
+    }
+    const qrMarkup = renderToStaticMarkup(<DshRemotePairingDialog {...shared} mode="qr" />)
+    const codeMarkup = renderToStaticMarkup(<DshRemotePairingDialog {...shared} mode="code" />)
+
+    expect(qrMarkup).toContain('role="dialog"')
+    expect(qrMarkup).toContain('aria-modal="true"')
+    expect(qrMarkup).toContain('在手机上连接这台电脑')
+    expect(qrMarkup).toContain('alt="远控配对二维码"')
+    expect(qrMarkup).not.toContain(pairing.pairingCode)
+    expect(codeMarkup).toContain(pairing.pairingCode)
+    expect(codeMarkup).toContain(`aria-label="复制配对码 ${pairing.pairingCode}"`)
+    expect(codeMarkup).not.toContain('alt="远控配对二维码"')
   })
 
   it('keeps binding activity human-readable without exposing internal refs', () => {
@@ -32,7 +67,7 @@ describe('DSH remote desktop settings', () => {
       lastUsedAtMillis: now - 5 * 60_000,
     }
 
-    expect(formatDshRemoteDeviceActivity(binding, now)).toBe('5 分钟前使用')
+    expect(formatDshRemoteDeviceActivity(binding, now)).toBe('5 分钟前连接')
   })
 
   it('renders a decodable signed pairing payload with at least four display pixels per QR module', async () => {

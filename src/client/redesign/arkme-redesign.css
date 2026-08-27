@@ -745,109 +745,91 @@ button.arkme-redesign-update-button:disabled { opacity: .55; cursor: default; }
 .arkme-billing-payment-content > .arkme-billing-primary-action { border-color: #20232d; background: #20232d; color: #fff; }
 .arkme-redesign-settings-error { margin: -8px 0 28px; padding: 10px 13px; border-radius: 10px; background: #fff3f0; color: #b54841; font-size: 12px; line-height: 18px; }
 
-/* DSH remote settings keeps the native Settings rhythm while giving pairing a
-   focused, task-oriented surface of its own. */
-.arkme-remote-settings-shell { display: grid; gap: 20px; padding-bottom: 32px; }
-.arkme-remote-page-header { min-height: 54px; display: grid; grid-template-columns: 92px minmax(0, 1fr) 92px; align-items: center; }
-.arkme-remote-page-header > div { min-width: 0; text-align: center; }
-.arkme-remote-page-header h1 { margin: 0; color: #20232c; font-size: 20px; line-height: 28px; font-weight: 620; letter-spacing: -.025em; }
-.arkme-remote-page-header p { margin: 2px 0 0; color: #858992; font-size: 12px; line-height: 18px; }
-.arkme-remote-back { justify-self: start; min-height: 34px; padding: 0 9px 0 5px; display: inline-flex; align-items: center; gap: 5px; border: 0; border-radius: 9px; background: transparent; color: #636974; font: inherit; font-size: 12px; cursor: pointer; }
+/* DSH remote settings follows the compact connection-management pattern:
+   persistent controls stay on the page; one-time pairing stays in a dialog. */
+.arkme-remote-settings-shell { display: grid; gap: 42px; padding-bottom: 42px; }
+.arkme-remote-page-header { min-height: 52px; display: grid; grid-template-columns: 88px minmax(0, 1fr) 88px; align-items: center; }
+.arkme-remote-page-header h1 { margin: 0; color: #20232c; font-size: 21px; line-height: 30px; font-weight: 620; letter-spacing: -.025em; text-align: center; }
+.arkme-remote-back { justify-self: start; min-height: 34px; padding: 0 9px 0 5px; display: inline-flex; align-items: center; gap: 5px; border: 0; border-radius: 9px; background: transparent; color: #747984; font: inherit; font-size: 12px; cursor: pointer; }
 .arkme-remote-back:hover { background: #f3f3f4; color: #20232c; }
-.arkme-remote-overview, .arkme-remote-pairing-card, .arkme-remote-devices { border: 1px solid #e2e3e6; border-radius: 16px; background: #fff; box-shadow: 0 1px 2px rgba(31, 35, 44, .025); }
-.arkme-remote-overview { padding: 18px; display: grid; grid-template-columns: 44px minmax(0, 1fr) auto; align-items: center; gap: 14px; }
-.arkme-remote-status-icon, .arkme-remote-section-icon, .arkme-remote-device-icon, .arkme-remote-empty > span { display: inline-flex; align-items: center; justify-content: center; color: #667085; background: #f3f4f6; }
-.arkme-remote-status-icon { width: 44px; height: 44px; border-radius: 13px; }
-.arkme-remote-status-icon.is-online { color: #2d7752; background: #eaf6ef; }
-.arkme-remote-status-icon.is-pending { color: #8a6a25; background: #fbf3df; }
-.arkme-remote-status-copy { min-width: 0; }
-.arkme-remote-status-label { display: inline-flex; align-items: center; gap: 7px; color: #343944; font-size: 14px; line-height: 20px; font-weight: 600; }
-.arkme-remote-status-label > i { width: 7px; height: 7px; border-radius: 999px; background: #a0a4ab; }
-.arkme-remote-status-label.is-online > i { background: #42a873; box-shadow: 0 0 0 3px #e5f4eb; }
-.arkme-remote-status-label.is-pending > i { background: #d5a23d; box-shadow: 0 0 0 3px #fbf1d9; }
-.arkme-remote-status-copy p { margin: 3px 0 0; overflow: hidden; color: #858992; font-size: 12px; line-height: 18px; white-space: nowrap; text-overflow: ellipsis; }
-.arkme-remote-switch { position: relative; width: 40px; height: 23px; padding: 0; border: 0; border-radius: 999px; background: #d7d9dd; cursor: pointer; transition: background .16s ease; }
+.arkme-remote-section { display: grid; gap: 13px; }
+.arkme-remote-section-header { min-height: 34px; display: flex; align-items: flex-end; justify-content: space-between; gap: 18px; }
+.arkme-remote-section-header > div:first-child { min-width: 0; }
+.arkme-remote-section-header h2 { margin: 0; color: #292c34; font-size: 14px; line-height: 21px; font-weight: 600; }
+.arkme-remote-section-header p { margin: 2px 0 0; color: #8b9098; font-size: 11px; line-height: 17px; }
+.arkme-remote-section-header > div:last-child { display: flex; align-items: center; gap: 8px; }
+.arkme-remote-icon-button { width: 32px; height: 32px; padding: 0; display: inline-flex; align-items: center; justify-content: center; border: 0; border-radius: 9px; background: transparent; color: #8a8f97; cursor: pointer; }
+.arkme-remote-icon-button:hover { background: #f3f3f4; color: #343944; }
+.arkme-remote-add-button { min-height: 32px; padding: 0 12px; display: inline-flex; align-items: center; gap: 5px; border: 0; border-radius: 9px; background: #20232c; color: #fff; font: inherit; font-size: 11px; font-weight: 550; cursor: pointer; }
+.arkme-remote-add-button:hover { background: #343944; }
+.arkme-remote-add-button:disabled, .arkme-remote-icon-button:disabled { opacity: .45; cursor: default; }
+.arkme-remote-settings-card { overflow: hidden; border: 1px solid #e1e2e5; border-radius: 16px; background: #fff; }
+.arkme-remote-allow-row { min-height: 60px; padding: 0 18px; display: flex; align-items: center; justify-content: space-between; gap: 18px; border-bottom: 1px solid #ededee; }
+.arkme-remote-allow-row > div { min-width: 0; display: grid; gap: 2px; }
+.arkme-remote-allow-row strong, .arkme-remote-device-row strong, .arkme-remote-name-row strong { color: #343944; font-size: 12px; line-height: 18px; font-weight: 600; }
+.arkme-remote-allow-row span, .arkme-remote-device-row span, .arkme-remote-name-row small { overflow: hidden; color: #8b9098; font-size: 10px; line-height: 16px; white-space: nowrap; text-overflow: ellipsis; }
+.arkme-remote-switch { position: relative; width: 40px; height: 23px; flex: 0 0 auto; padding: 0; border: 0; border-radius: 999px; background: #d7d9dd; cursor: pointer; transition: background .16s ease; }
 .arkme-remote-switch > span { position: absolute; top: 3px; left: 3px; width: 17px; height: 17px; border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgba(20, 24, 32, .22); transition: transform .16s ease; }
-.arkme-remote-switch[aria-checked="true"] { background: #5969c7; }
+.arkme-remote-switch[aria-checked="true"] { background: #3b9cf5; }
 .arkme-remote-switch[aria-checked="true"] > span { transform: translateX(17px); }
 .arkme-remote-switch:disabled { opacity: .5; cursor: default; }
-.arkme-remote-overview-actions { grid-column: 2 / -1; display: flex; align-items: center; gap: 8px; }
-.arkme-remote-primary-button, .arkme-remote-secondary-button, .arkme-remote-rename button, .arkme-remote-pairing-card footer button { min-height: 34px; padding: 0 13px; display: inline-flex; align-items: center; justify-content: center; gap: 6px; border: 1px solid transparent; border-radius: 9px; font: inherit; font-size: 12px; font-weight: 550; cursor: pointer; }
-.arkme-remote-primary-button { background: #20232c; color: #fff; }
-.arkme-remote-primary-button:hover { background: #343944; }
-.arkme-remote-secondary-button, .arkme-remote-rename button, .arkme-remote-pairing-card footer button { border-color: #e0e1e4; background: #fff; color: #4f5560; }
-.arkme-remote-secondary-button:hover, .arkme-remote-rename button:hover, .arkme-remote-pairing-card footer button:hover { background: #f7f7f8; border-color: #d3d5da; }
-.arkme-remote-primary-button:disabled, .arkme-remote-secondary-button:disabled, .arkme-remote-rename button:disabled, .arkme-remote-pairing-card footer button:disabled { opacity: .5; cursor: default; }
-.arkme-remote-rename { grid-column: 2 / -1; padding-top: 4px; display: grid; gap: 7px; }
-.arkme-remote-rename label { color: #777c85; font-size: 11px; line-height: 16px; }
-.arkme-remote-rename > div { display: flex; align-items: center; gap: 7px; }
-.arkme-remote-rename input { min-width: 0; height: 34px; box-sizing: border-box; flex: 1; padding: 0 10px; border: 1px solid #dfe1e5; border-radius: 9px; outline: 0; background: #fff; color: #20232c; font: inherit; font-size: 12px; }
-.arkme-remote-rename input:focus { border-color: #8894d7; box-shadow: 0 0 0 3px rgba(89, 105, 199, .12); }
-.arkme-remote-pairing-card { overflow: hidden; }
-.arkme-remote-pairing-card > header, .arkme-remote-devices > header { padding: 16px 18px; display: flex; align-items: center; gap: 11px; border-bottom: 1px solid #ededee; }
-.arkme-remote-section-icon { width: 36px; height: 36px; flex: 0 0 auto; border-radius: 11px; color: #5969c7; background: #eef0fb; }
-.arkme-remote-pairing-card > header > div, .arkme-remote-devices > header > div { min-width: 0; flex: 1; }
-.arkme-remote-pairing-card h2, .arkme-remote-devices h2 { margin: 0; color: #252831; font-size: 14px; line-height: 20px; font-weight: 600; }
-.arkme-remote-pairing-card header p, .arkme-remote-devices header p { margin: 2px 0 0; color: #858992; font-size: 11px; line-height: 17px; }
-.arkme-remote-expiry { flex: 0 0 auto; padding: 4px 8px; border-radius: 999px; background: #f1f2f4; color: #747984; font-size: 10px; line-height: 16px; font-variant-numeric: tabular-nums; }
-.arkme-remote-expiry.is-expired { background: #fff1ee; color: #b54841; }
-.arkme-remote-pairing-content { padding: 22px; display: grid; grid-template-columns: minmax(200px, 240px) minmax(0, 1fr); align-items: center; gap: 28px; }
-.arkme-remote-qr-frame { aspect-ratio: 1; padding: 13px; display: flex; align-items: center; justify-content: center; border: 1px solid #e4e5e8; border-radius: 15px; background: #fff; box-shadow: 0 5px 18px rgba(31, 35, 44, .055); }
-.arkme-remote-qr-frame img { width: 100%; height: auto; display: block; image-rendering: pixelated; }
-.arkme-remote-pairing-guide { min-width: 0; display: grid; gap: 16px; }
-.arkme-remote-pairing-guide ol { margin: 0; padding: 0; display: grid; gap: 13px; list-style: none; }
-.arkme-remote-pairing-guide li { display: flex; align-items: center; gap: 10px; }
-.arkme-remote-pairing-guide li > span { width: 23px; height: 23px; flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; border-radius: 50%; background: #f1f2f4; color: #5d626c; font-size: 10px; font-weight: 650; }
-.arkme-remote-pairing-guide li p { margin: 0; display: grid; }
-.arkme-remote-pairing-guide li strong { color: #343944; font-size: 12px; line-height: 18px; font-weight: 600; }
-.arkme-remote-pairing-guide li small { color: #8b9098; font-size: 10px; line-height: 16px; }
-.arkme-remote-code-block { padding: 11px 12px; display: grid; gap: 7px; border: 1px solid #e4e5e8; border-radius: 12px; background: #fafafb; }
-.arkme-remote-code-block > span { color: #858992; font-size: 10px; line-height: 15px; }
-.arkme-remote-code-block button { min-width: 0; padding: 0; display: flex; align-items: center; justify-content: space-between; gap: 12px; border: 0; background: transparent; color: #343944; cursor: pointer; }
-.arkme-remote-code-block button:disabled { opacity: .55; cursor: default; }
-.arkme-remote-code-block strong { overflow: hidden; font-size: 21px; line-height: 28px; font-weight: 650; letter-spacing: .12em; font-variant-numeric: tabular-nums; white-space: nowrap; text-overflow: ellipsis; user-select: all; }
-.arkme-remote-security-note { margin: 0; display: flex; align-items: flex-start; gap: 7px; color: #858992; font-size: 10px; line-height: 16px; }
-.arkme-remote-security-note svg { margin-top: 1px; flex: 0 0 auto; color: #6a8c77; }
-.arkme-remote-pairing-card > footer { padding: 11px 18px; display: flex; justify-content: flex-end; gap: 8px; border-top: 1px solid #ededee; background: #fafafb; }
-.arkme-remote-pairing-card > footer button { min-height: 30px; padding: 0 10px; font-size: 11px; }
-.arkme-remote-pairing-expired { padding: 30px 20px; display: grid; justify-items: center; gap: 13px; text-align: center; }
-.arkme-remote-pairing-expired p { margin: 0; color: #777c85; font-size: 12px; line-height: 18px; }
-.arkme-remote-devices > header > span { flex: 0 0 auto; color: #858992; font-size: 11px; }
-.arkme-remote-empty { padding: 34px 20px 38px; display: grid; justify-items: center; text-align: center; }
-.arkme-remote-empty > span { width: 42px; height: 42px; margin-bottom: 11px; border-radius: 13px; }
-.arkme-remote-empty > strong { color: #4b505a; font-size: 12px; line-height: 18px; font-weight: 600; }
-.arkme-remote-empty > p { max-width: 320px; margin: 4px 0 0; color: #92969e; font-size: 10px; line-height: 16px; }
-.arkme-remote-device-list { padding: 0 18px; }
-.arkme-remote-device-row { min-height: 66px; display: grid; grid-template-columns: 38px minmax(0, 1fr) auto 30px; align-items: center; gap: 11px; border-bottom: 1px solid #ededee; }
+.arkme-remote-device-row { min-height: 64px; padding: 0 18px; display: grid; grid-template-columns: 24px minmax(0, 1fr) auto; align-items: center; gap: 11px; border-bottom: 1px solid #ededee; }
 .arkme-remote-device-row:last-child { border-bottom: 0; }
-.arkme-remote-device-icon { width: 38px; height: 38px; border-radius: 12px; }
-.arkme-remote-device-row > div { min-width: 0; display: grid; gap: 2px; }
-.arkme-remote-device-row > div strong { overflow: hidden; color: #343944; font-size: 12px; line-height: 18px; font-weight: 600; white-space: nowrap; text-overflow: ellipsis; }
-.arkme-remote-device-row > div span { overflow: hidden; color: #8b9098; font-size: 10px; line-height: 16px; white-space: nowrap; text-overflow: ellipsis; }
-.arkme-remote-device-state { padding: 3px 7px; border-radius: 999px; background: #f1f2f4; color: #767b84; font-size: 9px; line-height: 14px; white-space: nowrap; }
-.arkme-remote-device-state.is-active { background: #eaf6ef; color: #387458; }
-.arkme-remote-device-row > button { width: 30px; height: 30px; padding: 0; display: inline-flex; align-items: center; justify-content: center; border: 0; border-radius: 8px; background: transparent; color: #a0a4ab; cursor: pointer; }
-.arkme-remote-device-row > button:hover { background: #fff1ee; color: #b54841; }
+.arkme-remote-device-row > svg { color: #68707c; }
+.arkme-remote-device-row > div { min-width: 0; display: grid; gap: 1px; }
+.arkme-remote-device-row > button { min-height: 30px; padding: 0 10px; border: 0; border-radius: 9px; background: #f3f3f4; color: #5d626c; font: inherit; font-size: 10px; cursor: pointer; }
+.arkme-remote-device-row > button:hover { background: #fff0ed; color: #b54841; }
 .arkme-remote-device-row > button:disabled { opacity: .45; cursor: default; }
-.arkme-remote-error { margin: 0; }
-.arkme-remote-back:focus-visible, .arkme-remote-switch:focus-visible, .arkme-remote-primary-button:focus-visible, .arkme-remote-secondary-button:focus-visible, .arkme-remote-pairing-card button:focus-visible, .arkme-remote-device-row > button:focus-visible { outline: 2px solid #5969c7; outline-offset: 2px; }
-@media (max-width: 720px) {
+.arkme-remote-empty-row { min-height: 52px; padding: 0 18px; display: flex; align-items: center; gap: 11px; color: #989ca3; font-size: 11px; }
+.arkme-remote-empty-row > svg { color: #a2a6ad; }
+.arkme-remote-name-row { width: 100%; min-height: 62px; padding: 0 18px; display: grid; grid-template-columns: 24px minmax(0, 1fr) 20px; align-items: center; gap: 11px; border: 0; background: transparent; color: #727780; font: inherit; text-align: left; cursor: pointer; }
+.arkme-remote-name-row:hover { background: #fafafb; }
+.arkme-remote-name-row > span { min-width: 0; display: grid; gap: 1px; }
+.arkme-remote-name-row small { display: block; }
+.arkme-remote-rename { padding: 12px 18px; display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 7px; border-top: 1px solid #ededee; }
+.arkme-remote-rename input { min-width: 0; height: 34px; box-sizing: border-box; padding: 0 10px; border: 1px solid #dfe1e5; border-radius: 9px; outline: 0; background: #fff; color: #20232c; font: inherit; font-size: 12px; }
+.arkme-remote-rename input:focus { border-color: #6eb3f3; box-shadow: 0 0 0 3px rgba(59, 156, 245, .12); }
+.arkme-remote-rename button { min-height: 34px; padding: 0 11px; border: 1px solid #e0e1e4; border-radius: 9px; background: #fff; color: #4f5560; font: inherit; font-size: 11px; cursor: pointer; }
+.arkme-remote-rename button[type="submit"] { border-color: #20232c; background: #20232c; color: #fff; }
+.arkme-remote-rename button:disabled { opacity: .5; cursor: default; }
+.arkme-remote-error { margin: -22px 0 0; }
+.arkme-remote-dialog-backdrop { position: fixed; inset: 0; z-index: 1200; padding: 24px; box-sizing: border-box; display: grid; place-items: center; overflow: auto; background: rgba(22, 24, 29, .28); backdrop-filter: blur(1.5px); }
+.arkme-remote-dialog { position: relative; width: min(440px, calc(100vw - 32px)); max-height: calc(100vh - 48px); box-sizing: border-box; padding: 28px; overflow: auto; border: 1px solid rgba(20, 24, 32, .08); border-radius: 19px; background: #fff; color: #20232c; box-shadow: 0 18px 54px rgba(17, 20, 27, .18); }
+.arkme-remote-dialog-close { position: absolute; top: 16px; right: 16px; width: 32px; height: 32px; padding: 0; display: inline-flex; align-items: center; justify-content: center; border: 0; border-radius: 9px; background: transparent; color: #777c85; cursor: pointer; }
+.arkme-remote-dialog-close:hover { background: #f3f3f4; color: #20232c; }
+.arkme-remote-dialog-symbol { height: 38px; display: flex; align-items: center; justify-content: center; gap: 9px; color: #343944; }
+.arkme-remote-dialog-symbol > span { width: 28px; height: 1px; background: #d6d8dc; }
+.arkme-remote-dialog > header { margin: 12px 0 22px; text-align: center; }
+.arkme-remote-dialog h2 { margin: 0; font-size: 19px; line-height: 27px; font-weight: 620; letter-spacing: -.02em; }
+.arkme-remote-dialog header p { margin: 6px 0 0; color: #858992; font-size: 11px; line-height: 17px; }
+.arkme-remote-pairing-tabs { height: 38px; padding: 3px; box-sizing: border-box; display: grid; grid-template-columns: 1fr 1fr; gap: 3px; border-radius: 11px; background: #f1f1f2; }
+.arkme-remote-pairing-tabs button { border: 0; border-radius: 8px; background: transparent; color: #737881; font: inherit; font-size: 11px; cursor: pointer; }
+.arkme-remote-pairing-tabs button[aria-selected="true"] { background: #fff; color: #252831; box-shadow: 0 1px 3px rgba(20, 24, 32, .09); }
+.arkme-remote-pairing-display { position: relative; min-height: 308px; margin-top: 14px; box-sizing: border-box; padding: 24px; display: flex; flex-direction: column; align-items: center; justify-content: center; border: 1px solid #e5e6e8; border-radius: 16px; background: #fff; }
+.arkme-remote-pairing-display > img { width: 232px; height: 232px; display: block; image-rendering: pixelated; }
+.arkme-remote-pairing-display > p { margin: 10px 0 0; color: #8b9098; font-size: 10px; line-height: 16px; text-align: center; }
+.arkme-remote-pairing-code { color: #20232c; font-size: 33px; line-height: 46px; font-weight: 620; letter-spacing: .17em; font-variant-numeric: tabular-nums; white-space: nowrap; user-select: all; }
+.arkme-remote-pairing-tools { position: absolute; right: 12px; bottom: 12px; display: flex; gap: 4px; }
+.arkme-remote-pairing-tools button { width: 30px; height: 30px; padding: 0; display: inline-flex; align-items: center; justify-content: center; border: 0; border-radius: 8px; background: transparent; color: #8a8f97; cursor: pointer; }
+.arkme-remote-pairing-tools button:hover { background: #f3f3f4; color: #343944; }
+.arkme-remote-pairing-expired { display: grid; justify-items: center; gap: 7px; text-align: center; }
+.arkme-remote-pairing-expired strong { font-size: 14px; line-height: 20px; }
+.arkme-remote-pairing-expired p { margin: 0; color: #8b9098; font-size: 11px; }
+.arkme-remote-pairing-expired button { margin-top: 7px; min-height: 32px; padding: 0 12px; border: 0; border-radius: 9px; background: #20232c; color: #fff; font: inherit; font-size: 11px; cursor: pointer; }
+.arkme-remote-dialog-note { margin: 14px 2px 0; display: flex; align-items: flex-start; gap: 7px; color: #858992; font-size: 10px; line-height: 16px; }
+.arkme-remote-dialog-note > svg { margin-top: 1px; flex: 0 0 auto; color: #5e856d; }
+.arkme-remote-back:focus-visible, .arkme-remote-icon-button:focus-visible, .arkme-remote-add-button:focus-visible, .arkme-remote-switch:focus-visible, .arkme-remote-device-row > button:focus-visible, .arkme-remote-name-row:focus-visible, .arkme-remote-rename button:focus-visible, .arkme-remote-dialog button:focus-visible { outline: 2px solid #3b9cf5; outline-offset: 2px; }
+@media (max-width: 520px) {
+  .arkme-remote-settings-shell { gap: 32px; }
   .arkme-remote-page-header { grid-template-columns: 70px minmax(0, 1fr) 70px; }
-  .arkme-remote-page-header p { display: none; }
-  .arkme-remote-pairing-content { grid-template-columns: 1fr; }
-  .arkme-remote-qr-frame { width: min(240px, 100%); box-sizing: border-box; justify-self: center; }
-}
-@media (max-width: 460px) {
-  .arkme-remote-overview { grid-template-columns: 40px minmax(0, 1fr) auto; padding: 15px; gap: 11px; }
-  .arkme-remote-status-icon { width: 40px; height: 40px; }
-  .arkme-remote-overview-actions, .arkme-remote-rename { grid-column: 1 / -1; }
-  .arkme-remote-overview-actions > button { flex: 1; }
-  .arkme-remote-pairing-card > header { align-items: flex-start; flex-wrap: wrap; }
-  .arkme-remote-expiry { margin-left: 47px; }
-  .arkme-remote-pairing-content { padding: 18px; gap: 20px; }
-  .arkme-remote-device-list { padding: 0 14px; }
-  .arkme-remote-device-row { grid-template-columns: 36px minmax(0, 1fr) 30px; }
-  .arkme-remote-device-state { display: none; }
+  .arkme-remote-section-header p { display: none; }
+  .arkme-remote-device-row { grid-template-columns: 22px minmax(0, 1fr); padding-top: 10px; padding-bottom: 10px; }
+  .arkme-remote-device-row > button { grid-column: 2; justify-self: start; }
+  .arkme-remote-dialog-backdrop { padding: 12px; }
+  .arkme-remote-dialog { padding: 24px 20px; }
+  .arkme-remote-pairing-display { min-height: 282px; padding: 18px; }
+  .arkme-remote-pairing-display > img { width: min(224px, 100%); height: auto; }
+  .arkme-remote-pairing-code { font-size: 26px; letter-spacing: .12em; }
 }
 @media (prefers-reduced-motion: reduce) {
   .arkme-remote-switch, .arkme-remote-switch > span { transition: none; }
@@ -1298,55 +1280,47 @@ body[data-ds-dark-theme] .arkme-redesign-settings-error {
   color: var(--dsw-alias-state-error-primary);
 }
 body[data-ds-dark-theme] .arkme-remote-page-header h1,
-body[data-ds-dark-theme] .arkme-remote-status-label,
-body[data-ds-dark-theme] .arkme-remote-pairing-card h2,
-body[data-ds-dark-theme] .arkme-remote-devices h2,
-body[data-ds-dark-theme] .arkme-remote-pairing-guide li strong,
-body[data-ds-dark-theme] .arkme-remote-device-row > div strong,
-body[data-ds-dark-theme] .arkme-remote-empty > strong,
-body[data-ds-dark-theme] .arkme-remote-code-block button { color: var(--dsw-alias-label-primary); }
-body[data-ds-dark-theme] .arkme-remote-page-header p,
-body[data-ds-dark-theme] .arkme-remote-status-copy p,
-body[data-ds-dark-theme] .arkme-remote-pairing-card header p,
-body[data-ds-dark-theme] .arkme-remote-devices header p,
-body[data-ds-dark-theme] .arkme-remote-pairing-guide li small,
-body[data-ds-dark-theme] .arkme-remote-code-block > span,
-body[data-ds-dark-theme] .arkme-remote-security-note,
-body[data-ds-dark-theme] .arkme-remote-device-row > div span,
-body[data-ds-dark-theme] .arkme-remote-empty > p { color: var(--dsw-alias-label-tertiary); }
-body[data-ds-dark-theme] .arkme-remote-overview,
-body[data-ds-dark-theme] .arkme-remote-pairing-card,
-body[data-ds-dark-theme] .arkme-remote-devices,
-body[data-ds-dark-theme] .arkme-remote-qr-frame,
+body[data-ds-dark-theme] .arkme-remote-section-header h2,
+body[data-ds-dark-theme] .arkme-remote-allow-row strong,
+body[data-ds-dark-theme] .arkme-remote-device-row strong,
+body[data-ds-dark-theme] .arkme-remote-name-row strong,
+body[data-ds-dark-theme] .arkme-remote-dialog,
+body[data-ds-dark-theme] .arkme-remote-pairing-code { color: var(--dsw-alias-label-primary); }
+body[data-ds-dark-theme] .arkme-remote-section-header p,
+body[data-ds-dark-theme] .arkme-remote-allow-row span,
+body[data-ds-dark-theme] .arkme-remote-device-row span,
+body[data-ds-dark-theme] .arkme-remote-name-row small,
+body[data-ds-dark-theme] .arkme-remote-dialog header p,
+body[data-ds-dark-theme] .arkme-remote-pairing-display > p,
+body[data-ds-dark-theme] .arkme-remote-dialog-note,
+body[data-ds-dark-theme] .arkme-remote-empty-row { color: var(--dsw-alias-label-tertiary); }
+body[data-ds-dark-theme] .arkme-remote-settings-card,
+body[data-ds-dark-theme] .arkme-remote-dialog,
+body[data-ds-dark-theme] .arkme-remote-pairing-display,
 body[data-ds-dark-theme] .arkme-remote-rename input { border-color: var(--dsw-alias-border-l2); background: var(--dsw-alias-bg-layer-1); color: var(--dsw-alias-label-primary); }
-body[data-ds-dark-theme] .arkme-remote-pairing-card > header,
-body[data-ds-dark-theme] .arkme-remote-devices > header,
-body[data-ds-dark-theme] .arkme-remote-pairing-card > footer,
-body[data-ds-dark-theme] .arkme-remote-device-row { border-color: var(--dsw-alias-border-l1); }
-body[data-ds-dark-theme] .arkme-remote-pairing-card > footer,
-body[data-ds-dark-theme] .arkme-remote-code-block { border-color: var(--dsw-alias-border-l2); background: var(--dsw-alias-bg-layer-2); }
+body[data-ds-dark-theme] .arkme-remote-allow-row,
+body[data-ds-dark-theme] .arkme-remote-device-row,
+body[data-ds-dark-theme] .arkme-remote-rename { border-color: var(--dsw-alias-border-l1); }
 body[data-ds-dark-theme] .arkme-remote-back,
-body[data-ds-dark-theme] .arkme-remote-secondary-button,
-body[data-ds-dark-theme] .arkme-remote-rename button,
-body[data-ds-dark-theme] .arkme-remote-pairing-card footer button { color: var(--dsw-alias-label-secondary); }
+body[data-ds-dark-theme] .arkme-remote-icon-button,
+body[data-ds-dark-theme] .arkme-remote-dialog-close,
+body[data-ds-dark-theme] .arkme-remote-pairing-tools button,
+body[data-ds-dark-theme] .arkme-remote-name-row { color: var(--dsw-alias-label-secondary); }
 body[data-ds-dark-theme] .arkme-remote-back:hover,
-body[data-ds-dark-theme] .arkme-remote-secondary-button:hover,
-body[data-ds-dark-theme] .arkme-remote-rename button:hover,
-body[data-ds-dark-theme] .arkme-remote-pairing-card footer button:hover { background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-primary); }
-body[data-ds-dark-theme] .arkme-remote-primary-button { background: var(--dsw-alias-button-primary-fill); color: var(--dsw-alias-label-primary-inverted); }
-body[data-ds-dark-theme] .arkme-remote-secondary-button,
-body[data-ds-dark-theme] .arkme-remote-rename button,
-body[data-ds-dark-theme] .arkme-remote-pairing-card footer button { border-color: var(--dsw-alias-border-l2); background: var(--dsw-alias-button-elevated-fill); }
+body[data-ds-dark-theme] .arkme-remote-icon-button:hover,
+body[data-ds-dark-theme] .arkme-remote-dialog-close:hover,
+body[data-ds-dark-theme] .arkme-remote-pairing-tools button:hover,
+body[data-ds-dark-theme] .arkme-remote-name-row:hover { background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-primary); }
+body[data-ds-dark-theme] .arkme-remote-add-button,
+body[data-ds-dark-theme] .arkme-remote-rename button[type="submit"],
+body[data-ds-dark-theme] .arkme-remote-pairing-expired button { background: var(--dsw-alias-button-primary-fill); color: var(--dsw-alias-label-primary-inverted); }
+body[data-ds-dark-theme] .arkme-remote-device-row > button,
+body[data-ds-dark-theme] .arkme-remote-rename button { border-color: var(--dsw-alias-border-l2); background: var(--dsw-alias-button-elevated-fill); color: var(--dsw-alias-label-secondary); }
 body[data-ds-dark-theme] .arkme-remote-switch[aria-checked="true"] { background: var(--dsw-alias-state-business-primary); }
-body[data-ds-dark-theme] .arkme-remote-status-icon,
-body[data-ds-dark-theme] .arkme-remote-device-icon,
-body[data-ds-dark-theme] .arkme-remote-empty > span,
-body[data-ds-dark-theme] .arkme-remote-pairing-guide li > span,
-body[data-ds-dark-theme] .arkme-remote-expiry { background: var(--dsw-alias-bg-layer-2); color: var(--dsw-alias-label-secondary); }
-body[data-ds-dark-theme] .arkme-remote-status-icon.is-online,
-body[data-ds-dark-theme] .arkme-remote-device-state.is-active { background: var(--dsw-alias-state-success-tertiary); color: var(--dsw-alias-state-success-primary); }
-body[data-ds-dark-theme] .arkme-remote-status-icon.is-pending { background: var(--dsw-alias-state-warning-tertiary); color: var(--dsw-alias-state-warning-primary); }
-body[data-ds-dark-theme] .arkme-remote-section-icon { background: var(--dsw-alias-state-business-tertiary); color: var(--dsw-alias-state-business-primary); }
+body[data-ds-dark-theme] .arkme-remote-pairing-tabs { background: var(--dsw-alias-bg-layer-2); }
+body[data-ds-dark-theme] .arkme-remote-pairing-tabs button { color: var(--dsw-alias-label-tertiary); }
+body[data-ds-dark-theme] .arkme-remote-pairing-tabs button[aria-selected="true"] { background: var(--dsw-alias-button-elevated-fill); color: var(--dsw-alias-label-primary); }
+body[data-ds-dark-theme] .arkme-remote-dialog-backdrop { background: rgba(7, 9, 13, .56); }
 body[data-ds-dark-theme] .arkme-redesign-setting-row > strong.is-danger,
 body[data-ds-dark-theme] .arkme-redesign-task-error,
 body[data-ds-dark-theme] .arkme-workspace-dialog-error {
