@@ -40,6 +40,13 @@ describe('ArkmeSettingsSurface', () => {
     expect(source).toContain('{authenticated && remoteVisible && <SettingsGroup title="远程控制">')
   })
 
+  it('opens remote settings as a modal without replacing the account settings surface', () => {
+    expect(source).not.toContain('if (remoteOpen) return')
+    expect(source).toContain('{remoteOpen && <ArkmeRemoteSettingsPanel onClose=')
+    expect(redesignCss).toContain('.arkme-remote-settings-dialog-backdrop')
+    expect(redesignCss).toContain('.arkme-remote-settings-dialog-body')
+  })
+
   it('positions the DSH account section at the top before paint', () => {
     expect(source).toMatch(/useLayoutEffect\(\(\) => \{\s*scrollArkmeSettingsSurface\(surfaceRef\.current\)/)
     expect(source).not.toContain('document.getElementById')

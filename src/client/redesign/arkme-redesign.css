@@ -747,11 +747,15 @@ button.arkme-redesign-update-button:disabled { opacity: .55; cursor: default; }
 
 /* DSH remote settings follows the compact connection-management pattern:
    persistent controls stay on the page; one-time pairing stays in a dialog. */
-.arkme-remote-settings-shell { display: grid; gap: 42px; padding-bottom: 42px; }
-.arkme-remote-page-header { min-height: 52px; display: grid; grid-template-columns: 88px minmax(0, 1fr) 88px; align-items: center; }
-.arkme-remote-page-header h1 { margin: 0; color: #20232c; font-size: 21px; line-height: 30px; font-weight: 620; letter-spacing: -.025em; text-align: center; }
-.arkme-remote-back { justify-self: start; min-height: 34px; padding: 0 9px 0 5px; display: inline-flex; align-items: center; gap: 5px; border: 0; border-radius: 9px; background: transparent; color: #747984; font: inherit; font-size: 12px; cursor: pointer; }
-.arkme-remote-back:hover { background: #f3f3f4; color: #20232c; }
+.arkme-remote-settings-dialog-backdrop { position: fixed; inset: 0; z-index: 1150; padding: 24px; box-sizing: border-box; display: grid; place-items: center; background: rgba(22, 24, 29, .28); backdrop-filter: blur(1.5px); }
+.arkme-remote-settings-dialog { width: min(720px, calc(100vw - 48px)); max-height: min(720px, calc(100vh - 48px)); display: flex; flex-direction: column; overflow: hidden; border: 1px solid rgba(20, 24, 32, .08); border-radius: 19px; background: #fff; color: #20232c; box-shadow: 0 18px 54px rgba(17, 20, 27, .18); }
+.arkme-remote-page-header { min-height: 74px; padding: 0 24px 0 28px; box-sizing: border-box; display: flex; align-items: center; justify-content: space-between; gap: 20px; border-bottom: 1px solid #ededee; }
+.arkme-remote-page-header > div { min-width: 0; }
+.arkme-remote-page-header h1 { margin: 0; color: #20232c; font-size: 18px; line-height: 25px; font-weight: 620; letter-spacing: -.02em; }
+.arkme-remote-page-header p { margin: 3px 0 0; color: #8b9098; font-size: 11px; line-height: 17px; }
+.arkme-remote-settings-close { width: 32px; height: 32px; flex: 0 0 auto; padding: 0; display: inline-flex; align-items: center; justify-content: center; border: 0; border-radius: 9px; background: transparent; color: #777c85; cursor: pointer; }
+.arkme-remote-settings-close:hover { background: #f3f3f4; color: #20232c; }
+.arkme-remote-settings-dialog-body { padding: 24px 28px 28px; display: grid; gap: 28px; overflow-y: auto; overscroll-behavior: contain; }
 .arkme-remote-section { display: grid; gap: 13px; }
 .arkme-remote-section-header { min-height: 34px; display: flex; align-items: flex-end; justify-content: space-between; gap: 18px; }
 .arkme-remote-section-header > div:first-child { min-width: 0; }
@@ -818,10 +822,13 @@ button.arkme-redesign-update-button:disabled { opacity: .55; cursor: default; }
 .arkme-remote-pairing-expired button { margin-top: 7px; min-height: 32px; padding: 0 12px; border: 0; border-radius: 9px; background: #20232c; color: #fff; font: inherit; font-size: 11px; cursor: pointer; }
 .arkme-remote-dialog-note { margin: 14px 2px 0; display: flex; align-items: flex-start; gap: 7px; color: #858992; font-size: 10px; line-height: 16px; }
 .arkme-remote-dialog-note > svg { margin-top: 1px; flex: 0 0 auto; color: #5e856d; }
-.arkme-remote-back:focus-visible, .arkme-remote-icon-button:focus-visible, .arkme-remote-add-button:focus-visible, .arkme-remote-switch:focus-visible, .arkme-remote-device-row > button:focus-visible, .arkme-remote-name-row:focus-visible, .arkme-remote-rename button:focus-visible, .arkme-remote-dialog button:focus-visible { outline: 2px solid #3b9cf5; outline-offset: 2px; }
+.arkme-remote-settings-close:focus-visible, .arkme-remote-icon-button:focus-visible, .arkme-remote-add-button:focus-visible, .arkme-remote-switch:focus-visible, .arkme-remote-device-row > button:focus-visible, .arkme-remote-name-row:focus-visible, .arkme-remote-rename button:focus-visible, .arkme-remote-dialog button:focus-visible { outline: 2px solid #3b9cf5; outline-offset: 2px; }
 @media (max-width: 520px) {
-  .arkme-remote-settings-shell { gap: 32px; }
-  .arkme-remote-page-header { grid-template-columns: 70px minmax(0, 1fr) 70px; }
+  .arkme-remote-settings-dialog-backdrop { padding: 10px; }
+  .arkme-remote-settings-dialog { width: calc(100vw - 20px); max-height: calc(100vh - 20px); border-radius: 17px; }
+  .arkme-remote-page-header { min-height: 68px; padding: 0 16px 0 20px; }
+  .arkme-remote-page-header p { display: none; }
+  .arkme-remote-settings-dialog-body { padding: 20px 18px 22px; gap: 24px; }
   .arkme-remote-section-header p { display: none; }
   .arkme-remote-device-row { grid-template-columns: 22px minmax(0, 1fr); padding-top: 10px; padding-bottom: 10px; }
   .arkme-remote-device-row > button { grid-column: 2; justify-self: start; }
@@ -1287,6 +1294,7 @@ body[data-ds-dark-theme] .arkme-remote-name-row strong,
 body[data-ds-dark-theme] .arkme-remote-dialog,
 body[data-ds-dark-theme] .arkme-remote-pairing-code { color: var(--dsw-alias-label-primary); }
 body[data-ds-dark-theme] .arkme-remote-section-header p,
+body[data-ds-dark-theme] .arkme-remote-page-header p,
 body[data-ds-dark-theme] .arkme-remote-allow-row span,
 body[data-ds-dark-theme] .arkme-remote-device-row span,
 body[data-ds-dark-theme] .arkme-remote-name-row small,
@@ -1295,18 +1303,20 @@ body[data-ds-dark-theme] .arkme-remote-pairing-display > p,
 body[data-ds-dark-theme] .arkme-remote-dialog-note,
 body[data-ds-dark-theme] .arkme-remote-empty-row { color: var(--dsw-alias-label-tertiary); }
 body[data-ds-dark-theme] .arkme-remote-settings-card,
+body[data-ds-dark-theme] .arkme-remote-settings-dialog,
 body[data-ds-dark-theme] .arkme-remote-dialog,
 body[data-ds-dark-theme] .arkme-remote-pairing-display,
 body[data-ds-dark-theme] .arkme-remote-rename input { border-color: var(--dsw-alias-border-l2); background: var(--dsw-alias-bg-layer-1); color: var(--dsw-alias-label-primary); }
 body[data-ds-dark-theme] .arkme-remote-allow-row,
 body[data-ds-dark-theme] .arkme-remote-device-row,
-body[data-ds-dark-theme] .arkme-remote-rename { border-color: var(--dsw-alias-border-l1); }
-body[data-ds-dark-theme] .arkme-remote-back,
+body[data-ds-dark-theme] .arkme-remote-rename,
+body[data-ds-dark-theme] .arkme-remote-page-header { border-color: var(--dsw-alias-border-l1); }
+body[data-ds-dark-theme] .arkme-remote-settings-close,
 body[data-ds-dark-theme] .arkme-remote-icon-button,
 body[data-ds-dark-theme] .arkme-remote-dialog-close,
 body[data-ds-dark-theme] .arkme-remote-pairing-tools button,
 body[data-ds-dark-theme] .arkme-remote-name-row { color: var(--dsw-alias-label-secondary); }
-body[data-ds-dark-theme] .arkme-remote-back:hover,
+body[data-ds-dark-theme] .arkme-remote-settings-close:hover,
 body[data-ds-dark-theme] .arkme-remote-icon-button:hover,
 body[data-ds-dark-theme] .arkme-remote-dialog-close:hover,
 body[data-ds-dark-theme] .arkme-remote-pairing-tools button:hover,
@@ -1320,6 +1330,7 @@ body[data-ds-dark-theme] .arkme-remote-switch[aria-checked="true"] { background:
 body[data-ds-dark-theme] .arkme-remote-pairing-tabs { background: var(--dsw-alias-bg-layer-2); }
 body[data-ds-dark-theme] .arkme-remote-pairing-tabs button { color: var(--dsw-alias-label-tertiary); }
 body[data-ds-dark-theme] .arkme-remote-pairing-tabs button[aria-selected="true"] { background: var(--dsw-alias-button-elevated-fill); color: var(--dsw-alias-label-primary); }
+body[data-ds-dark-theme] .arkme-remote-settings-dialog-backdrop,
 body[data-ds-dark-theme] .arkme-remote-dialog-backdrop { background: rgba(7, 9, 13, .56); }
 body[data-ds-dark-theme] .arkme-redesign-setting-row > strong.is-danger,
 body[data-ds-dark-theme] .arkme-redesign-task-error,

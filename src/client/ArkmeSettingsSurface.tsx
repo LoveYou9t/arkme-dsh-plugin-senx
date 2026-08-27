@@ -338,8 +338,6 @@ export function ArkmeSettingsSurface() {
     else void arkmeAppUpdateStore.refresh(true)
   }
 
-  if (remoteOpen) return <ArkmeRemoteSettingsPanel onBack={() => { setRemoteOpen(false) }} />
-
   return <div ref={surfaceRef} className="arkme-redesign-settings-surface" data-arkme-settings-surface aria-label="Arkme 设置">
     <div className="arkme-redesign-settings-shell">
       <div className="arkme-redesign-settings-profile">
@@ -399,5 +397,6 @@ export function ArkmeSettingsSurface() {
 
       {error !== '' && <div className="arkme-redesign-settings-error" role="alert">{error}</div>}
     </div>
+    {remoteOpen && <ArkmeRemoteSettingsPanel onClose={() => { setRemoteOpen(false) }} />}
   </div>
 }

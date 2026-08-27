@@ -21,8 +21,11 @@ const pairing = {
 
 describe('DSH remote desktop settings', () => {
   it('provides the v4 remote switch, pairing and long-lived binding management entry points', () => {
-    const markup = renderToStaticMarkup(<ArkmeRemoteSettingsPanel onBack={() => undefined} />)
-    expect(markup).toContain('aria-label="远程控制设置"')
+    const markup = renderToStaticMarkup(<ArkmeRemoteSettingsPanel onClose={() => undefined} />)
+    expect(markup).toContain('role="dialog"')
+    expect(markup).toContain('aria-modal="true"')
+    expect(markup).toContain('data-arkme-remote-settings="true"')
+    expect(markup).toContain('aria-label="关闭移动端远控设置"')
     expect(markup).toContain('移动端远控')
     expect(markup).toContain('可控制这台电脑的设备')
     expect(markup).toContain('role="switch"')

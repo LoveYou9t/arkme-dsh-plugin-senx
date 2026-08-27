@@ -1,5 +1,4 @@
 import { ArrowClockwise } from '@phosphor-icons/react/dist/icons/ArrowClockwise'
-import { ArrowLeft } from '@phosphor-icons/react/dist/icons/ArrowLeft'
 import { Check } from '@phosphor-icons/react/dist/icons/Check'
 import { Copy } from '@phosphor-icons/react/dist/icons/Copy'
 import { DesktopTower } from '@phosphor-icons/react/dist/icons/DesktopTower'
@@ -111,7 +110,7 @@ export function DshRemotePairingDialog({
   </div>
 }
 
-export function ArkmeRemoteSettingsPanel({ onBack }: { onBack: () => void }) {
+export function ArkmeRemoteSettingsPanel({ onClose }: { onClose: () => void }) {
   const [status, setStatus] = useState<DshRemoteStatus>()
   const [pairing, setPairing] = useState<DshRemotePairingTicket>()
   const [bindings, setBindings] = useState<DshRemoteBindingProjection[]>([])
@@ -192,39 +191,43 @@ export function ArkmeRemoteSettingsPanel({ onBack }: { onBack: () => void }) {
   const visibleBindings = bindings.filter(binding => binding.status !== 'revoked')
   const canPair = !busy && status?.connected === true
 
-  return <div className="arkme-redesign-settings-surface" data-arkme-remote-settings aria-label="远程控制设置">
-    <div className="arkme-redesign-settings-shell arkme-remote-settings-shell">
+  return <div className="arkme-remote-settings-dialog-backdrop" role="presentation" onMouseDown={event => {
+    if (event.target === event.currentTarget && !busy && pairing === undefined) onClose()
+  }}>
+    <section className="arkme-remote-settings-dialog" role="dialog" aria-modal="true" aria-labelledby="arkme-remote-settings-title" data-arkme-remote-settings>
       <header className="arkme-remote-page-header">
-        <button type="button" className="arkme-remote-back" aria-label="返回 Arkme 设置" onClick={onBack}><ArrowLeft size={17} aria-hidden /><span>设置</span></button>
-        <h1>移动端远控</h1>
+        <div><h1 id="arkme-remote-settings-title">移动端远控</h1><p>管理手机对这台电脑中 DSH 会话的访问</p></div>
+        <button type="button" autoFocus className="arkme-remote-settings-close" aria-label="关闭移动端远控设置" disabled={busy} onClick={onClose}><X size={17} aria-hidden /></button>
       </header>
 
-      <section className="arkme-remote-section" aria-labelledby="arkme-remote-devices-title">
-        <header className="arkme-remote-section-header">
-          <div><h2 id="arkme-remote-devices-title">可控制这台电脑的设备</h2><p>已绑定设备可继续这台电脑中的 DSH 会话</p></div>
-          <div><button type="button" className="arkme-remote-icon-button" aria-label="刷新设备列表" disabled={busy} onClick={() => { void run(async () => { await refresh(undefined, true) }) }}><ArrowClockwise size={16} aria-hidden /></button>
-            <button type="button" className="arkme-remote-add-button" disabled={!canPair} onClick={createPairing}><Plus size={14} aria-hidden />添加</button></div>
-        </header>
-        <div className="arkme-remote-settings-card">
-          <div className="arkme-remote-allow-row"><div><strong>允许连接</strong><span>{remoteStatusDescription(status)}</span></div><button type="button" className="arkme-remote-switch" role="switch" aria-label="允许移动端远程控制" aria-checked={status?.enabled === true} disabled={busy || status?.available !== true} onClick={toggle}><span aria-hidden /></button></div>
-          {visibleBindings.map(binding => <div key={binding.bindingRef} className="arkme-remote-device-row">
-            <DeviceMobile size={20} weight="duotone" aria-hidden /><div><strong>{binding.controllerDisplayName}</strong><span>{platformLabel(binding.controllerPlatform)} · {formatDshRemoteDeviceActivity(binding, now)}</span></div>
-            <button type="button" disabled={busy} onClick={() => { revoke(binding) }}>撤销访问权限</button>
-          </div>)}
-          {visibleBindings.length === 0 && <div className="arkme-remote-empty-row"><DeviceMobile size={18} aria-hidden /><span>尚未添加设备</span></div>}
-        </div>
-      </section>
+      <div className="arkme-remote-settings-dialog-body">
+        <section className="arkme-remote-section" aria-labelledby="arkme-remote-devices-title">
+          <header className="arkme-remote-section-header">
+            <div><h2 id="arkme-remote-devices-title">可控制这台电脑的设备</h2><p>已绑定设备可继续这台电脑中的 DSH 会话</p></div>
+            <div><button type="button" className="arkme-remote-icon-button" aria-label="刷新设备列表" disabled={busy} onClick={() => { void run(async () => { await refresh(undefined, true) }) }}><ArrowClockwise size={16} aria-hidden /></button>
+              <button type="button" className="arkme-remote-add-button" disabled={!canPair} onClick={createPairing}><Plus size={14} aria-hidden />添加</button></div>
+          </header>
+          <div className="arkme-remote-settings-card">
+            <div className="arkme-remote-allow-row"><div><strong>允许连接</strong><span>{remoteStatusDescription(status)}</span></div><button type="button" className="arkme-remote-switch" role="switch" aria-label="允许移动端远程控制" aria-checked={status?.enabled === true} disabled={busy || status?.available !== true} onClick={toggle}><span aria-hidden /></button></div>
+            {visibleBindings.map(binding => <div key={binding.bindingRef} className="arkme-remote-device-row">
+              <DeviceMobile size={20} weight="duotone" aria-hidden /><div><strong>{binding.controllerDisplayName}</strong><span>{platformLabel(binding.controllerPlatform)} · {formatDshRemoteDeviceActivity(binding, now)}</span></div>
+              <button type="button" disabled={busy} onClick={() => { revoke(binding) }}>撤销访问权限</button>
+            </div>)}
+            {visibleBindings.length === 0 && <div className="arkme-remote-empty-row"><DeviceMobile size={18} aria-hidden /><span>尚未添加设备</span></div>}
+          </div>
+        </section>
 
-      <section className="arkme-remote-section" aria-labelledby="arkme-remote-other-title">
-        <header className="arkme-remote-section-header"><div><h2 id="arkme-remote-other-title">其他设置</h2></div></header>
-        <div className="arkme-remote-settings-card">
-          <button type="button" className="arkme-remote-name-row" disabled={busy} onClick={() => { setRenaming(value => !value) }}><DesktopTower size={20} weight="duotone" aria-hidden /><span><strong>电脑名称</strong><small>修改在移动端显示的名称</small></span><PencilSimple size={15} aria-hidden /></button>
-          {renaming && <form className="arkme-remote-rename" onSubmit={event => { event.preventDefault(); rename() }}><input autoFocus value={desktopName} maxLength={48} aria-label="电脑名称" placeholder="例如：办公室 Mac" disabled={busy} onChange={event => { setDesktopName(event.currentTarget.value) }} /><button type="submit" disabled={busy || desktopName.trim() === ''}>保存</button><button type="button" disabled={busy} onClick={() => { setRenaming(false); setDesktopName('') }}>取消</button></form>}
-        </div>
-      </section>
+        <section className="arkme-remote-section" aria-labelledby="arkme-remote-other-title">
+          <header className="arkme-remote-section-header"><div><h2 id="arkme-remote-other-title">其他设置</h2></div></header>
+          <div className="arkme-remote-settings-card">
+            <button type="button" className="arkme-remote-name-row" disabled={busy} onClick={() => { setRenaming(value => !value) }}><DesktopTower size={20} weight="duotone" aria-hidden /><span><strong>电脑名称</strong><small>修改在移动端显示的名称</small></span><PencilSimple size={15} aria-hidden /></button>
+            {renaming && <form className="arkme-remote-rename" onSubmit={event => { event.preventDefault(); rename() }}><input autoFocus value={desktopName} maxLength={48} aria-label="电脑名称" placeholder="例如：办公室 Mac" disabled={busy} onChange={event => { setDesktopName(event.currentTarget.value) }} /><button type="submit" disabled={busy || desktopName.trim() === ''}>保存</button><button type="button" disabled={busy} onClick={() => { setRenaming(false); setDesktopName('') }}>取消</button></form>}
+          </div>
+        </section>
 
-      {error !== '' && <div className="arkme-redesign-settings-error arkme-remote-error" role="alert">{error}</div>}
-    </div>
+        {error !== '' && <div className="arkme-redesign-settings-error arkme-remote-error" role="alert">{error}</div>}
+      </div>
+    </section>
     {pairing !== undefined && <DshRemotePairingDialog pairing={pairing} now={now} mode={pairingMode} copied={copied} busy={busy} onModeChange={setPairingMode} onCopy={copyPairingCode} onRegenerate={createPairing} onClose={cancelPairing} />}
   </div>
 }
