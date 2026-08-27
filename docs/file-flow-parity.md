@@ -95,7 +95,7 @@ native open commands or new remote upload/search services are introduced.
 
 ## Verification and remaining boundaries
 
-Typecheck, full tests (1855 passed, 5 skipped) and build passed on macOS,
+Typecheck, full tests (1864 passed, 5 skipped) and build passed on macOS,
 including the B / Solid icon replacement. File icon tests pin all 12 SVG hashes,
 check inactive/self-contained assets, retain MIME precedence and verify the
 shared draft/card/preview mapping, including DMG. No new Host, SDK or Tool
@@ -105,6 +105,16 @@ The file viewer uses a 64px icon and places its close control inside the
 top-right corner, with a 32px hit target and 12px inset. Information and content
 views both reserve space above their content. Click and Escape dismissal remain
 covered; the latter stops propagation so a parent detail view stays open.
+
+The Web adaptation shows actual reception percentages on the reference client's
+220px-wide, 4px-high rounded track, with no invented percentage when total bytes
+are unknown. A received browser-previewable file offers Preview; other formats
+(including DMG, Office and archives) offer Download directly. It does not offer
+an unusable Open button or show a native-application limitation paragraph.
+The primary download action and toolbar share one save operation, so moving the
+action into the panel after reception cannot cancel a download already in flight.
+This is UI-only adaptation of existing reception and download operations; it adds
+no Host route, SDK or Tool capability. Native OS opening remains unsupported.
 
 The mounted message view now retains its last usable attachment display when
 the Host explicitly reports a media lookup failure for the same record version.
