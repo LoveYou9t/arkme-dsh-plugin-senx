@@ -1208,7 +1208,8 @@ describe('ArkmeService', () => {
           phone: '13800138000',
           email: 'test@example.com',
           has_bind_apple: true,
-          has_bind_wechat: false,
+          has_bind_wechat: true,
+          wechat_nick_name: '微信昵称',
           has_bind_google: true,
         },
       })
@@ -1224,7 +1225,8 @@ describe('ArkmeService', () => {
       canUpdateArkmeId: true,
       accountType: 1,
       createdAt: 123,
-      bindings: { apple: true, wechat: false, google: true },
+      bindings: { apple: true, wechat: true, google: true },
+      bindingNames: { wechat: '微信昵称' },
       contact: { phoneMasked: '138****8000', emailMasked: 't***@example.com' },
     })
     expect(JSON.stringify(snapshot)).not.toContain('完整真实姓名')

@@ -582,6 +582,7 @@ export class ArkmeService {
         retryOutbox: true,
         revisionPolling: true,
         userProfile: true,
+        accountSettings: true,
         imageRead: true,
         recordCalendar: true,
         imageLibrary: true,

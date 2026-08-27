@@ -70,8 +70,26 @@ function fakeService() {
     billingProducts: vi.fn(async () => ({ items: [] })),
     createBillingOrder: vi.fn(async (input: unknown) => input),
     billingOrderStatus: vi.fn(async (orderId: string) => ({ orderId, status: 'pending' })),
+    checkArkmeIdAvailability: vi.fn(async (arkmeId: string) => ({ available: true, reason: '', arkmeId })),
+    setArkmeIdOnce: vi.fn(async (arkmeId: string) => ({ arkmeId, changed: true, canUpdate: false, revision: 2 })),
   }
 }
+
+describe('account settings Host API dispatch', () => {
+  it('dispatches Arkme ID checks and writes without browser-owned account fields', async () => {
+    const service = fakeService()
+
+    await expect(dispatchArkmeHostOperation(service as never, 'user.arkme-id.check', {
+      arkmeId: '  Lucis_01  ', userId: 999,
+    })).resolves.toMatchObject({ arkmeId: '  Lucis_01  ' })
+    await expect(dispatchArkmeHostOperation(service as never, 'user.arkme-id.set', {
+      arkmeId: 'Lucis_01', accessToken: 'secret',
+    })).resolves.toMatchObject({ arkmeId: 'Lucis_01', changed: true })
+
+    expect(service.checkArkmeIdAvailability).toHaveBeenCalledWith('  Lucis_01  ')
+    expect(service.setArkmeIdOnce).toHaveBeenCalledWith('Lucis_01')
+  })
+})
 
 describe('billing Host API dispatch', () => {
   it('dispatches quota and product reads without browser account fields', async () => {

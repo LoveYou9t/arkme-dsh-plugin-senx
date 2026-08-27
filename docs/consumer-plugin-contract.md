@@ -93,7 +93,41 @@ Plugin update discovery and acknowledgement are lifecycle concerns owned by the 
 
 `capabilities().features.callHistory === true` advertises Browser-safe call-history access. `callHistory()` returns recent call records with opaque account-scoped `callRef` values, display metadata, result labels, summary status and summary previews. `callDetail(callRef)` accepts only an unchanged `callRef` from the Provider and returns safe metadata, participants, summary and transcript text. `retryCallSummary(callRef)` is a write-like operation and must only run from a current explicit human request to retry or regenerate that call summary. Consumers must never expect or reconstruct raw room IDs, WebRTC credentials, recording URLs, video URLs, signed media URLs or upstream tokens from this contract.
 
-`profile()` exposes only UI-safe fields: display name, nickname, avatar reference, Arkme ID, optional one-time Arkme ID change availability, account type, creation time, binding flags, and masked phone/email. Raw phone, raw email, real name, and credentials are intentionally excluded from contract v1. The model-facing `arkme_id_set` tool owns the one-time write workflow; the Browser SDK does not expose a profile mutation method.
+`profile()` exposes only UI-safe fields: display name, nickname, avatar reference, Arkme ID, optional one-time Arkme ID change availability, account type, creation time, binding flags, optional third-party display names such as bound WeChat nickname, and masked phone/email. Raw phone, raw email, real name, OAuth code, and credentials are intentionally excluded from contract v1.
+
+`capabilities().features.accountSettings === true` advertises the current-account settings migration from the Flutter client. Built-in UI shows the Arkme ID, generates the personal QR code from the same World share URL rule used by Flutter (`<shareWebsite>/<arkmeId>`), and can run the phone bind/rebind SMS flow through `auth.phone.send` and `auth.phone.verify`. `checkArkmeIdAvailability()` and `setArkmeIdOnce()` expose the same one-time Arkme ID owner used by the model-facing `arkme_id_set` tool; callers must obtain explicit human confirmation before `setArkmeIdOnce()`. `sendPhoneCode()` requires a Geetest captcha result from a current human browser action, and `verifyPhoneCode()` refreshes auth/profile state after success. WeChat binding remains a Flutter-native AppBridge OAuth flow: Flutter opens WeChat, receives an OAuth code, then calls `/api/v1/auth/wechat-bind`. The plugin contract currently exposes only WeChat binding status and safe nickname; Consumer SDKs and model Tools must not fabricate a WeChat bind/rebind flow without a Host-provided OAuth bridge.
+
+Account settings capability matrix:
+
+| Capability | UI | SDK | Tool | Host owner |
+| --- | --- | --- | --- | --- |
+| Show Arkme ID and bindings | `ArkmeSettingsSurface` account info rows | `profile()` | `arkme_user_profile` | `ProfileService.refreshProfileForSession()` |
+| Personal QR and copy profile link | Built-in QR dialog | `profile()` + Consumer-generated URL from `shareWebsite` | N/A, display-only | Client config + safe profile projection |
+| Check/set Arkme ID once | Built-in ID dialog | `checkArkmeIdAvailability()`, `setArkmeIdOnce()` | `arkme_id_set` with human confirmation | `ProfileService.checkArkmeIdAvailability()` / `setArkmeIdOnce()` |
+| Phone bind/rebind | Built-in SMS dialog | `sendPhoneCode()`, `verifyPhoneCode()` | Blocked: human captcha and SMS code must not be model-driven | `AuthService.sendPhoneCode()` / `verifyPhoneCode()` |
+| WeChat bind/rebind | Status only, explicit unavailable feedback | Blocked until a Host OAuth bridge exists | Blocked until a Host OAuth bridge exists | Flutter AppBridge only today |
+
+UI structure:
+
+```text
+设置页
+  账户概览
+    头像 + 名称 + Arkme ID + Arkme ID 旁二维码图标入口
+  账户
+  账号信息
+    Arkme ID：当前 ID / 暂未获取到账号 ID -> 设置账号 ID 弹窗
+    手机号：脱敏号码 / 未绑定 -> 绑定或更换手机号弹窗
+    微信：绑定昵称 / 已绑定 / 未绑定 -> DSH OAuth 能力缺失反馈
+```
+
+Interaction flow:
+
+```text
+点击 Arkme ID -> 本地格式校验 -> Host 可用性校验 -> 人类确认 -> Host 写入 -> 刷新 profile -> 关闭弹窗
+点击 Arkme ID 旁二维码图标 -> 用 shareWebsite + arkmeId 生成二维码 -> 打开二维码弹窗 -> 复制链接 -> 状态反馈
+点击手机号 -> 极验验证 -> 发送短信 -> 输入验证码 -> Host 验证绑定 -> 刷新 auth/profile -> 关闭弹窗
+点击微信 -> 显示 Flutter AppBridge OAuth 缺失说明，不发起伪请求
+```
 
 `readImage(avatarRef)` resolves an opaque image reference returned by `profile()` or `listSources()`. Private chats expose one optional `avatarRef`. Groups expose the preferred additive `groupAvatar` presentation plus legacy `avatarRefs`: `groupAvatar.slots` preserves the server-selected order for up to five members, including safe phone-default or generic fallbacks when a real image is absent, while legacy `avatarRefs` contains only resolvable real images. `memberCount`, `strategy`, and `computedAtMillis` describe the snapshot without exposing member or session identities. The Provider refreshes an authorized public profile image before downloading it and returns bounded PNG/JPEG/WebP/GIF base64 bytes; signed URLs, STS credentials and bearer tokens never enter the browser contract. Consumers must use `imageDataUrl()` (or decode the payload themselves) instead of concatenating OSS URLs or fetching an avatar reference directly.
 
