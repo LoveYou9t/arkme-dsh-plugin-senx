@@ -228,6 +228,10 @@ export class DshRemoteHostChannelManager {
 
   private async handle(channel: ActiveChannel, payload: DshRemoteCipherEnvelope, metadata: DshRemoteTrustedEventMetadata): Promise<void> {
     if (this.channels.get(channel.binding.bindingRef) !== channel) return
+    // Realtime broadcasts every Channel event to every subscriber, including
+    // the publisher. Host key-init/confirmation/response echoes are transport
+    // evidence only and must never tear down the Host's own control channel.
+    if (metadata.senderRole === 'host') return
     if (metadata.targetHostLeaseGeneration !== channel.serviceLeaseGeneration || metadata.senderRole !== 'controller'
       || metadata.senderCredentialRef !== channel.binding.controllerCredentialRef
       || metadata.subjectRevision !== channel.binding.revision) {

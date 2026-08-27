@@ -103,6 +103,15 @@ describe('Host control Channel key lifecycle', () => {
     expect(firstInit).toMatchObject({ kind: 'host-key-init', channel_ref: claims.channel_ref, host_remote_auth_epoch: 3 })
     expect(manager.status(binding.bindingRef)?.ready).toBe(false)
 
+    // The real EventBus broadcasts a publisher's own event back to its
+    // subscription. A Host echo must not tear down the control channel.
+    realtime.onEvent?.(firstInit, {
+      senderRole: 'host', senderCredentialRef: claims.credential_ref,
+      authorizationRef: 'host-authorization-01', subjectRevision: 1, remoteAuthEpoch: 3,
+      acceptedAtMillis: nowMillis, targetHostLeaseGeneration: 9,
+    })
+    await vi.waitFor(() => { expect(manager.status(binding.bindingRef)).toBeDefined() })
+
     const controllerEphemeral = generateX25519Key()
     const transcript = dshRemoteControlAgreementTranscript({
       bindingRef: binding.bindingRef, bindingRevision: 1, runtimeRef: claims.runtime_ref, channelRef: claims.channel_ref,

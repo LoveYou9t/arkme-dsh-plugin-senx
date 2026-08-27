@@ -342,10 +342,30 @@ export class DshApiProxyAdapter {
     if (workspace === undefined || !workspace.available) throw new DshRemoteError('WORKSPACE_UNAVAILABLE', '工作目录已经删除或不可访问')
     const create = this.api.sessions?.create
     if (typeof create !== 'function') this.unsupported('session.create')
-    return unwrap(await create.call(this.api.sessions, {
+    const sessionId = stableSessionId(input.requestRef)
+    const created = unwrap(await create.call(this.api.sessions, {
       rpcId: input.dshRpcId,
-      payload: { workspaceId: input.workspaceId, sessionId: stableSessionId(input.requestRef) },
+      payload: { workspaceId: input.workspaceId, sessionId },
     }))
+    if (created.sessionId !== sessionId) {
+      throw new DshRemoteError('REMOTE_INVALID_RESPONSE', 'DSH 返回了与预分配值不一致的 SessionId')
+    }
+    return created
+  }
+
+  async reconcileCreatedSession(input: { workspaceId: string; requestRef: string }): Promise<{ sessionId: string } | undefined> {
+    const expected = stableSessionId(input.requestRef)
+    let cursor: string | undefined
+    do {
+      const page = await this.sessions({
+        workspaceId: input.workspaceId,
+        limit: DSH_REMOTE_MAX_PAGE_ITEMS,
+        ...(cursor === undefined ? {} : { cursor }),
+      })
+      if (page.items.some(item => item.sessionId === expected)) return { sessionId: expected }
+      cursor = page.nextCursor
+    } while (cursor !== undefined)
+    return undefined
   }
 
   async prompt(input: {

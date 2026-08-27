@@ -80,6 +80,22 @@ describe('public DSH ApiProxy remote adapter', () => {
     expect(first.sessionId).toMatch(/^[a-f0-9-]{36}$/)
   })
 
+  it('reconciles a created Session by its deterministic request identity', async () => {
+    const { api } = await fakeApi()
+    const adapter = new DshApiProxyAdapter(api)
+    const created = await adapter.createSession({ workspaceId: 'workspace-1', requestRef: 'request-1', dshRpcId: 'rpc-1' })
+    api.workspace!.list = async request => ok({
+      items: [{ workspaceId: 'workspace-1', path: process.cwd(), title: 'Project', sessionIds: [created.sessionId] }],
+    }, request.rpcId)
+    api.sessions!.list = async request => ok({ items: [{
+      sessionId: created.sessionId, updatedAt: 100, running: false, blank: true,
+    }] }, request.rpcId)
+    await expect(adapter.reconcileCreatedSession({ workspaceId: 'workspace-1', requestRef: 'request-1' }))
+      .resolves.toEqual({ sessionId: created.sessionId })
+    await expect(adapter.reconcileCreatedSession({ workspaceId: 'workspace-1', requestRef: 'other-request' }))
+      .resolves.toBeUndefined()
+  })
+
   it('forwards bounded text with explicit queue/steer and rejects attachments and slash commands first', async () => {
     const { api, prompt } = await fakeApi()
     const adapter = new DshApiProxyAdapter(api)

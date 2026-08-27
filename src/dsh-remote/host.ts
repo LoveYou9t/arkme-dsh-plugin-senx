@@ -179,11 +179,19 @@ export class ArkmeRemoteRealtimeHost implements DshRemoteHostFacade {
   async start(): Promise<void> {
     if (this.started) return
     this.started = true
-    this.stopTransportDisconnect = this.options.realtime.subscribeDisconnect(() => { this.handleTransportDisconnect() })
-    this.stopEvents = this.options.apiProxy.startEvents()
     if (!this.options.featureEnabled) { this.bump(); return }
-    await this.syncSession()
+    this.stopTransportDisconnect = this.options.realtime.subscribeDisconnect(() => { this.handleTransportDisconnect() })
+    await this.syncSessionSafely()
     this.scheduleSessionSync()
+  }
+
+  private async syncSessionSafely(): Promise<void> {
+    try {
+      await this.syncSession()
+    } catch (error) {
+      this.connectionError = asDshRemoteError(error)
+      this.bump()
+    }
   }
 
   private async syncSession(): Promise<void> {
@@ -209,7 +217,10 @@ export class ArkmeRemoteRealtimeHost implements DshRemoteHostFacade {
     const state = await this.options.runtimeStore.account(accountId)
     this.bindings = state.bindings
     if (this.runtime.remoteEnabled && this.options.transportAvailable !== false) {
+      this.startApiProxyEvents()
       await this.connectHost().catch(error => { this.handleTransportDisconnect(error) })
+    } else {
+      this.connectionError = undefined
     }
     this.bump()
   }
@@ -218,7 +229,7 @@ export class ArkmeRemoteRealtimeHost implements DshRemoteHostFacade {
     if (!this.started || !this.options.featureEnabled || this.sessionTimer !== undefined) return
     this.sessionTimer = setTimeout(() => {
       this.sessionTimer = undefined
-      void this.syncSession().catch(() => undefined).finally(() => { this.scheduleSessionSync() })
+      void this.syncSessionSafely().finally(() => { this.scheduleSessionSync() })
     }, 2_000)
     this.sessionTimer.unref()
   }
@@ -226,8 +237,7 @@ export class ArkmeRemoteRealtimeHost implements DshRemoteHostFacade {
   async stop(): Promise<void> {
     if (!this.started) return
     this.started = false
-    this.stopEvents?.()
-    this.stopEvents = undefined
+    this.stopApiProxyEvents()
     this.stopTransportDisconnect?.()
     this.stopTransportDisconnect = undefined
     if (this.sessionTimer !== undefined) clearTimeout(this.sessionTimer)
@@ -239,6 +249,7 @@ export class ArkmeRemoteRealtimeHost implements DshRemoteHostFacade {
   }
 
   private async deactivateAccount(): Promise<void> {
+    this.stopApiProxyEvents()
     try { if (this.connected) await this.options.realtime.unregisterHost() } catch { /* Lease expiry remains the fallback. */ }
     await this.channelManager?.closeAll()
     this.channelManager = undefined
@@ -257,6 +268,15 @@ export class ArkmeRemoteRealtimeHost implements DshRemoteHostFacade {
     this.backendRuntimeRevision = 0
     this.bindings = []
     this.connectionError = undefined
+  }
+
+  private startApiProxyEvents(): void {
+    if (this.stopEvents === undefined) this.stopEvents = this.options.apiProxy.startEvents()
+  }
+
+  private stopApiProxyEvents(): void {
+    this.stopEvents?.()
+    this.stopEvents = undefined
   }
 
   private handleTransportDisconnect(error?: unknown): void {
@@ -317,6 +337,7 @@ export class ArkmeRemoteRealtimeHost implements DshRemoteHostFacade {
     const accountId = this.accountId!
     if (!enabled) {
       try { if (this.connected) await this.options.realtime.unregisterHost() } finally {
+        this.stopApiProxyEvents()
         await this.channelManager?.closeAll()
         this.channelManager = undefined
         await this.options.realtime.disconnect()
@@ -332,6 +353,7 @@ export class ArkmeRemoteRealtimeHost implements DshRemoteHostFacade {
       return this.getStatus()
     }
     this.runtime = await this.options.runtimeStore.setRemoteEnabled(accountId, this.options.profileRef, true)
+    this.startApiProxyEvents()
     try { await this.connectHost() }
     catch (error) { this.handleTransportDisconnect(error); throw error }
     this.bump()
@@ -860,9 +882,24 @@ export class ArkmeRemoteRealtimeHost implements DshRemoteHostFacade {
     if (this.ledger === undefined || this.accountId === undefined) return
     for (const entry of this.ledger.unsettledForReconciliation(this.accountId, this.now())) {
       const argumentsValue = entry.payload.arguments
+      const argumentsRecord = argumentsValue !== null && typeof argumentsValue === 'object' && !Array.isArray(argumentsValue)
+        ? argumentsValue as Record<string, unknown> : undefined
       const sessionId = argumentsValue !== null && typeof argumentsValue === 'object' && typeof (argumentsValue as Record<string, unknown>).session_ref === 'string'
         ? (argumentsValue as Record<string, unknown>).session_ref as string : undefined
       let proven = false
+      let recoveredValue: Record<string, unknown> = { recovered: true, dshRpcId: entry.dshRpcId }
+      if (entry.operation === 'session.create' && typeof argumentsRecord?.workspace_ref === 'string') {
+        try {
+          const created = await this.options.apiProxy.reconcileCreatedSession({
+            workspaceId: argumentsRecord.workspace_ref,
+            requestRef: entry.requestRef,
+          })
+          if (created !== undefined) {
+            proven = true
+            recoveredValue = { recovered: true, sessionId: created.sessionId }
+          }
+        } catch { /* An unavailable list cannot prove a safe result. */ }
+      }
       if (sessionId !== undefined) {
         try {
           const history = await this.options.apiProxy.history({ sessionId, limit: 50 })
@@ -870,7 +907,7 @@ export class ArkmeRemoteRealtimeHost implements DshRemoteHostFacade {
         } catch { /* Absence or unavailable history cannot prove a safe retry. */ }
       }
       const identity = { accountId: entry.accountId, bindingRef: entry.bindingRef, runtimeRef: entry.runtimeRef, requestRef: entry.requestRef }
-      if (proven) this.ledger.complete(identity, { value: { recovered: true, dshRpcId: entry.dshRpcId } })
+      if (proven) this.ledger.complete(identity, { value: recoveredValue })
       else this.ledger.markOutcomeUnknown(identity, 'DSH history did not prove the accepted result after Host recovery')
     }
   }

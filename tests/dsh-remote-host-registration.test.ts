@@ -22,6 +22,31 @@ class MemorySecrets implements ArkmeSecureValueStore {
 afterEach(() => { vi.useRealTimers() })
 
 describe('Host durable registration lifecycle', () => {
+  it('does not subscribe to DSH events while the global feature or local Runtime switch is off', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'arkme remote disabled '))
+    const mux = vi.fn(async function* () { yield* [] })
+    const base = {
+      environment: 'test' as const, profileRef: 'web', hostClientRef: 'host-client-test',
+      readSession: async () => ({ userId: 42, clientId: 9 }),
+      credentialBroker: new DesktopCredentialBroker(new MemorySecrets()), runtimeStore: new DshRemoteRuntimeStore(directory),
+      controlPlane: {} as DshRemoteControlPlane,
+      realtime: { subscribeDisconnect: () => () => undefined, disconnect: async () => undefined } as unknown as DshRemoteRealtimeTransport,
+      grantSigningKeys: { test: 'A'.repeat(43) },
+      ledgerForAccount: () => new DshRemoteCommandLedger(join(directory, 'ledger'), Buffer.alloc(32, 9)),
+      apiProxy: new DshApiProxyAdapter({ events: { mux } }),
+    }
+    const disabled = new ArkmeRemoteRealtimeHost({ ...base, featureEnabled: false })
+    await disabled.start()
+    expect(mux).not.toHaveBeenCalled()
+    await disabled.stop()
+
+    const localOff = new ArkmeRemoteRealtimeHost({ ...base, featureEnabled: true })
+    await localOff.start()
+    expect(localOff.getStatus().enabled).toBe(false)
+    expect(mux).not.toHaveBeenCalled()
+    await localOff.stop()
+  })
+
   it('uses the exact Backend device -> desktop -> runtime -> policy wire before Realtime registration', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'arkme remote registration '))
     const calls: Array<{ name: string; value: Record<string, unknown> }> = []
