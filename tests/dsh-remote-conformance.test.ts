@@ -36,7 +36,7 @@ describe('canonical dsh.remote/v1 cross-language fixture', () => {
   it('pins the exact governance checksum', async () => {
     const { raw } = await fixture()
     expect(createHash('sha256').update(raw).digest('hex'))
-      .toBe('9b1f39baeefd7e59d81a34ae22e69b1055628b7893ec717308f9b81566137b2c')
+      .toBe('9d102dc2298c39e806bc8e20f340316adbc5511aa1ca0fce4903db04bb1ec6fb')
   })
 
   it('matches every checksum in the canonical manifest', async () => {

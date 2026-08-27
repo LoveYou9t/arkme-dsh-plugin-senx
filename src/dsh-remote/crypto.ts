@@ -22,7 +22,7 @@ import type {
 } from './types.js'
 
 const CROCKFORD_ALPHABET = '0123456789ABCDEFGHJKMNPQRSTVWXYZ'
-const CODE_PATTERN = /^[0-9A-HJKMNP-TV-Z]{20}$/
+const CODE_PATTERN = /^[0-9A-HJKMNP-TV-Z]{8}$/
 
 export function encodeBase64Url(value: Uint8Array | string): string {
   return Buffer.from(value).toString('base64url')
@@ -58,15 +58,15 @@ export function sha256(value: Uint8Array | string): Buffer {
 }
 
 export function generatePairingCode(random: (size: number) => Buffer = randomBytes): string {
-  const entropy = random(13)
-  if (entropy.length !== 13) throw new Error('pairing entropy source returned the wrong byte length')
+  const entropy = random(5)
+  if (entropy.length !== 5) throw new Error('pairing entropy source returned the wrong byte length')
   let accumulator = 0
   let bits = 0
   let result = ''
   for (const byte of entropy) {
     accumulator = (accumulator << 8) | byte
     bits += 8
-    while (bits >= 5 && result.length < 20) {
+    while (bits >= 5 && result.length < 8) {
       bits -= 5
       result += CROCKFORD_ALPHABET[(accumulator >>> bits) & 31]
       accumulator &= (1 << bits) - 1
@@ -78,7 +78,7 @@ export function generatePairingCode(random: (size: number) => Buffer = randomByt
 export function normalizePairingCode(value: string): string {
   const normalized = value.trim().toUpperCase().replace(/-/g, '')
   if (!CODE_PATTERN.test(normalized)) {
-    throw new DshRemoteError('REMOTE_REQUEST_INVALID', '配对码必须为 20 位 Crockford Base32')
+    throw new DshRemoteError('REMOTE_REQUEST_INVALID', '配对码必须为 8 位 Crockford Base32')
   }
   return normalized
 }

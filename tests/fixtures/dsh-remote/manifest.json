@@ -7,6 +7,6 @@
     "errors.json": "37544c35e818b014b137d09e6f883f302b316e283500dc498d9328c8074442bd",
     "pairing-ticket.schema.json": "b5893111bfd39013da4ae449ef3587c753ee247f95b726846213206f10314cec",
     "remote-envelope.schema.json": "280cad6102d5964b06b22ee57b7f46af3c577992630a67aa9ed35c7995f7a116",
-    "fixtures/protocol-v1.json": "9b1f39baeefd7e59d81a34ae22e69b1055628b7893ec717308f9b81566137b2c"
+    "fixtures/protocol-v1.json": "9d102dc2298c39e806bc8e20f340316adbc5511aa1ca0fce4903db04bb1ec6fb"
   }
 }

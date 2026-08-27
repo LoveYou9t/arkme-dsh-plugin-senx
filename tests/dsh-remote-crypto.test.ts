@@ -21,17 +21,17 @@ import {
 } from '../src/dsh-remote/crypto.js'
 
 describe('dsh.remote/v1 crypto contract', () => {
-  it('generates and normalizes the 100-bit Crockford pairing secret', () => {
+  it('generates and normalizes the 40-bit Crockford pairing secret', () => {
     const code = generatePairingCode(size => Buffer.alloc(size, 0xab))
-    expect(code).toMatch(/^[0-9A-HJKMNP-TV-Z]{20}$/)
-    expect(normalizePairingCode(`${code.slice(0, 5)}-${code.slice(5, 10)}-${code.slice(10)}`)).toBe(code)
+    expect(code).toMatch(/^[0-9A-HJKMNP-TV-Z]{8}$/)
+    expect(normalizePairingCode(`${code.slice(0, 4)}-${code.slice(4)}`)).toBe(code)
     expect(pairingLocator(code)).toMatch(/^[a-f0-9]{10}$/)
-    expect(pairingLocator('0123-4567-89AB-CDEF-GHJK')).toBe('a6b239e799')
+    expect(pairingLocator('0123-ABCD')).toBe('5c01ba5fc2')
     for (const ambiguous of ['I', 'L', 'O', 'U']) {
-      expect(() => normalizePairingCode(`0123456789ABCDEFGH${ambiguous}K`)).toThrow(/Crockford/)
+      expect(() => normalizePairingCode(`0123ABC${ambiguous}`)).toThrow(/Crockford/)
     }
-    expect(() => normalizePairingCode('0123456789 ABCDEFGHJK')).toThrow(/Crockford/)
-    expect(() => normalizePairingCode('1234')).toThrow(/20/)
+    expect(() => normalizePairingCode('0123 ABCD')).toThrow(/Crockford/)
+    expect(() => normalizePairingCode('1234')).toThrow(/8/)
   })
 
   it('keeps canonical transcripts stable across object insertion order', () => {
@@ -55,7 +55,7 @@ describe('dsh.remote/v1 crypto contract', () => {
     const controllerSecret = deriveX25519(controller.privateJwk, host.publicKey)
     expect(hostSecret).toEqual(controllerSecret)
     const transcript = 'pairing-transcript'
-    const psk = pairingPsk('0123456789ABCDEFGHJK')
+    const psk = pairingPsk('0123ABCD')
     const hostKeys = deriveDirectionalKeys(hostSecret, psk, transcript)
     const controllerKeys = deriveDirectionalKeys(controllerSecret, psk, transcript)
     expect(hostKeys).toEqual(controllerKeys)

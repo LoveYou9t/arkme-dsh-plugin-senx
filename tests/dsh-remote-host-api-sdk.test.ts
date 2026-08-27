@@ -16,7 +16,7 @@ function remoteHost(): DshRemoteHostFacade {
     getStatus: vi.fn(() => status), setEnabled: vi.fn(async enabled => ({ ...status, enabled })),
     createPairingAttempt: vi.fn(async () => ({
       pairingRef: 'pairing-test-01', pairingChannelRef: 'channel-test-01', qrPayload: '{}',
-      pairingCode: '0123-4567-89AB-CDEF-GHJK', hostKeyFingerprint: 'fingerprint',
+      pairingCode: '0123-ABCD', hostKeyFingerprint: 'fingerprint',
       expiresAtMillis: 10_000, runtimeRef: 'runtime-test-01',
     })),
     cancelPairingAttempt: vi.fn(async () => undefined), listBindings: vi.fn(async () => []),
