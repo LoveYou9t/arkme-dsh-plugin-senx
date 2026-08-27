@@ -103,6 +103,7 @@ export interface Config {
   openclawProfile: string
   shareWebsite: string
   dshRemoteFeatureEnabled: boolean
+  dshRemoteRealtimeBaseUrl: string
   dshRemoteGrantSigningKeys: string
 }
 
@@ -151,6 +152,7 @@ export const Config: Schema<Config> = Schema.object({
   openclawProfile: Schema.string().default('dev'),
   shareWebsite: Schema.string().default(ARKME_DEFAULT_SHARE_WEBSITE),
   dshRemoteFeatureEnabled: Schema.boolean().default(false),
+  dshRemoteRealtimeBaseUrl: Schema.string().default(''),
   dshRemoteGrantSigningKeys: Schema.string().default('{}'),
 })
 
@@ -409,7 +411,7 @@ export function apply(ctx: Context, config: Config): void {
     const injectedSocketFactory = apiCtx.get('arkmeRemoteSocketFactory') as ArkmeRemoteAuthenticatedSocketFactory | undefined
     const authenticatedSocketFactory: ArkmeRemoteAuthenticatedSocketFactory = injectedSocketFactory
       ?? (input => createDefaultDshRemoteSocket({
-        authBaseUrl: config.authBaseUrl,
+        realtimeBaseUrl: config.dshRemoteRealtimeBaseUrl,
         accessToken: input.accessToken,
         signal: input.signal,
       }))
@@ -593,6 +595,7 @@ function validateConfig(ctx: Context, config: Config): void {
       config.relationBaseUrl,
       config.intelligentBaseUrl,
       config.audioBaseUrl,
+      ...(config.dshRemoteFeatureEnabled ? [config.dshRemoteRealtimeBaseUrl] : []),
     ].filter(origin => new URL(origin).hostname.endsWith('.senguo.me'))
     if (testDefaults.length > 0) {
       throw new Error('dsh-arkme: production environment must explicitly configure every service origin')
@@ -612,6 +615,9 @@ function validateConfig(ctx: Context, config: Config): void {
   if (!/^[A-Za-z0-9_-]{1,64}$/.test(config.openclawProfile)) {
     throw new Error('dsh-arkme: openclawProfile must be a fixed profile name')
   }
+  if (config.dshRemoteFeatureEnabled && config.dshRemoteRealtimeBaseUrl.trim() === '') {
+    throw new Error('dsh-arkme: enabled DSH remote requires dshRemoteRealtimeBaseUrl')
+  }
   for (const [label, raw] of [
     ['authBaseUrl', config.authBaseUrl],
     ['subjectBaseUrl', config.subjectBaseUrl],
@@ -626,6 +632,9 @@ function validateConfig(ctx: Context, config: Config): void {
     ['intelligentBaseUrl', config.intelligentBaseUrl],
     ['audioBaseUrl', config.audioBaseUrl],
     ['shareWebsite', config.shareWebsite],
+    ...(config.dshRemoteFeatureEnabled
+      ? [['dshRemoteRealtimeBaseUrl', config.dshRemoteRealtimeBaseUrl] as const]
+      : []),
   ] as const) {
     const url = new URL(raw)
     if (url.protocol !== 'https:' || url.username !== '' || url.password !== '' || url.pathname !== '/') {
