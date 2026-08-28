@@ -382,8 +382,8 @@ describe('ArkmeBotConversationSurface business gates', () => {
     expect(pendingMarkup.indexOf('已确认写入')).toBeLessThan(pendingMarkup.indexOf('稍后的回复'))
 
     await act(async () => { arkmeUi.recordChanged(); await Promise.resolve() })
-    const rows = renderer!.root.findAll(node => node.type === 'div' && node.children.includes('已确认写入'))
-    expect(rows).toHaveLength(1)
+    const finalMarkup = JSON.stringify(renderer!.toJSON())
+    expect(finalMarkup.match(/已确认写入/g)).toHaveLength(1)
   })
 
   it('keeps distinct server messages that share content and timestamp', async () => {

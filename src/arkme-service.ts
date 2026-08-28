@@ -523,37 +523,23 @@ export class ArkmeService {
     await this.bot.deleteManagedBot(botRef, confirmationName, options)
   }
 
-  async botNotificationPreference(botRef: string, options: { signal?: AbortSignal } = {}): Promise<ArkmeBotNotificationPreference> {
-    return await this.botConversation.notificationPreference(botRef, options)
-  }
+  async botNotificationPreference(botRef: string, options: { signal?: AbortSignal } = {}): Promise<ArkmeBotNotificationPreference> { return await this.botConversation.notificationPreference(botRef, options) }
 
-  async updateBotNotificationPreference(botRef: string, muted: boolean, options: { signal?: AbortSignal } = {}): Promise<ArkmeBotNotificationPreference> {
-    return await this.botConversation.updateNotificationPreference(botRef, muted, options)
-  }
+  async updateBotNotificationPreference(botRef: string, muted: boolean, options: { signal?: AbortSignal } = {}): Promise<ArkmeBotNotificationPreference> { return await this.botConversation.updateNotificationPreference(botRef, muted, options) }
 
   async openBotChat(botRef: string, options: { signal?: AbortSignal } = {}): Promise<ArkmeSourceItem> {
     return await this.bot.openBotChat(botRef, options)
   }
 
-  async listBotPrivateChatDirectory(options: { signal?: AbortSignal } = {}) {
-    return await this.botConversation.directory(options)
-  }
+  async listBotPrivateChatDirectory(options: { signal?: AbortSignal } = {}) { return await this.botConversation.directory(options) }
 
-  async openBotPrivateChat(botRef: string, options: { signal?: AbortSignal } = {}) {
-    return await this.botConversation.open(botRef, options)
-  }
+  async openBotPrivateChat(botRef: string, options: { signal?: AbortSignal } = {}) { return await this.botConversation.open(botRef, options) }
 
-  async refreshBotPrivateChat(botRef: string, options: { signal?: AbortSignal } = {}) {
-    return await this.botConversation.refresh(botRef, options)
-  }
+  async refreshBotPrivateChat(botRef: string, options: { signal?: AbortSignal } = {}) { return await this.botConversation.refresh(botRef, options) }
 
-  async sendBotPrivateChatMessage(botRef: string, content: string, options: { signal?: AbortSignal } = {}) {
-    return await this.botConversation.send(botRef, content, options)
-  }
+  async sendBotPrivateChatMessage(botRef: string, content: string, options: { signal?: AbortSignal } = {}) { return await this.botConversation.send(botRef, content, options) }
 
-  async markBotPrivateChatRead(botRef: string, sequence: number, options: { signal?: AbortSignal } = {}) {
-    return await this.botConversation.markRead(botRef, sequence, options)
-  }
+  async markBotPrivateChatRead(botRef: string, sequence: number, options: { signal?: AbortSignal } = {}) { return await this.botConversation.markRead(botRef, sequence, options) }
 
   async listGroupBots(
     groupSourceRef: string,
