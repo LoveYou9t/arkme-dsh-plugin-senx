@@ -4665,12 +4665,49 @@ describe('ArkmeService', () => {
             {
               moment_id: 'moment-incoming-secret', start_at: 1_785_999_000_000, end_at: 1_785_999_060_000,
               time_range_text: '09:40 - 09:41', title: '对方共享的录音', summary: '对方共享的摘要',
-              summary_status: 2, transcript: '对方共享的原文', transcript_available: true,
-              is_shared_by_other: true,
+              summary_status: 2, transcript_available: false,
+              is_shared_by_other: true, shared_by_user_id: 20002,
+              chat_session_uid: 'chat-private-1', record_uid: 'record-incoming-secret',
+              record_owner_user_id: 20002, source_relation_uid: 'rel-incoming-secret',
+              shared_sequence: 17,
             },
           ],
           has_more: false,
           partial: false,
+        } })
+      }
+      if (url.endsWith('/api/v1/chats/records/detail')) {
+        expect(body).toEqual({
+          chat_session_uid: 'chat-private-1',
+          record_uid: 'record-incoming-secret',
+          record_owner_user_id: 20002,
+          rel_uid: 'rel-incoming-secret',
+          seq: 17,
+        })
+        return json({ code: 200, data: {
+          chat_session_uid: 'chat-private-1',
+          item: {
+            relation: {
+              chat_session_uid: 'chat-private-1',
+              record_uid: 'record-incoming-secret',
+              record_owner_user_id: 20002,
+              rel_uid: 'rel-incoming-secret',
+              seq: 17,
+            },
+            record: { status: 1, payload: { content_payload: {
+              render_kind: 'shared_recording_memory',
+              source_digest: 'digest-incoming-secret',
+              shared_by_user_id: 20002,
+              shared_at: 1_785_999_000_000,
+              display_at: 1_785_999_000_000,
+              end_at: 1_785_999_060_000,
+              time_range_text: '09:40 - 09:41',
+              title: '对方共享的录音',
+              summary: '对方共享的摘要',
+              transcript: '对方共享的完整原文',
+              participants: [{ ref_user_id: 20002, display_name: '小林', role: 1 }],
+            } } },
+          },
         } })
       }
       throw new Error(`unexpected ${url}`)
@@ -4685,15 +4722,25 @@ describe('ArkmeService', () => {
       state: 'success', legacyTimeIndexFallback: true, timeIndexComplete: false,
       items: [
         { title: '自己的录音', isSharedByOther: false, transcript: '自己的原文' },
-        { title: '对方共享的录音', isSharedByOther: true, transcript: '对方共享的原文' },
+        { title: '对方共享的录音', isSharedByOther: true, transcriptAvailable: false },
       ],
     })
     const ownerRef = firstPage.items[0]!.recordingRef
     const incomingRef = firstPage.items[1]!.recordingRef
+    const incomingDetailRef = firstPage.items[1]!.sharedRecordingDetailRef
     expect(ownerRef).toMatch(/^arkme-related-recording-v1\.[A-Za-z0-9_-]+$/)
     expect(incomingRef).toMatch(/^arkme-related-recording-v1\.[A-Za-z0-9_-]+$/)
+    expect(firstPage.items[0]!.sharedRecordingDetailRef).toBeUndefined()
+    expect(incomingDetailRef).toMatch(/^arkme-shared-recording-detail-v1\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/)
     expect(ownerRef).not.toContain('moment-owner-secret')
     expect(incomingRef).not.toContain('moment-incoming-secret')
+    expect(incomingDetailRef).not.toContain('record-incoming-secret')
+    expect(incomingDetailRef).not.toContain('rel-incoming-secret')
+
+    await expect(service.sharedRecordingDetail(incomingDetailRef!)).resolves.toMatchObject({
+      title: '对方共享的录音',
+      transcript: '对方共享的完整原文',
+    })
 
     const repeatedPage = await service.relatedRecordings(sourceRef)
     expect(repeatedPage.items.map(item => item.recordingRef)).toEqual([ownerRef, incomingRef])

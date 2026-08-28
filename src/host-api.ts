@@ -1115,6 +1115,10 @@ export async function dispatchArkmeHostOperation(
       stringParam(params, 'recordUid'),
       requestSignal === undefined ? {} : { signal: requestSignal },
     )
+    case 'source.shared-recording-detail': return await service.sharedRecordingDetail(
+      stringParam(params, 'detailRef'),
+      requestSignal === undefined ? {} : { signal: requestSignal },
+    )
     case 'source.forward-messages': return await service.forwardSourceMessages(
       stringParam(params, 'sourceRef'),
       messageActionRefsParam(params),

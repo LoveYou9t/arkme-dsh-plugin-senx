@@ -45,6 +45,8 @@ import type {
   ArkmeSourceItem,
   ArkmeSourceReadResult,
   ArkmeSourceSendResult,
+  ArkmeSharedRecordingParticipant,
+  ArkmeSharedRecordingPreview,
   ArkmeTimelineCursor,
   ArkmeTimelineItem,
   ArkmeTimelinePage,
@@ -93,6 +95,16 @@ interface ArkmeMessageActionRefPayload {
   voiceCount: number
   fileCount: number
   fileNames: string[]
+}
+
+interface ArkmeSharedRecordingDetailRefPayload {
+  version: 1
+  viewerUserId: number
+  chatSessionUid: string
+  relationUid: string
+  recordOwnerUserId: number
+  recordUid: string
+  sequence: number
 }
 
 interface ArkmeChatMemberRefPayload {
@@ -2713,6 +2725,7 @@ export class ChatService {
       chatSessionUid: string,
     ): Promise<ArkmeTimelineItem[]> {
       const items: ArkmeTimelineItem[] = []
+      const signingKey = await this.runtime.stateStore.uniqueCode()
       for (const raw of listValue(data.items)) {
         const item = objectValue(raw)
         const relation = objectValue(item.relation)
@@ -2721,9 +2734,24 @@ export class ChatService {
         const uid = stringValue(relation.record_uid ?? payload.record_uid).trim()
         if (uid === '') continue
         const senderUserId = numberValue(relation.sender_user_id)
+        const relationUid = stringValue(relation.rel_uid ?? relation.relUid).trim()
         const aiPolish = this.aiPolish.timelineAiPolish(record, payload)
         const sendAtMillis = numberValue(relation.attach_at ?? payload.send_at)
         const forwardRecords = await this.chatForwardRecordsPreview(item, session.userId, sendAtMillis)
+        const sharedRecording = this.withSharedRecordingDetailRef(this.chatSharedRecordingPreview(item), {
+          viewerUserId: session.userId,
+          chatSessionUid,
+          relationUid,
+          recordOwnerUserId: integerLikeValue(
+            record.record_owner_user_id ?? record.recordOwnerUserId
+            ?? payload.record_owner_user_id ?? payload.recordOwnerUserId
+            ?? relation.record_owner_user_id ?? relation.recordOwnerUserId,
+          ),
+          recordUid: uid,
+          senderUserId: integerLikeValue(relation.sender_user_id),
+          sequence: integerLikeValue(relation.seq),
+          signingKey,
+        })
         const rawAgentSource = timelineAgentSource(relation, record, payload)
         const agentSource = senderUserId === session.userId
           ? this.arko.currentUserAgentSourceFallback(session.userId, rawAgentSource)
@@ -2747,6 +2775,7 @@ export class ChatService {
           ...(numberValue(record.version ?? payload.version) > 0 ? { recordVersion: numberValue(record.version ?? payload.version) } : {}),
           ...(aiPolish === undefined ? {} : { aiPolish }),
           ...(forwardRecords === undefined ? {} : { forwardRecords }),
+          ...(sharedRecording === undefined ? {} : { sharedRecording }),
           displayKind: numberValue(payload.display_kind),
           contentBlocks,
         })
@@ -2860,6 +2889,267 @@ export class ChatService {
         ...(truncated ? { truncated: true } : {}),
       }
     }
+
+  chatSharedRecordingPreview(raw: unknown): ArkmeTimelineItem['sharedRecording'] | undefined {
+    const contentPayload = this.media.recordContentPayload(raw)
+    const direct = this.sharedRecordingPreviewFromPayload(contentPayload)
+    if (direct !== undefined) return direct
+
+    const root = objectValue(raw)
+    const relation = objectValue(root.relation)
+    const relationPayload = parsedObject(
+      relation.render_content_payload ?? relation.renderContentPayload
+        ?? root.render_content_payload ?? root.renderContentPayload,
+    )
+    const relationDirect = this.sharedRecordingPreviewFromPayload(relationPayload)
+    if (relationDirect !== undefined) return relationDirect
+    const relationRenderKind = stringValue(relationPayload.render_kind ?? relationPayload.renderKind).trim()
+    if (relationRenderKind !== 'shared_recording_memory') return undefined
+
+    const record = objectValue(root.record)
+    const recordPayload = parsedObject(record.payload)
+    const recordPayloadContent = parsedObject(recordPayload.content_payload ?? recordPayload.contentPayload)
+    const recordContentPayload = parsedObject(record.content_payload ?? record.contentPayload)
+    const rootPayload = parsedObject(root.payload)
+    const rootContentPayload = parsedObject(root.content_payload ?? root.contentPayload)
+    const candidates = [
+      contentPayload,
+      recordPayload,
+      recordPayloadContent,
+      recordContentPayload,
+      rootPayload,
+      rootContentPayload,
+    ]
+    for (const candidate of candidates) {
+      const body = objectValue(candidate.shared_recording ?? candidate.sharedRecording)
+      const payload = Object.keys(body).length === 0 ? candidate : body
+      if (!this.sharedRecordingSourceDigestCompatible(payload, relationPayload)) continue
+      const projection = this.sharedRecordingPreviewFromPayload({
+        ...payload,
+        ...relationPayload,
+        render_kind: 'shared_recording_memory',
+      })
+      if (projection !== undefined) return projection
+    }
+    return undefined
+  }
+
+  private sharedRecordingParticipantsFromPayload(payload: Record<string, unknown>): ArkmeSharedRecordingParticipant[] {
+    const participants = listValue(payload.participants)
+    const mobileParticipants = listValue(payload.participant_ls ?? payload.participantLs)
+    const speakers = listValue(payload.speaker_ls ?? payload.speakerLs ?? payload.speakers)
+    const values = participants.length > 0 ? participants : mobileParticipants.length > 0 ? mobileParticipants : speakers
+    return values.flatMap(value => {
+      if (typeof value === 'string') {
+        const displayName = value.trim()
+        return displayName === '' ? [] : [{ displayName, role: 0 } satisfies ArkmeSharedRecordingParticipant]
+      }
+      const participant = objectValue(value)
+      const displayName = stringValue(
+        participant.display_name ?? participant.displayName
+        ?? participant.nick_name ?? participant.nickName
+        ?? participant.speaker_name ?? participant.speakerName
+        ?? participant.name,
+      ).trim()
+      if (displayName === '') return []
+      const refUserId = integerLikeValue(
+        participant.ref_user_id ?? participant.refUserId ?? participant.ref_usr_id ?? participant.refUsrId,
+      )
+      return [{
+        ...(refUserId > 0 ? { refUserId } : {}),
+        displayName,
+        role: Math.max(0, integerLikeValue(participant.role)),
+      } satisfies ArkmeSharedRecordingParticipant]
+    })
+  }
+
+  private sharedRecordingTranscriptFromPayload(payload: Record<string, unknown>): string {
+    const direct = stringValue(
+      payload.transcript ?? payload.transcript_text ?? payload.transcriptText
+      ?? payload.original_text ?? payload.originalText,
+    ).trim()
+    if (direct !== '') return direct
+    for (const key of ['transcript_ls', 'transcriptLs', 'transcript_segments', 'transcriptSegments', 'asr_ls', 'asrLs']) {
+      const lines = listValue(payload[key]).flatMap(value => {
+        if (typeof value === 'string') {
+          const line = value.trim()
+          return line === '' ? [] : [line]
+        }
+        const segment = objectValue(value)
+        const text = stringValue(
+          segment.text ?? segment.text_content ?? segment.textContent
+          ?? segment.transcript ?? segment.content,
+        ).trim()
+        if (text === '') return []
+        const speakerName = stringValue(
+          segment.speaker_name ?? segment.speakerName
+          ?? segment.speaker_label ?? segment.speakerLabel
+          ?? segment.nick_name ?? segment.nickName
+          ?? segment.display_name ?? segment.displayName,
+        ).trim()
+        return [speakerName === '' ? text : `${speakerName}：${text}`]
+      })
+      if (lines.length > 0) return lines.join('\n')
+    }
+    return ''
+  }
+
+  private sharedRecordingPreviewFromPayload(payload: Record<string, unknown>, depth = 0): ArkmeTimelineItem['sharedRecording'] | undefined {
+    const renderKind = stringValue(payload.render_kind ?? payload.renderKind).trim()
+    if (renderKind === 'shared_recording_memory') {
+      const sourceDigest = stringValue(payload.source_digest ?? payload.sourceDigest).trim()
+      const title = stringValue(payload.title ?? payload.orig_name ?? payload.origName).trim()
+      const summary = stringValue(
+        payload.summary ?? payload.summary_text ?? payload.summaryText ?? payload.content_summary ?? payload.contentSummary,
+      ).trim()
+      const displayAtMillis = integerLikeValue(payload.display_at ?? payload.displayAt)
+      if (sourceDigest === '' || title === '' || summary === '' || displayAtMillis <= 0) return undefined
+      const transcript = this.sharedRecordingTranscriptFromPayload(payload)
+      return {
+        sourceDigest,
+        sharedByUserId: Math.max(0, integerLikeValue(payload.shared_by_user_id ?? payload.sharedByUserId)),
+        sharedAtMillis: Math.max(0, integerLikeValue(payload.shared_at ?? payload.sharedAt)),
+        displayAtMillis,
+        endAtMillis: Math.max(0, integerLikeValue(payload.end_at ?? payload.endAt)),
+        timeRangeText: stringValue(payload.time_range_text ?? payload.timeRangeText).trim(),
+        title,
+        summary,
+        ...(transcript === '' ? {} : { transcript }),
+        transcriptAvailable: transcript !== '',
+        participants: this.sharedRecordingParticipantsFromPayload(payload),
+      }
+    }
+    if (renderKind !== '' || depth >= 4) return undefined
+    for (const key of [
+      'shared_recording', 'sharedRecording',
+      'content_payload', 'contentPayload',
+      'record_payload', 'recordPayload',
+      'fallback_content_payload', 'fallbackContentPayload',
+      'payload', 'extra',
+    ]) {
+      const nested = parsedObject(payload[key])
+      if (Object.keys(nested).length === 0) continue
+      const projection = this.sharedRecordingPreviewFromPayload(nested, depth + 1)
+      if (projection !== undefined) return projection
+    }
+    return undefined
+  }
+
+  private sharedRecordingSourceDigestCompatible(
+    left: Record<string, unknown>,
+    right: Record<string, unknown>,
+  ): boolean {
+    const leftDigest = stringValue(left.source_digest ?? left.sourceDigest).trim()
+    const rightDigest = stringValue(right.source_digest ?? right.sourceDigest).trim()
+    return leftDigest === '' || rightDigest === '' || leftDigest === rightDigest
+  }
+
+  private withSharedRecordingDetailRef(
+    recording: ArkmeSharedRecordingPreview | undefined,
+    input: {
+      viewerUserId: number
+      chatSessionUid: string
+      relationUid: string
+      recordOwnerUserId: number
+      recordUid: string
+      senderUserId: number
+      sequence: number
+      signingKey: string
+    },
+  ): ArkmeSharedRecordingPreview | undefined {
+    if (recording === undefined) return undefined
+    const recordUid = input.recordUid.trim()
+    const recordOwnerUserId = input.recordOwnerUserId > 0
+      ? input.recordOwnerUserId
+      : recording.sharedByUserId > 0
+        ? recording.sharedByUserId
+        : input.senderUserId
+    const chatSessionUid = input.chatSessionUid.trim()
+    if (chatSessionUid === '' || recordUid === '' || recordOwnerUserId <= 0) return recording
+    return {
+      ...recording,
+      detailRef: this.sealSharedRecordingDetailRef({
+        version: 1,
+        viewerUserId: input.viewerUserId,
+        chatSessionUid,
+        relationUid: input.relationUid.trim(),
+        recordOwnerUserId: Math.trunc(recordOwnerUserId),
+        recordUid,
+        sequence: Math.max(0, Math.trunc(input.sequence)),
+      }, input.signingKey),
+    }
+  }
+
+  private sealSharedRecordingDetailRef(payload: ArkmeSharedRecordingDetailRefPayload, signingKey: string): string {
+    const encoded = encodeOpaqueJson(payload)
+    const signature = createHmac('sha256', signingKey).update(encoded).digest('base64url')
+    return `arkme-shared-recording-detail-v1.${encoded}.${signature}`
+  }
+
+  private async openSharedRecordingDetailRef(
+    detailRef: string,
+    expectedViewerUserId: number,
+  ): Promise<ArkmeSharedRecordingDetailRefPayload> {
+    const parts = detailRef.trim().split('.')
+    if (parts.length !== 3 || parts[0] !== 'arkme-shared-recording-detail-v1') {
+      throw new ArkmePluginError('shared-recording-detail-ref-invalid', '共享录音详情引用无效，请刷新后重试', false)
+    }
+    const encoded = parts[1] ?? ''
+    const supplied = Buffer.from(parts[2] ?? '', 'base64url')
+    const expected = createHmac('sha256', await this.runtime.stateStore.uniqueCode()).update(encoded).digest()
+    if (supplied.length !== expected.length || !timingSafeEqual(supplied, expected)) {
+      throw new ArkmePluginError('shared-recording-detail-ref-invalid', '共享录音详情引用无效，请刷新后重试', false)
+    }
+    let parsed: Record<string, unknown>
+    try { parsed = objectValue(decodeOpaqueJson(encoded)) }
+    catch (error) {
+      throw new ArkmePluginError('shared-recording-detail-ref-invalid', '共享录音详情引用无效，请刷新后重试', false, 400, { cause: error })
+    }
+    const result: ArkmeSharedRecordingDetailRefPayload = {
+      version: 1,
+      viewerUserId: integerLikeValue(parsed.viewerUserId),
+      chatSessionUid: stringValue(parsed.chatSessionUid).trim(),
+      relationUid: stringValue(parsed.relationUid).trim(),
+      recordOwnerUserId: integerLikeValue(parsed.recordOwnerUserId),
+      recordUid: stringValue(parsed.recordUid).trim(),
+      sequence: Math.max(0, integerLikeValue(parsed.sequence)),
+    }
+    if (parsed.version !== 1 || result.viewerUserId !== expectedViewerUserId || result.chatSessionUid === ''
+      || result.recordUid === '' || result.recordOwnerUserId <= 0) {
+      throw new ArkmePluginError('shared-recording-detail-ref-invalid', '共享录音详情引用与当前账号不匹配，请刷新后重试', false, 403)
+    }
+    return result
+  }
+
+  async sharedRecordingDetail(
+    detailRef: string,
+    options: { signal?: AbortSignal } = {},
+  ): Promise<ArkmeSharedRecordingPreview> {
+    const session = await this.runtime.requireSession()
+    const reference = await this.openSharedRecordingDetailRef(detailRef, session.userId)
+    const data = await this.runtime.authenticatedChatPost<Record<string, unknown>>(
+      '/api/v1/chats/records/detail',
+      {
+        chat_session_uid: reference.chatSessionUid,
+        record_uid: reference.recordUid,
+        record_owner_user_id: reference.recordOwnerUserId,
+        ...(reference.relationUid === '' ? {} : { rel_uid: reference.relationUid }),
+        ...(reference.sequence <= 0 ? {} : { seq: reference.sequence }),
+      },
+      session,
+      options.signal,
+      {
+        lane: 'interactive-read',
+        key: `shared-recording-detail:${reference.chatSessionUid}:${reference.recordUid}:${String(reference.sequence)}`,
+        failureCooldownMs: 2_000,
+      },
+    )
+    const projection = this.chatSharedRecordingPreview(objectValue(data.item)) ?? this.chatSharedRecordingPreview(data)
+    if (projection === undefined) {
+      throw new ArkmePluginError('shared-recording-detail-unavailable', '共享录音详情暂时无法读取，请稍后重试', true, 502)
+    }
+    return { ...projection, detailRef }
+  }
   
   private async rawChatMembers(
     chatSessionUid: string,
@@ -2951,6 +3241,20 @@ export class ChatService {
       const aiPolish = this.aiPolish.timelineAiPolish(record, payload)
       const sendAtMillis = numberValue(relation.attach_at ?? payload.send_at)
       const forwardRecords = await this.chatForwardRecordsPreview(item, session.userId, sendAtMillis)
+      const sharedRecording = this.withSharedRecordingDetailRef(this.chatSharedRecordingPreview(item), {
+        viewerUserId: session.userId,
+        chatSessionUid: source.ownerRef,
+        relationUid,
+        recordOwnerUserId: integerLikeValue(
+          record.record_owner_user_id ?? record.recordOwnerUserId
+          ?? payload.record_owner_user_id ?? payload.recordOwnerUserId
+          ?? relation.record_owner_user_id ?? relation.recordOwnerUserId,
+        ),
+        recordUid: uid,
+        senderUserId,
+        sequence: integerLikeValue(relation.seq),
+        signingKey,
+      })
       const rawAgentSource = timelineAgentSource(relation, record, payload)
       const agentSource = senderUserId === session.userId
         ? this.arko.currentUserAgentSourceFallback(session.userId, rawAgentSource)
@@ -3001,6 +3305,7 @@ export class ChatService {
         editDurationMillis: numberValue(payload.edit_duration_millis),
         contentBlocks,
         ...(forwardRecords === undefined ? {} : { forwardRecords }),
+        ...(sharedRecording === undefined ? {} : { sharedRecording }),
       }) - 1
       if (senderUserId > 0) senderUserIdByIndex.set(itemIndex, senderUserId)
     }
