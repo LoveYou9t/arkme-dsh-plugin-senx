@@ -24,6 +24,12 @@ const preReleaseWorkflow = path.join(
   'workflows',
   'request-pre-release-build.yml',
 )
+const productionWorkflow = path.join(
+  repositoryRoot,
+  '.github',
+  'workflows',
+  'request-production-build.yml',
+)
 const codeOwnersFile = path.join(repositoryRoot, '.github', 'CODEOWNERS')
 const temporaryDirectories: string[] = []
 
@@ -173,36 +179,55 @@ describe('Arkme Backend 安全构建请求脚本', () => {
 })
 
 describe('Arkme Backend 构建请求工作流安全边界', () => {
-  it('仅在 npm 发布成功后使用 production Environment Secret', async () => {
-    const workflow = await readFile(releaseWorkflow, 'utf8')
-    const triggerJob = workflow.slice(
-      workflow.indexOf('  request-backend-build:'),
+  it('npm 发布沿用受信任的 pull_request OIDC 身份并从默认分支派发生产构建', async () => {
+    const release = await readFile(releaseWorkflow, 'utf8')
+    const production = await readFile(productionWorkflow, 'utf8')
+    const dispatchJob = release.slice(
+      release.indexOf('  dispatch-backend-build:'),
+      release.indexOf('  sync-dev:'),
     )
 
-    expect(workflow).toContain('pull_request_target:')
-    expect(workflow).not.toContain('  pull_request:\n')
+    expect(release).toContain('  pull_request:\n')
+    expect(release).not.toContain('pull_request_target:')
+    expect(dispatchJob).toContain('needs: [prepare, publish]')
+    expect(dispatchJob).toContain("if: needs.publish.result == 'success'")
+    expect(dispatchJob).toContain('contents: write')
+    expect(dispatchJob).toContain('arkme-plugin-release-published')
+    expect(dispatchJob).toContain('RELEASE_SHA: ${{ needs.prepare.outputs.release_sha }}')
+    expect(dispatchJob).toContain('VERSION: ${{ needs.publish.outputs.version }}')
+    expect(dispatchJob).not.toContain('secrets.')
+
+    expect(production).toContain('repository_dispatch:')
+    expect(production).toContain('types: [arkme-plugin-release-published]')
+    expect(production).toContain('environment: production')
+    expect(production).toContain('contents: read')
+    expect(production).toContain('ref: master')
+    expect(production).toContain('persist-credentials: false')
+    expect(production).toContain('git merge-base --is-ancestor "$RELEASE_SHA" origin/master')
+    expect(production).toContain('git rev-parse "${tag}^{commit}"')
+    expect(production).toContain('gh release view "$tag"')
+    expect(production).toContain('npm view "${package_name}@${VERSION}" version')
+    expect(production).toContain(
+      'ARKME_BACKEND_BASE_URL: ${{ secrets.ARKME_BACKEND_BASE_URL }}',
+    )
+    expect(production).toContain(
+      'ARKME_CI_TRIGGER_SECRET: ${{ secrets.ARKME_CI_TRIGGER_SECRET }}',
+    )
+    expect(production).not.toContain('vars.ARKME_BACKEND_BASE_URL')
+    expect(production).toContain(
+      'run: bash .github/scripts/request-arkme-build.sh',
+    )
+  })
+
+  it('生产构建工作流只检出默认分支的受信任脚本', async () => {
+    const workflow = await readFile(productionWorkflow, 'utf8')
+
     expect(workflow).toContain('ref: master')
     expect(workflow).not.toContain(
       'ref: ${{ github.event.pull_request.head.sha }}',
     )
-    expect(triggerJob).toContain('needs: [prepare, publish]')
-    expect(triggerJob).toContain(
-      'name: 调用 Backend 请求 Arkme 生产构建',
-    )
-    expect(triggerJob).toContain("if: needs.publish.result == 'success'")
-    expect(triggerJob).toContain('environment: production')
-    expect(triggerJob).toContain('contents: read')
-    expect(triggerJob).toContain('persist-credentials: false')
-    expect(triggerJob).toContain(
-      'ARKME_BACKEND_BASE_URL: ${{ secrets.ARKME_BACKEND_BASE_URL }}',
-    )
-    expect(triggerJob).toContain(
-      'ARKME_CI_TRIGGER_SECRET: ${{ secrets.ARKME_CI_TRIGGER_SECRET }}',
-    )
-    expect(triggerJob).not.toContain('vars.ARKME_BACKEND_BASE_URL')
-    expect(triggerJob).toContain(
-      'run: bash .github/scripts/request-arkme-build.sh',
-    )
+    expect(workflow).not.toContain('pull_request_target')
+    expect(workflow).not.toContain('github.event.pull_request.head')
   })
 
   it('仅在受保护的 pre-release 更新后使用测试服 Environment Secret', async () => {
