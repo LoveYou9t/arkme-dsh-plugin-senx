@@ -148,7 +148,9 @@ describe('Arkme rich content presentation', () => {
     expect(html).toContain('/arkme-self/api/media?ref=image-ref')
     expect(html).toContain('<video')
     expect(html).toContain('<audio')
-    expect(html).toContain('download="a.pdf"')
+    expect(html).toContain('data-arkme-file-card="file"')
+    expect(html).toContain('4 B · 未下载')
+    expect(html).not.toContain('download="a.pdf"')
     expect(html).toContain('data-arkme-long-article="preview"')
     expect(html).toContain('data-arkme-long-article-inner="true"')
     expect(html).toContain('aria-label="查看长文 长文标题"')
@@ -340,6 +342,16 @@ describe('Arkme rich content presentation', () => {
     />)
     expect(imageHtml).toContain('data-arkme-attachment-tile="image-preview"')
     expect(imageHtml).toContain('src="blob:clipboard-preview"')
+
+    const videoHtml = renderToStaticMarkup(<ArkmeAttachmentDraftTile
+      asset={{ fileAssetUid: 'video-asset', fileName: 'clip.mp4', mimeType: 'video/mp4', size: 8, fileKind: 3 }}
+      previewUrl="blob:video-preview"
+      onRemove={() => undefined}
+    />)
+    expect(videoHtml).toContain('data-arkme-attachment-tile="video-preview"')
+    expect(videoHtml).toContain('<video')
+    expect(videoHtml).toContain('src="blob:video-preview"')
+    expect(videoHtml).toContain('▶')
   })
 
   it('extracts clipboard images without consuming text-only clipboard content', () => {

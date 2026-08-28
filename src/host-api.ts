@@ -1,14 +1,13 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import { randomUUID } from 'node:crypto'
 import { ArkmePluginError, ArkmeService } from './arkme-service.js'
 import { isArkmeBotAvatarRef } from './bot-avatar-ref.js'
 import { ArkmePluginUpdateError, ArkmePluginUpdateManager } from './plugin-update.js'
 import { ArkmeOutgoingCallError, type ArkmeOutgoingCallFailureCode } from './outgoing-call-contract.js'
 import type {
   ArkmeAiVideoJobStatus, ArkmeArrangementListStatus, ArkmeArrangementMutationIntent, ArkmeBotProvider,
-  ArkmeBillingPaymentMethod, ArkmeConversationMemberRecordMode, ArkmeDirectorySectionKind,
-  ArkmeBotMentionInput, ArkmeFavoriteStickerAddInput, ArkmeFavoriteStickerManageAction,
-  ArkmeHumanMentionInput, ArkmeMessageReadReceiptQueryItem,
+  ArkmeBillingPaymentMethod, ArkmeBotMentionInput, ArkmeConversationMemberRecordMode,
+  ArkmeDirectorySectionKind, ArkmeFavoriteStickerAddInput, ArkmeFavoriteStickerManageAction,
+  ArkmeGroupAiPolishThreadMessage, ArkmeHumanMentionInput, ArkmeMessageReadReceiptQueryItem,
   ArkmePluginRequest, ArkmePluginResponse, ArkmeRecordCursor,
   ArkmeRichSendInput, ArkmeSearchSceneKind, ArkmeSourceDirectory, ArkmeTimelineCursor,
   ArkmeWorldPublishFileAsset,
@@ -22,9 +21,9 @@ import type { ArkmeExtensionCatalogItem, ArkmeExtensionCatalogPage, ArkmeExtensi
 import { effectiveExtensionPublisherRole } from './extensions/publisher-role.js'
 import { invokePersistentArkmeExtension } from './extensions/persistent-runtime.js'
 import { invokeArkmeBundle } from './extensions/bundle-runtime.js'
+import { ARKME_RUNTIME_INSTANCE_ID } from './runtime-instance.js'
 
 const MAX_REQUEST_BYTES = 128 * 1024
-const ARKME_HOST_INSTANCE_ID = randomUUID()
 
 function isLoopback(address: string | undefined): boolean {
   return address === '127.0.0.1' || address === '::1' || address === '::ffff:127.0.0.1'
@@ -252,6 +251,24 @@ function stringListParam(params: Record<string, unknown>, key: string): string[]
 
 function messageActionRefsParam(params: Record<string, unknown>): string[] {
   return stringListParam(params, 'actionRefs').map(value => value.trim()).filter(value => value !== '')
+}
+
+function aiPolishThreadMessagesParam(params: Record<string, unknown>): ArkmeGroupAiPolishThreadMessage[] {
+  if (!Array.isArray(params.threadMessages)) return []
+  return params.threadMessages.slice(-40).flatMap(raw => {
+    if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return []
+    const item = raw as Record<string, unknown>
+    const id = typeof item.id === 'string' ? item.id.trim() : ''
+    const role = item.role === 'ai' || item.role === 'user' ? item.role : undefined
+    const text = typeof item.text === 'string' ? item.text.trim().slice(0, 4_000) : ''
+    if (id === '' || role === undefined || text === '') return []
+    const ruleRef = typeof item.ruleRef === 'string' ? item.ruleRef.trim() : ''
+    return [{
+      id, role, text,
+      ...(item.isRule === true ? { isRule: true } : {}),
+      ...(ruleRef === '' ? {} : { ruleRef }),
+    }]
+  })
 }
 
 function optionalPositiveIntegerParam(params: Record<string, unknown>, key: string): number | undefined {
@@ -552,7 +569,7 @@ export function createArkmeHostApi(service: ArkmeService, options: ArkmeHostApiO
       }
       const request = await readRequest(req)
       const params = request.params ?? {}
-      if (['extensions.delete', 'extensions.reviews.create', 'extensions.audit.check', 'extensions.install.start', 'extensions.install.pause', 'extensions.install.resume', 'extensions.enabled.set', 'extensions.metadata.update', 'extensions.share.rotate', 'extensions.preview.delete', 'extensions.preview.reorder', 'extensions.uninstall', 'extensions.restart', 'extensions.client.failure', 'extensions.persistent.invoke', 'extensions.bundle.invoke', 'extensions.mine.publish']
+      if (['user.arkme-id.set', 'extensions.delete', 'extensions.reviews.create', 'extensions.audit.check', 'extensions.install.start', 'extensions.install.pause', 'extensions.install.resume', 'extensions.enabled.set', 'extensions.metadata.update', 'extensions.share.rotate', 'extensions.preview.delete', 'extensions.preview.reorder', 'extensions.uninstall', 'extensions.restart', 'extensions.client.failure', 'extensions.persistent.invoke', 'extensions.bundle.invoke', 'extensions.mine.publish']
         .includes(request.operation) && origin === undefined) {
         throw new ArkmePluginError('origin-required', '扩展变更必须从当前 DSH 页面发起', false, 403)
       }
@@ -601,7 +618,7 @@ export async function dispatchArkmeHostOperation(
 ): Promise<unknown> {
   switch (operation) {
     case 'provider.capabilities': return service.providerCapabilities()
-    case 'provider.instance': return { instanceId: ARKME_HOST_INSTANCE_ID }
+    case 'provider.instance': return { instanceId: ARKME_RUNTIME_INSTANCE_ID }
     case 'provider.state': return await service.providerState()
     case 'chat.realtime.state': return service.chatRealtimeState()
     case 'plugin.update.status': return await requireUpdateManager(updateManager).status()
@@ -868,6 +885,8 @@ export async function dispatchArkmeHostOperation(
     case 'records.retry': return await service.retryPending(stringParam(params, 'recordUid'))
     case 'user.profile': return await service.cachedProfile()
     case 'user.profile.refresh': return await service.refreshProfile()
+    case 'user.arkme-id.check': return await service.checkArkmeIdAvailability(stringParam(params, 'arkmeId'))
+    case 'user.arkme-id.set': return await service.setArkmeIdOnce(stringParam(params, 'arkmeId'))
     case 'image.read': {
       const image = await service.readImage(stringParam(params, 'imageRef'))
       return {
@@ -1130,6 +1149,14 @@ export async function dispatchArkmeHostOperation(
     case 'source.ai-polish.generate-rule': return await service.generateGroupAiPolishRuleForSource(
       stringParam(params, 'sourceRef'),
       stringParam(params, 'requirement'),
+      {
+        threadMessages: aiPolishThreadMessagesParam(params),
+        ...(stringParam(params, 'targetRuleRef').trim() === '' ? {} : { targetRuleRef: stringParam(params, 'targetRuleRef').trim() }),
+      },
+    )
+    case 'source.ai-polish.prepare-enable': return await service.prepareEnableGroupAiPolishRuleForSource(
+      stringParam(params, 'sourceRef'),
+      stringParam(params, 'ruleRef'),
     )
     case 'source.ai-polish.confirm-enable': return await service.confirmEnableGroupAiPolish(
       stringParam(params, 'confirmationRef'),
@@ -1198,6 +1225,21 @@ export async function dispatchArkmeHostOperation(
       stringParam(params, 'sourceRef'),
       stringParam(params, 'memberRef'),
     )
+    case 'files.capabilities': return service.fileCapabilities()
+    case 'files.local.list': return await service.fileList()
+    case 'files.local.open': return await service.fileOpenLocal(stringParam(params, 'fileRef'))
+    case 'files.local.remove': await service.fileRemove(stringParam(params, 'fileRef')); return { removed: true }
+    case 'files.search': return await service.fileSearch({ query: stringParam(params, 'query'), limit: numberParam(params, 'limit', 30), cursor: stringParam(params, 'cursor') })
+    case 'files.send.tasks': return await service.fileSendTasks(stringParam(params, 'sourceRef') || undefined)
+    case 'files.send.retry': return await service.fileSendRetry(stringParam(params, 'taskRef'))
+    case 'files.send.discard': return await service.fileSendDiscard(stringParam(params, 'taskRef'))
+    case 'files.send.reconcile': return await service.fileSendReconcile(stringParam(params, 'taskRef'))
+    case 'files.stage-bytes': return await service.fileStageBytes(stringParam(params, 'contentBase64'), { fileName: stringParam(params, 'fileName'), mimeType: stringParam(params, 'mimeType') || 'application/octet-stream' })
+    case 'files.receive': return await service.fileReceive(stringParam(params, 'mediaRef'), booleanParam(params, 'start'))
+    case 'files.send': return await service.fileSend({
+      sourceRef: stringParam(params, 'sourceRef'), recordUid: stringParam(params, 'recordUid'), relationUid: stringParam(params, 'relationUid'),
+      fileRefs: stringListParam(params, 'fileRefs'), content: richSendParam(params),
+    })
     case 'source.send-rich': return await service.sendSourceRich(
       stringParam(params, 'sourceRef'),
       richSendParam(params),

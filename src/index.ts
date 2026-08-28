@@ -18,7 +18,7 @@ import {
   type DshWebBootGraph,
 } from './harness-embed-route.js'
 import { createOutgoingCallAssetHandler } from './outgoing-call-assets.js'
-import { createArkmeMediaHandler, createArkmeUploadHandler } from './rich-media-routes.js'
+import { createArkmeMediaHandler, createArkmeUploadHandler, createArkmeLocalFileHandler } from './rich-media-routes.js'
 import { createArkmeVoiceprintEnrollmentHandler } from './voiceprint-routes.js'
 import { createArkmeSessionStore } from './keychain-store.js'
 import { ArkmeLocalDatabase } from './local-database.js'
@@ -146,10 +146,19 @@ export const Config: Schema<Config> = Schema.object({
 })
 
 export const name = 'dsh-arkme'
-export const inject = ['webServer', 'tools', 'systemPrompt', 'pluginInventory', 'clientModules']
+export const inject = ['webServer', 'tools', 'systemPrompt', 'pluginInventory', 'clientModules', 'apiProxy']
 
 interface DshClientModulesLike {
   graph(): DshWebBootGraph
+}
+
+interface DshApiProxyLike {
+  host: {
+    openPath(
+      request: { rpcId: string; payload: { path: string } },
+      signal: AbortSignal,
+    ): Promise<{ result: { ok: true; value: { opened: true } } | { ok: false; error: { message: string } } }>
+  }
 }
 
 export function readDshRuntimeVersion(dshBinPath: string): string | undefined {
@@ -199,7 +208,13 @@ export function apply(ctx: Context, config: Config): void {
   const localDatabase = new ArkmeLocalDatabase(stateDirectory, stateStore)
   const sessionStore = createArkmeSessionStore(`${config.keychainServicePrefix}.${config.environment}`)
   const pendingSessionStore = createArkmeSessionStore(`${config.keychainServicePrefix}.${config.environment}.pending-binding`)
-  const service = new ArkmeService(config, sessionStore, localDatabase, fetch, pendingSessionStore)
+  const service = new ArkmeService({ ...config, fileStateDirectory: join(stateDirectory, 'files') }, sessionStore, localDatabase, fetch, pendingSessionStore)
+  service.attachLocalFileOpener(async (path, signal) => {
+    const apiProxy = ctx.get('apiProxy') as DshApiProxyLike | undefined
+    if (apiProxy === undefined) throw new Error('当前 DSH 宿主未提供本机文件打开能力')
+    const response = await apiProxy.host.openPath({ rpcId: randomUUID(), payload: { path } }, signal)
+    if (!response.result.ok) throw new Error(response.result.error.message)
+  })
   const openClawStateDirectory = join(stateDirectory, 'openclaw')
   const openClawCli = createOpenClawCliAdapter({
     profile: config.openclawProfile,
@@ -371,6 +386,8 @@ export function apply(ctx: Context, config: Config): void {
     maxUploadBytes: config.maxUploadBytes,
   }
   const uploadHandler = createArkmeUploadHandler(service, richMediaOptions)
+  const stageHandler = createArkmeUploadHandler(service, richMediaOptions, 'stage')
+  const localFileHandler = createArkmeLocalFileHandler(service, richMediaOptions)
   const mediaHandler = createArkmeMediaHandler(service, richMediaOptions)
   const voiceprintEnrollmentHandler = createArkmeVoiceprintEnrollmentHandler(service, {
     expectedPort: ctx.webServer.port,
@@ -437,6 +454,8 @@ export function apply(ctx: Context, config: Config): void {
     path: `${config.routePath}/upload`,
     handler: uploadHandler,
   }), 'dsh-arkme: rich content upload route')
+  ctx.effect(() => ctx.webServer.register({ kind: 'exact', path: `${config.routePath}/files/stage`, handler: stageHandler }), 'dsh-arkme: local file preparation')
+  ctx.effect(() => ctx.webServer.register({ kind: 'exact', path: `${config.routePath}/files/local`, handler: localFileHandler }), 'dsh-arkme: authorized local file bytes')
   ctx.effect(() => ctx.webServer.register({
     kind: 'exact',
     path: `${config.routePath}/media`,

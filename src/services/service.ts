@@ -75,6 +75,7 @@ export interface ArkmeServiceConfig {
   richMediaRenderEnabled?: boolean
   richMediaSendEnabled?: boolean
   maxUploadBytes?: number
+  fileStateDirectory?: string
 }
 
 export type FetchLike = typeof fetch

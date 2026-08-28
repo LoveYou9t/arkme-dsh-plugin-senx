@@ -88,7 +88,7 @@ describe('ArkmeCallHistorySurface', () => {
   })
 
   it('builds the same profile-share URL contract used by the mobile client', () => {
-    expect(profileShareUrl('Falling 01')).toBe('https://jiwo.cc/Falling%2001?scene=profile_share')
+    expect(profileShareUrl('Falling 01')).toBe('https://jiwo.cc/Falling%2001')
     expect(profileQrDataUrl('Falling')).toMatch(/^data:image\/gif;base64,/)
   })
 

@@ -37,15 +37,62 @@ describe('core-only DeepSeek Harness iframe route', () => {
     expect(projected.rev).toMatch(/^[a-f0-9]{12}$/)
   })
 
-  it('fails closed when a retained client depends on a removed extension', () => {
+  it('removes optional profile clients that depend on removed extensions', () => {
     const value = graph()
     value.entries[2] = {
       ...value.entries[2]!,
       external: ['@arkme-local/weather/client'],
     }
 
-    expect(() => projectHarnessBootGraph(value, ['@arkme-local/weather']))
-      .toThrow('depends on removed package @arkme-local/weather')
+    const projected = projectHarnessBootGraph(value, ['@arkme-local/weather'])
+
+    expect(projected.entries.map(entry => entry.id)).toEqual([
+      '@deepseek-ai/dsh-client-modules',
+      '@deepseek-ai/dsh-client-runtime',
+    ])
+  })
+
+  it('removes profile clients that depend on Arkme even when extension-store does not list them', () => {
+    const value = graph()
+    value.entries.push(
+      {
+        id: 'jotmo-time-ledger',
+        url: '/time-ledger.js',
+        rev: 'time-ledger',
+        inject: ['@deepseek-ai/dsh-client-ui-slots', '@senguoyun/dsh-arkme'],
+      },
+      {
+        id: 'jotmo-time-ledger-panel',
+        url: '/time-ledger-panel.js',
+        rev: 'time-ledger-panel',
+        inject: ['jotmo-time-ledger'],
+      },
+      {
+        id: '@deepseek-ai/dsh-client-ui-slots',
+        url: '/slots.js',
+        rev: 'slots',
+      },
+    )
+
+    const projected = projectHarnessBootGraph(value, ['@arkme-local/weather'])
+
+    expect(projected.entries.map(entry => entry.id)).toEqual([
+      '@deepseek-ai/dsh-client-modules',
+      '@deepseek-ai/dsh-client-runtime',
+      '@deepseek-ai/dsh-core-ui',
+      '@deepseek-ai/dsh-client-ui-slots',
+    ])
+  })
+
+  it('fails closed when a required DSH boot client depends on a removed extension', () => {
+    const value = graph()
+    value.entries[1] = {
+      ...value.entries[1]!,
+      inject: ['@senguoyun/dsh-arkme'],
+    }
+
+    expect(() => projectHarnessBootGraph(value, []))
+      .toThrow('required package @deepseek-ai/dsh-client-runtime depends on removed package @senguoyun/dsh-arkme')
   })
 
   it('fails closed when either parser preload is missing', () => {

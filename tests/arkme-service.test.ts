@@ -949,6 +949,7 @@ describe('ArkmeService', () => {
       'https://chat.test/api/v1/chats/detail',
       'https://auth.test/api/v1/auth/get-user-info',
       'https://auth.test/api/v1/auth/get-public-users-by-ids',
+      'https://auth.test/api/v1/auth/get-public-users-by-ids',
       'https://webrtc.test/api/v1/trtc/credentials',
       'https://webrtc.test/api/v1/trtc/create-room',
     ])
@@ -1208,7 +1209,8 @@ describe('ArkmeService', () => {
           phone: '13800138000',
           email: 'test@example.com',
           has_bind_apple: true,
-          has_bind_wechat: false,
+          has_bind_wechat: true,
+          wechat_nick_name: '微信昵称',
           has_bind_google: true,
         },
       })
@@ -1224,7 +1226,8 @@ describe('ArkmeService', () => {
       canUpdateArkmeId: true,
       accountType: 1,
       createdAt: 123,
-      bindings: { apple: true, wechat: false, google: true },
+      bindings: { apple: true, wechat: true, google: true },
+      bindingNames: { wechat: '微信昵称' },
       contact: { phoneMasked: '138****8000', emailMasked: 't***@example.com' },
     })
     expect(JSON.stringify(snapshot)).not.toContain('完整真实姓名')
@@ -1249,9 +1252,9 @@ describe('ArkmeService', () => {
     expect(first).toMatchObject({ status: 'authenticated', userId: 10001 })
     expect(concurrent).toEqual(first)
     expect(provider).toMatchObject({ authStatus: 'authenticated', userId: 10001 })
-    expect(fetchImpl).toHaveBeenCalledOnce()
+    expect(fetchImpl).toHaveBeenCalledTimes(2)
     await expect(service.authStatus()).resolves.toEqual(first)
-    expect(fetchImpl).toHaveBeenCalledOnce()
+    expect(fetchImpl).toHaveBeenCalledTimes(2)
   })
 
   it('falls back to the legacy name slug when the Arkme ID is absent', async () => {
@@ -1320,12 +1323,13 @@ describe('ArkmeService', () => {
     })
     expect(calls.map(call => [call.method, new URL(call.url).pathname])).toEqual([
       ['GET', '/api/v1/auth/get-user-info'],
+      ['POST', '/api/v1/auth/get-public-users-by-ids'],
       ['POST', '/api/v1/auth/check-jotmo-id-available'],
       ['POST', '/api/v1/auth/update-jotmo-id'],
       ['GET', '/api/v1/auth/get-user-info'],
     ])
-    expect(calls[1]?.body).toEqual({ name: 'New_id-01', scene: 'user_update' })
-    expect(calls[2]?.body).toEqual({ name: 'New_id-01' })
+    expect(calls[2]?.body).toEqual({ name: 'New_id-01', scene: 'user_update' })
+    expect(calls[3]?.body).toEqual({ name: 'New_id-01' })
     expect(state.profile).toMatchObject({ arkmeId: 'New_id-01', canUpdateArkmeId: false })
   })
 
@@ -1348,7 +1352,7 @@ describe('ArkmeService', () => {
     await expect(service.setArkmeIdOnce('Current_01')).resolves.toMatchObject({
       arkmeId: 'Current_01', changed: false, canUpdate: true,
     })
-    expect(fetchImpl).toHaveBeenCalledOnce()
+    expect(fetchImpl).toHaveBeenCalledTimes(2)
   })
 
   it('rejects an Arkme ID change after the account has used its one-time update', async () => {
@@ -1370,7 +1374,7 @@ describe('ArkmeService', () => {
     await expect(service.setArkmeIdOnce('Lucis666')).rejects.toMatchObject({
       code: 'arkme-id-modify-limited', retryable: false, httpStatus: 409,
     })
-    expect(fetchImpl).toHaveBeenCalledOnce()
+    expect(fetchImpl).toHaveBeenCalledTimes(2)
   })
 
   it('aborts the one-time Arkme ID write if the signed-in account changes after profile refresh', async () => {
@@ -1397,7 +1401,7 @@ describe('ArkmeService', () => {
     await expect(service.setArkmeIdOnce('New_account')).rejects.toMatchObject({
       code: 'account-changed', retryable: false, httpStatus: 409,
     })
-    expect(fetchImpl).toHaveBeenCalledOnce()
+    expect(fetchImpl).toHaveBeenCalledTimes(2)
   })
 
   it('validates Arkme IDs locally and maps authoritative availability reasons', async () => {
@@ -1424,7 +1428,7 @@ describe('ArkmeService', () => {
     await expect(service.setArkmeIdOnce('Taken_01')).rejects.toMatchObject({
       code: 'arkme-id-taken', retryable: false, httpStatus: 409,
     })
-    expect(fetchImpl).toHaveBeenCalledTimes(3)
+    expect(fetchImpl).toHaveBeenCalledTimes(4)
   })
 
   it('reconciles an unknown update outcome by reading back the current Arkme ID', async () => {
@@ -1509,6 +1513,67 @@ describe('ArkmeService', () => {
     })
     expect(requests[1]?.authorization).toBeUndefined()
     expect(requests[1]?.url).not.toContain('test-access-key-secret')
+  })
+
+  it('resolves the current user remote profile avatar through its opaque reference', async () => {
+    const sessions = new MemorySessionStore()
+    sessions.session = { userId: 10001, accessToken: 'access', refreshToken: 'refresh' }
+    const state = new MemoryStateStore()
+    const avatarUrl = 'https://jotmo-userfiles-test.oss-cn-hangzhou.aliyuncs.com/avatar/self.png?x-oss-signature=own-avatar'
+    const png = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 4])
+    const service = new ArkmeService(config, sessions, state, async input => {
+      const url = String(input)
+      if (url.endsWith('/api/v1/auth/get-user-info')) return json({ code: 200, data: {
+        user_id: 10001, nick_name: '我', head_img: avatarUrl, name_slug: 'me', type: 1,
+      } })
+      if (url === avatarUrl) {
+        return new Response(png, {
+          status: 200,
+          headers: { 'Content-Type': 'image/png', 'Content-Length': String(png.byteLength) },
+        })
+      }
+      throw new Error(`unexpected ${url}`)
+    })
+
+    const snapshot = await service.refreshProfile()
+    const avatarRef = snapshot.profile!.avatarRef
+
+    expect(avatarRef).toMatch(/^arkme-profile-image-v1\./)
+    await expect(service.readImage(avatarRef)).resolves.toMatchObject({ mediaType: 'image/png', bytes: png.byteLength })
+  })
+
+  it('falls back to the signed-in user file asset avatar when no public avatar is available', async () => {
+    const sessions = new MemorySessionStore()
+    sessions.session = { userId: 10001, accessToken: 'access', refreshToken: 'refresh' }
+    const state = new MemoryStateStore()
+    const assetRef = 'file_asset://01a03bce-e704-7073-a083-94ec6362e53d'
+    const assetUrl = 'https://jotmo-userfiles-test.oss-cn-hangzhou.aliyuncs.com/avatar/self.png?x-oss-signature=asset-avatar'
+    const png = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 4])
+    const service = new ArkmeService(config, sessions, state, async (input, init) => {
+      const url = String(input)
+      if (url.endsWith('/api/v1/auth/get-user-info')) return json({ code: 200, data: {
+        user_id: 10001, nick_name: '我', head_img: assetRef, name_slug: 'me', type: 1,
+      } })
+      if (url.endsWith('/api/v1/auth/get-public-users-by-ids')) return json({ code: 200, data: {
+        items: [{ user_id: 10001, nick_name: '我', head_img: '' }],
+      } })
+      if (url.endsWith('/api/v1/files/assets/query')) {
+        expect(JSON.parse(String(init?.body))).toEqual({ file_asset_uids: [assetRef.slice('file_asset://'.length)] })
+        return json({ code: 0, data: { items: [{
+          file_asset_uid: assetRef.slice('file_asset://'.length), status: 'ready', mime_type: 'image/png', preview_url: assetUrl,
+        }] } })
+      }
+      if (url === assetUrl) return new Response(png, {
+        status: 200, headers: { 'Content-Type': 'image/png', 'Content-Length': String(png.byteLength) },
+      })
+      throw new Error(`unexpected ${url}`)
+    })
+
+    const snapshot = await service.refreshProfile()
+    expect(snapshot.profile).toMatchObject({
+      avatarRef: expect.stringMatching(/^arkme-profile-image-v1\./), avatarAssetRef: assetRef,
+    })
+    await expect(service.readImage(snapshot.profile!.avatarRef)).resolves.toMatchObject({ mediaType: 'image/png', bytes: png.byteLength })
   })
 
   it('rejects cross-user profile image references before signing', async () => {
@@ -2816,24 +2881,31 @@ describe('ArkmeService', () => {
   it('lets an active regular member generate a rule and writes it only after confirmation', async () => {
     const sessions = new MemorySessionStore()
     sessions.session = { userId: 10001, accessToken: 'access', refreshToken: 'refresh' }
+    let enabled = false
+    const savedRules: Array<Record<string, unknown>> = []
     const requests: Array<{ url: string; body: Record<string, unknown> }> = []
     const service = new ArkmeService(config, sessions, new MemoryStateStore(), async (input, init) => {
       const url = String(input)
       const body = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>
       requests.push({ url, body })
       if (url.endsWith('/api/v1/chats/ai-polish/settings/query')) return json({ code: 200, data: {
-        config: { enabled: false, active_rule_uid: '', update_at: 10 }, rules: [],
+        config: { enabled, active_rule_uid: enabled ? 'candidate-1' : '', update_at: 10 }, rules: savedRules,
         viewer_role: 3, can_manage: true,
       } })
       if (url.endsWith('/api/v1/chats/ai-polish/rules/generate')) return json({ code: 200, data: {
         candidate: { candidate_uid: 'candidate-1', name: '清晰友好', rule_text: '表达清晰友好并保留事实。', prompt_version: 'v1' },
       } })
-      if (url.endsWith('/api/v1/chats/ai-polish/rules/upsert')) return json({ code: 200, data: {
-        rule: { rule_uid: 'candidate-1', name: body.name, rule_text: body.rule_text }, outcome: 'inserted',
-      } })
-      if (url.endsWith('/api/v1/chats/ai-polish/settings/update')) return json({ code: 200, data: {
+      if (url.endsWith('/api/v1/chats/ai-polish/rules/upsert')) {
+        const rule = { rule_uid: 'candidate-1', name: body.name, rule_text: body.rule_text }
+        savedRules.push(rule)
+        return json({ code: 200, data: { rule, outcome: 'inserted' } })
+      }
+      if (url.endsWith('/api/v1/chats/ai-polish/settings/update')) {
+        enabled = true
+        return json({ code: 200, data: {
         config: { enabled: true, active_rule_uid: 'candidate-1', update_at: body.update_at }, outcome: 'updated',
       } })
+      }
       throw new Error(`unexpected ${url}`)
     })
     const ref = sourceRefFor('group_chat', 'group-4', '规则群')
@@ -2849,9 +2921,10 @@ describe('ArkmeService', () => {
     await expect(service.confirmEnableGroupAiPolish(candidate.confirmationRef)).resolves.toEqual({
       groupName: '规则群', enabled: true, ruleName: '清晰友好', changed: true,
     })
-    expect(requests.slice(-2).map(request => request.url)).toEqual([
+    expect(requests.slice(-3).map(request => request.url)).toEqual([
       'https://chat.test/api/v1/chats/ai-polish/rules/upsert',
       'https://chat.test/api/v1/chats/ai-polish/settings/update',
+      'https://chat.test/api/v1/chats/ai-polish/settings/query',
     ])
   })
 
@@ -5035,7 +5108,10 @@ describe('ArkmeService', () => {
     }, { recordUid: 'record-rich', relationUid: 'relation-rich' })).resolves.toMatchObject({ itemUid: 'record-rich', sequence: 4 })
     expect(sentBodies[0]).toMatchObject({
       chat_session_uid: 'chat-media', record_uid: 'record-rich', rel_uid: 'relation-rich', template_kind: 2,
-      content_payload: { media_refs: [{ file_asset_uid: 'asset-12345678', render_role: 1 }] },
+      content_payload: { media_refs: [{
+        file_asset_uid: 'asset-12345678', render_role: 1, file_name: '示例.png', file_kind: 1,
+        mime_type: 'image/png', size: 3,
+      }] },
     })
     await expect(service.sendSourceRich(sourceRef, {
       title: '长文标题', textContent: '长文正文', displayKind: 1, thinkingDurationMillis: 4200,

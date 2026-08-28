@@ -54,6 +54,8 @@ function withoutInfrastructureNames(content: string): string {
     .replaceAll('userfiles.jotmo.cc', '')
     .replaceAll('jotmo-useraudio-test.oss-cn-hangzhou.aliyuncs.com', '')
     .replaceAll('jotmo-useraudio.oss-cn-hangzhou.aliyuncs.com', '')
+    .replaceAll('X-Jotmo-Runtime-Instance-Id', '')
+    .replaceAll('X-Jotmo-SSE-Identity-Version', '')
     .replaceAll('data.jotmo_id', '')
     .replaceAll('data.can_update_jotmo_id', '')
     .replaceAll('raw.jotmo_id', '')
@@ -73,6 +75,11 @@ function withoutOpenClawProtocolNames(file: string, content: string): string {
   if (file !== join(root, 'src/openclaw/cli-adapter.ts')) return content
   // The published package, plugin id and channel key are fixed external protocol identifiers.
   return content.replace(/jotmo/gi, '')
+}
+
+function withoutBotOwnerProtocolNames(file: string, content: string): string {
+  if (file !== join(root, 'src/services/bot-service.ts')) return content
+  return content.replaceAll("'jotmo-subject'", '').replaceAll("'jotmo-chat'", '')
 }
 
 function withoutArkmeIdCompatibilityAliases(file: string, content: string): string {
@@ -160,7 +167,7 @@ describe('Arkme plugin identity', () => {
           ),
         ),
       )
-      const content = withoutInfrastructureNames(withoutOpenClawProtocolNames(file, source))
+      const content = withoutInfrastructureNames(withoutOpenClawProtocolNames(file, withoutBotOwnerProtocolNames(file, source)))
       return /jotmo|jiwo|即我/i.test(content) ? [file.slice(root.length)] : []
     })
 

@@ -365,7 +365,7 @@ export function formatCallTranscriptClock(startedLabel: string, offsetSeconds: n
 }
 
 export function profileShareUrl(arkmeId: string): string {
-  return `https://jiwo.cc/${encodeURIComponent(arkmeId)}?scene=profile_share`
+  return `https://jiwo.cc/${encodeURIComponent(arkmeId)}`
 }
 
 export function callInviteUrl(arkmeId: string, mediaType: ArkmeCallMediaType): string {

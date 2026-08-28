@@ -7,6 +7,8 @@ import { describe, expect, it } from 'vitest'
 const root = fileURLToPath(new URL('..', import.meta.url))
 
 const expectedPublicMethods = [
+  'fileCapabilities', 'fileSearch', 'fileSessionUser', 'fileStage', 'fileList', 'fileReadLocal', 'attachLocalFileOpener', 'fileOpenLocal', 'fileRemove', 'fileSend',
+  'fileSendTasks', 'fileSendRetry', 'fileStageBytes', 'fileSendDiscard', 'fileSendReconcile', 'fileReceive',
   'startChatRealtime', 'chatRealtimeState', 'subscribeChatRealtime', 'chatRealtimeInitialEvent',
   'attachOpenClawProvisioner', 'connectOpenClawBot', 'listBots', 'listBotPrivateChatDirectory', 'createBot', 'createBotSummary', 'revealBotSecret',
   'manageBotProfile', 'updateManagedBot', 'revealManagedBotToken', 'deleteManagedBot', 'botNotificationPreference', 'updateBotNotificationPreference',
@@ -28,7 +30,7 @@ const expectedPublicMethods = [
   'dshBetaCommunityEntryState', 'interwovenMoments', 'interwovenMomentDetail',
   'joinDSHBetaCommunity', 'inspectGroupAiPolish', 'inspectGroupAiPolishByName',
   'readGroupAiPolishNotices', 'generateGroupAiPolishRuleForSource', 'generateGroupAiPolishRule',
-  'confirmEnableGroupAiPolish', 'prepareDisableGroupAiPolishForSource', 'prepareDisableGroupAiPolish',
+  'prepareEnableGroupAiPolish', 'prepareEnableGroupAiPolishRuleForSource', 'confirmEnableGroupAiPolish', 'prepareDisableGroupAiPolishForSource', 'prepareDisableGroupAiPolish',
   'confirmDisableGroupAiPolish', 'listGroupMembers', 'listGroupMemberCandidates', 'groupInvitePreview', 'addGroupMembers',
   'createGroup', 'groupSettings', 'setGroupMessageDnd',
   'renameGroup', 'leaveGroup', 'dissolveGroup', 'reportGroup', 'userCard',
@@ -60,6 +62,7 @@ const expectedPublicMethods = [
 ].sort()
 
 const expectedServiceFiles = [
+  'file-transfers.ts',
   'service.ts', 'auth-service.ts', 'profile-service.ts', 'bot-service.ts', 'source-service.ts',
   'chat-service.ts', 'chat-realtime-service.ts', 'group-service.ts', 'group-ai-polish-service.ts',
   'record-service.ts', 'related-recording-service.ts', 'recording-service.ts', 'search-service.ts',
@@ -109,6 +112,13 @@ describe('Arkme service architecture', () => {
     for (const file of readdirSync(directory).filter(name => name.endsWith('-service.ts'))) {
       expect(readFileSync(join(directory, file), 'utf8')).not.toMatch(/from ['"]\.\.\/arkme-service/)
     }
+  })
+
+  it('keeps direct-conversation and group Bot projections behind separate mappers', () => {
+    const botService = readFileSync(join(root, 'src/services/bot-service.ts'), 'utf8')
+    const arkmeService = readFileSync(join(root, 'src/arkme-service.ts'), 'utf8')
+    expect(botService).toContain('groupBotSummaryFromData')
+    expect(arkmeService).not.toContain('BOT_CONVERSATION_OWNER')
   })
 
   it('keeps World cross-domain dependencies behind narrow ports', () => {

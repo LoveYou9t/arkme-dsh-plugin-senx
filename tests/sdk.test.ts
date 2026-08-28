@@ -469,6 +469,7 @@ describe('Arkme SDK', () => {
             features: {
               authStatus: true, cachedSnapshot: true, remoteRefresh: true, search: true,
               createText: true, retryOutbox: true, revisionPolling: true, userProfile: true, imageRead: true,
+              accountSettings: true,
               recordCalendar: true,
               sourceDirectory: true, sourceTimeline: true, sourceTextSend: true, outgoingCall: true,
               messageReadReceipts: true,
@@ -494,6 +495,14 @@ describe('Arkme SDK', () => {
             revision: 5,
           })
         }
+        if (request.operation === 'user.arkme-id.check') {
+          return success({ available: true, reason: '', arkmeId: request.params?.arkmeId })
+        }
+        if (request.operation === 'user.arkme-id.set') {
+          return success({ arkmeId: request.params?.arkmeId, changed: true, canUpdate: false, revision: 6 })
+        }
+        if (request.operation === 'auth.phone.send') return success({ sent: true })
+        if (request.operation === 'auth.phone.verify') return success({ status: 'authenticated', environment: 'test', userId: 1 })
         if (request.operation === 'image.read') {
           return success({ mediaType: 'image/png', bytes: 8, dataBase64: 'iVBORw0KGgo=' })
         }
@@ -510,13 +519,19 @@ describe('Arkme SDK', () => {
 
     await expect(sdk.capabilities()).resolves.toMatchObject({
       contractVersion: 1,
-      features: { outgoingCall: true, extensionManagement: true, extensionIcons: true, messageReadReceipts: true },
+      features: { outgoingCall: true, extensionManagement: true, extensionIcons: true, messageReadReceipts: true, accountSettings: true },
       limits: { maxMessageReadReceiptItems: 50 },
     })
     await expect(sdk.search('复盘', { limit: 5, syncAll: true })).resolves.toMatchObject({ revision: 4 })
     await expect(sdk.profile({ refresh: true })).resolves.toMatchObject({
       profile: { displayName: '昵称' }, revision: 5,
     })
+    await expect(sdk.checkArkmeIdAvailability(' Lucis_01 ')).resolves.toMatchObject({ available: true, arkmeId: 'Lucis_01' })
+    await expect(sdk.setArkmeIdOnce(' Lucis_01 ')).resolves.toMatchObject({ arkmeId: 'Lucis_01', changed: true })
+    await expect(sdk.sendPhoneCode('138 0000 8000', {
+      lot_number: 'lot', captcha_output: 'out', pass_token: 'pass', gen_time: 'time',
+    })).resolves.toEqual({ sent: true })
+    await expect(sdk.verifyPhoneCode('138-0000-8000', '123456')).resolves.toMatchObject({ status: 'authenticated' })
     const image = await sdk.readImage('1_1700000000_1_0.png')
     expect(image).toMatchObject({ mediaType: 'image/png', bytes: 8 })
     expect(sdk.imageDataUrl(image)).toBe('data:image/png;base64,iVBORw0KGgo=')
@@ -537,6 +552,13 @@ describe('Arkme SDK', () => {
       { operation: 'provider.capabilities' },
       { operation: 'records.search', params: { query: '复盘', limit: 5, syncAll: true } },
       { operation: 'user.profile.refresh' },
+      { operation: 'user.arkme-id.check', params: { arkmeId: 'Lucis_01' } },
+      { operation: 'user.arkme-id.set', params: { arkmeId: 'Lucis_01' } },
+      {
+        operation: 'auth.phone.send',
+        params: { phone: '13800008000', captcha: { lot_number: 'lot', captcha_output: 'out', pass_token: 'pass', gen_time: 'time' } },
+      },
+      { operation: 'auth.phone.verify', params: { phone: '13800008000', code: '123456' } },
       { operation: 'image.read', params: { imageRef: '1_1700000000_1_0.png' } },
       { operation: 'calendar.buckets', params: { startDate: '2026-08-01', endDate: '2026-08-31', timezone: 'Asia/Shanghai' } },
       {
@@ -868,6 +890,37 @@ describe('Arkme SDK', () => {
       'ArkmeOutgoingCallPrepareResult',
       'ArkmeOutgoingCallToolResult',
     ]) expect(rootSource).toContain(name)
+  })
+
+  it('exposes the same confirmation-based group AI polish owner to external plugins', async () => {
+    const calls: Array<{ operation: string; params?: Record<string, unknown> }> = []
+    const sdk = createArkmeSdk({
+      fetchImpl: async (_input, init) => {
+        const request = JSON.parse(String(init?.body)) as { operation: string; params?: Record<string, unknown> }
+        calls.push(request)
+        if (request.operation === 'source.ai-polish.settings') return success({
+          sourceRef: 'group-ref', groupName: '产品群', enabled: false, canManage: true,
+          viewerRole: 1, activeRuleName: '', rules: [], updatedAtMillis: 1,
+        })
+        if (request.operation === 'source.ai-polish.prepare-enable') return success({
+          groupName: '产品群', ruleName: '友好简洁', ruleText: '表达友好、简洁。', confirmationRef: 'confirm-1',
+        })
+        if (request.operation === 'source.ai-polish.confirm-enable') return success({
+          groupName: '产品群', enabled: true, ruleName: '友好简洁', changed: true,
+        })
+        throw new Error(`unexpected ${request.operation}`)
+      },
+    })
+
+    await expect(sdk.groupAiPolishSettings('group-ref')).resolves.toMatchObject({ canManage: true })
+    await expect(sdk.prepareEnableGroupAiPolishRule('group-ref', 'rule-2'))
+      .resolves.toMatchObject({ confirmationRef: 'confirm-1' })
+    await expect(sdk.confirmEnableGroupAiPolish('confirm-1')).resolves.toMatchObject({ enabled: true })
+    expect(calls).toEqual([
+      { operation: 'source.ai-polish.settings', params: { sourceRef: 'group-ref' } },
+      { operation: 'source.ai-polish.prepare-enable', params: { sourceRef: 'group-ref', ruleRef: 'rule-2' } },
+      { operation: 'source.ai-polish.confirm-enable', params: { confirmationRef: 'confirm-1' } },
+    ])
   })
 
   it('notifies subscribers only when auth identity or revision changes', async () => {

@@ -404,6 +404,10 @@ export interface ArkmeBotSummary {
   description: string
   status: ArkmeBotStatus
   directChatAvailable: boolean
+  /** Whether this Bot accepts outbound private-chat messages from Arkme. */
+  privateChatOutboundEnabled?: boolean
+  /** Whether canonical Record changes can update this Bot conversation. */
+  refreshOnRecordChanges?: boolean
   /** Creation time supplied by the Bot service, when available. */
   createdAtMillis?: number
   /** Latest private-chat message time, when the conversation directory has been hydrated. */
@@ -418,12 +422,27 @@ export interface ArkmeBotList {
   items: ArkmeBotSummary[]
 }
 
-/** Browser-safe projection of one message in the legacy Bot direct-chat protocol. */
+/** Browser-safe projection of one Bot private-chat message. */
 export interface ArkmeBotPrivateChatMessage {
+  messageId: string
+  recordUid?: string
   role: 'user' | 'assistant'
   content: string
   status: string
   createdAtMillis: number
+  attachments: ArkmeBotPrivateChatAttachment[]
+}
+
+/** Safe attachment metadata; source file identifiers and remote URLs remain Host-owned. */
+export interface ArkmeBotPrivateChatAttachment {
+  kind: string
+  fileName: string
+  mimeType: string
+  size: number
+  durationMillis: number
+  width: number
+  height: number
+  sortOrder: number
 }
 
 export interface ArkmeBotPrivateChatConversation {
@@ -994,6 +1013,8 @@ export interface ArkmeProviderCapabilities {
     retryOutbox: true
     revisionPolling: true
     userProfile: true
+    /** Current-account profile settings support Arkme ID, personal QR, and phone binding flows. */
+    accountSettings?: true
     imageRead: true
     /** Record-calendar bucket and day-record reads backed by the Arkme record service. */
     recordCalendar?: true
@@ -1021,6 +1042,8 @@ export interface ArkmeProviderCapabilities {
     /** Built-in quick-add surface plus SDK/Host support for contacts, groups, and Bots. */
     conversationQuickAdd?: true
     groupSettings: true
+    /** Group AI expression-polish settings, rule previews, and confirmation-based mutations. */
+    groupAiPolish?: true
     /** Installed-extension inspection and desired enable/disable state are available. */
     extensionManagement?: true
     /** Owner-authorized extension name, description, and private/public visibility editing is available. */
@@ -1085,6 +1108,8 @@ export interface ArkmeUserProfile {
   displayName: string
   nickname: string
   avatarRef: string
+  /** Backing file-asset reference for the signed-in user's avatar when the profile endpoint has not returned a public URL. */
+  avatarAssetRef?: string
   avatarUrl?: string
   arkmeId: string
   /** Whether this account can still use its one-time Arkme ID change. Omitted for legacy cached profiles. */
@@ -1095,6 +1120,9 @@ export interface ArkmeUserProfile {
     apple: boolean
     wechat: boolean
     google: boolean
+  }
+  bindingNames?: {
+    wechat?: string
   }
   contact: {
     phoneMasked?: string
@@ -1392,6 +1420,16 @@ export interface ArkmeGroupAiPolishRule {
   name: string
   ruleText: string
   isActive: boolean
+  /** Browser-safe conversation history persisted with the rule for mobile/desktop continuity. */
+  threadMessages?: ArkmeGroupAiPolishThreadMessage[]
+}
+
+export interface ArkmeGroupAiPolishThreadMessage {
+  id: string
+  role: 'ai' | 'user'
+  text: string
+  isRule?: boolean
+  ruleRef?: string
 }
 
 export interface ArkmeGroupAiPolishSnapshot {
@@ -1410,6 +1448,7 @@ export interface ArkmeGroupAiPolishRuleCandidate {
   ruleName: string
   ruleText: string
   confirmationRef: string
+  threadMessages?: ArkmeGroupAiPolishThreadMessage[]
 }
 
 export interface ArkmeGroupAiPolishMutationResult {
@@ -1440,6 +1479,10 @@ export interface ArkmeContentBlock {
   sortOrder: number
   /** Backend media render role. 3 means a standalone chat sticker. */
   renderRole?: 1 | 3
+  /** Original bytes, distinct from an image preview. */
+  originalRef?: string
+  localFileRef?: string
+  uploadProgress?: import('./file-transfer-contract.js').ArkmeFileProgress
 }
 
 export interface ArkmeUploadedAsset {
@@ -2536,6 +2579,8 @@ export type ArkmePluginOperation =
   | 'calendar.records'
   | 'user.profile'
   | 'user.profile.refresh'
+  | 'user.arkme-id.check'
+  | 'user.arkme-id.set'
   | 'image.read'
   | 'images.list'
   | 'world.feed'
@@ -2585,6 +2630,7 @@ export type ArkmePluginOperation =
   | 'source.ai-polish.settings'
   | 'source.ai-polish.notices'
   | 'source.ai-polish.generate-rule'
+  | 'source.ai-polish.prepare-enable'
   | 'source.ai-polish.confirm-enable'
   | 'source.ai-polish.prepare-disable'
   | 'source.ai-polish.confirm-disable'
@@ -2609,6 +2655,18 @@ export type ArkmePluginOperation =
   | 'favorite-stickers.add'
   | 'favorite-stickers.send'
   | 'favorite-stickers.manage'
+  | 'files.capabilities'
+  | 'files.search'
+  | 'files.stage-bytes'
+  | 'files.send.discard'
+  | 'files.send.reconcile'
+  | 'files.local.list'
+  | 'files.local.open'
+  | 'files.local.remove'
+  | 'files.send'
+  | 'files.send.tasks'
+  | 'files.send.retry'
+  | 'files.receive'
   | 'source.long-article.detail'
   | 'source.long-article.update'
   | 'source.long-article.draft.get'

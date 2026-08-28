@@ -63,6 +63,7 @@ import {
   RelatedRecordingService,
 } from './services/related-recording-service.js'
 import { SearchService } from './services/search-service.js'
+import { createArkmeFileTransfers, type ArkmeFileSendInput, type ArkmeLocalFile, type FileTransfers } from './file-transfer-owner.js'
 import {
   ArkmePluginError,
   ServiceRuntime,
@@ -143,6 +144,7 @@ import type {
   ArkmeGroupAiPolishNotice,
   ArkmeGroupAiPolishRuleCandidate,
   ArkmeGroupAiPolishSnapshot,
+  ArkmeGroupAiPolishThreadMessage,
   ArkmeGroupMemberList,
   ArkmeGroupMemberAddResult,
   ArkmeGroupMemberCandidateList,
@@ -283,6 +285,8 @@ export class ArkmeService {
   private readonly contactDirectory: ContactDirectoryService
   private readonly unmarkedSpeaker: UnmarkedSpeakerService
   private readonly voiceprint: VoiceprintService
+  private readonly fileTransfers: FileTransfers | undefined
+  private localFileOpener?: (path: string, signal: AbortSignal) => Promise<void>
   private worldVoiceprintInviteVariantIndex = 0
 
   constructor(
@@ -375,10 +379,44 @@ export class ArkmeService {
       reconnectChatRealtime: () => { this.realtime.reconnect() },
       clearAccountState: userIds => { this.clearAccountState(userIds) },
     })
+    this.fileTransfers = createArkmeFileTransfers({
+      directory: config.fileStateDirectory,
+      maxUploadBytes: config.maxUploadBytes,
+      runtime: this.runtime,
+      source: this.source,
+      media: this.media,
+      chat: this.chat,
+      openPath: async (path, signal) => {
+        if (this.localFileOpener === undefined) throw new Error('当前 DSH 宿主未提供本机文件打开能力')
+        await this.localFileOpener(path, signal)
+      },
+    })
   }
+
+  private filesOwner(): FileTransfers {
+    if (!this.fileTransfers) throw new ArkmePluginError('file-flow-unavailable', '当前宿主不支持本地文件流程，请升级插件', false, 501)
+    return this.fileTransfers
+  }
+  fileCapabilities() { return this.filesOwner().capabilities() }
+  async fileSearch(options: { query?: string; limit: number; cursor?: string; signal?: AbortSignal }) { return await this.search.searchFiles(options) }
+  async fileSessionUser() { return (await this.runtime.requireSession()).userId }
+  async fileStage(path: string, metadata: Pick<ArkmeLocalFile, 'fileName' | 'mimeType' | 'size'>, expectedUserId?: number) { return await this.filesOwner().stage(path, metadata, expectedUserId) }
+  async fileList() { return await this.filesOwner().files() }
+  async fileReadLocal(ref: string) { return await this.filesOwner().readLocal(ref) }
+  attachLocalFileOpener(openPath: (path: string, signal: AbortSignal) => Promise<void>) { this.localFileOpener = openPath }
+  async fileOpenLocal(ref: string) { return await this.filesOwner().openLocal(ref) }
+  async fileRemove(ref: string) { await this.filesOwner().remove(ref) }
+  async fileSend(input: ArkmeFileSendInput) { return await this.filesOwner().enqueue(input) }
+  async fileSendTasks(sourceRef?: string) { return await this.filesOwner().tasks(sourceRef) }
+  async fileSendRetry(taskRef: string) { return await this.filesOwner().retry(taskRef) }
+  async fileStageBytes(contentBase64: string, metadata: Pick<ArkmeLocalFile, 'fileName' | 'mimeType'>) { return await this.filesOwner().stageBytes(contentBase64, metadata) }
+  async fileSendDiscard(taskRef: string) { return await this.filesOwner().discard(taskRef) }
+  async fileSendReconcile(taskRef: string) { return await this.filesOwner().reconcile(taskRef) }
+  async fileReceive(mediaRef: string, start = false) { return await this.filesOwner().reception(mediaRef, start) }
 
   private clearAccountState(userIds: readonly number[]): void {
     for (const userId of userIds) this.privacy.clear(userId)
+    this.fileTransfers?.cancelActive()
     for (const userId of userIds) this.outgoingCall.clearUser(userId, '账号已退出，呼叫已取消')
     this.source.dispose()
     this.media.dispose()
@@ -491,7 +529,9 @@ export class ArkmeService {
   }
 
   async sendBotPrivateChatMessage(botRef: string, content: string, options: { signal?: AbortSignal } = {}) {
-    return await this.bot.sendBotPrivateChatMessage(botRef, content, options)
+    const outcome = await this.bot.sendBotPrivateChatMessage(botRef, content, options)
+    if (outcome.recordProjectionChanged) await this.realtime.invalidateRecordProjection()
+    return outcome.result
   }
 
   async listGroupBots(
@@ -582,6 +622,7 @@ export class ArkmeService {
         retryOutbox: true,
         revisionPolling: true,
         userProfile: true,
+        accountSettings: true,
         imageRead: true,
         recordCalendar: true,
         imageLibrary: true,
@@ -602,6 +643,7 @@ export class ArkmeService {
         contactAdd: true,
         conversationQuickAdd: true,
         groupSettings: true,
+        groupAiPolish: true,
         extensionManagement: true,
         extensionMetadataEdit: true,
         extensionIcons: true,
@@ -685,6 +727,7 @@ export class ArkmeService {
   async retryCallSummary(callRef: string, signal?: AbortSignal): Promise<ArkmeCallSummaryRetryResult> { return await this.callHistory.retryCallSummary(callRef, signal) }
 
   dispose(): void {
+    this.fileTransfers?.cancelActive()
     this.contact.dispose()
     this.contactDirectory.dispose()
     this.unmarkedSpeaker.dispose()
@@ -982,7 +1025,7 @@ export class ArkmeService {
   async generateGroupAiPolishRuleForSource(
     sourceRef: string,
     requirement: string,
-    options: { signal?: AbortSignal } = {},
+    options: { signal?: AbortSignal; threadMessages?: readonly ArkmeGroupAiPolishThreadMessage[]; targetRuleRef?: string } = {},
   ): Promise<ArkmeGroupAiPolishRuleCandidate> {
     return await this.aiPolish.generateGroupAiPolishRuleForSource(sourceRef, requirement, options)
   }
@@ -990,9 +1033,17 @@ export class ArkmeService {
   async generateGroupAiPolishRule(
     groupName: string,
     requirement: string,
-    options: { signal?: AbortSignal } = {},
+    options: { signal?: AbortSignal; threadMessages?: readonly ArkmeGroupAiPolishThreadMessage[]; targetRuleRef?: string } = {},
   ): Promise<ArkmeGroupAiPolishRuleCandidate> {
     return await this.aiPolish.generateGroupAiPolishRule(groupName, requirement, options)
+  }
+
+  prepareEnableGroupAiPolish(groupName: string, ruleName = '', options: { signal?: AbortSignal } = {}): Promise<ArkmeGroupAiPolishRuleCandidate> {
+    return this.aiPolish.prepareEnableGroupAiPolish(groupName, ruleName, options)
+  }
+
+  prepareEnableGroupAiPolishRuleForSource(sourceRef: string, ruleRef: string, options: { signal?: AbortSignal } = {}): Promise<ArkmeGroupAiPolishRuleCandidate> {
+    return this.aiPolish.prepareEnableGroupAiPolishRuleForSource(sourceRef, ruleRef, options)
   }
 
   async confirmEnableGroupAiPolish(
