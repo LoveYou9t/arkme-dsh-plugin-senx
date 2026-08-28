@@ -2,9 +2,14 @@ import { createServer } from 'node:http'
 import { once } from 'node:events'
 import { describe, expect, it, vi } from 'vitest'
 import { createArkmeHostApi, dispatchArkmeHostOperation } from '../src/host-api.js'
+import { ARKME_RUNTIME_INSTANCE_ID } from '../src/runtime-instance.js'
 
 function fakeService() {
   return {
+    resolveLinkMetadata: vi.fn(async (
+      url: string,
+      _options?: unknown,
+    ): Promise<{ url: string; title: string } | null> => ({ url, title: '即我 Jotmo' })),
     prepareOutgoingCall: vi.fn(async (input: unknown) => input),
     listCallHistory: vi.fn(async (input: unknown) => input),
     callDetail: vi.fn(async (callRef: string) => ({ callRef })),
@@ -37,6 +42,11 @@ function fakeService() {
     openOfficialAuthorPrivateChat: vi.fn(async () => ({ source: { sourceRef: 'official-author-source' } })),
     openPrivateChatFromContact: vi.fn(async (contactRef: string) => ({ source: { sourceRef: `source:${contactRef}` } })),
     openPrivateChatFromMember: vi.fn(async (sourceRef: string, memberRef: string) => ({ sourceRef, memberRef })),
+    copySourceMessageLink: vi.fn(async (sourceRef: string, actionRefs: unknown, options: unknown) => ({ sourceRef, actionRefs, options })),
+    resolveMessageCopyLink: vi.fn(async (sid: string, options: unknown) => ({ sid, options })),
+    extendMessageCopyLink: vi.fn(async (sid: string, itemIndex: number, textContent: string, recordUid: string, options: unknown) => ({ sid, itemIndex, textContent, recordUid, options })),
+    sharedRecordingDetail: vi.fn(async (detailRef: string, options: unknown) => ({ detailRef, options })),
+    forwardSourceMessages: vi.fn(async (sourceRef: string, actionRefs: unknown, options: unknown) => ({ sourceRef, actionRefs, options })),
     sendSourceText: vi.fn(async (_sourceRef: string, _text: string, options: unknown) => options),
     sendSourceRich: vi.fn(async () => undefined),
     favoriteStickers: vi.fn(async () => ({ items: [], itemCount: 0, updatedAtMillis: 0 })),
@@ -53,6 +63,8 @@ function fakeService() {
     groupInvitePreview: vi.fn(async () => ({ inviteLink: 'https://example.test/invite' })),
     listGroupBots: vi.fn(async () => ({ items: [] })),
     addGroupBot: vi.fn(async () => ({ installed: true })),
+    generateGroupAiPolishRuleForSource: vi.fn(async () => ({ confirmationRef: 'confirm-1' })),
+    prepareEnableGroupAiPolishRuleForSource: vi.fn(async () => ({ confirmationRef: 'confirm-2' })),
     listMyWorldFeed: vi.fn(async (input: unknown) => input),
     listUserWorldFeed: vi.fn(async (_userId: number, input: unknown) => input),
     publishWorldText: vi.fn(async (input: unknown) => input),
@@ -65,8 +77,35 @@ function fakeService() {
     billingProducts: vi.fn(async () => ({ items: [] })),
     createBillingOrder: vi.fn(async (input: unknown) => input),
     billingOrderStatus: vi.fn(async (orderId: string) => ({ orderId, status: 'pending' })),
+    checkArkmeIdAvailability: vi.fn(async (arkmeId: string) => ({ available: true, reason: '', arkmeId })),
+    setArkmeIdOnce: vi.fn(async (arkmeId: string) => ({ arkmeId, changed: true, canUpdate: false, revision: 2 })),
   }
 }
+
+describe('provider instance Host API dispatch', () => {
+  it('returns the same process identity used by the realtime transport', async () => {
+    await expect(dispatchArkmeHostOperation({} as never, 'provider.instance', {}))
+      .resolves.toEqual({ instanceId: ARKME_RUNTIME_INSTANCE_ID })
+    await expect(dispatchArkmeHostOperation({} as never, 'provider.instance', {}))
+      .resolves.toEqual({ instanceId: ARKME_RUNTIME_INSTANCE_ID })
+  })
+})
+
+describe('account settings Host API dispatch', () => {
+  it('dispatches Arkme ID checks and writes without browser-owned account fields', async () => {
+    const service = fakeService()
+
+    await expect(dispatchArkmeHostOperation(service as never, 'user.arkme-id.check', {
+      arkmeId: '  Lucis_01  ', userId: 999,
+    })).resolves.toMatchObject({ arkmeId: '  Lucis_01  ' })
+    await expect(dispatchArkmeHostOperation(service as never, 'user.arkme-id.set', {
+      arkmeId: 'Lucis_01', accessToken: 'secret',
+    })).resolves.toMatchObject({ arkmeId: 'Lucis_01', changed: true })
+
+    expect(service.checkArkmeIdAvailability).toHaveBeenCalledWith('  Lucis_01  ')
+    expect(service.setArkmeIdOnce).toHaveBeenCalledWith('Lucis_01')
+  })
+})
 
 describe('billing Host API dispatch', () => {
   it('dispatches quota and product reads without browser account fields', async () => {
@@ -143,6 +182,80 @@ describe('favorite sticker Host API dispatch', () => {
     await expect(dispatchArkmeHostOperation(service as never, 'favorite-stickers.manage', {
       fileAssetUid: 'asset-12345678', action: 'replace',
     })).rejects.toMatchObject({ code: 'favorite-sticker-manage-invalid' })
+  })
+})
+
+describe('link metadata Host API dispatch', () => {
+  it('dispatches link title resolution through its dedicated infrastructure owner', async () => {
+    const service = fakeService()
+    const request = new AbortController()
+
+    await expect(dispatchArkmeHostOperation(service as never, 'link.metadata', {
+      url: 'https://jotmo.ai/path',
+    }, undefined, undefined, undefined, undefined, request.signal)).resolves.toEqual({
+      url: 'https://jotmo.ai/path', title: '即我 Jotmo',
+    })
+    expect(service.resolveLinkMetadata).toHaveBeenCalledWith('https://jotmo.ai/path', { signal: request.signal })
+  })
+
+  it('owns the public SDK non-null fallback without forwarding that policy into infrastructure', async () => {
+    const service = fakeService()
+    service.resolveLinkMetadata.mockResolvedValueOnce(null)
+    const request = new AbortController()
+
+    await expect(dispatchArkmeHostOperation(service as never, 'source.link-metadata.resolve', {
+      url: ' https://example.com/a ', cookie: 'must-not-forward',
+    }, undefined, undefined, undefined, undefined, request.signal)).resolves.toEqual({
+      url: 'https://example.com/a', title: '分享链接', siteName: 'example.com',
+    })
+    expect(service.resolveLinkMetadata).toHaveBeenCalledWith(' https://example.com/a ', {
+      signal: request.signal,
+    })
+
+    service.resolveLinkMetadata.mockResolvedValueOnce(null)
+    await expect(dispatchArkmeHostOperation(service as never, 'source.link-metadata.resolve', {
+      url: 'https://github.com/arkme-senx/arkme-dsh-plugin/pull/145',
+    })).resolves.toEqual({
+      url: 'https://github.com/arkme-senx/arkme-dsh-plugin/pull/145',
+      title: 'Pull Request #145 · arkme-senx/arkme-dsh-plugin',
+      siteName: 'github.com',
+    })
+  })
+
+  it('requires a same-origin Browser request before starting link metadata work', async () => {
+    const service = fakeService()
+    const server = createServer(createArkmeHostApi(service as never, {
+      expectedPort: 3080,
+      allowNonLoopback: false,
+    }))
+    server.listen(0, '127.0.0.1')
+    await once(server, 'listening')
+    const address = server.address()
+    if (address === null || typeof address === 'string') throw new Error('test server address missing')
+    try {
+      const response = await fetch(`http://127.0.0.1:${String(address.port)}/arkme-self/api`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ operation: 'link.metadata', params: { url: 'https://jotmo.ai/' } }),
+      })
+
+      expect(response.status).toBe(403)
+      await expect(response.json()).resolves.toMatchObject({ ok: false, error: { code: 'origin-required' } })
+      expect(service.resolveLinkMetadata).not.toHaveBeenCalled()
+
+      const accepted = await fetch(`http://127.0.0.1:${String(address.port)}/arkme-self/api`, {
+        method: 'POST',
+        headers: { Origin: 'http://127.0.0.1:3080', 'Content-Type': 'application/json' },
+        body: JSON.stringify({ operation: 'link.metadata', params: { url: 'https://jotmo.ai/' } }),
+      })
+      expect(accepted.status).toBe(200)
+      expect(service.resolveLinkMetadata).toHaveBeenCalledWith('https://jotmo.ai/', {
+        signal: expect.any(AbortSignal),
+      })
+    } finally {
+      server.close()
+      await once(server, 'close')
+    }
   })
 })
 
@@ -298,6 +411,32 @@ describe('group member Host API dispatch', () => {
   })
 })
 
+describe('group AI polish Host API dispatch', () => {
+  it('forwards only source-bound rule data and a bounded browser-safe conversation', async () => {
+    const service = fakeService()
+    await dispatchArkmeHostOperation(service as never, 'source.ai-polish.generate-rule', {
+      sourceRef: 'group-ref', requirement: '更简洁', userId: 999,
+      targetRuleRef: 'rule-ref',
+      threadMessages: [
+        { id: 'r0', role: 'ai', text: '说明要求' },
+        { id: 'bad', role: 'system', text: '不能进入 Host owner' },
+        { id: 'r1', role: 'user', text: '更简洁', ruleRef: 'internal-rule-ref' },
+      ],
+    })
+    await dispatchArkmeHostOperation(service as never, 'source.ai-polish.prepare-enable', {
+      sourceRef: 'group-ref', ruleRef: 'rule-ref', userId: 999,
+    })
+    expect(service.generateGroupAiPolishRuleForSource).toHaveBeenCalledWith('group-ref', '更简洁', {
+      threadMessages: [
+        { id: 'r0', role: 'ai', text: '说明要求' },
+        { id: 'r1', role: 'user', text: '更简洁', ruleRef: 'internal-rule-ref' },
+      ],
+      targetRuleRef: 'rule-ref',
+    })
+    expect(service.prepareEnableGroupAiPolishRuleForSource).toHaveBeenCalledWith('group-ref', 'rule-ref')
+  })
+})
+
 describe('conversation member Host API dispatch', () => {
   it('forwards only opaque member references and bounded paging fields', async () => {
     const service = fakeService()
@@ -413,6 +552,48 @@ describe('message read receipt Host API dispatch', () => {
       sourceRef: 'source-ref', items: { itemUid: 'record-1', sequence: 8 },
     })).rejects.toMatchObject({ code: 'message-read-receipt-items-invalid' })
     expect(service.messageReadReceiptSummaries).not.toHaveBeenCalled()
+  })
+})
+
+describe('message action Host API dispatch', () => {
+  it('forwards only the opaque shared-recording detail reference', async () => {
+    const service = fakeService()
+    const signal = new AbortController().signal
+    await dispatchArkmeHostOperation(service as never, 'source.shared-recording-detail', {
+      detailRef: ' shared-detail-ref ',
+      chatSessionUid: 'must-not-forward',
+      recordOwnerUserId: 999,
+      recordUid: 'must-not-forward',
+    }, undefined, undefined, undefined, undefined, signal)
+    expect(service.sharedRecordingDetail).toHaveBeenCalledWith(' shared-detail-ref ', { signal })
+  })
+
+  it('forwards only opaque message action references and bounded send identifiers', async () => {
+    const service = fakeService()
+    await dispatchArkmeHostOperation(service as never, 'source.message-copy-link', {
+      sourceRef: 'source-ref', actionRefs: ['action-1', '', 'action-2'], relationUid: 'must-not-forward',
+    })
+    await dispatchArkmeHostOperation(service as never, 'source.message-copy-link.resolve', {
+      sid: 'U2HQgn1RhPJZaFmx', sourceRef: 'must-not-forward',
+    })
+    await dispatchArkmeHostOperation(service as never, 'source.message-copy-link.extend', {
+      sid: 'U2HQgn1RhPJZaFmx', itemIndex: 1, textContent: ' 延展 ', recordUid: 'record-1', relationUid: 'must-not-forward',
+    })
+    await dispatchArkmeHostOperation(service as never, 'source.forward-messages', {
+      sourceRef: 'source-ref', actionRefs: ['action-1'], recordUid: 'record-1', relationUid: 'rel-1',
+      targetSourceRef: 'target-source-ref', commentText: ' 附言 ',
+      textContent: 'must-not-forward',
+    })
+
+    expect(service.copySourceMessageLink).toHaveBeenCalledWith('source-ref', ['action-1', 'action-2'], expect.any(Object))
+    expect(service.resolveMessageCopyLink).toHaveBeenCalledWith('U2HQgn1RhPJZaFmx', expect.any(Object))
+    expect(service.extendMessageCopyLink).toHaveBeenCalledWith('U2HQgn1RhPJZaFmx', 1, ' 延展 ', 'record-1', expect.any(Object))
+    expect(service.forwardSourceMessages).toHaveBeenCalledWith('source-ref', ['action-1'], {
+      recordUid: 'record-1',
+      relationUid: 'rel-1',
+      targetSourceRef: 'target-source-ref',
+      commentText: ' 附言 ',
+    })
   })
 })
 

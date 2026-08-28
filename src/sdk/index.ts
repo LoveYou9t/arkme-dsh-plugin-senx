@@ -11,6 +11,7 @@ import type {
   ArkmeArrangementReminderToggleResult,
   ArkmeArrangementReminderWriteResult,
   ArkmeAuthSnapshot,
+  ArkmeCaptchaResult,
   ArkmeBotList,
   ArkmeBotMentionInput,
   ArkmeBotProvider,
@@ -35,6 +36,10 @@ import type {
   ArkmeConversationMemberRecordPage,
   ArkmeCreateTextResult,
   ArkmeGroupMemberAddResult,
+  ArkmeGroupAiPolishMutationResult,
+  ArkmeGroupAiPolishRuleCandidate,
+  ArkmeGroupAiPolishSnapshot,
+  ArkmeGroupAiPolishThreadMessage,
   ArkmeGroupMemberCandidateList,
   ArkmeGroupInvitePreview,
   ArkmeGroupMemberList,
@@ -42,9 +47,14 @@ import type {
   ArkmeGroupBotCandidateList,
   ArkmeImagePayload,
   ArkmeImageSearchResult,
+  ArkmeIdAvailabilitySnapshot,
+  ArkmeIdMutationResult,
   ArkmeHumanMentionInput,
   ArkmeLongArticleDetail,
   ArkmeLongArticleDraft,
+  ArkmeMessageCopyLinkExtendResult,
+  ArkmeMessageCopyLinkResult,
+  ArkmeMessageCopyLinkResolveResult,
   ArkmeMessageReadReceiptDetail,
   ArkmeMessageReadReceiptQueryItem,
   ArkmeMessageReadReceiptSummaryList,
@@ -101,6 +111,11 @@ import type {
 } from '../extensions/types.js'
 import type { ArkmeMyExtensionPage, ArkmeMyExtensionPublishInput } from '../extensions/owned-types.js'
 import { normalizeGitHubRepositoryURL } from '../extensions/source.js'
+import type { ArkmeFilePolicy, ArkmeLocalFile, ArkmeFileSendInput, ArkmeFileSendTask, ArkmeFileReception } from '../file-transfer-contract.js'
+export type { ArkmeFileOpenResult, ArkmeFilePolicy, ArkmeLocalFile, ArkmeFileProgress, ArkmeFileSendInput, ArkmeFileSendTask, ArkmeFileReception } from '../file-transfer-contract.js'
+import type { ArkmeLinkMetadata } from '../link-metadata.js'
+
+export type { ArkmeLinkMetadata } from '../link-metadata.js'
 
 export type {
   ArkmeArrangementDetail,
@@ -154,6 +169,11 @@ export type {
   ArkmeGroupMemberAddItemResult,
   ArkmeGroupMemberAddResult,
   ArkmeGroupMemberAddStatus,
+  ArkmeGroupAiPolishMutationResult,
+  ArkmeGroupAiPolishRule,
+  ArkmeGroupAiPolishRuleCandidate,
+  ArkmeGroupAiPolishSnapshot,
+  ArkmeGroupAiPolishThreadMessage,
   ArkmeGroupMemberCandidate,
   ArkmeGroupMemberCandidateList,
   ArkmeGroupMemberItem,
@@ -168,9 +188,21 @@ export type {
   ArkmeImagePayload,
   ArkmeImageSearchItem,
   ArkmeImageSearchResult,
+  ArkmeIdAvailabilityReason,
+  ArkmeIdAvailabilitySnapshot,
+  ArkmeIdMutationResult,
   ArkmeHumanMentionInput,
   ArkmeLongArticleDetail,
   ArkmeLongArticleDraft,
+  ArkmeMessageCopyLinkExtendResult,
+  ArkmeMessageCopyLinkResult,
+  ArkmeMessageCopyLinkAccessMode,
+  ArkmeMessageCopyLinkMediaItem,
+  ArkmeMessageCopyLinkPresentationNode,
+  ArkmeMessageCopyLinkResolveResult,
+  ArkmeMessageCopyLinkSnapshotItem,
+  ArkmeMessageCopyLinkSourceAnchor,
+  ArkmeMessageCopyLinkStructuredContent,
   ArkmeMessageReadReceiptDetail,
   ArkmeMessageReadReceiptMember,
   ArkmeMessageReadReceiptQueryItem,
@@ -546,6 +578,36 @@ export class ArkmeSdk {
       undefined,
       options.signal,
     )
+  }
+
+  /** Validate a candidate Arkme ID with the same one-time account rule used by the built-in UI. */
+  async checkArkmeIdAvailability(arkmeId: string, signal?: AbortSignal): Promise<ArkmeIdAvailabilitySnapshot> {
+    const normalized = arkmeId.trim()
+    if (normalized === '') throw new TypeError('Arkme ID must not be empty')
+    return await this.call<ArkmeIdAvailabilitySnapshot>('user.arkme-id.check', { arkmeId: normalized }, signal)
+  }
+
+  /** Set the current account Arkme ID once after explicit user confirmation. */
+  async setArkmeIdOnce(arkmeId: string, signal?: AbortSignal): Promise<ArkmeIdMutationResult> {
+    const normalized = arkmeId.trim()
+    if (normalized === '') throw new TypeError('Arkme ID must not be empty')
+    return await this.call<ArkmeIdMutationResult>('user.arkme-id.set', { arkmeId: normalized }, signal)
+  }
+
+  /** Send a phone verification code for login, first bind, or phone rebind depending on auth state. */
+  async sendPhoneCode(phone: string, captcha: ArkmeCaptchaResult, signal?: AbortSignal): Promise<{ sent: true }> {
+    const normalized = phone.replace(/[\s-]/g, '')
+    if (!/^1[3-9][0-9]{9}$/.test(normalized)) throw new TypeError('Phone number is invalid')
+    return await this.call<{ sent: true }>('auth.phone.send', { phone: normalized, captcha }, signal)
+  }
+
+  /** Verify a phone code and refresh the account auth/profile state. */
+  async verifyPhoneCode(phone: string, code: string, signal?: AbortSignal): Promise<ArkmeAuthSnapshot> {
+    const normalized = phone.replace(/[\s-]/g, '')
+    const normalizedCode = code.trim()
+    if (!/^1[3-9][0-9]{9}$/.test(normalized)) throw new TypeError('Phone number is invalid')
+    if (!/^[0-9]{6}$/.test(normalizedCode)) throw new TypeError('Phone verification code is invalid')
+    return await this.call<ArkmeAuthSnapshot>('auth.phone.verify', { phone: normalized, code: normalizedCode }, signal)
   }
 
   /** Search by an exact phone number or Arkme ID without exposing internal account identifiers. */
@@ -1070,6 +1132,63 @@ export class ArkmeSdk {
     return await this.call<ArkmeGroupMemberList>('group.members', { sourceRef, activeOnly: true }, signal)
   }
 
+  async groupAiPolishSettings(sourceRef: string, signal?: AbortSignal): Promise<ArkmeGroupAiPolishSnapshot> {
+    if (sourceRef.trim() === '') throw new TypeError('Arkme group source reference must not be empty')
+    return await this.call<ArkmeGroupAiPolishSnapshot>('source.ai-polish.settings', { sourceRef }, signal)
+  }
+
+  async generateGroupAiPolishRule(
+    sourceRef: string,
+    requirement: string,
+    options: { threadMessages?: readonly ArkmeGroupAiPolishThreadMessage[]; targetRuleRef?: string; signal?: AbortSignal } = {},
+  ): Promise<ArkmeGroupAiPolishRuleCandidate> {
+    if (sourceRef.trim() === '' || requirement.trim() === '') {
+      throw new TypeError('Arkme group source reference and polish requirement must not be empty')
+    }
+    return await this.call<ArkmeGroupAiPolishRuleCandidate>('source.ai-polish.generate-rule', {
+      sourceRef, requirement,
+      ...(options.threadMessages === undefined ? {} : { threadMessages: options.threadMessages }),
+      ...(options.targetRuleRef === undefined || options.targetRuleRef.trim() === '' ? {} : { targetRuleRef: options.targetRuleRef.trim() }),
+    }, options.signal)
+  }
+
+  async prepareEnableGroupAiPolishRule(
+    sourceRef: string,
+    ruleRef: string,
+    signal?: AbortSignal,
+  ): Promise<ArkmeGroupAiPolishRuleCandidate> {
+    if (sourceRef.trim() === '' || ruleRef.trim() === '') {
+      throw new TypeError('Arkme group source and AI polish rule references must not be empty')
+    }
+    return await this.call<ArkmeGroupAiPolishRuleCandidate>('source.ai-polish.prepare-enable', {
+      sourceRef, ruleRef,
+    }, signal)
+  }
+
+  async confirmEnableGroupAiPolish(
+    confirmationRef: string,
+    signal?: AbortSignal,
+  ): Promise<ArkmeGroupAiPolishMutationResult> {
+    if (confirmationRef.trim() === '') throw new TypeError('Arkme AI polish confirmation reference must not be empty')
+    return await this.call<ArkmeGroupAiPolishMutationResult>('source.ai-polish.confirm-enable', { confirmationRef }, signal)
+  }
+
+  async prepareDisableGroupAiPolish(
+    sourceRef: string,
+    signal?: AbortSignal,
+  ): Promise<ArkmeGroupAiPolishRuleCandidate> {
+    if (sourceRef.trim() === '') throw new TypeError('Arkme group source reference must not be empty')
+    return await this.call<ArkmeGroupAiPolishRuleCandidate>('source.ai-polish.prepare-disable', { sourceRef }, signal)
+  }
+
+  async confirmDisableGroupAiPolish(
+    confirmationRef: string,
+    signal?: AbortSignal,
+  ): Promise<ArkmeGroupAiPolishMutationResult> {
+    if (confirmationRef.trim() === '') throw new TypeError('Arkme AI polish confirmation reference must not be empty')
+    return await this.call<ArkmeGroupAiPolishMutationResult>('source.ai-polish.confirm-disable', { confirmationRef }, signal)
+  }
+
   async listSourceMembers(sourceRef: string, signal?: AbortSignal): Promise<ArkmeConversationMemberList> {
     if (sourceRef.trim() === '') throw new TypeError('Arkme chat source reference must not be empty')
     return await this.call<ArkmeConversationMemberList>('source.members', { sourceRef, activeOnly: true }, signal)
@@ -1220,6 +1339,80 @@ export class ArkmeSdk {
     }, options.signal)
   }
 
+  async copyMessageLink(
+    sourceRef: string,
+    actionRefs: readonly string[],
+    signal?: AbortSignal,
+  ): Promise<ArkmeMessageCopyLinkResult> {
+    const refs = actionRefs.map(value => value.trim()).filter(value => value !== '')
+    if (sourceRef.trim() === '' || refs.length === 0 || refs.length > 100 || new Set(refs).size !== refs.length) {
+      throw new TypeError('Arkme message link action references must be 1-100 unique values')
+    }
+    return await this.call<ArkmeMessageCopyLinkResult>('source.message-copy-link', { sourceRef, actionRefs: refs }, signal)
+  }
+
+  async resolveMessageCopyLink(
+    sid: string,
+    signal?: AbortSignal,
+  ): Promise<ArkmeMessageCopyLinkResolveResult> {
+    const normalizedSid = sid.trim()
+    if (!/^[0-9A-Za-z]{16}$/.test(normalizedSid)) {
+      throw new TypeError('Arkme message copy-link sid must be 16 alphanumeric characters')
+    }
+    return await this.call<ArkmeMessageCopyLinkResolveResult>('source.message-copy-link.resolve', { sid: normalizedSid }, signal)
+  }
+
+  async extendMessageCopyLink(
+    sid: string,
+    textContent: string,
+    options: { itemIndex?: number; recordUid?: string; signal?: AbortSignal } = {},
+  ): Promise<ArkmeMessageCopyLinkExtendResult> {
+    const normalizedSid = sid.trim()
+    const text = textContent.trim()
+    const itemIndex = Math.trunc(options.itemIndex ?? 0)
+    if (!/^[0-9A-Za-z]{16}$/.test(normalizedSid)) {
+      throw new TypeError('Arkme message copy-link sid must be 16 alphanumeric characters')
+    }
+    if (text === '') throw new TypeError('Arkme message copy-link extension text must not be empty')
+    if (itemIndex < 0 || itemIndex >= 100) throw new TypeError('Arkme message copy-link item index must be 0-99')
+    return await this.call<ArkmeMessageCopyLinkExtendResult>('source.message-copy-link.extend', {
+      sid: normalizedSid,
+      itemIndex,
+      textContent: text,
+      recordUid: options.recordUid ?? crypto.randomUUID(),
+    }, options.signal)
+  }
+
+  async resolveLinkMetadata(
+    url: string,
+    signal?: AbortSignal,
+  ): Promise<ArkmeLinkMetadata> {
+    const normalizedUrl = url.trim()
+    if (normalizedUrl === '' || normalizedUrl.length > 2_048) {
+      throw new TypeError('Arkme link metadata URL must not be empty')
+    }
+    return await this.call<ArkmeLinkMetadata>('source.link-metadata.resolve', { url: normalizedUrl }, signal)
+  }
+
+  async forwardMessages(
+    sourceRef: string,
+    actionRefs: readonly string[],
+    options: { targetSourceRef?: string; recordUid?: string; relationUid?: string; commentText?: string; signal?: AbortSignal } = {},
+  ): Promise<ArkmeSourceSendResult> {
+    const refs = actionRefs.map(value => value.trim()).filter(value => value !== '')
+    if (sourceRef.trim() === '' || refs.length === 0 || refs.length > 100 || new Set(refs).size !== refs.length) {
+      throw new TypeError('Arkme forward action references must be 1-100 unique values')
+    }
+    return await this.call<ArkmeSourceSendResult>('source.forward-messages', {
+      sourceRef,
+      ...(options.targetSourceRef === undefined || options.targetSourceRef.trim() === '' ? {} : { targetSourceRef: options.targetSourceRef.trim() }),
+      actionRefs: refs,
+      recordUid: options.recordUid ?? crypto.randomUUID(),
+      relationUid: options.relationUid ?? crypto.randomUUID(),
+      ...(options.commentText === undefined || options.commentText.trim() === '' ? {} : { commentText: options.commentText.trim() }),
+    }, options.signal)
+  }
+
   async relatedRecordingEligibility(
     sourceRef: string,
     signal?: AbortSignal,
@@ -1329,6 +1522,53 @@ export class ArkmeSdk {
     await this.call<void>('source.long-article.draft.delete', {
       sourceRef, ...(itemUid === undefined ? {} : { itemUid }),
     }, signal)
+  }
+
+  async fileCapabilities(signal?: AbortSignal): Promise<ArkmeFilePolicy> {
+    const policy = await this.call<ArkmeFilePolicy>('files.capabilities', undefined, signal)
+    if (policy.version !== 1) throw new Error(`Unsupported Arkme file contract version ${String(policy.version)}`)
+    return policy
+  }
+  async searchFiles(options: { query?: string; limit?: number; cursor?: string; signal?: AbortSignal } = {}): Promise<import('../types.js').ArkmeRecordSearchResult> {
+    const { signal, ...params } = options
+    return this.call('files.search', params, signal)
+  }
+  async localFiles(signal?: AbortSignal): Promise<ArkmeLocalFile[]> { return this.call('files.local.list', undefined, signal) }
+  async openLocalFile(fileRef: string, signal?: AbortSignal): Promise<import('../file-transfer-contract.js').ArkmeFileOpenResult> { return this.call('files.local.open', { fileRef }, signal) }
+  async removeLocalFile(fileRef: string): Promise<void> { return this.call('files.local.remove', { fileRef }) }
+  async sendFiles(input: ArkmeFileSendInput): Promise<ArkmeFileSendTask> { return this.call('files.send', { ...input.content, ...input }) }
+  async fileSendTasks(sourceRef?: string, signal?: AbortSignal): Promise<ArkmeFileSendTask[]> { return this.call('files.send.tasks', sourceRef === undefined ? {} : { sourceRef }, signal) }
+  async retryFileSend(taskRef: string): Promise<ArkmeFileSendTask> { return this.call('files.send.retry', { taskRef }) }
+  async discardFileSend(taskRef: string): Promise<void> { return this.call('files.send.discard', { taskRef }) }
+  async reconcileFileSend(taskRef: string): Promise<ArkmeFileSendTask> { return this.call('files.send.reconcile', { taskRef }) }
+  async stageFileBytes(contentBase64: string, metadata: Pick<ArkmeLocalFile, 'fileName' | 'mimeType'>): Promise<ArkmeLocalFile> { return this.call('files.stage-bytes', { contentBase64, ...metadata }) }
+  async receiveFile(mediaRef: string, start = false, signal?: AbortSignal): Promise<ArkmeFileReception> { return this.call('files.receive', { mediaRef, start }, signal) }
+  subscribeFileSends(sourceRef: string, listener: (tasks: ArkmeFileSendTask[]) => void, options: ArkmeSubscribeOptions = {}): () => void {
+    const controller = new AbortController()
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const poll = async () => {
+      try { const tasks = await this.fileSendTasks(sourceRef, controller.signal); if (!controller.signal.aborted) listener(tasks) }
+      catch (error) { if (!controller.signal.aborted) options.onError?.(error) }
+      finally { if (!controller.signal.aborted) timer = setTimeout(() => { void poll() }, Math.max(250, options.intervalMs ?? 750)) }
+    }
+    if (options.immediate !== false) void poll()
+    else timer = setTimeout(() => { void poll() }, Math.max(250, options.intervalMs ?? 750))
+    return () => { controller.abort(); if (timer !== undefined) clearTimeout(timer) }
+  }
+  localFileUrl(fileRef: string, download = false): string {
+    if (!/^arkme-file-v1\.[0-9a-f-]{36}$/.test(fileRef)) throw new TypeError('Invalid local file reference')
+    return `${this.route}/files/local?ref=${encodeURIComponent(fileRef)}${download ? '&download=1' : ''}`
+  }
+
+  /** Stage locally only. Cloud upload starts when sendFiles accepts a task. */
+  async stageFile(file: Blob & { name?: string }, options: { fileName?: string; signal?: AbortSignal } = {}): Promise<ArkmeLocalFile> {
+    const response = await this.fetchImpl(`${this.route}/files/stage`, {
+      method: 'POST', headers: { 'Content-Type': file.type || 'application/octet-stream', 'X-Arkme-File-Name': encodeURIComponent(options.fileName ?? file.name ?? 'attachment') },
+      body: file, ...(options.signal === undefined ? {} : { signal: options.signal }),
+    })
+    const payload = await response.json() as ArkmePluginResponse<ArkmeLocalFile>
+    if (!payload.ok) throw new ArkmeClientError(payload.error)
+    return payload.value
   }
 
   async upload(

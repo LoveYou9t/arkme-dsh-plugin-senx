@@ -139,6 +139,7 @@ describe('registerArkmeTools', () => {
       'arkme_group_member_candidates',
       'arkme_group_member_add',
       'arkme_source_read',
+      'arkme_copy_link_extend',
       'arkme_source_members',
       'arkme_source_member_records',
       'arkme_message_read_statuses',
@@ -159,6 +160,7 @@ describe('registerArkmeTools', () => {
       'arkme_call_start',
       'arkme_ai_video',
       'arkme_text_ai_video',
+      'arkme_files_list', 'arkme_files_search', 'arkme_file_prepare', 'arkme_files_send', 'arkme_file_task', 'arkme_file_receive',
     ])
     const assembly = await ctx.systemPrompt.assemble()
     expect(assembly.sections.find(section => section.name === 'tool:arkme')?.text)

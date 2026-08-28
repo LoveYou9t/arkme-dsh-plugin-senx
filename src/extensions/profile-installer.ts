@@ -1,7 +1,7 @@
 import { execFile, spawn } from 'node:child_process'
 import { closeSync, existsSync, openSync, statSync } from 'node:fs'
 import { mkdir, writeFile } from 'node:fs/promises'
-import { dirname, join } from 'node:path'
+import { dirname, join, relative, resolve, sep } from 'node:path'
 import { promisify } from 'node:util'
 import { randomUUID } from 'node:crypto'
 import { localExtensionPnpmArgs, prepareProfilePackageManager } from '../profile-package-manager.js'
@@ -49,9 +49,14 @@ export class ArkmeExtensionProfileInstaller {
   async install(bundleDirectory: string): Promise<void> {
     await this.mutate(async () => {
       if (!existsSync(bundleDirectory)) throw new Error('扩展 Bundle 目录不存在')
+      const profileDirectory = join(this.options.dshHome, 'profiles', this.options.profileName)
+      const pathFromProfile = relative(profileDirectory, resolve(bundleDirectory))
+      const portablePath = pathFromProfile.startsWith(`arkme-extensions${sep}`)
+        ? pathFromProfile.split(sep).join('/')
+        : undefined
       await this.run([
         'plugin', '--profile', this.options.profileName,
-        ...localExtensionPnpmArgs(['add', `link:${bundleDirectory}`]),
+        ...localExtensionPnpmArgs(['add', `link:${portablePath ?? bundleDirectory}`]),
       ])
     })
   }

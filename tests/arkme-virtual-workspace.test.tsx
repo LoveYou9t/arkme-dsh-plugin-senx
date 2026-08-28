@@ -1,6 +1,11 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
-import { arkmeRootDirectoryLoadState, botActivityAtMillis, sortArkmeBotsByCreatedAt } from '../src/client/ArkmeVirtualWorkspace.js'
+import {
+  arkmeOfficialAuthorSource,
+  arkmeRootDirectoryLoadState,
+  botActivityAtMillis,
+  sortArkmeBotsByCreatedAt,
+} from '../src/client/ArkmeVirtualWorkspace.js'
 
 const workspaceSource = readFileSync(new URL('../src/client/ArkmeVirtualWorkspace.tsx', import.meta.url), 'utf8')
 
@@ -23,10 +28,22 @@ describe('Arkme conversation directory load state', () => {
     })).toBe('idle')
   })
 
+  it('keeps embedded directory refresh failures out of the visible sidebar', () => {
+    const embeddedStatuses = workspaceSource.slice(
+      workspaceSource.indexOf("rootDirectoryState === 'loading'"),
+      workspaceSource.indexOf('{lockedDirectory ? <>'),
+    )
+    expect(embeddedStatuses).not.toContain("rootDirectoryState === 'error'")
+    expect(embeddedStatuses).not.toContain('加载失败')
+    expect(embeddedStatuses).not.toContain('重试')
+  })
+
   it('opens and selects the new Bot through its dedicated private-chat surface', () => {
     expect(workspaceSource).toContain('const createdQuickAddBot = async (bot: ArkmeBotSummary): Promise<void> =>')
     expect(workspaceSource).toContain('setBots(current => sortArkmeBotsByCreatedAt([bot, ...current.filter(item => item.botRef !== bot.botRef)]))')
     expect(workspaceSource).toContain('arkmeUi.openBotConversation(bot)')
+    expect(workspaceSource).toContain('(bot.unreadCount ?? 0) > 0')
+    expect(workspaceSource).toContain('bot.isMuted === true')
     expect(workspaceSource).toContain("callArkme<{ items: ArkmeBotSummary[] }>('bots.private-chat.directory'")
   })
 
@@ -51,9 +68,25 @@ describe('Arkme conversation directory load state', () => {
 
   it('uses 38px avatars consistently in the conversation directory', () => {
     expect(workspaceSource).toContain("sourceAvatarWrap: { width: 38, height: 38")
-    expect(workspaceSource.match(/<ArkmeMark size=\{38\} \/>/g)).toHaveLength(2)
+    expect(workspaceSource.match(/<ArkmeMark size=\{38\} \/>/g)).toHaveLength(3)
     expect(workspaceSource).toContain('<ArkmeSendToSelfIcon size={38} />')
     expect(workspaceSource).toMatch(/<ArkmeSourceAvatar\s+size=\{38\}/)
+  })
+
+  it('hides the contact-author guide when the ordinary directory already contains the author chat', () => {
+    const author = { sourceRef: 'author-chat', kind: 'private_chat' as const, peerUserId: 11, displayName: '作者', activeAtMillis: 1, unreadCount: 0 }
+    const peer = { sourceRef: 'peer-chat', kind: 'private_chat' as const, peerUserId: 12, displayName: '朋友', activeAtMillis: 2, unreadCount: 0 }
+    expect(arkmeOfficialAuthorSource([peer, author], 11)).toBe(author)
+    expect(arkmeOfficialAuthorSource([peer], 11)).toBeUndefined()
+    expect(workspaceSource).toContain("officialAuthorSource === undefined && <ArkmeOfficialAuthorRow")
+    expect(workspaceSource).toContain("callArkme<ArkmeOfficialAuthorProfile>('chat.official-author.profile'")
+    expect(workspaceSource).toContain('<ArkmeUserAvatar')
+  })
+
+  it('keeps DeepSeek Harness ahead of every root-directory guide', () => {
+    const rootDirectory = workspaceSource.slice(workspaceSource.indexOf("{directory === 'root' && <>"))
+    expect(rootDirectory.indexOf('<DeepSeekHarnessRow')).toBeLessThan(rootDirectory.indexOf('<ArkmeDSHBetaCommunityEntry'))
+    expect(rootDirectory.indexOf('<DeepSeekHarnessRow')).toBeLessThan(rootDirectory.indexOf('<ArkmeOfficialAuthorRow'))
   })
 
   it('provides right-click pin and remove actions for chat and Bot rows', () => {

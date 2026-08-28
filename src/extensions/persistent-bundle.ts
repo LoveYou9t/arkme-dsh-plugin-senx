@@ -40,9 +40,18 @@ export interface ArkmePersistentInstallation {
   published_at: number
 }
 
-function packageIdentity(extensionId: string): { packageName: string; entryId: string } {
+export function persistentExtensionPackageIdentity(extensionId: string): { packageName: string; entryId: string } {
   const suffix = createHash('sha256').update(extensionId).digest('hex').slice(0, 16)
   return { packageName: `@arkme-local/ext-${suffix}`, entryId: `arkme-extension-${suffix}` }
+}
+
+export function persistentExtensionBundleDirectory(
+  profileDirectory: string,
+  extensionId: string,
+  version: string,
+): string {
+  const suffix = createHash('sha256').update(extensionId).digest('hex').slice(0, 16)
+  return join(profileDirectory, 'arkme-extensions', suffix, version)
 }
 
 function writeSecure(path: string, content: string): void {
@@ -162,6 +171,44 @@ export function readPersistentExtensionActivation(installationUrl: URL): ArkmePe
   return state as ArkmePersistentActivation
 }
 
+export function repairPersistentExtensionInstallation(input: {
+  bundleDirectory: string
+  packageName: string
+  extensionId: string
+  version: string
+  artifactPath: string
+  artifactSha256: string
+  manifestSha256: string
+}): boolean {
+  const installationPath = join(input.bundleDirectory, 'installation.json')
+  const installation = JSON.parse(readFileSync(installationPath, 'utf8')) as Partial<ArkmePersistentInstallation>
+  if (installation.format_version !== ARKME_PERSISTENT_BUNDLE_FORMAT_VERSION
+    || installation.extension_id !== input.extensionId
+    || installation.version !== input.version
+    || typeof installation.artifact_path !== 'string' || installation.artifact_path.trim() === ''
+    || installation.artifact_sha256 !== input.artifactSha256
+    || installation.manifest_sha256 !== input.manifestSha256
+    || typeof installation.signature !== 'string' || installation.signature.trim() === ''
+    || typeof installation.signing_key_id !== 'string' || installation.signing_key_id.trim() === ''
+    || typeof installation.trusted_public_key !== 'string' || installation.trusted_public_key.trim() === ''
+    || !Number.isSafeInteger(installation.published_at) || (installation.published_at ?? -1) < 0) {
+    throw new Error('Arkme persistent extension installation identity mismatch')
+  }
+  const manifest = JSON.parse(readFileSync(join(input.bundleDirectory, 'package.json'), 'utf8')) as {
+    name?: unknown
+    version?: unknown
+  }
+  if (manifest.name !== input.packageName || manifest.version !== input.version) {
+    throw new Error('Arkme persistent extension package identity mismatch')
+  }
+  if (installation.artifact_path === input.artifactPath) return false
+  replaceSecure(installationPath, `${JSON.stringify({
+    ...installation,
+    artifact_path: input.artifactPath,
+  }, undefined, 2)}\n`)
+  return true
+}
+
 export function materializePersistentExtensionBundle(input: {
   profileDirectory: string
   resolution: ArkmeExtensionInstallResolution
@@ -170,11 +217,10 @@ export function materializePersistentExtensionBundle(input: {
   clientCode?: string
   clientApiPath?: string
 }): ArkmePersistentBundleResult {
-  const { packageName, entryId } = packageIdentity(input.resolution.extension_id)
-  const bundleDirectory = join(
+  const { packageName, entryId } = persistentExtensionPackageIdentity(input.resolution.extension_id)
+  const bundleDirectory = persistentExtensionBundleDirectory(
     input.profileDirectory,
-    'arkme-extensions',
-    createHash('sha256').update(input.resolution.extension_id).digest('hex').slice(0, 16),
+    input.resolution.extension_id,
     input.resolution.version,
   )
   const installation: ArkmePersistentInstallation = {

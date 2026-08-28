@@ -85,6 +85,68 @@ describe('Arkme SDK', () => {
     expect(calls).toEqual([{ operation: 'images.list', params: { limit: 24, cursor: 'next-images' } }])
   })
 
+  it('copies and resolves links, then forwards messages through bounded opaque action references', async () => {
+    const calls: Array<{ operation: string; params?: Record<string, unknown> }> = []
+    const sdk = createArkmeSdk({
+      fetchImpl: async (_input, init) => {
+        const request = JSON.parse(String(init?.body)) as { operation: string; params?: Record<string, unknown> }
+        calls.push(request)
+        if (request.operation === 'source.message-copy-link') return success({ sid: 'sid-1', url: 'https://app.arkme.ai/share/sid-1' })
+        if (request.operation === 'source.message-copy-link.resolve') return success({
+          sid: 'U2HQgn1RhPJZaFmx',
+          displayTitle: '实习性的快记',
+          generatedAtMillis: 1,
+          accessMode: 'link_read_only',
+          items: [],
+          presentation: [],
+        })
+        if (request.operation === 'source.message-copy-link.extend') return success({
+          sid: 'U2HQgn1RhPJZaFmx',
+          recordUid: request.params?.recordUid,
+          parentRecordUid: 'parent-record-1',
+          status: 1,
+          localState: 'synced',
+        })
+        if (request.operation === 'source.link-metadata.resolve') return success({
+          url: 'https://github.com/arkme-senx/arkme-dsh-plugin/pull/145',
+          title: 'fix(ui): 补齐快记详情图片展示 by htao-123 · Pull Request #145 · arkme-senx/arkme-dsh-plugin',
+          siteName: 'GitHub',
+        })
+        if (request.operation === 'source.forward-messages') return success({ sourceRef: 'source-ref', itemUid: 'forward-record', status: 1 })
+        throw new Error(`unexpected ${request.operation}`)
+      },
+    })
+
+    await expect(sdk.copyMessageLink('source-ref', [' action-1 ', '', 'action-2']))
+      .resolves.toEqual({ sid: 'sid-1', url: 'https://app.arkme.ai/share/sid-1' })
+    await expect(sdk.resolveMessageCopyLink(' U2HQgn1RhPJZaFmx '))
+      .resolves.toMatchObject({ sid: 'U2HQgn1RhPJZaFmx', displayTitle: '实习性的快记' })
+    await expect(sdk.extendMessageCopyLink(' U2HQgn1RhPJZaFmx ', ' 延展 ', {
+      itemIndex: 1,
+      recordUid: 'record-extension-1',
+    })).resolves.toMatchObject({ recordUid: 'record-extension-1', parentRecordUid: 'parent-record-1' })
+    await expect(sdk.resolveLinkMetadata(' https://github.com/arkme-senx/arkme-dsh-plugin/pull/145 '))
+      .resolves.toMatchObject({ title: 'fix(ui): 补齐快记详情图片展示 by htao-123 · Pull Request #145 · arkme-senx/arkme-dsh-plugin' })
+    await expect(sdk.forwardMessages('source-ref', ['action-1'], {
+      targetSourceRef: 'target-source-ref',
+      recordUid: 'record-1',
+      relationUid: 'rel-1',
+      commentText: ' 附言 ',
+    })).resolves.toMatchObject({ itemUid: 'forward-record' })
+
+    expect(calls).toEqual([
+      { operation: 'source.message-copy-link', params: { sourceRef: 'source-ref', actionRefs: ['action-1', 'action-2'] } },
+      { operation: 'source.message-copy-link.resolve', params: { sid: 'U2HQgn1RhPJZaFmx' } },
+      { operation: 'source.message-copy-link.extend', params: { sid: 'U2HQgn1RhPJZaFmx', itemIndex: 1, textContent: '延展', recordUid: 'record-extension-1' } },
+      { operation: 'source.link-metadata.resolve', params: { url: 'https://github.com/arkme-senx/arkme-dsh-plugin/pull/145' } },
+      { operation: 'source.forward-messages', params: { sourceRef: 'source-ref', targetSourceRef: 'target-source-ref', actionRefs: ['action-1'], recordUid: 'record-1', relationUid: 'rel-1', commentText: '附言' } },
+    ])
+    await expect(sdk.copyMessageLink('source-ref', ['action-1', 'action-1'])).rejects.toThrow('unique')
+    await expect(sdk.resolveMessageCopyLink('bad')).rejects.toThrow('16 alphanumeric')
+    await expect(sdk.extendMessageCopyLink('bad', '延展')).rejects.toThrow('16 alphanumeric')
+    await expect(sdk.resolveLinkMetadata('')).rejects.toThrow('must not be empty')
+  })
+
   it('searches and adds contacts through opaque same-origin contracts', async () => {
     const calls: Array<{ operation: string; params?: Record<string, unknown> }> = []
     const sdk = createArkmeSdk({
@@ -407,6 +469,7 @@ describe('Arkme SDK', () => {
             features: {
               authStatus: true, cachedSnapshot: true, remoteRefresh: true, search: true,
               createText: true, retryOutbox: true, revisionPolling: true, userProfile: true, imageRead: true,
+              accountSettings: true,
               recordCalendar: true,
               sourceDirectory: true, sourceTimeline: true, sourceTextSend: true, outgoingCall: true,
               messageReadReceipts: true,
@@ -432,6 +495,14 @@ describe('Arkme SDK', () => {
             revision: 5,
           })
         }
+        if (request.operation === 'user.arkme-id.check') {
+          return success({ available: true, reason: '', arkmeId: request.params?.arkmeId })
+        }
+        if (request.operation === 'user.arkme-id.set') {
+          return success({ arkmeId: request.params?.arkmeId, changed: true, canUpdate: false, revision: 6 })
+        }
+        if (request.operation === 'auth.phone.send') return success({ sent: true })
+        if (request.operation === 'auth.phone.verify') return success({ status: 'authenticated', environment: 'test', userId: 1 })
         if (request.operation === 'image.read') {
           return success({ mediaType: 'image/png', bytes: 8, dataBase64: 'iVBORw0KGgo=' })
         }
@@ -448,13 +519,19 @@ describe('Arkme SDK', () => {
 
     await expect(sdk.capabilities()).resolves.toMatchObject({
       contractVersion: 1,
-      features: { outgoingCall: true, extensionManagement: true, extensionIcons: true, messageReadReceipts: true },
+      features: { outgoingCall: true, extensionManagement: true, extensionIcons: true, messageReadReceipts: true, accountSettings: true },
       limits: { maxMessageReadReceiptItems: 50 },
     })
     await expect(sdk.search('复盘', { limit: 5, syncAll: true })).resolves.toMatchObject({ revision: 4 })
     await expect(sdk.profile({ refresh: true })).resolves.toMatchObject({
       profile: { displayName: '昵称' }, revision: 5,
     })
+    await expect(sdk.checkArkmeIdAvailability(' Lucis_01 ')).resolves.toMatchObject({ available: true, arkmeId: 'Lucis_01' })
+    await expect(sdk.setArkmeIdOnce(' Lucis_01 ')).resolves.toMatchObject({ arkmeId: 'Lucis_01', changed: true })
+    await expect(sdk.sendPhoneCode('138 0000 8000', {
+      lot_number: 'lot', captcha_output: 'out', pass_token: 'pass', gen_time: 'time',
+    })).resolves.toEqual({ sent: true })
+    await expect(sdk.verifyPhoneCode('138-0000-8000', '123456')).resolves.toMatchObject({ status: 'authenticated' })
     const image = await sdk.readImage('1_1700000000_1_0.png')
     expect(image).toMatchObject({ mediaType: 'image/png', bytes: 8 })
     expect(sdk.imageDataUrl(image)).toBe('data:image/png;base64,iVBORw0KGgo=')
@@ -475,6 +552,13 @@ describe('Arkme SDK', () => {
       { operation: 'provider.capabilities' },
       { operation: 'records.search', params: { query: '复盘', limit: 5, syncAll: true } },
       { operation: 'user.profile.refresh' },
+      { operation: 'user.arkme-id.check', params: { arkmeId: 'Lucis_01' } },
+      { operation: 'user.arkme-id.set', params: { arkmeId: 'Lucis_01' } },
+      {
+        operation: 'auth.phone.send',
+        params: { phone: '13800008000', captcha: { lot_number: 'lot', captcha_output: 'out', pass_token: 'pass', gen_time: 'time' } },
+      },
+      { operation: 'auth.phone.verify', params: { phone: '13800008000', code: '123456' } },
       { operation: 'image.read', params: { imageRef: '1_1700000000_1_0.png' } },
       { operation: 'calendar.buckets', params: { startDate: '2026-08-01', endDate: '2026-08-31', timezone: 'Asia/Shanghai' } },
       {
@@ -806,6 +890,37 @@ describe('Arkme SDK', () => {
       'ArkmeOutgoingCallPrepareResult',
       'ArkmeOutgoingCallToolResult',
     ]) expect(rootSource).toContain(name)
+  })
+
+  it('exposes the same confirmation-based group AI polish owner to external plugins', async () => {
+    const calls: Array<{ operation: string; params?: Record<string, unknown> }> = []
+    const sdk = createArkmeSdk({
+      fetchImpl: async (_input, init) => {
+        const request = JSON.parse(String(init?.body)) as { operation: string; params?: Record<string, unknown> }
+        calls.push(request)
+        if (request.operation === 'source.ai-polish.settings') return success({
+          sourceRef: 'group-ref', groupName: '产品群', enabled: false, canManage: true,
+          viewerRole: 1, activeRuleName: '', rules: [], updatedAtMillis: 1,
+        })
+        if (request.operation === 'source.ai-polish.prepare-enable') return success({
+          groupName: '产品群', ruleName: '友好简洁', ruleText: '表达友好、简洁。', confirmationRef: 'confirm-1',
+        })
+        if (request.operation === 'source.ai-polish.confirm-enable') return success({
+          groupName: '产品群', enabled: true, ruleName: '友好简洁', changed: true,
+        })
+        throw new Error(`unexpected ${request.operation}`)
+      },
+    })
+
+    await expect(sdk.groupAiPolishSettings('group-ref')).resolves.toMatchObject({ canManage: true })
+    await expect(sdk.prepareEnableGroupAiPolishRule('group-ref', 'rule-2'))
+      .resolves.toMatchObject({ confirmationRef: 'confirm-1' })
+    await expect(sdk.confirmEnableGroupAiPolish('confirm-1')).resolves.toMatchObject({ enabled: true })
+    expect(calls).toEqual([
+      { operation: 'source.ai-polish.settings', params: { sourceRef: 'group-ref' } },
+      { operation: 'source.ai-polish.prepare-enable', params: { sourceRef: 'group-ref', ruleRef: 'rule-2' } },
+      { operation: 'source.ai-polish.confirm-enable', params: { confirmationRef: 'confirm-1' } },
+    ])
   })
 
   it('notifies subscribers only when auth identity or revision changes', async () => {

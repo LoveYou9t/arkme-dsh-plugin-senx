@@ -8,6 +8,7 @@ import { listSourcesToolModule } from './conversation/list-sources.js'
 import { groupAiPolishToolModule } from './conversation/group-ai-polish.js'
 import { addFavoriteStickerToolModule, listFavoriteStickersToolModule, manageFavoriteStickerToolModule, sendFavoriteStickerToolModule } from './conversation/favorite-stickers.js'
 import { readSourceToolModule } from './conversation/read-source.js'
+import { copyLinkExtendToolModule } from './conversation/copy-link-extend.js'
 import { messageReadReceiptToolModules } from './conversation/read-receipts.js'
 import { sourceMemberRecordsToolModule, sourceMembersToolModule } from './conversation/member-records.js'
 import { reportMessageToolModule } from './conversation/report-message.js'
@@ -19,6 +20,7 @@ import { conversationMarkReadToolModule, unreadConversationsToolModule } from '.
 import { aiVideoToolModule } from './media/ai-video.js'
 import { textAiVideoToolModule } from './media/text-ai-video.js'
 import { readImageToolModule } from './media/read-image.js'
+import { fileToolModules } from './media/files.js'
 import { recordingToolModules } from './recordings/index.js'
 import { createRecordToolModule } from './records/create.js'
 import { listImagesToolModule } from './records/images.js'
@@ -67,6 +69,7 @@ export const businessToolModules: readonly ArkmeToolModule[] = [
   unreadConversationsToolModule,
   ...groupMemberToolModules,
   readSourceToolModule,
+  copyLinkExtendToolModule,
   sourceMembersToolModule,
   sourceMemberRecordsToolModule,
   ...messageReadReceiptToolModules,
@@ -85,4 +88,5 @@ export const businessToolModules: readonly ArkmeToolModule[] = [
   aiVideoToolModule,
   textAiVideoToolModule,
   readImageToolModule,
+  ...fileToolModules,
 ]

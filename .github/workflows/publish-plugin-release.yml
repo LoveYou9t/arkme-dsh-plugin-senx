@@ -1,7 +1,7 @@
 name: 合并 master 后发布插件
 
 on:
-  pull_request:
+  pull_request_target:
     types: [closed]
     branches: [master]
 
@@ -252,6 +252,27 @@ jobs:
           if ! gh release view "$tag" >/dev/null 2>&1; then
             gh release create "$tag" --target "$RELEASE_SHA" --title "$tag" --generate-notes
           fi
+
+  request-backend-build:
+    name: 调用 Backend 请求 Arkme 生产构建
+    needs: [prepare, publish]
+    if: needs.publish.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    environment: production
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.release_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+      - name: 调用 Backend 请求 Arkme 生产构建
+        env:
+          ARKME_BACKEND_BASE_URL: ${{ secrets.ARKME_BACKEND_BASE_URL }}
+          ARKME_CI_TRIGGER_SECRET: ${{ secrets.ARKME_CI_TRIGGER_SECRET }}
+        run: bash .github/scripts/request-arkme-build.sh
 
   sync-dev:
     needs: [prepare, publish]

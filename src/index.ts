@@ -12,8 +12,15 @@ import { createOpenClawCliAdapter, createOpenClawCommandRunner, createOpenClawFi
 import type {} from '@deepseek-ai/dsh-host-webserver'
 import { registerDSHAgentInputRecordSync } from './dsh-agent-input-sync.js'
 import { createArkmeHostApi } from './host-api.js'
+import { openDshHostPath } from './dsh-host-capabilities.js'
+import { ARKME_HARNESS_EMBED_PATH } from './harness-embed-contract.js'
+import {
+  createHarnessEmbedRouteHandler,
+  dshRootDocumentHeaders,
+  type DshWebBootGraph,
+} from './harness-embed-route.js'
 import { createOutgoingCallAssetHandler } from './outgoing-call-assets.js'
-import { createArkmeMediaHandler, createArkmeUploadHandler } from './rich-media-routes.js'
+import { createArkmeMediaHandler, createArkmeUploadHandler, createArkmeLocalFileHandler } from './rich-media-routes.js'
 import { createArkmeVoiceprintEnrollmentHandler } from './voiceprint-routes.js'
 import { createArkmeSecureValueStore, createArkmeSessionStore } from './keychain-store.js'
 import { ArkmeLocalDatabase } from './local-database.js'
@@ -154,7 +161,11 @@ export const Config: Schema<Config> = Schema.object({
 })
 
 export const name = 'dsh-arkme'
-export const inject = ['webServer', 'tools', 'systemPrompt', 'pluginInventory']
+export const inject = ['webServer', 'tools', 'systemPrompt', 'pluginInventory', 'clientModules']
+
+interface DshClientModulesLike {
+  graph(): DshWebBootGraph
+}
 
 export function readDshRuntimeVersion(dshBinPath: string): string | undefined {
   if (dshBinPath.trim() === '') return undefined
@@ -224,7 +235,10 @@ export function apply(ctx: Context, config: Config): void {
   const localDatabase = new ArkmeLocalDatabase(stateDirectory, stateStore)
   const sessionStore = createArkmeSessionStore(`${config.keychainServicePrefix}.${config.environment}`)
   const pendingSessionStore = createArkmeSessionStore(`${config.keychainServicePrefix}.${config.environment}.pending-binding`)
-  const service = new ArkmeService(config, sessionStore, localDatabase, fetch, pendingSessionStore)
+  const service = new ArkmeService({ ...config, fileStateDirectory: join(stateDirectory, 'files') }, sessionStore, localDatabase, fetch, pendingSessionStore)
+  service.attachLocalFileOpener(async (path, signal) => {
+    await openDshHostPath(ctx, path, signal)
+  })
   let remoteHost: DshRemoteHostFacade | undefined
   const openClawStateDirectory = join(stateDirectory, 'openclaw')
   const openClawCli = createOpenClawCliAdapter({
@@ -239,6 +253,7 @@ export function apply(ctx: Context, config: Config): void {
   }))
   const extensionDirectory = config.extensionArtifactDirectory.trim() || join(dshHome, 'arkme-self', 'extensions')
   const extensionStore = new ArkmeExtensionInstallStore(extensionDirectory)
+  const clientModules = (ctx as Context & { clientModules: DshClientModulesLike }).clientModules
   const updateManager = new ArkmePluginUpdateManager({
     enabled: config.updateCheckEnabled,
     channel: config.updateChannel,
@@ -449,6 +464,8 @@ export function apply(ctx: Context, config: Config): void {
     maxUploadBytes: config.maxUploadBytes,
   }
   const uploadHandler = createArkmeUploadHandler(service, richMediaOptions)
+  const stageHandler = createArkmeUploadHandler(service, richMediaOptions, 'stage')
+  const localFileHandler = createArkmeLocalFileHandler(service, richMediaOptions)
   const mediaHandler = createArkmeMediaHandler(service, richMediaOptions)
   const voiceprintEnrollmentHandler = createArkmeVoiceprintEnrollmentHandler(service, {
     expectedPort: ctx.webServer.port,
@@ -466,6 +483,22 @@ export function apply(ctx: Context, config: Config): void {
   const realtimeEvents = new ArkmeRealtimeEvents(service, {
     expectedPort: ctx.webServer.port,
     allowNonLoopback: config.allowNonLoopback,
+  })
+  const harnessEmbedHandler = createHarnessEmbedRouteHandler({
+    getGraph: () => clientModules.graph(),
+    installedPackageNames: () => extensionStore.list().flatMap(item =>
+      item.profilePackageName === undefined ? [] : [item.profilePackageName]),
+    readRootHtml: async request => {
+      const response = await fetch(`http://127.0.0.1:${String(ctx.webServer.port)}/`, {
+        headers: dshRootDocumentHeaders(request),
+        signal: AbortSignal.timeout(Math.min(config.requestTimeoutMs, 5_000)),
+      })
+      if (!response.ok) throw new Error(`DSH root document returned HTTP ${String(response.status)}`)
+      return await response.text()
+    },
+    onError: error => {
+      ctx.logger.warn('dsh-arkme: core-only Harness document failed: %s', error instanceof Error ? error.message : String(error))
+    },
   })
   ctx.effect(() => () => {
     service.dispose()
@@ -485,6 +518,11 @@ export function apply(ctx: Context, config: Config): void {
     handler,
   }), 'dsh-arkme: local BFF route')
   ctx.effect(() => ctx.webServer.register({
+    kind: 'exact',
+    path: ARKME_HARNESS_EMBED_PATH,
+    handler: harnessEmbedHandler,
+  }), 'dsh-arkme: core-only DeepSeek Harness iframe route')
+  ctx.effect(() => ctx.webServer.register({
     kind: 'prefix',
     path: `${config.routePath}/call`,
     handler: callAssetHandler,
@@ -494,6 +532,8 @@ export function apply(ctx: Context, config: Config): void {
     path: `${config.routePath}/upload`,
     handler: uploadHandler,
   }), 'dsh-arkme: rich content upload route')
+  ctx.effect(() => ctx.webServer.register({ kind: 'exact', path: `${config.routePath}/files/stage`, handler: stageHandler }), 'dsh-arkme: local file preparation')
+  ctx.effect(() => ctx.webServer.register({ kind: 'exact', path: `${config.routePath}/files/local`, handler: localFileHandler }), 'dsh-arkme: authorized local file bytes')
   ctx.effect(() => ctx.webServer.register({
     kind: 'exact',
     path: `${config.routePath}/media`,

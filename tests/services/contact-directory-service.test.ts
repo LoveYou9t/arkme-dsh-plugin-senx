@@ -192,8 +192,18 @@ describe('ContactDirectoryService', () => {
 
     expect(page).toEqual({
       section: 'bots', total: 1, hasMore: false,
-      items: [{ kind: 'bot', botRef: expect.stringMatching(/^arkme-bot-v2\./), displayName: '小助手' }],
+      items: [{
+        kind: 'bot', bot: {
+        botRef: expect.stringMatching(/^arkme-bot-v2\./),
+        directoryKey: expect.stringMatching(/^arkme-bot-directory-v1\./),
+        name: '小助手', provider: 'webhook', description: '', status: 'online',
+        directChatAvailable: false, privateChatOutboundEnabled: false, refreshOnRecordChanges: false,
+        conversationProjection: 'none',
+      } }],
     })
+    expect(page.items[0]).not.toHaveProperty('botRef')
+    expect(page.items[0]).not.toHaveProperty('displayName')
+    expect(page.items[0]).not.toHaveProperty('avatarRef')
     expect(JSON.stringify(page)).not.toContain('bot-private-1')
   })
 
@@ -336,7 +346,9 @@ describe('ContactDirectoryService', () => {
     expect(page.items.map(item => item.displayName)).toEqual(['老张', '林林', '周周', '私聊陈', '吴吴'])
     expect(JSON.stringify(page)).not.toContain('direct-')
     expect(JSON.stringify(page)).not.toContain('base-')
-    expect(JSON.stringify(page)).not.toContain('999')
+    expect(page.items).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: 'contact', displayName: '机器人' }),
+    ]))
     expect(runtime.authenticatedChatPost).toHaveBeenCalledWith(
       '/api/v1/chats/list',
       { limit: 50, session_kind: 1 },

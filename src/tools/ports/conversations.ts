@@ -1,6 +1,7 @@
 import type {
   ArkmeConversationMemberList, ArkmeConversationMemberRecordMode, ArkmeConversationMemberRecordPage,
   ArkmeDirectTextSendResult, ArkmeGroupAiPolishMutationResult, ArkmeGroupAiPolishRuleCandidate,
+  ArkmeMessageCopyLinkExtendResult,
   ArkmeGroupAiPolishSnapshot, ArkmeMessageReportResult, ArkmeSourceDirectory, ArkmeSourceList, ArkmeSourceReadResult, ArkmeSourceSendResult,
   ArkmeMessageReadReceiptDetail, ArkmeMessageReadReceiptQueryItem, ArkmeMessageReadReceiptSummaryList,
   ArkmeRelatedRecordingPage, ArkmeRelatedRecordingPageOptions, ArkmeTimelineCursor, ArkmeTimelinePage,
@@ -63,6 +64,13 @@ export interface ArkmeConversationToolPort {
       agentAuthored?: boolean
     },
   ): Promise<ArkmeSourceSendResult>
+  extendMessageCopyLink(
+    sid: string,
+    itemIndex: number,
+    textContent: string,
+    recordUid: string,
+    options?: { signal?: AbortSignal },
+  ): Promise<ArkmeMessageCopyLinkExtendResult>
   favoriteStickers(signal?: AbortSignal): Promise<ArkmeFavoriteStickerList>
   addFavoriteSticker(item: ArkmeFavoriteStickerAddInput, signal?: AbortSignal): Promise<ArkmeFavoriteStickerList>
   sendFavoriteSticker(
@@ -98,6 +106,11 @@ export interface ArkmeConversationToolPort {
   generateGroupAiPolishRule(
     groupName: string,
     requirement: string,
+    options?: { signal?: AbortSignal },
+  ): Promise<ArkmeGroupAiPolishRuleCandidate>
+  prepareEnableGroupAiPolish(
+    groupName: string,
+    ruleName?: string,
     options?: { signal?: AbortSignal },
   ): Promise<ArkmeGroupAiPolishRuleCandidate>
   confirmEnableGroupAiPolish(
