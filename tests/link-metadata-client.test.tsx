@@ -215,6 +215,21 @@ describe('Arkme link metadata presentation', () => {
     expect(callHost).not.toHaveBeenCalled()
   })
 
+  it('keeps ordinary GitHub repository links immediate without waiting for network metadata', async () => {
+    const callHost = vi.fn(async () => null)
+    const resolver = new ArkmeHostLinkMetadataResolver(callHost)
+
+    await expect(resolver.resolve('https://github.com/arkme-senx/arkme-dsh-plugin')).resolves.toEqual({
+      url: 'https://github.com/arkme-senx/arkme-dsh-plugin',
+      title: 'arkme-senx/arkme-dsh-plugin',
+    })
+    await expect(resolver.resolve('https://github.com/arkme-senx/arkme-dsh-plugin/issues/12')).resolves.toEqual({
+      url: 'https://github.com/arkme-senx/arkme-dsh-plugin/issues/12',
+      title: 'arkme-senx/arkme-dsh-plugin',
+    })
+    expect(callHost).not.toHaveBeenCalled()
+  })
+
   it('resolves deterministic CodeUp change names without waiting for Host metadata', async () => {
     const callHost = vi.fn(async () => null)
     const resolver = new ArkmeHostLinkMetadataResolver(callHost)

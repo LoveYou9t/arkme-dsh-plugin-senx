@@ -183,7 +183,7 @@ describe('favorite sticker Host API dispatch', () => {
   })
 })
 
-describe('World publish Host API dispatch', () => {
+describe('link metadata Host API dispatch', () => {
   it('dispatches link title resolution through its dedicated infrastructure owner', async () => {
     const service = fakeService()
     const request = new AbortController()
@@ -255,7 +255,9 @@ describe('World publish Host API dispatch', () => {
       await once(server, 'close')
     }
   })
+})
 
+describe('World publish Host API dispatch', () => {
   it('aborts an in-flight voiceprint generation when its Browser request disconnects', async () => {
     let upstreamSignal: AbortSignal | undefined
     const generationStarted = Promise.withResolvers<void>()

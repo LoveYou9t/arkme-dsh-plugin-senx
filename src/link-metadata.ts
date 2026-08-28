@@ -14,8 +14,13 @@ export function arkmeKnownLinkMetadataFallback(rawUrl: string | URL): ArkmeLinkM
     const url = linkUrl(rawUrl)
     const host = url.hostname.replace(/^www\./iu, '').toLowerCase()
     const parts = url.pathname.split('/').filter(Boolean)
-    if (host === 'github.com' && parts.length >= 4 && parts[2] === 'pull') {
-      return { url: url.href, title: `Pull Request #${parts[3]} · ${parts[0]}/${parts[1]}` }
+    if (host === 'github.com') {
+      if (parts.length >= 4 && parts[2] === 'pull') {
+        return { url: url.href, title: `Pull Request #${parts[3]} · ${parts[0]}/${parts[1]}` }
+      }
+      if (parts.length >= 2) {
+        return { url: url.href, title: `${parts[0]}/${parts[1]}` }
+      }
     }
     if ((host === 'codeup.aliyun.com' || host.endsWith('.codeup.aliyun.com')) && parts.includes('change')) {
       const changeIndex = parts.indexOf('change')
