@@ -75,6 +75,11 @@ function withoutOpenClawProtocolNames(file: string, content: string): string {
   return content.replace(/jotmo/gi, '')
 }
 
+function withoutBotOwnerProtocolNames(file: string, content: string): string {
+  if (file !== join(root, 'src/services/bot-service.ts')) return content
+  return content.replaceAll("'jotmo-subject'", '').replaceAll("'jotmo-chat'", '')
+}
+
 function withoutArkmeIdCompatibilityAliases(file: string, content: string): string {
   const localizedUiFiles = new Set([
     join(root, 'src/client/ArkmeLogin.tsx'),
@@ -160,7 +165,7 @@ describe('Arkme plugin identity', () => {
           ),
         ),
       )
-      const content = withoutInfrastructureNames(withoutOpenClawProtocolNames(file, source))
+      const content = withoutInfrastructureNames(withoutOpenClawProtocolNames(file, withoutBotOwnerProtocolNames(file, source)))
       return /jotmo|jiwo|即我/i.test(content) ? [file.slice(root.length)] : []
     })
 

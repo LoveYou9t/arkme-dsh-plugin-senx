@@ -111,6 +111,13 @@ describe('Arkme service architecture', () => {
     }
   })
 
+  it('keeps direct-conversation and group Bot projections behind separate mappers', () => {
+    const botService = readFileSync(join(root, 'src/services/bot-service.ts'), 'utf8')
+    const arkmeService = readFileSync(join(root, 'src/arkme-service.ts'), 'utf8')
+    expect(botService).toContain('groupBotSummaryFromData')
+    expect(arkmeService).not.toContain('BOT_CONVERSATION_OWNER')
+  })
+
   it('keeps World cross-domain dependencies behind narrow ports', () => {
     const world = readFileSync(join(root, 'src/services/world-service.ts'), 'utf8')
     expect(world).toContain('export interface ArkmeWorldProfileReader')

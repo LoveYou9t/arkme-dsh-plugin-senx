@@ -491,7 +491,9 @@ export class ArkmeService {
   }
 
   async sendBotPrivateChatMessage(botRef: string, content: string, options: { signal?: AbortSignal } = {}) {
-    return await this.bot.sendBotPrivateChatMessage(botRef, content, options)
+    const outcome = await this.bot.sendBotPrivateChatMessage(botRef, content, options)
+    if (outcome.recordProjectionChanged) await this.realtime.invalidateRecordProjection()
+    return outcome.result
   }
 
   async listGroupBots(

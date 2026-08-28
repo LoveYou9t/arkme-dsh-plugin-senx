@@ -404,6 +404,10 @@ export interface ArkmeBotSummary {
   description: string
   status: ArkmeBotStatus
   directChatAvailable: boolean
+  /** Whether this Bot accepts outbound private-chat messages from Arkme. */
+  privateChatOutboundEnabled?: boolean
+  /** Whether canonical Record changes can update this Bot conversation. */
+  refreshOnRecordChanges?: boolean
   /** Creation time supplied by the Bot service, when available. */
   createdAtMillis?: number
   /** Latest private-chat message time, when the conversation directory has been hydrated. */
@@ -418,12 +422,27 @@ export interface ArkmeBotList {
   items: ArkmeBotSummary[]
 }
 
-/** Browser-safe projection of one message in the legacy Bot direct-chat protocol. */
+/** Browser-safe projection of one Bot private-chat message. */
 export interface ArkmeBotPrivateChatMessage {
+  messageId: string
+  recordUid?: string
   role: 'user' | 'assistant'
   content: string
   status: string
   createdAtMillis: number
+  attachments: ArkmeBotPrivateChatAttachment[]
+}
+
+/** Safe attachment metadata; source file identifiers and remote URLs remain Host-owned. */
+export interface ArkmeBotPrivateChatAttachment {
+  kind: string
+  fileName: string
+  mimeType: string
+  size: number
+  durationMillis: number
+  width: number
+  height: number
+  sortOrder: number
 }
 
 export interface ArkmeBotPrivateChatConversation {
