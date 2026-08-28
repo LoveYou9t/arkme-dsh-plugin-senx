@@ -5,6 +5,7 @@ import {
   ArkmeAttachmentDraftTile, ArkmeMediaPreview, ArkmeMessageContent, ArkmeRecordDetailContent,
   arkmeContainedImageRect, arkmeImagePreviewAnchoredTop,
   arkmeImagePreviewDragTop, arkmeMessageCopyLinkSidFromUrl, arkmeNextImagePreviewMode,
+  arkmeRelatedRecordingItemFromSharedRecording, arkmeSharedRecordingTimeText,
 } from '../src/client/ArkmeRichContent.js'
 import { ArkmeLongArticleDialog } from '../src/client/ArkmeLongArticleDialog.js'
 import { ArkmeTimelineDetailDrawer, ForwardRecordsDetail } from '../src/client/ArkmeNoteDetails.js'
@@ -60,7 +61,50 @@ describe('Arkme rich content presentation', () => {
     expect(html).not.toContain('background:')
   })
 
-  it('keeps copied quick links as internal business links and normal URLs on shared link infrastructure', () => {
+  it('renders shared recordings as compact summary cards without leaking transcript text', () => {
+    const item = {
+      itemUid: 'shared-recording', senderName: '小杨', isMe: false, sendAtMillis: 1, status: 1, title: '', textContent: '',
+      sharedRecording: {
+        sourceDigest: 'digest-one',
+        detailRef: 'detail-ref-one',
+        sharedByUserId: 12,
+        sharedAtMillis: 1_782_300_000_000,
+        displayAtMillis: 1_782_300_000_000,
+        endAtMillis: 1_782_303_000_000,
+        timeRangeText: '2026-06-25 10:23 - 10:27',
+        title: '产品复盘',
+        summary: '讨论了共享方案，并明确了后续任务和风险控制。',
+        transcript: '完整录音原文不应该出现在预览卡片里',
+        transcriptAvailable: true,
+        participants: [
+          { refUserId: 12, displayName: '小杨', role: 1 },
+          { refUserId: 13, displayName: '老黄', role: 1 },
+        ],
+      },
+    }
+    const html = renderToStaticMarkup(<ArkmeMessageContent item={item} />)
+    expect(html).toContain('data-arkme-shared-recording-card="true"')
+    expect(html).toContain('产品复盘')
+    expect(html).toContain('10:23 - 10:27')
+    expect(html).toContain('讨论了共享方案，并明确了后续任务和风险控制。')
+    expect(html).toContain('参与者：小杨 / 老黄')
+    expect(html).toContain('-webkit-line-clamp:2')
+    expect(html).not.toContain('完整录音原文')
+    expect(html).not.toContain('共同记忆 · 相关录音')
+    expect(arkmeSharedRecordingTimeText(item.sharedRecording)).toBe('10:23 - 10:27')
+    expect(arkmeRelatedRecordingItemFromSharedRecording(item)).toMatchObject({
+      recordingRef: 'shared-recording:digest-one',
+      sharedRecordingDetailRef: 'detail-ref-one',
+      timeRangeText: '10:23 - 10:27',
+      title: '产品复盘',
+      transcriptAvailable: true,
+      transcript: '完整录音原文不应该出现在预览卡片里',
+      participants: [{ displayName: '小杨' }, { displayName: '老黄' }],
+      isSharedByOther: true,
+    })
+  })
+
+  it('renders copied quick links and normal urls as Flutter-style inline link previews', () => {
     const sid = 'U2HQgn1RhPJZaFmx'
     expect(arkmeMessageCopyLinkSidFromUrl(`https://jiwo.cc/s/${sid}`, 'https://jiwo.cc')).toBe(sid)
     const copyLinkHtml = renderToStaticMarkup(<ArkmeMessageContent

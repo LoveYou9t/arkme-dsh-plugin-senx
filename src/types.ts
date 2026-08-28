@@ -1336,6 +1336,8 @@ export interface ArkmeTimelineItem {
   selfTopic?: ArkmeTimelineSelfTopic
   /** Browser-safe Chat forward snapshot. It is present only for explicit `render_kind=forward_records` payloads. */
   forwardRecords?: ArkmeForwardRecordsPreview
+  /** Browser-safe shared recording snapshot. It is present only for explicit `render_kind=shared_recording_memory` payloads. */
+  sharedRecording?: ArkmeSharedRecordingPreview
 }
 
 /** Identity of one message returned by an Arkme private/group timeline. */
@@ -1414,6 +1416,29 @@ export interface ArkmeForwardRecordPreviewItem {
   contentBlocks?: ArkmeContentBlock[]
   mediaUnavailable?: true
   truncated?: true
+}
+
+export interface ArkmeSharedRecordingParticipant {
+  refUserId?: number
+  displayName: string
+  role: number
+}
+
+export interface ArkmeSharedRecordingPreview {
+  /** Backend record digest for opening the shared recording snapshot. */
+  sourceDigest: string
+  /** Browser-safe Host-bound detail reference for loading the full transcript on demand. */
+  detailRef?: string
+  sharedByUserId: number
+  sharedAtMillis: number
+  displayAtMillis: number
+  endAtMillis: number
+  timeRangeText: string
+  title: string
+  summary: string
+  transcript?: string
+  transcriptAvailable: boolean
+  participants: ArkmeSharedRecordingParticipant[]
 }
 
 export interface ArkmeTimelineAgentSource {
@@ -1752,6 +1777,8 @@ export interface ArkmeRelatedRecordingParticipant {
 export interface ArkmeRelatedRecordingItem {
   /** Account-bound opaque identity. Browser and Agent consumers must not parse it. */
   recordingRef: string
+  /** UI-only opaque reference for shared/related recording details that need lazy transcript loading. */
+  sharedRecordingDetailRef?: string
   startAtMillis: number
   endAtMillis: number
   dateStamp?: number
@@ -1765,6 +1792,7 @@ export interface ArkmeRelatedRecordingItem {
   speakers: ArkmeRelatedRecordingSpeaker[]
   participants: ArkmeRelatedRecordingParticipant[]
   isSharedByOther: boolean
+  sharedByUserId?: number
 }
 
 export interface ArkmeRelatedRecordingMonthBucket {
@@ -2774,6 +2802,7 @@ export type ArkmeHostOperation = ArkmePluginOperation
   | 'plugin.update.install-status'
   | 'source.interwoven-moments'
   | 'source.interwoven-detail'
+  | 'source.shared-recording-detail'
   | 'extensions.catalog.list'
   | 'extensions.classification.tree'
   | 'extensions.classification.items'

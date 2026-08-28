@@ -4,6 +4,7 @@ import {
 } from 'react'
 import { createPortal } from 'react-dom'
 import { RobotIcon } from '@phosphor-icons/react/dist/csr/Robot'
+import { Waveform } from '@phosphor-icons/react/dist/icons/Waveform'
 import qrcode from 'qrcode-generator'
 import type {
   ArkmeAuthSnapshot, ArkmeGroupAiPolishNotice, ArkmeGroupAiPolishSnapshot, ArkmeSourceReadResult,
@@ -17,6 +18,7 @@ import type {
   ArkmeTopicHierarchyMoveResult,
   ArkmeTopicDissolveTask,
   ArkmeBotList, ArkmeGroupBotCandidate, ArkmeGroupBotCandidateList,
+  ArkmeSharedRecordingPreview,
 } from '../types.js'
 import { callArkme, ArkmeClientError } from './api.js'
 import { createArkmeSdk } from '../sdk/index.js'
@@ -26,7 +28,17 @@ import { bindSentFileTaskLocals, fileTaskConversationPreview, fileTaskTimelineIt
 import { isArkmeRequestAbort, retryArkmeRead } from './read-retry.js'
 import { verifyPhoneCaptcha } from './geetest.js'
 import { ArkmeSourceAvatar, ArkmeUserAvatar } from './ArkmeAvatar.js'
-import { ArkmeGroupChatControls } from './ArkmeGroupChatControls.js'
+import {
+  ARKME_CONVERSATION_HEADER_ACTIONS_STYLE,
+  ARKME_CONVERSATION_SETTINGS_MENU_ROW_STYLE,
+  ARKME_CONVERSATION_SETTINGS_MENU_SCRIM_STYLE,
+  ARKME_CONVERSATION_SETTINGS_MENU_STATUS_STYLE,
+  ARKME_CONVERSATION_SETTINGS_MENU_WIDTH,
+  ARKME_CONVERSATION_SETTINGS_POPOVER_STYLE,
+  ArkmeConversationHeaderIconButton,
+  ArkmeConversationMoreIcon,
+  ArkmeGroupChatControls,
+} from './ArkmeGroupChatControls.js'
 import {
   ArkmeMemberActionMenu, ArkmeMemberProfileCard, ArkmeMemberRecordsPanel,
   arkmeMemberActionMenuRowCount, arkmeMemberConversationAction, positionArkmeMemberMenu,
@@ -41,7 +53,10 @@ import { ArkmeLongArticleDialog } from './ArkmeLongArticleDialog.js'
 import { ArkmeRecordingSurface } from './ArkmeRecordingSurface.js'
 import { ArkmeCallSurface } from './ArkmeCallSurface.js'
 import { ArkmeWorldSurface } from './ArkmeWorldSurface.js'
-import { ArkmeMediaPreview, ArkmeMessageContent } from './ArkmeRichContent.js'
+import {
+  ArkmeMediaPreview, ArkmeMessageContent, arkmeRelatedRecordingItemFromSharedRecording,
+  arkmeRelatedRecordingItemFromSharedRecordingPreview,
+} from './ArkmeRichContent.js'
 import { ArkmeAttachmentStrip, ArkmeFilePreparingIndicator } from './ArkmeAttachmentStrip.js'
 import { ArkmeRichComposerInput, type ArkmeRichComposerHandle } from './ArkmeRichComposerInput.js'
 import { ArkmeEmojiPicker } from './ArkmeEmojiPicker.js'
@@ -219,11 +234,6 @@ const styles: Record<string, CSSProperties> = {
   title: { flex: '0 1 auto', minWidth: 0, margin: 0, fontSize: 15, lineHeight: '21px', fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
   headerSubtitle: { color: colors.secondary, fontSize: 11, lineHeight: '15px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
   titleMuteIcon: { width: 16, height: 16, flex: 'none', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', color: colors.secondary },
-  headerActions: { position: 'relative', marginLeft: 'auto', flex: 'none' },
-  moreButton: { width: 36, height: 32, border: 0, borderRadius: 9, background: 'transparent', color: colors.text, cursor: 'pointer', fontSize: 17, letterSpacing: 2 },
-  popover: { position: 'absolute', zIndex: 40, top: 38, right: 0, width: 150, padding: 6, border: `1px solid ${colors.border}`, borderRadius: 12, background: colors.panel, boxShadow: '0 12px 32px rgba(0,0,0,.12)' },
-  menuItem: { width: '100%', display: 'flex', alignItems: 'center', gap: 10, border: 0, borderRadius: 8, padding: '9px 10px', background: 'transparent', color: colors.text, cursor: 'pointer', fontSize: 13 },
-  menuStatus: { padding: '9px 10px', color: colors.secondary, fontSize: 12, lineHeight: '18px' },
   messageActionMenu: {
     position: 'absolute', zIndex: 60, width: 178, padding: 6, border: `1px solid ${colors.border}`,
     borderRadius: 10, background: colors.panel, boxShadow: '0 14px 36px rgba(20,23,31,.16)',
@@ -274,6 +284,7 @@ const styles: Record<string, CSSProperties> = {
   rowSearchTarget: { borderRadius: 14, outline: '2px solid rgba(10,132,255,.42)', outlineOffset: 5, background: 'rgba(10,132,255,.07)', transition: 'outline-color .3s ease, background-color .3s ease' },
   rowMe: { justifyContent: 'flex-end' },
   rowOther: { justifyContent: 'flex-start' },
+  sharedRecordingRow: { justifyContent: 'center' },
   rowSelectMode: { position: 'relative', padding: '6px 0 6px 48px', boxSizing: 'border-box', cursor: 'pointer' },
   rowSelectedForAction: { background: arkmeTheme.layer2 },
   selectCheck: {
@@ -290,9 +301,11 @@ const styles: Record<string, CSSProperties> = {
   messageLine: { maxWidth: '100%', display: 'flex', alignItems: 'flex-start', gap: 10, marginBottom: 18 },
   messageLineMe: { flexDirection: 'row-reverse' },
   forwardMessageLine: { width: 'auto' },
+  sharedRecordingMessageLine: { width: 'min(600px, 100%)', justifyContent: 'center', marginBottom: 42 },
   messageBody: { minWidth: 0, flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 7 },
   messageBodyMe: { alignItems: 'flex-end' },
   forwardMessageBody: { flex: 1 },
+  sharedRecordingMessageBody: { width: '100%', flex: 'none', alignItems: 'stretch' },
   messageAvatar: {
     width: 34, height: 34, flex: 'none', overflow: 'hidden', borderRadius: 999,
     display: 'grid', placeItems: 'center', background: 'transparent', color: arkmeTheme.secondary, fontSize: 11, fontWeight: 600,
@@ -318,6 +331,11 @@ const styles: Record<string, CSSProperties> = {
   bubbleMe: { background: arkmeTheme.messageOwn, borderColor: 'rgba(83,97,145,.045)', borderRadius: '16px 5px 16px 16px', '--arkme-bubble-fade': arkmeTheme.messageOwn } as CSSProperties,
   bubbleOther: { background: arkmeTheme.messageOther, '--arkme-bubble-fade': arkmeTheme.messageOther } as CSSProperties,
   forwardBubble: { width: 354, maxWidth: '100%', minWidth: 0, padding: '13px 15px' },
+  sharedRecordingBubble: {
+    width: '100%', maxWidth: '100%', minWidth: 0, padding: '18px 21px',
+    borderRadius: 12, background: arkmeTheme.base, borderColor: arkmeTheme.border,
+    boxShadow: 'none', '--arkme-bubble-fade': arkmeTheme.base,
+  } as CSSProperties,
   text: { margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontSize: 12, lineHeight: '20px' },
   meta: { color: arkmeTheme.tertiary, fontSize: 11 },
   polishMeta: { minHeight: 14, marginBottom: 2, color: colors.secondary, fontSize: 10, lineHeight: '14px', display: 'flex', gap: 8, alignItems: 'center' },
@@ -702,8 +720,9 @@ export function arkmeMessageCopyText(item: ArkmeTimelineItem): string {
   if (title !== '' && text !== '') return `${title}\n${text}`
   if (text !== '') return text
   if (title !== '') return title
-  if ((item.contentBlocks?.length ?? 0) > 0) return '非文本内容'
   if (item.forwardRecords !== undefined) return item.forwardRecords.title
+  if (item.sharedRecording !== undefined) return `${item.sharedRecording.title}\n${item.sharedRecording.summary}`.trim()
+  if ((item.contentBlocks?.length ?? 0) > 0) return '非文本内容'
   return ''
 }
 
@@ -1237,6 +1256,7 @@ function arkmeDraftForwardPrivateRecordsTitle(rawCurrentName: string, rawCounter
 
 function arkmeForwardRecordPreviewLine(item: ArkmeTimelineItem): string {
   if (item.forwardRecords !== undefined) return '[转发快记]'
+  if (item.sharedRecording !== undefined) return '[相关录音]'
   const text = item.textContent.trim().replace(/\s+/g, ' ')
   if (text !== '') return text
   const title = item.title.trim().replace(/\s+/g, ' ')
@@ -1921,6 +1941,7 @@ export function ArkmeSurface({
   }, [authView, localeId])
   const [relatedEligibility, setRelatedEligibility] = useState<'idle' | 'loading' | 'allowed' | 'denied' | 'error'>('idle')
   const [relatedMenuOpen, setRelatedMenuOpen] = useState(false)
+  const [relatedMenuPosition, setRelatedMenuPosition] = useState({ left: 12, top: 54 })
   const [relatedPanelOpen, setRelatedPanelOpen] = useState(false)
   const [relatedState, setRelatedState] = useState<'loading' | ArkmeRelatedRecordingPageState>('loading')
   const [relatedStateMessage, setRelatedStateMessage] = useState('')
@@ -1937,21 +1958,15 @@ export function ArkmeSurface({
   const relatedGenerationRef = useRef(0)
   const relatedLoadingMoreRef = useRef(false)
   const activeRelatedSourceRef = useRef('')
-  const relatedMenuRef = useRef<HTMLDivElement>(null)
+  const relatedMenuButtonRef = useRef<HTMLButtonElement>(null)
 
   useEffect(() => {
     if (!relatedMenuOpen || typeof document === 'undefined') return
-    const closeFromOutside = (event: PointerEvent) => {
-      const target = event.target instanceof Node ? event.target : null
-      if (arkmeShouldDismissAnchoredMenu(target, relatedMenuRef.current, null)) setRelatedMenuOpen(false)
-    }
     const closeFromKeyboard = (event: globalThis.KeyboardEvent) => {
       if (event.key === 'Escape') setRelatedMenuOpen(false)
     }
-    document.addEventListener('pointerdown', closeFromOutside)
     document.addEventListener('keydown', closeFromKeyboard)
     return () => {
-      document.removeEventListener('pointerdown', closeFromOutside)
       document.removeEventListener('keydown', closeFromKeyboard)
     }
   }, [relatedMenuOpen])
@@ -2125,6 +2140,42 @@ export function ArkmeSurface({
     void loadRelatedPage(month, undefined, false, generation)
   }, [loadRelatedPage])
 
+  const selectRelatedMonth = useCallback((month: string) => {
+    setRelatedMonth(month)
+    setRelatedDetail(undefined)
+  }, [])
+  const loadRelatedRecordingDetail = useCallback(async (
+    item: ArkmeRelatedRecordingItem,
+    signal?: AbortSignal,
+  ): Promise<ArkmeRelatedRecordingItem> => {
+    const detailRef = item.sharedRecordingDetailRef?.trim() ?? ''
+    if (detailRef === '') return item
+    const loaded = arkmeRelatedRecordingItemFromSharedRecordingPreview(
+      await callArkme<ArkmeSharedRecordingPreview>(
+        'source.shared-recording-detail',
+        { detailRef },
+        signal,
+      ),
+      { itemUid: item.recordingRef, isMe: !item.isSharedByOther },
+    )
+    const next: ArkmeRelatedRecordingItem = {
+      ...item,
+      sharedRecordingDetailRef: detailRef,
+      startAtMillis: loaded.startAtMillis > 0 ? loaded.startAtMillis : item.startAtMillis,
+      endAtMillis: loaded.endAtMillis > 0 ? loaded.endAtMillis : item.endAtMillis,
+      timeRangeText: loaded.timeRangeText.trim() === '' ? item.timeRangeText : loaded.timeRangeText,
+      title: loaded.title.trim() === '' ? item.title : loaded.title,
+      summary: loaded.summary.trim() === '' ? item.summary : loaded.summary,
+      summaryStatus: loaded.summaryStatus,
+      transcriptAvailable: loaded.transcriptAvailable,
+      speakers: loaded.speakers.length > 0 ? loaded.speakers : item.speakers,
+      participants: loaded.participants.length > 0 ? loaded.participants : item.participants,
+      isSharedByOther: item.isSharedByOther,
+    }
+    if (loaded.transcript !== undefined) next.transcript = loaded.transcript
+    return next
+  }, [])
+
   function activateContextPanel(kind: 'note' | 'members' | 'records' | 'moment' | 'related') {
     if (kind !== 'note') setDrawer(undefined)
     setGroupMembersOpen(kind === 'members')
@@ -2166,8 +2217,8 @@ export function ArkmeSurface({
 
   const loadMoreRelated = useCallback(() => {
     if (relatedLoadingMoreRef.current || !relatedHasMore || relatedNextCursor === undefined) return
-    void loadRelatedPage(relatedMonth, relatedNextCursor, true, relatedGenerationRef.current)
-  }, [loadRelatedPage, relatedHasMore, relatedMonth, relatedNextCursor])
+    void loadRelatedPage('', relatedNextCursor, true, relatedGenerationRef.current)
+  }, [loadRelatedPage, relatedHasMore, relatedNextCursor])
 
   useEffect(() => {
     relatedEligibilityAbortRef.current?.abort()
@@ -2212,9 +2263,24 @@ export function ArkmeSurface({
 
   const toggleRelatedMenu = useCallback(() => {
     if (relatedPanelOpen) return
-    const opening = !relatedMenuOpen
-    setRelatedMenuOpen(opening)
-    if (opening) ensureRelatedEligibility()
+    if (relatedMenuOpen) {
+      setRelatedMenuOpen(false)
+      return
+    }
+    const host = panelRef.current
+    const button = relatedMenuButtonRef.current
+    if (host !== null && button !== null) {
+      const hostRect = host.getBoundingClientRect()
+      const buttonRect = button.getBoundingClientRect()
+      const menuWidth = ARKME_CONVERSATION_SETTINGS_MENU_WIDTH
+      const menuHeight = 44
+      setRelatedMenuPosition({
+        left: Math.max(12, Math.min(hostRect.width - menuWidth - 12, buttonRect.right - hostRect.left - menuWidth)),
+        top: Math.max(8, Math.min(hostRect.height - menuHeight - 12, buttonRect.bottom - hostRect.top + 8)),
+      })
+    }
+    setRelatedMenuOpen(true)
+    ensureRelatedEligibility()
   }, [ensureRelatedEligibility, relatedMenuOpen, relatedPanelOpen])
 
   const acknowledgeRead = useCallback(async (nextItems: ArkmeTimelineItem[]) => {
@@ -2915,6 +2981,9 @@ export function ArkmeSurface({
   }
 
   const detailItem = items.find(item => item.itemUid === detailItemUid)
+  const detailSharedRecording = detailItem === undefined
+    ? undefined
+    : arkmeRelatedRecordingItemFromSharedRecording(detailItem)
   const activateSource = useCallback((nextSource: ArkmeTimelinePage['source']) => {
     // The directory owns the middle conversation list. Update it before selecting
     // the source so sources opened outside that list (for example, from World)
@@ -3676,6 +3745,7 @@ export function ArkmeSurface({
   const utilityContentVisible = authView === 'content'
     && (ui.mode === 'recordings' || ui.mode === 'world' || ui.mode === 'search' || ui.mode === 'extensions'
       || ui.mode === 'voiceprint' || ui.mode === 'calls')
+  const conversationOverlayHost = panelRef.current
 
   return (
     <div
@@ -3817,25 +3887,58 @@ export function ArkmeSurface({
             onMembersChanged={() => { setConversationMembersRefreshRevision(value => value + 1) }}
             onError={setError}
           />}
-          {shouldShowPrivateChatActions(authenticated, source?.kind) && <div ref={relatedMenuRef} style={{
-            ...styles.headerActions,
-            width: 36,
+          {shouldShowPrivateChatActions(authenticated, source?.kind) && <div style={{
+            ...ARKME_CONVERSATION_HEADER_ACTIONS_STYLE,
             visibility: relatedPanelOpen ? 'hidden' : 'visible',
           }}>
-            <button type="button" style={styles.moreButton} aria-label="更多私聊操作" aria-haspopup="menu" aria-expanded={relatedMenuOpen}
-              onClick={toggleRelatedMenu}>•••</button>
-            {relatedMenuOpen && <div style={styles.popover} role="menu" aria-busy={relatedEligibility === 'loading'}>
-              {shouldShowRelatedRecordingsEntry(authenticated, source?.kind, relatedEligibility, relatedPanelOpen)
-                ? <button type="button" role="menuitem" style={styles.menuItem} onClick={openRelatedPanel}>
-                  <span aria-hidden>◉</span><span>相关录音</span>
-                </button>
-                : relatedEligibility === 'error'
-                  ? <button type="button" role="menuitem" style={styles.menuItem} onClick={ensureRelatedEligibility}>重新检查相关录音</button>
-                  : <div role="status" style={styles.menuStatus}>
-                    {relatedEligibility === 'denied' ? '当前没有可用操作' : '正在检查相关录音…'}
-                  </div>}
-            </div>}
+            <ArkmeConversationHeaderIconButton
+              label="更多私聊操作"
+              buttonRef={relatedMenuButtonRef}
+              hasPopup
+              expanded={relatedMenuOpen}
+              onClick={toggleRelatedMenu}
+            ><ArkmeConversationMoreIcon /></ArkmeConversationHeaderIconButton>
           </div>}
+          {shouldShowPrivateChatActions(authenticated, source?.kind) && relatedMenuOpen && conversationOverlayHost !== null && createPortal(
+            <div style={ARKME_CONVERSATION_SETTINGS_MENU_SCRIM_STYLE} role="presentation" onMouseDown={event => {
+              if (event.target === event.currentTarget) setRelatedMenuOpen(false)
+            }}>
+              <div
+                style={{
+                  ...ARKME_CONVERSATION_SETTINGS_POPOVER_STYLE,
+                  left: relatedMenuPosition.left,
+                  top: relatedMenuPosition.top,
+                }}
+                role="menu"
+                aria-label="更多私聊操作"
+                aria-busy={relatedEligibility === 'loading'}
+                onMouseDown={event => { event.stopPropagation() }}
+              >
+                {shouldShowRelatedRecordingsEntry(authenticated, source?.kind, relatedEligibility, relatedPanelOpen)
+                  ? <button
+                    type="button"
+                    role="menuitem"
+                    style={ARKME_CONVERSATION_SETTINGS_MENU_ROW_STYLE}
+                    onMouseEnter={event => { event.currentTarget.style.background = arkmeTheme.subtle }}
+                    onMouseLeave={event => { event.currentTarget.style.background = 'transparent' }}
+                    onClick={openRelatedPanel}
+                  ><Waveform size={20} aria-hidden /><span>相关录音</span></button>
+                  : relatedEligibility === 'error'
+                    ? <button
+                      type="button"
+                      role="menuitem"
+                      style={ARKME_CONVERSATION_SETTINGS_MENU_ROW_STYLE}
+                      onMouseEnter={event => { event.currentTarget.style.background = arkmeTheme.subtle }}
+                      onMouseLeave={event => { event.currentTarget.style.background = 'transparent' }}
+                      onClick={ensureRelatedEligibility}
+                    ><Waveform size={20} aria-hidden /><span>重新检查相关录音</span></button>
+                    : <div role="status" style={ARKME_CONVERSATION_SETTINGS_MENU_STATUS_STYLE}>
+                      {relatedEligibility === 'denied' ? '当前没有可用操作' : '正在检查相关录音…'}
+                    </div>}
+              </div>
+            </div>,
+            conversationOverlayHost,
+          )}
         </header>}
         {authView === 'login' ? <div style={styles.loginBody}><ArkmeLogin
           t={t}
@@ -3954,11 +4057,15 @@ export function ArkmeSurface({
                 const polishStatus = aiPolishStatus(item)
                 const selectedForAction = activeSelectMode?.selectedIds.has(item.itemUid) === true
                 const canUseMessageAction = arkmeTimelineMessageActionRef(item) !== ''
+                const isForwardMessageCard = item.forwardRecords !== undefined
+                const isSharedRecordingCard = item.sharedRecording !== undefined
+                const isStructuredMessageCard = isForwardMessageCard || isSharedRecordingCard
                 return <Fragment key={row.id}>
                   {startsDay && <li style={styles.date}>{dayLabel(item.sendAtMillis)}</li>}
                   <li data-arkme-conversation-row={row.id} data-arkme-message-item-uid={item.itemUid} style={{
                     ...styles.row,
                     ...(item.isMe ? styles.rowMe : styles.rowOther),
+                    ...(isSharedRecordingCard ? styles.sharedRecordingRow : {}),
                     ...(activeSelectMode === undefined ? {} : styles.rowSelectMode),
                     ...(selectedForAction ? styles.rowSelectedForAction : {}),
                     ...(highlightedTargetUid === item.itemUid ? styles.rowSearchTarget : {}),
@@ -3995,10 +4102,11 @@ export function ArkmeSurface({
                     <div style={{
                       ...styles.messageLine,
                       ...(activeSelectMode === undefined ? {} : styles.messageLineSelectMode),
-                      ...(item.isMe ? styles.messageLineMe : {}),
-                      ...(item.forwardRecords === undefined ? {} : styles.forwardMessageLine),
+                      ...(item.isMe && !isSharedRecordingCard ? styles.messageLineMe : {}),
+                      ...(isForwardMessageCard ? styles.forwardMessageLine : {}),
+                      ...(isSharedRecordingCard ? styles.sharedRecordingMessageLine : {}),
                     }}>
-                      {showMessageAvatars && <MessageAvatar
+                      {showMessageAvatars && !isSharedRecordingCard && <MessageAvatar
                         {...(avatarRef === undefined ? {} : { avatarRef })}
                         {...(messageMember === undefined ? {} : { member: messageMember })}
                         profileEnabled={source?.kind === 'group_chat'}
@@ -4007,22 +4115,19 @@ export function ArkmeSurface({
                       />}
                       <div style={{
                         ...styles.messageBody,
-                        ...(item.isMe ? styles.messageBodyMe : {}),
-                        ...(item.forwardRecords === undefined ? {} : styles.forwardMessageBody),
+                        ...(item.isMe && !isSharedRecordingCard ? styles.messageBodyMe : {}),
+                        ...(isForwardMessageCard ? styles.forwardMessageBody : {}),
+                        ...(isSharedRecordingCard ? styles.sharedRecordingMessageBody : {}),
                       }}>
-                        <ArkmeTimelineMessageHeader item={item} {...(selfProfile === undefined ? {} : { profile: selfProfile })} />
-                        <ArkmeMessageReadReceiptLine
-                          source={source}
-                          item={item}
-                          wide={item.forwardRecords !== undefined}
-                        >
-                          <div
+                        {!isSharedRecordingCard && <ArkmeTimelineMessageHeader item={item} {...(selfProfile === undefined ? {} : { profile: selfProfile })} />}
+                        {(() => {
+                          const messageBubble = <div
                             role="button"
                             tabIndex={0}
                             style={{
                               ...styles.bubble,
-                              ...(item.isMe ? styles.bubbleMe : styles.bubbleOther),
-                              ...(item.forwardRecords === undefined ? {} : styles.forwardBubble),
+                              ...(isSharedRecordingCard ? styles.sharedRecordingBubble : item.isMe ? styles.bubbleMe : styles.bubbleOther),
+                              ...(isForwardMessageCard ? styles.forwardBubble : {}),
                             }}
                             onClick={event => {
                               if (event.target instanceof Element && event.target.closest('button,a,audio,video,input,select,textarea,[role=link],[role=slider]')) return
@@ -4037,7 +4142,7 @@ export function ArkmeSurface({
                             }}
                             onContextMenu={event => { openMessageMenu(item, event) }}
                             data-arkme-message-direction={item.isMe ? 'self' : 'other'}
-                            aria-label="打开快记详情"
+                            aria-label={isSharedRecordingCard ? '打开录音详情' : '打开快记详情'}
                           >{polishStatus !== '' && <span style={styles.polishMeta}>
                             {item.aiPolish?.state === 'failed' ? <button
                               type="button" style={styles.retry} onClick={event => { event.stopPropagation(); void retryAiPolish(item) }}
@@ -4066,14 +4171,23 @@ export function ArkmeSurface({
                                   : candidate))
                               }}
                             />
-                            <ArkmeTimelineAgentSourceBadge item={item} />
+                            {!isSharedRecordingCard && <ArkmeTimelineAgentSourceBadge item={item} />}
                             {fileTasks.tasks.filter(task => (task.result?.itemUid ?? task.recordUid) === item.itemUid && task.state !== 'sent').map(task => <div key={task.taskRef} role="status" style={{ fontSize: 12, marginTop: 6 }}>
                               {task.error ?? (task.state === 'sending' ? '正在发送…' : task.state === 'queued' ? '等待上传' : '正在上传')}
                               {task.state === 'failed' && <button type="button" onClick={event => { event.stopPropagation(); void callArkme('files.send.retry', { taskRef: task.taskRef }).then(fileTasks.refresh).catch(caught => setError(errorMessage(caught))) }}>重试</button>}
                               {task.state === 'uncertain' && <button type="button" onClick={event => { event.stopPropagation(); void callArkme<ArkmeFileSendTask>('files.send.reconcile', { taskRef: task.taskRef }).then(value => { fileTasks.refresh(); if (value.state === 'uncertain') setError('最近的会话记录还无法确认发送结果，请先核对原会话，不要重复发送') }).catch(caught => setError(errorMessage(caught))) }}>核对发送结果</button>}
                             </div>)}
                           </div>
-                        </ArkmeMessageReadReceiptLine>
+                          return isSharedRecordingCard
+                            ? messageBubble
+                            : <ArkmeMessageReadReceiptLine
+                              source={source}
+                              item={item}
+                              wide={isStructuredMessageCard}
+                            >
+                              {messageBubble}
+                            </ArkmeMessageReadReceiptLine>
+                        })()}
                         {selfTopicSource !== undefined && <ArkmeTimelineSelfTopicBadge topic={selfTopicSource} onSelect={activateSelfSource} />}
                       </div>
                     </div>
@@ -4512,8 +4626,24 @@ export function ArkmeSurface({
             item={detailItem}
             onClose={() => { setDrawer(undefined) }}
           />}
+          {detailSharedRecording !== undefined && <RelatedRecordingDetail
+            key={detailItem.itemUid}
+            item={detailSharedRecording}
+            showReadOnlyLabel={false}
+            {...(detailSharedRecording.sharedRecordingDetailRef === undefined ? {} : {
+              loadDetail: async (_item: ArkmeRelatedRecordingItem, signal?: AbortSignal) => arkmeRelatedRecordingItemFromSharedRecordingPreview(
+                await callArkme<ArkmeSharedRecordingPreview>(
+                  'source.shared-recording-detail',
+                  { detailRef: detailSharedRecording.sharedRecordingDetailRef },
+                  signal,
+                ),
+                detailItem,
+              ),
+            })}
+            onClose={() => { setDrawer(undefined) }}
+          />}
         </>}
-        {drawer === 'detail' && detailItem !== undefined && detailItem.forwardRecords === undefined && <ArkmeTimelineDetailDrawer
+        {drawer === 'detail' && detailItem !== undefined && detailItem.forwardRecords === undefined && detailSharedRecording === undefined && <ArkmeTimelineDetailDrawer
           key={detailItem.itemUid}
           item={detailItem}
           sourceRef={source?.sourceRef}
@@ -4568,6 +4698,7 @@ export function ArkmeSurface({
       </section>
       {relatedPanelOpen && source?.kind === 'private_chat' && <RelatedRecordingsPanel
         contactName={source.displayName}
+        {...(source.avatarRef === undefined ? {} : { contactAvatarRef: source.avatarRef })}
         state={relatedState}
         stateMessage={relatedStateMessage}
         error={relatedError}
@@ -4577,13 +4708,14 @@ export function ArkmeSurface({
         monthBuckets={relatedMonths}
         selectedMonth={relatedMonth}
         onClose={closeRelatedPanel}
-        onRetry={() => { reloadRelated(relatedMonth) }}
+        onRetry={() => { reloadRelated('') }}
         onLoadMore={loadMoreRelated}
-        onMonthChange={reloadRelated}
+        onMonthChange={selectRelatedMonth}
         onSelect={setRelatedDetail}
       />}
       {relatedDetail !== undefined && <RelatedRecordingDetail
         item={relatedDetail}
+        loadDetail={loadRelatedRecordingDetail}
         onClose={() => { setRelatedDetail(undefined) }}
       />}
       {selectedMoment !== undefined && detailState !== undefined && <ArkmeInterwovenDetailAside

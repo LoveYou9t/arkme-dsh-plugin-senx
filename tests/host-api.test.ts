@@ -8,6 +8,7 @@ function fakeService() {
   return {
     resolveLinkMetadata: vi.fn(async (
       url: string,
+      _options?: unknown,
     ): Promise<{ url: string; title: string } | null> => ({ url, title: '即我 Jotmo' })),
     prepareOutgoingCall: vi.fn(async (input: unknown) => input),
     listCallHistory: vi.fn(async (input: unknown) => input),
@@ -44,6 +45,7 @@ function fakeService() {
     copySourceMessageLink: vi.fn(async (sourceRef: string, actionRefs: unknown, options: unknown) => ({ sourceRef, actionRefs, options })),
     resolveMessageCopyLink: vi.fn(async (sid: string, options: unknown) => ({ sid, options })),
     extendMessageCopyLink: vi.fn(async (sid: string, itemIndex: number, textContent: string, recordUid: string, options: unknown) => ({ sid, itemIndex, textContent, recordUid, options })),
+    sharedRecordingDetail: vi.fn(async (detailRef: string, options: unknown) => ({ detailRef, options })),
     forwardSourceMessages: vi.fn(async (sourceRef: string, actionRefs: unknown, options: unknown) => ({ sourceRef, actionRefs, options })),
     sendSourceText: vi.fn(async (_sourceRef: string, _text: string, options: unknown) => options),
     sendSourceRich: vi.fn(async () => undefined),
@@ -554,6 +556,18 @@ describe('message read receipt Host API dispatch', () => {
 })
 
 describe('message action Host API dispatch', () => {
+  it('forwards only the opaque shared-recording detail reference', async () => {
+    const service = fakeService()
+    const signal = new AbortController().signal
+    await dispatchArkmeHostOperation(service as never, 'source.shared-recording-detail', {
+      detailRef: ' shared-detail-ref ',
+      chatSessionUid: 'must-not-forward',
+      recordOwnerUserId: 999,
+      recordUid: 'must-not-forward',
+    }, undefined, undefined, undefined, undefined, signal)
+    expect(service.sharedRecordingDetail).toHaveBeenCalledWith(' shared-detail-ref ', { signal })
+  })
+
   it('forwards only opaque message action references and bounded send identifiers', async () => {
     const service = fakeService()
     await dispatchArkmeHostOperation(service as never, 'source.message-copy-link', {

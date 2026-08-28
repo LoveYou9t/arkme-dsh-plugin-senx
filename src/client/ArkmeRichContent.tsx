@@ -3,7 +3,11 @@ import { createPortal } from 'react-dom'
 import { ArkmeFileIcon } from './ArkmeFileIcon.js'
 import { arkmeTheme } from './arkme-theme.js'
 import { ARKME_DEFAULT_SHARE_WEBSITE } from '../types.js'
-import type { ArkmeContentBlock, ArkmeLongArticleDetail, ArkmeTimelineItem, ArkmeUploadedAsset } from '../types.js'
+import type {
+  ArkmeContentBlock, ArkmeLinkMetadata, ArkmeLongArticleDetail, ArkmeRelatedRecordingItem,
+  ArkmeSharedRecordingPreview, ArkmeTimelineItem, ArkmeUploadedAsset,
+} from '../types.js'
+import { callArkme } from './api.js'
 import { ArkmeLongArticleDialog } from './ArkmeLongArticleDialog.js'
 import { ArkmeVoiceContent, arkmeVoiceMediaUrl } from './ArkmeVoiceContent.js'
 import { ArkmeFileViewer, ArkmeFileActions, arkmeLocalFileUrl, arkmeFileSize, useArkmeOriginal } from './ArkmeFileViewer.js'
@@ -47,6 +51,12 @@ const styles: Record<string, CSSProperties> = {
   forwardTitle: { margin: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 14, lineHeight: '22px', fontWeight: 600 },
   forwardLines: { marginTop: 7, display: 'flex', flexDirection: 'column', gap: 0 },
   forwardLine: { margin: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: arkmeTheme.secondary, fontSize: 13, lineHeight: 1.65 },
+  sharedRecordingCard: { width: '100%', minWidth: 0, overflow: 'hidden', color: arkmeTheme.text },
+  sharedRecordingTop: { display: 'flex', alignItems: 'baseline', gap: 8, minWidth: 0 },
+  sharedRecordingTitle: { flex: 1, minWidth: 0, margin: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 14, lineHeight: 1.35, fontWeight: 600 },
+  sharedRecordingTime: { flex: 'none', color: arkmeTheme.tertiary, fontSize: 12, lineHeight: '16px' },
+  sharedRecordingSummary: { margin: '6px 0 0', display: '-webkit-box', overflow: 'hidden', WebkitBoxOrient: 'vertical', WebkitLineClamp: 2, color: arkmeTheme.secondary, fontSize: 13, lineHeight: 1.45 },
+  sharedRecordingParticipants: { margin: '7px 0 0', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: arkmeTheme.tertiary, fontSize: 12, lineHeight: 1.3 },
   inlineLink: { display: 'inline-flex', alignItems: 'baseline', gap: 4, maxWidth: '100%', color: 'var(--dsw-alias-state-business-primary, #007aff)', textDecoration: 'none', cursor: 'pointer', verticalAlign: 'baseline' },
   inlineLinkTitle: { minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
   previewOverlay: { position: 'fixed', inset: 0, zIndex: 1000, display: 'grid', placeItems: 'center', padding: 48, boxSizing: 'border-box', background: 'rgba(0,0,0,.78)' },
@@ -576,6 +586,77 @@ function splitVisualRuns(blocks: ArkmeContentBlock[]): Array<ArkmeContentBlock |
   return rows
 }
 
+function arkmeSharedRecordingClockText(value: number): string {
+  const millis = value > 0 && value < 100_000_000_000 ? value * 1000 : value
+  if (millis <= 0) return ''
+  const date = new Date(millis)
+  return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`
+}
+
+export function arkmeSharedRecordingTimeText(
+  recording: Pick<ArkmeSharedRecordingPreview, 'timeRangeText' | 'displayAtMillis' | 'endAtMillis'>,
+): string {
+  const explicit = recording.timeRangeText.trim().replace(/\s+/gu, ' ')
+  if (explicit !== '') {
+    const matches = [...explicit.matchAll(/(?:^|\D)([0-2]?\d):([0-5]\d)(?::[0-5]\d)?/gu)]
+    if (matches.length >= 2) {
+      const start = `${String(matches[0]?.[1] ?? '').padStart(2, '0')}:${matches[0]?.[2] ?? '00'}`
+      const end = `${String(matches[1]?.[1] ?? '').padStart(2, '0')}:${matches[1]?.[2] ?? '00'}`
+      return `${start} - ${end}`
+    }
+    if (matches.length === 1) return `${String(matches[0]?.[1] ?? '').padStart(2, '0')}:${matches[0]?.[2] ?? '00'}`
+    return explicit
+  }
+  const start = arkmeSharedRecordingClockText(recording.displayAtMillis)
+  const end = arkmeSharedRecordingClockText(recording.endAtMillis)
+  if (start !== '' && end !== '' && end !== start) return `${start} - ${end}`
+  return start || end
+}
+
+function arkmeSharedRecordingParticipantsText(recording: Pick<ArkmeSharedRecordingPreview, 'participants'>): string {
+  const names = recording.participants.map(participant => participant.displayName.trim()).filter(name => name !== '')
+  return names.length === 0 ? '' : `参与者：${names.join(' / ')}`
+}
+
+export function arkmeRelatedRecordingItemFromSharedRecordingPreview(
+  recording: ArkmeSharedRecordingPreview,
+  owner?: Pick<ArkmeTimelineItem, 'itemUid' | 'isMe'>,
+): ArkmeRelatedRecordingItem {
+  const startAtMillis = recording.displayAtMillis
+  const endAtMillis = recording.endAtMillis > 0 ? recording.endAtMillis : startAtMillis
+  const participants = recording.participants.map((participant, index) => ({
+    speakerId: participant.refUserId === undefined ? `shared-recording-participant:${String(index)}` : `user:${String(participant.refUserId)}`,
+    ...(participant.refUserId === undefined ? {} : { refUserId: participant.refUserId }),
+    displayName: participant.displayName,
+    role: participant.role,
+  }))
+  return {
+    recordingRef: `shared-recording:${recording.sourceDigest}`,
+    ...(recording.detailRef === undefined ? {} : { sharedRecordingDetailRef: recording.detailRef }),
+    startAtMillis,
+    endAtMillis,
+    timeRangeText: arkmeSharedRecordingTimeText(recording),
+    title: recording.title,
+    summary: recording.summary,
+    summaryStatus: 2,
+    ...(recording.transcript === undefined ? {} : { transcript: recording.transcript }),
+    transcriptAvailable: recording.transcriptAvailable,
+    speakers: participants.map(participant => ({
+      speakerId: participant.speakerId,
+      ...(participant.refUserId === undefined ? {} : { refUserId: participant.refUserId }),
+      nickname: participant.displayName,
+    })),
+    participants,
+    isSharedByOther: owner?.isMe !== true,
+  }
+}
+
+export function arkmeRelatedRecordingItemFromSharedRecording(item: ArkmeTimelineItem): ArkmeRelatedRecordingItem | undefined {
+  return item.sharedRecording === undefined
+    ? undefined
+    : arkmeRelatedRecordingItemFromSharedRecordingPreview(item.sharedRecording, item)
+}
+
 export function ArkmeMessageContent({ item, sourceRef, onLongArticleUpdated, highlightMentions = false, collapseText = true, presentation = 'bubble', shareWebsite, onMessageCopyLinkOpen }: {
   item: ArkmeTimelineItem
   presentation?: 'bubble' | 'detail'
@@ -627,6 +708,18 @@ export function ArkmeMessageContent({ item, sourceRef, onLongArticleUpdated, hig
           style={styles.forwardLine}
         >{line}</p>)}
       </div>
+    </div>
+  }
+  if (item.sharedRecording !== undefined) {
+    const timeText = arkmeSharedRecordingTimeText(item.sharedRecording)
+    const participantsText = arkmeSharedRecordingParticipantsText(item.sharedRecording)
+    return <div style={styles.sharedRecordingCard} data-arkme-shared-recording-card="true">
+      <div style={styles.sharedRecordingTop}>
+        <p style={styles.sharedRecordingTitle} title={item.sharedRecording.title}>{item.sharedRecording.title}</p>
+        {timeText !== '' && <span style={styles.sharedRecordingTime}>{timeText}</span>}
+      </div>
+      <p style={styles.sharedRecordingSummary}>{item.sharedRecording.summary}</p>
+      {participantsText !== '' && <p style={styles.sharedRecordingParticipants}>{participantsText}</p>}
     </div>
   }
   const markFailed = (block: ArkmeContentBlock, failure: MediaFailure = 'retryable') => {
