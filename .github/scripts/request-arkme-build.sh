@@ -33,18 +33,18 @@ if ! http_status="$(
     --write-out '%{http_code}' \
     "$endpoint"
 )"; then
-  printf '触发 Arkme Jenkins 失败：Backend 请求未完成。\n' >&2
+  printf '请求 Arkme 构建失败：Backend 请求未完成。\n' >&2
   exit 1
 fi
 
 if [[ "$http_status" != '202' ]]; then
-  printf '触发 Arkme Jenkins 失败：Backend 未接受请求（HTTP %s）。\n' "$http_status" >&2
+  printf '请求 Arkme 构建失败：Backend 未接受请求（HTTP %s）。\n' "$http_status" >&2
   exit 1
 fi
 
 if ! grep -Eq '"queued"[[:space:]]*:[[:space:]]*true([[:space:]}]|$)' "$response_file"; then
-  printf '触发 Arkme Jenkins 失败：Backend 未确认任务进入队列。\n' >&2
+  printf '请求 Arkme 构建失败：Backend 未确认任务进入队列。\n' >&2
   exit 1
 fi
 
-printf 'Arkme Jenkins 构建已成功进入队列。\n'
+printf 'Arkme 构建请求已由 Backend 接受并进入队列。\n'

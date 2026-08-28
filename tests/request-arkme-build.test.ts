@@ -10,7 +10,7 @@ const triggerScript = path.join(
   repositoryRoot,
   '.github',
   'scripts',
-  'trigger-arkme-jenkins.sh',
+  'request-arkme-build.sh',
 )
 const releaseWorkflow = path.join(
   repositoryRoot,
@@ -22,7 +22,7 @@ const preReleaseWorkflow = path.join(
   repositoryRoot,
   '.github',
   'workflows',
-  'trigger-pre-release-jenkins.yml',
+  'request-pre-release-build.yml',
 )
 const codeOwnersFile = path.join(repositoryRoot, '.github', 'CODEOWNERS')
 const temporaryDirectories: string[] = []
@@ -94,12 +94,12 @@ exit "$FAKE_CURL_EXIT_CODE"
   return { ...result, curlArguments }
 }
 
-describe('Arkme Jenkins 安全触发脚本', () => {
+describe('Arkme Backend 安全构建请求脚本', () => {
   it('仅在 Backend 返回 202 且 queued=true 时成功', async () => {
     const result = await runTrigger()
 
     expect(result.status).toBe(0)
-    expect(result.stdout).toBe('Arkme Jenkins 构建已成功进入队列。\n')
+    expect(result.stdout).toBe('Arkme 构建请求已由 Backend 接受并进入队列。\n')
     expect(result.stderr).toBe('')
     expect(result.curlArguments).toContain('--proto\n=https\n')
     expect(result.curlArguments).toContain('--tlsv1.2\n')
@@ -140,13 +140,13 @@ describe('Arkme Jenkins 安全触发脚本', () => {
 
   it('Backend 返回错误状态时只输出脱敏状态', async () => {
     const result = await runTrigger({
-      body: '{"error":"internal Jenkins URL"}',
+      body: '{"error":"internal upstream details"}',
       httpStatus: '403',
     })
 
     expect(result.status).toBe(1)
     expect(result.stderr).toContain('HTTP 403')
-    expect(result.stderr).not.toContain('internal Jenkins URL')
+    expect(result.stderr).not.toContain('internal upstream details')
     expect(result.stdout).toBe('')
   })
 
@@ -172,15 +172,27 @@ describe('Arkme Jenkins 安全触发脚本', () => {
   })
 })
 
-describe('Arkme Jenkins 工作流安全边界', () => {
+describe('Arkme Backend 构建请求工作流安全边界', () => {
   it('仅在 npm 发布成功后使用 production Environment Secret', async () => {
     const workflow = await readFile(releaseWorkflow, 'utf8')
-    const triggerJob = workflow.slice(workflow.indexOf('  trigger-jenkins:'))
+    const triggerJob = workflow.slice(
+      workflow.indexOf('  request-backend-build:'),
+    )
 
+    expect(workflow).toContain('pull_request_target:')
+    expect(workflow).not.toContain('  pull_request:\n')
+    expect(workflow).toContain('ref: master')
+    expect(workflow).not.toContain(
+      'ref: ${{ github.event.pull_request.head.sha }}',
+    )
     expect(triggerJob).toContain('needs: [prepare, publish]')
+    expect(triggerJob).toContain(
+      'name: 调用 Backend 请求 Arkme 生产构建',
+    )
     expect(triggerJob).toContain("if: needs.publish.result == 'success'")
     expect(triggerJob).toContain('environment: production')
     expect(triggerJob).toContain('contents: read')
+    expect(triggerJob).toContain('persist-credentials: false')
     expect(triggerJob).toContain(
       'ARKME_BACKEND_BASE_URL: ${{ secrets.ARKME_BACKEND_BASE_URL }}',
     )
@@ -188,6 +200,9 @@ describe('Arkme Jenkins 工作流安全边界', () => {
       'ARKME_CI_TRIGGER_SECRET: ${{ secrets.ARKME_CI_TRIGGER_SECRET }}',
     )
     expect(triggerJob).not.toContain('vars.ARKME_BACKEND_BASE_URL')
+    expect(triggerJob).toContain(
+      'run: bash .github/scripts/request-arkme-build.sh',
+    )
   })
 
   it('仅在受保护的 pre-release 更新后使用测试服 Environment Secret', async () => {
@@ -195,6 +210,9 @@ describe('Arkme Jenkins 工作流安全边界', () => {
 
     expect(workflow).toContain('push:')
     expect(workflow).toContain('branches: [pre-release]')
+    expect(workflow).toContain(
+      'name: 调用 Backend 请求 Arkme 测试服构建',
+    )
     expect(workflow).toContain('environment: pre-release')
     expect(workflow).toContain('contents: read')
     expect(workflow).toContain('ref: ${{ github.sha }}')
@@ -206,7 +224,7 @@ describe('Arkme Jenkins 工作流安全边界', () => {
       'ARKME_CI_TRIGGER_SECRET: ${{ secrets.ARKME_CI_TRIGGER_SECRET }}',
     )
     expect(workflow).toContain(
-      'run: bash .github/scripts/trigger-arkme-jenkins.sh',
+      'run: bash .github/scripts/request-arkme-build.sh',
     )
     expect(workflow).not.toContain('pull_request_target')
     expect(workflow).not.toContain('vars.ARKME_BACKEND_BASE_URL')
