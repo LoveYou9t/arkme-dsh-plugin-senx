@@ -42,13 +42,46 @@ function referencesPackage(specifier: string, packageName: string): boolean {
   return specifier === packageName || specifier.startsWith(`${packageName}/`)
 }
 
+function dependencyRemovedBy(
+  entry: DshWebBootEntry,
+  removedPackageNames: ReadonlySet<string>,
+): string | undefined {
+  for (const dependency of [...(entry.inject ?? []), ...(entry.external ?? [])]) {
+    const removed = [...removedPackageNames].find(packageName => referencesPackage(dependency, packageName))
+    if (removed !== undefined) return removed
+  }
+  return undefined
+}
+
+function isRequiredBootPackage(packageName: string): boolean {
+  return REQUIRED_BOOT_PACKAGES.includes(packageName as typeof REQUIRED_BOOT_PACKAGES[number])
+}
+
+function completeRemovedPackageClosure(
+  entries: readonly DshWebBootEntry[],
+  removedPackageNames: Set<string>,
+): void {
+  let changed = true
+  while (changed) {
+    changed = false
+    for (const entry of entries) {
+      if (removedPackageNames.has(entry.id)) continue
+      const removed = dependencyRemovedBy(entry, removedPackageNames)
+      if (removed === undefined) continue
+      if (isRequiredBootPackage(entry.id)) {
+        throw new Error(`harness boot graph: required package ${entry.id} depends on removed package ${removed}`)
+      }
+      removedPackageNames.add(entry.id)
+      changed = true
+    }
+  }
+}
+
 function assertNoRemovedDependencies(entries: readonly DshWebBootEntry[], removedPackageNames: ReadonlySet<string>): void {
   for (const entry of entries) {
-    for (const dependency of [...(entry.inject ?? []), ...(entry.external ?? [])]) {
-      const removed = [...removedPackageNames].find(packageName => referencesPackage(dependency, packageName))
-      if (removed !== undefined) {
-        throw new Error(`harness boot graph: kept package ${entry.id} depends on removed package ${removed}`)
-      }
+    const removed = dependencyRemovedBy(entry, removedPackageNames)
+    if (removed !== undefined) {
+      throw new Error(`harness boot graph: kept package ${entry.id} depends on removed package ${removed}`)
     }
   }
 }
@@ -67,6 +100,7 @@ export function projectHarnessBootGraph(
     DSH_CLIENT_HMR_PACKAGE_NAME,
     ...installedPackageNames.map(name => name.trim()).filter(Boolean),
   ])
+  completeRemovedPackageClosure(graph.entries, removedPackageNames)
   const entries = graph.entries.filter(entry => !removedPackageNames.has(entry.id))
 
   for (const required of REQUIRED_BOOT_PACKAGES) {
