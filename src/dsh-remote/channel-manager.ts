@@ -193,15 +193,28 @@ export class DshRemoteHostChannelManager {
       persistedTransportSequence: material.lastTransportSequence,
       unsubscribe: () => undefined, ready: false, controller,
     }
-    channel.unsubscribe = await this.options.realtime.subscribe({
+    const subscribe = async (afterSequence?: number): Promise<() => void> => await this.options.realtime.subscribe({
       channelRef: claims.channel_ref, authorizationRef: authorization.authorizationRef,
-      afterSequence: channel.lastTransportSequence,
+      ...(afterSequence === undefined ? {} : { afterSequence }),
       onEvent: (payload, metadata) => {
         void this.handle(channel, payload as DshRemoteCipherEnvelope, metadata).catch(() => {
           void this.close(channel.binding.bindingRef)
         })
       }, signal: controller.signal,
     })
+    try {
+      channel.unsubscribe = await subscribe(channel.lastTransportSequence)
+    } catch (error) {
+      if (!(error instanceof DshRemoteError) || error.code !== 'REPLAY_GAP') {
+        controller.abort()
+        throw error
+      }
+      // Realtime treats an omitted after_seq on secured DSH channels as an
+      // atomic live-head baseline. The Controller requests a full encrypted
+      // snapshot after key agreement, so unavailable transport history must
+      // not keep HostChannelReady permanently false.
+      channel.unsubscribe = await subscribe()
+    }
     this.channels.set(binding.bindingRef, channel)
     this.scheduleRenew(channel)
     await this.startKeyAgreement(channel)

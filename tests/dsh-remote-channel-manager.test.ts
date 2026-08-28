@@ -40,6 +40,7 @@ class FakeRealtime implements DshRemoteRealtimeTransport {
   readonly afterSequences: Array<number | undefined> = []
   onEvent: ((payload: DshRemoteRealtimePayload, metadata: DshRemoteTrustedEventMetadata) => void) | undefined
   rejectNextOversizedProjection = false
+  rejectNextReplay = false
   subscribeDisconnect() { return () => undefined }
   async connect() {}
   async disconnect() {}
@@ -50,6 +51,10 @@ class FakeRealtime implements DshRemoteRealtimeTransport {
   }
   async subscribe(input: Parameters<DshRemoteRealtimeTransport['subscribe']>[0]) {
     this.afterSequences.push(input.afterSequence)
+    if (this.rejectNextReplay && input.afterSequence !== undefined) {
+      this.rejectNextReplay = false
+      throw new DshRemoteError('REPLAY_GAP', 'replay window expired', true)
+    }
     this.onEvent = input.onEvent
     return () => { this.onEvent = undefined }
   }
@@ -178,8 +183,9 @@ describe('Host control Channel key lifecycle', () => {
       keyEpoch: 2, direction: 'host-to-controller',
     })).toMatchObject({ request_ref: 'request-test-01', status: 'completed' })
 
+    realtime.rejectNextReplay = true
     await manager.open(binding)
-    expect(realtime.afterSequences).toEqual([0, 3])
+    expect(realtime.afterSequences).toEqual([0, 3, undefined])
     const secondInit = realtime.published.at(-1)!.payload as Record<string, unknown>
     expect(secondInit.host_ephemeral_public_key).not.toBe(firstInit.host_ephemeral_public_key)
     await manager.closeAll()
