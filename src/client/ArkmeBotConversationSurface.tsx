@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type CSSProperties } from 'react'
+import { useEffect, useRef, useState, useSyncExternalStore, type CSSProperties } from 'react'
 import { GearSix } from '@phosphor-icons/react/dist/icons/GearSix'
 import { RobotIcon } from '@phosphor-icons/react/dist/csr/Robot'
 import type {
@@ -10,6 +10,7 @@ import type {
 import { callArkme } from './api.js'
 import { arkmeTheme } from './arkme-theme.js'
 import { ArkmeBotSettingsPanel } from './ArkmeBotSettingsPanel.js'
+import { arkmeUi } from './ui-controller.js'
 import { arkmeConversationComposerHeight, arkmeConversationComposerLayout } from './conversation-composer-presentation.js'
 
 const styles: Record<string, CSSProperties> = {
@@ -50,8 +51,8 @@ const styles: Record<string, CSSProperties> = {
 function mergeMessages(current: readonly ArkmeBotPrivateChatMessage[], incoming: readonly ArkmeBotPrivateChatMessage[]): ArkmeBotPrivateChatMessage[] {
   const next = [...current]
   for (const message of incoming) {
-    const duplicate = next.some(existing => existing.role === message.role && existing.content === message.content
-      && existing.createdAtMillis === message.createdAtMillis)
+    const duplicate = message.messageId !== ''
+      && next.some(existing => existing.messageId === message.messageId)
     if (!duplicate) next.push(message)
   }
   return next
@@ -77,6 +78,7 @@ export function ArkmeBotConversationSurface({
   onConversationActivity?(bot: ArkmeBotSummary): void
   onDeleted?(): void
 }) {
+  const ui = useSyncExternalStore(arkmeUi.subscribe, arkmeUi.getSnapshot, arkmeUi.getSnapshot)
   const [messages, setMessages] = useState<ArkmeBotPrivateChatMessage[]>([])
   const [draft, setDraft] = useState('')
   const [loading, setLoading] = useState(true)
@@ -85,22 +87,35 @@ export function ArkmeBotConversationSurface({
   const [settingsOpen, setSettingsOpen] = useState(false)
   const bodyRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
+  const loadedBotRef = useRef<string>()
+  const sendInFlightRef = useRef(false)
+  const activeRef = useRef(true)
+  const conversationRecordRevision = bot.refreshOnRecordChanges === true
+    ? ui.recordRevision
+    : 0
+
+  useEffect(() => {
+    activeRef.current = true
+    return () => { activeRef.current = false }
+  }, [])
 
   useEffect(() => {
     const controller = new AbortController()
-    setLoading(true)
+    const initialLoad = loadedBotRef.current !== bot.botRef
+    if (initialLoad) setLoading(true)
     setError('')
-    setMessages([])
+    if (initialLoad) setMessages([])
     void callArkme<ArkmeBotPrivateChatConversation>('bots.private-chat.open', { botRef: bot.botRef }, controller.signal)
       .then(value => {
         if (controller.signal.aborted) return
+        loadedBotRef.current = bot.botRef
         setMessages(value.messages)
         onConversationActivity?.(value.bot)
       })
       .catch(caught => { if (!controller.signal.aborted) setError(caught instanceof Error ? caught.message : String(caught)) })
-      .finally(() => { if (!controller.signal.aborted) setLoading(false) })
+      .finally(() => { if (!controller.signal.aborted && initialLoad) setLoading(false) })
     return () => { controller.abort() }
-  }, [bot.botRef])
+  }, [bot.botRef, conversationRecordRevision])
 
   useEffect(() => { bodyRef.current?.scrollTo({ top: bodyRef.current.scrollHeight }) }, [messages.length])
   useEffect(() => {
@@ -112,22 +127,27 @@ export function ArkmeBotConversationSurface({
 
   const send = async () => {
     const content = draft.trim()
-    if (content === '' || sending) return
+    if (content === '' || sendInFlightRef.current) return
+    sendInFlightRef.current = true
     setSending(true)
     setError('')
     try {
       const result = await callArkme<ArkmeBotPrivateChatSendResult>('bots.private-chat.send', { botRef: bot.botRef, content })
+      if (!activeRef.current) return
       const activityMessages = [result.userMessage, ...result.botMessages]
       setMessages(current => mergeMessages(current, activityMessages))
       onConversationActivity?.(botWithActivity(bot, activityMessages))
       setDraft('')
       if (result.status !== 'ok') setError('Bot 暂未返回回复，请稍后刷新查看。')
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : String(caught))
+      if (activeRef.current) setError(caught instanceof Error ? caught.message : String(caught))
     } finally {
-      setSending(false)
+      sendInFlightRef.current = false
+      if (activeRef.current) setSending(false)
     }
   }
+
+  const privateChatInboundOnly = bot.directChatAvailable && bot.privateChatOutboundEnabled === false
 
   return <section style={styles.shell} aria-label={`${bot.name} Bot 对话`}>
     <header style={styles.header}>
@@ -140,10 +160,12 @@ export function ArkmeBotConversationSurface({
       {loading ? <div role="status" style={styles.loading}>正在加载 Bot 对话…</div>
         : messages.length === 0 ? <div style={styles.empty}>和 {bot.name} 打个招呼吧</div>
           : <div style={styles.messages}>{messages.map((message, index) => <div
-            key={`${message.role}:${message.createdAtMillis}:${index}`} style={{ ...styles.row, ...(message.role === 'user' ? styles.rowUser : {}) }}
+            key={message.messageId || `${message.role}:${message.createdAtMillis}:${index}`} style={{ ...styles.row, ...(message.role === 'user' ? styles.rowUser : {}) }}
           ><div style={{ ...styles.bubble, ...(message.role === 'user' ? styles.bubbleUser : styles.bubbleAssistant) }}>{message.content}</div></div>)}</div>}
     </div>
-    <footer className="arkme-conversation-composer" style={styles.composer}><div className="arkme-conversation-composer-inner" style={styles.composerInner}>
+    {privateChatInboundOnly ? <footer className="arkme-conversation-composer" style={styles.composer}><div className="arkme-conversation-composer-inner" style={styles.composerInner}>
+      <div role="note" style={styles.loading}>Webhook Bot 仅接收外部系统推送</div>
+    </div></footer> : <footer className="arkme-conversation-composer" style={styles.composer}><div className="arkme-conversation-composer-inner" style={styles.composerInner}>
       <textarea
         ref={inputRef} value={draft} disabled={sending} style={styles.input} rows={1} maxLength={20_000}
         placeholder={`发消息给 ${bot.name}`}
@@ -162,7 +184,7 @@ export function ArkmeBotConversationSurface({
           </svg>
         </button>
       </div>
-    </div></footer>
+    </div></footer>}
     {settingsOpen && <ArkmeBotSettingsPanel bot={bot} onClose={() => { setSettingsOpen(false) }} onUpdated={updated => { onConversationActivity?.(updated); setSettingsOpen(false) }} onDeleted={() => { setSettingsOpen(false); onDeleted?.() }} />}
   </section>
 }
