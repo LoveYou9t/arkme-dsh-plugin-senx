@@ -164,11 +164,6 @@ const styles: Record<string, CSSProperties> = {
     height: 14, flex: 'none', margin: '-10px 16px 6px', display: 'flex', alignItems: 'center', gap: 4,
     color: colors.caption, fontSize: 10, lineHeight: '14px',
   },
-  rootDirectoryStatusError: { color: '#c2413b' },
-  rootDirectoryStatusRetry: {
-    padding: 0, border: 0, background: 'transparent', color: 'inherit', cursor: 'pointer', font: 'inherit', fontSize: 10,
-    lineHeight: '14px', textDecoration: 'underline',
-  },
   embeddedSearchField: { flex: 1, minWidth: 0, margin: 0 },
   createTaskButton: {
     width: 40, height: 40, flex: 'none', display: 'grid', placeItems: 'center', padding: 0,
@@ -1602,9 +1597,6 @@ export function ArkmeNavigation({
     </div>}
     {directory === 'root' && embeddedProductShell && authenticated && rootDirectoryState === 'updating' && <div style={styles.rootDirectoryStatus} role="status">
       <ArkmeDirectoryRefreshIcon /><span>更新中</span>
-    </div>}
-    {directory === 'root' && embeddedProductShell && authenticated && rootDirectoryState === 'error' && <div style={{ ...styles.rootDirectoryStatus, ...styles.rootDirectoryStatusError }} role="alert">
-      <span aria-hidden>!</span><span>加载失败</span><button type="button" style={styles.rootDirectoryStatusRetry} onClick={() => { void loadDirectory('root', undefined, true) }}>重试</button>
     </div>}
 
     {lockedDirectory ? <>
