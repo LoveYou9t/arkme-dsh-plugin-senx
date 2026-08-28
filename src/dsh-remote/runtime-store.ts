@@ -11,6 +11,16 @@ interface AccountRuntimeState {
   displayName?: string
   desktopRef?: string
   runtimes: Record<string, DshRemoteRuntimeProjection>
+  projections: Record<string, DshRemoteProjectionInventory>
+}
+
+export interface DshRemoteProjectionInventory {
+  workspaceRefs: string[]
+  sessions: Array<{
+    sessionRef: string
+    workspaceRef: string
+    sourceUpdatedAt: number
+  }>
 }
 
 interface PersistedRuntimeState {
@@ -23,7 +33,7 @@ function emptyState(): PersistedRuntimeState {
 }
 
 function accountState(state: PersistedRuntimeState, accountId: string): AccountRuntimeState {
-  return state.accounts[accountId] ?? { runtimes: {} }
+  return state.accounts[accountId] ?? { runtimes: {}, projections: {} }
 }
 
 export class DshRemoteRuntimeStore {
@@ -132,6 +142,38 @@ export class DshRemoteRuntimeStore {
     })
   }
 
+  async projectionInventory(
+    accountId: string,
+    profileRef: string,
+  ): Promise<DshRemoteProjectionInventory> {
+    return await this.read(state => {
+      const inventory = accountState(state, accountId).projections[profileRef]
+      return inventory === undefined
+        ? { workspaceRefs: [], sessions: [] }
+        : {
+            workspaceRefs: [...inventory.workspaceRefs],
+            sessions: inventory.sessions.map(value => ({ ...value })),
+          }
+    })
+  }
+
+  async saveProjectionInventory(
+    accountId: string,
+    profileRef: string,
+    inventory: DshRemoteProjectionInventory,
+  ): Promise<void> {
+    await this.update(state => {
+      const account = accountState(state, accountId)
+      account.projections[profileRef] = {
+        workspaceRefs: [...new Set(inventory.workspaceRefs)].sort(),
+        sessions: [...inventory.sessions]
+          .map(value => ({ ...value }))
+          .sort((left, right) => left.sessionRef.localeCompare(right.sessionRef)),
+      }
+      state.accounts[accountId] = account
+    })
+  }
+
   private async read<T>(reader: (state: PersistedRuntimeState) => T): Promise<T> {
     let result!: T
     await this.serial(async () => { result = reader(await this.load()) })
@@ -171,10 +213,45 @@ export class DshRemoteRuntimeStore {
           delete runtime.remoteEnabled
           runtimes[profileRef] = runtime as unknown as DshRemoteRuntimeProjection
         }
+        const projections: Record<string, DshRemoteProjectionInventory> = {}
+        if (source.projections !== undefined) {
+          if (source.projections === null || typeof source.projections !== 'object' || Array.isArray(source.projections)) {
+            throw new Error('projection inventory schema mismatch')
+          }
+          for (const [profileRef, inventoryValue] of Object.entries(source.projections as Record<string, unknown>)) {
+            if (inventoryValue === null || typeof inventoryValue !== 'object' || Array.isArray(inventoryValue)) {
+              throw new Error('projection inventory schema mismatch')
+            }
+            const inventory = inventoryValue as Record<string, unknown>
+            if (!Array.isArray(inventory.workspaceRefs) || !Array.isArray(inventory.sessions)) {
+              throw new Error('projection inventory schema mismatch')
+            }
+            const workspaceRefs = inventory.workspaceRefs.map(value => {
+              if (typeof value !== 'string' || value.trim() === '') throw new Error('workspace inventory schema mismatch')
+              return value
+            })
+            const sessions = inventory.sessions.map(value => {
+              if (value === null || typeof value !== 'object' || Array.isArray(value)) throw new Error('session inventory schema mismatch')
+              const session = value as Record<string, unknown>
+              if (typeof session.sessionRef !== 'string' || session.sessionRef.trim() === ''
+                || typeof session.workspaceRef !== 'string' || session.workspaceRef.trim() === ''
+                || !Number.isSafeInteger(session.sourceUpdatedAt) || Number(session.sourceUpdatedAt) <= 0) {
+                throw new Error('session inventory schema mismatch')
+              }
+              return {
+                sessionRef: session.sessionRef,
+                workspaceRef: session.workspaceRef,
+                sourceUpdatedAt: Number(session.sourceUpdatedAt),
+              }
+            })
+            projections[profileRef] = { workspaceRefs, sessions }
+          }
+        }
         accounts[accountId] = {
           ...(typeof source.displayName === 'string' ? { displayName: source.displayName } : {}),
           ...(typeof source.desktopRef === 'string' ? { desktopRef: source.desktopRef } : {}),
           runtimes,
+          projections,
         }
       }
       this.state = { schemaVersion: 2, accounts }

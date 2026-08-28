@@ -67,17 +67,18 @@ async function fixture(input: { featureEnabled?: boolean; session?: () => { user
     syncSessions: async value => { controlCalls.push({ name: 'sessions', value }); return {} },
     appendSessionEvents: async value => { controlCalls.push({ name: 'events', value }); return {} },
   }
+  const adapter = apiProxy()
   const host = new ArkmeRemoteRealtimeHost({
     featureEnabled: input.featureEnabled ?? true,
     profileRef: 'web', hostClientRef: 'host-client-01', displayName: 'My Mac',
     readSession: async () => input.session === undefined ? { userId: 42, clientId: 9 } : input.session(),
     secretBroker: new DshRemoteRuntimeSecretBroker(new MemorySecrets()),
     runtimeStore: new DshRemoteRuntimeStore(directory),
-    controlPlane, realtime, apiProxy: apiProxy(),
+    controlPlane, realtime, apiProxy: adapter,
     ledgerForAccount: (_accountId, key) => new DshRemoteCommandLedger(join(directory, 'ledger'), key),
     now: () => 2_000,
   })
-  return { host, realtime, controlCalls }
+  return { host, realtime, controlCalls, adapter }
 }
 
 afterEach(() => { vi.useRealTimers() })
@@ -119,6 +120,31 @@ describe('Host login-only registration lifecycle', () => {
     await host.stop()
     const tail = realtime.calls.slice(-3)
     expect(tail).toEqual(['unregister', 'unsubscribe', 'disconnect'])
+  })
+
+  it('emits explicit tombstones when a previously projected workspace and session disappear', async () => {
+    const { host, controlCalls, adapter } = await fixture()
+    await host.start()
+    vi.spyOn(adapter, 'workspaces').mockResolvedValue([])
+    vi.spyOn(adapter, 'sessions').mockResolvedValue({ items: [] })
+
+    await (host as unknown as {
+      syncProjectionSnapshot(force: boolean): Promise<void>
+    }).syncProjectionSnapshot(true)
+
+    const workspace = controlCalls.filter(call => call.name === 'workspaces').at(-1)!.value
+    const session = controlCalls.filter(call => call.name === 'sessions').at(-1)!.value
+    expect(workspace).toMatchObject({
+      items: [{ workspace_ref: 'workspace-01', deleted: true }],
+    })
+    expect(session).toMatchObject({
+      items: [{
+        workspace_ref: 'workspace-01',
+        session_ref: 'session-01',
+        deleted: true,
+      }],
+    })
+    await host.stop()
   })
 
   it('activates after login and tears down immediately after logout', async () => {

@@ -78,4 +78,29 @@ describe('Runtime local persistence without device authorization', () => {
     expect(persisted).toContain('"schemaVersion": 2')
     expect(persisted).not.toMatch(/credentialRef|bindings|remoteEnabled/)
   })
+
+  it('persists only opaque projection inventory needed for explicit tombstones', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'dsh-runtime-projection-'))
+    const first = new DshRemoteRuntimeStore(directory)
+    await first.saveProjectionInventory('42', 'web', {
+      workspaceRefs: ['workspace-2', 'workspace-1', 'workspace-1'],
+      sessions: [{
+        sessionRef: 'session-1',
+        workspaceRef: 'workspace-1',
+        sourceUpdatedAt: 10,
+      }],
+    })
+
+    const second = new DshRemoteRuntimeStore(directory)
+    await expect(second.projectionInventory('42', 'web')).resolves.toEqual({
+      workspaceRefs: ['workspace-1', 'workspace-2'],
+      sessions: [{
+        sessionRef: 'session-1',
+        workspaceRef: 'workspace-1',
+        sourceUpdatedAt: 10,
+      }],
+    })
+    const persisted = await readFile(join(directory, 'dsh-remote', 'runtime-state.json'), 'utf8')
+    expect(persisted).not.toContain('/repo')
+  })
 })

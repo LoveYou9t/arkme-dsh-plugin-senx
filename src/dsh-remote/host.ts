@@ -547,60 +547,106 @@ export class ArkmeRemoteRealtimeHost implements DshRemoteHostFacade {
 
   private async syncProjectionSnapshot(force = false): Promise<void> {
     const runtime = this.runtime
-    if (runtime === undefined) return
+    const accountId = this.accountId
+    if (runtime === undefined || accountId === undefined) return
     if (force) this.lastProjectionSyncAttemptMillis = this.now()
     const capabilities = new Set(this.options.apiProxy.capabilities())
     const projectionAt = this.nextProjectionVersion()
+    const previous = await this.options.runtimeStore.projectionInventory(
+      accountId,
+      this.options.profileRef,
+    )
     const workspaces = capabilities.has('workspace.list') ? await this.options.apiProxy.workspaces() : []
-    for (let offset = 0; offset < workspaces.length || offset === 0; offset += 100) {
-      const items = workspaces.slice(offset, offset + 100)
+    const currentWorkspaceRefs = new Set(workspaces.map(item => item.workspaceId))
+    const workspaceItems = [
+      ...workspaces.map(item => ({
+        workspace_ref: item.workspaceId,
+        title: item.title,
+        path: item.path,
+        available: item.available,
+        projection_at: projectionAt,
+        deleted: false,
+      })),
+      ...previous.workspaceRefs
+        .filter(workspaceRef => !currentWorkspaceRefs.has(workspaceRef))
+        .map(workspaceRef => ({
+          workspace_ref: workspaceRef,
+          title: '',
+          path: '',
+          available: false,
+          projection_at: projectionAt,
+          deleted: true,
+        })),
+    ]
+    for (let offset = 0; offset < workspaceItems.length || offset === 0; offset += 100) {
       await this.options.controlPlane.syncWorkspaces({
         runtime_ref: runtime.runtimeRef,
         host_generation: runtime.hostGeneration,
-        items: items.map(item => ({
-          workspace_ref: item.workspaceId,
-          title: item.title,
-          path: item.path,
-          available: item.available,
-          projection_at: projectionAt,
-          deleted: false,
-        })),
+        items: workspaceItems.slice(offset, offset + 100),
       })
-      if (workspaces.length === 0) break
+      if (workspaceItems.length === 0) break
     }
-    if (!capabilities.has('session.list')) {
+
+    const sessions = [] as Awaited<ReturnType<DshApiProxyAdapter['sessions']>>['items']
+    if (capabilities.has('session.list')) {
+      let cursor: string | undefined
+      const seenCursors = new Set<string>()
+      for (let pageCount = 0; pageCount < 200; pageCount += 1) {
+        const page = await this.options.apiProxy.sessions({ limit: 50, ...(cursor === undefined ? {} : { cursor }) })
+        sessions.push(...page.items)
+        if (page.nextCursor === undefined) break
+        if (seenCursors.has(page.nextCursor)) throw new DshRemoteError('REMOTE_INVALID_RESPONSE', 'DSH 会话游标发生循环')
+        seenCursors.add(page.nextCursor)
+        cursor = page.nextCursor
+        if (pageCount === 199) throw new DshRemoteError('REMOTE_INVALID_RESPONSE', 'DSH 会话分页超过安全上限')
+      }
+    }
+    const currentSessionRefs = new Set(sessions.map(item => item.sessionId))
+    const sessionItems = [
+      ...sessions.map(item => ({
+        workspace_ref: item.workspaceId,
+        session_ref: item.sessionId,
+        title: item.title ?? '',
+        source_updated_at: Math.max(1, Math.trunc(item.updatedAt)),
+        projection_at: projectionAt,
+        running: item.running,
+        blank: item.blank,
+        ...(item.projectionAsOfSeq === undefined ? {} : { projection_as_of_seq: item.projectionAsOfSeq }),
+        deleted: false,
+      })),
+      ...previous.sessions
+        .filter(item => !currentSessionRefs.has(item.sessionRef))
+        .map(item => ({
+          workspace_ref: item.workspaceRef,
+          session_ref: item.sessionRef,
+          title: '',
+          source_updated_at: item.sourceUpdatedAt,
+          projection_at: projectionAt,
+          running: false,
+          blank: false,
+          deleted: true,
+        })),
+    ]
+    for (let offset = 0; offset < sessionItems.length || offset === 0; offset += 100) {
       await this.options.controlPlane.syncSessions({
         runtime_ref: runtime.runtimeRef,
         host_generation: runtime.hostGeneration,
-        items: [],
+        items: sessionItems.slice(offset, offset + 100),
       })
-      return
+      if (sessionItems.length === 0) break
     }
-    let cursor: string | undefined
-    const seenCursors = new Set<string>()
-    for (let pageCount = 0; pageCount < 200; pageCount += 1) {
-      const page = await this.options.apiProxy.sessions({ limit: 50, ...(cursor === undefined ? {} : { cursor }) })
-      await this.options.controlPlane.syncSessions({
-        runtime_ref: runtime.runtimeRef,
-        host_generation: runtime.hostGeneration,
-        items: page.items.map(item => ({
-          workspace_ref: item.workspaceId,
-          session_ref: item.sessionId,
-          title: item.title ?? '',
-          source_updated_at: Math.max(1, Math.trunc(item.updatedAt)),
-          projection_at: projectionAt,
-          running: item.running,
-          blank: item.blank,
-          ...(item.projectionAsOfSeq === undefined ? {} : { projection_as_of_seq: item.projectionAsOfSeq }),
-          deleted: false,
+    await this.options.runtimeStore.saveProjectionInventory(
+      accountId,
+      this.options.profileRef,
+      {
+        workspaceRefs: workspaces.map(item => item.workspaceId),
+        sessions: sessions.map(item => ({
+          sessionRef: item.sessionId,
+          workspaceRef: item.workspaceId,
+          sourceUpdatedAt: Math.max(1, Math.trunc(item.updatedAt)),
         })),
-      })
-      if (page.nextCursor === undefined) return
-      if (seenCursors.has(page.nextCursor)) throw new DshRemoteError('REMOTE_INVALID_RESPONSE', 'DSH 会话游标发生循环')
-      seenCursors.add(page.nextCursor)
-      cursor = page.nextCursor
-    }
-    throw new DshRemoteError('REMOTE_INVALID_RESPONSE', 'DSH 会话分页超过安全上限')
+      },
+    )
   }
 
   private async dispatch(request: DshRemoteRequest): Promise<{ duplicate: boolean; value: unknown }> {
