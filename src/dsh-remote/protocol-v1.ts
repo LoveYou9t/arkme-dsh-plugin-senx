@@ -1,11 +1,8 @@
-import { randomBytes } from 'node:crypto'
-import { canonicalJson, decryptXChaCha20Poly1305, encodeBase64Url, encryptXChaCha20Poly1305, sha256 } from './crypto.js'
 import { DshRemoteError } from './errors.js'
 import {
   DSH_REMOTE_MAX_FRAME_BYTES,
   DSH_REMOTE_PROTOCOL,
   DSH_REMOTE_PROTOCOL_MAJOR,
-  type DshRemoteCipherEnvelope,
   type DshRemoteOperation,
   type DshRemoteRequest,
 } from './types.js'
@@ -142,48 +139,4 @@ export function parseDshRemoteRequest(
     operation: source.operation as DshRemoteOperation,
     body,
   }
-}
-
-function cipherAad(input: Pick<DshRemoteCipherEnvelope, 'protocol' | 'protocol_major' | 'key_epoch' | 'direction'>): string {
-  return canonicalJson({
-    protocol: input.protocol,
-    protocol_major: input.protocol_major,
-    key_epoch: input.key_epoch,
-    direction: input.direction,
-  })
-}
-
-export function encryptDshRemotePayload(
-  key: Uint8Array,
-  plaintext: unknown,
-  input: { keyEpoch: number; direction: DshRemoteCipherEnvelope['direction']; nonce?: Uint8Array },
-): DshRemoteCipherEnvelope {
-  const metadata = {
-    protocol: DSH_REMOTE_PROTOCOL,
-    protocol_major: DSH_REMOTE_PROTOCOL_MAJOR,
-    key_epoch: positiveInteger(input.keyEpoch, 'key_epoch'),
-    direction: input.direction,
-  }
-  const aad = cipherAad(metadata)
-  const encrypted = encryptXChaCha20Poly1305(key, canonicalJson(plaintext), aad, input.nonce ?? randomBytes(24))
-  return { ...metadata, ...encrypted, aad_hash: encodeBase64Url(sha256(aad)) }
-}
-
-export function decryptDshRemotePayload<T>(
-  key: Uint8Array,
-  envelope: DshRemoteCipherEnvelope,
-  expected: { keyEpoch: number; direction: DshRemoteCipherEnvelope['direction'] },
-): T {
-  if (envelope.protocol !== DSH_REMOTE_PROTOCOL || envelope.protocol_major !== DSH_REMOTE_PROTOCOL_MAJOR) {
-    throw new DshRemoteError('REMOTE_PROTOCOL_UNSUPPORTED', '远控密文协议不受支持')
-  }
-  if (envelope.key_epoch !== expected.keyEpoch || envelope.direction !== expected.direction) {
-    throw new DshRemoteError('REMOTE_AUTH_EPOCH_STALE', '远控密钥世代已经失效', true)
-  }
-  const aad = cipherAad(envelope)
-  if (envelope.aad_hash !== encodeBase64Url(sha256(aad))) throw new DshRemoteError('DEVICE_PROOF_INVALID', '远控密文元数据认证失败')
-  const plaintext = decryptXChaCha20Poly1305(key, envelope, aad)
-  if (plaintext.length > DSH_REMOTE_MAX_FRAME_BYTES) throw new DshRemoteError('REMOTE_REQUEST_INVALID', '远控明文超过 60KiB')
-  try { return JSON.parse(plaintext.toString('utf8')) as T }
-  catch (error) { throw new DshRemoteError('REMOTE_REQUEST_INVALID', '远控明文 JSON 无效', false, {}, { cause: error }) }
 }

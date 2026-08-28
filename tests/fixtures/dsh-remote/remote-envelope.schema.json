@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://jotmo.dev/contracts/dsh-remote/v1/remote-envelope.schema.json",
-  "title": "DSH Remote v1 encrypted inner envelope",
+  "title": "DSH Remote v1 bounded typed payload",
   "type": "object",
   "additionalProperties": false,
   "required": ["protocol", "protocol_major", "kind", "request_ref", "host_generation", "issued_at", "operation", "body"],

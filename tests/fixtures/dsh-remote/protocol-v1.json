@@ -1,49 +1,63 @@
 {
   "version": 1,
-  "manual_code": {
-    "display": "0123-ABCD",
-    "normalized": "0123ABCD",
-    "locator_hex": "5c01ba5fc2"
+  "authority": "authenticated-account",
+  "runtime_target": {
+    "channel_ref": "runtime_fixture_01",
+    "runtime_ref": "runtime_fixture_01",
+    "host_profile_ref": "profile_fixture_01",
+    "host_client_ref": "host_client_fixture_01",
+    "host_lease_generation": 17
   },
-  "pairing_ticket": {
-    "unsigned_canonical_json": "{\"challenge\":\"QEFCQ0RFRkdISUpLTE1OT1BRUlNUVVZXWFlaW1xdXl8\",\"environment\":\"test\",\"expires_at\":1787760600000,\"host_ephemeral_public_key\":\"B6N8vBQgk8i3VdwbEOhstCY3StFqqFPtC9_AsrhtHHw\",\"host_fingerprint\":\"gF0vfOTYfcKmnOVpHQRkUe_y1VPmSLhXDydcnkVEvjc\",\"host_public_signing_key\":\"bw8O6z-_-SXGbQPhnc5I1e3J_-5RzSaucd055W9_3aI\",\"pairing_ref\":\"pair_fixture_01\",\"scheme\":\"jotmo-dsh-remote\",\"version\":1}",
-    "host_private_seed": "0NHS09TV1tfY2drb3N3e3-Dh4uPk5ebn6Onq6-zt7u8",
-    "host_public_signing_key": "bw8O6z-_-SXGbQPhnc5I1e3J_-5RzSaucd055W9_3aI",
-    "host_fingerprint": "gF0vfOTYfcKmnOVpHQRkUe_y1VPmSLhXDydcnkVEvjc",
-    "host_signature": "duH8zWnstx30QwxvsC_6DHZUmI8CpEFFI34tZhxK7iuW1i1FL5QU9CxocZqRocTpcmNG7lHoTq9AmfbICDSPBw"
+  "host_pre_registration_subscribe": {
+    "type": "channel.subscribe",
+    "request_id": "request_subscribe_fixture_01",
+    "namespace": "dsh_remote",
+    "channel_ref": "runtime_fixture_01",
+    "runtime_ref": "runtime_fixture_01",
+    "host_profile_ref": "profile_fixture_01",
+    "host_client_ref": "host_client_fixture_01",
+    "host_lease_generation": 0,
+    "after_seq": 3
   },
-  "key_agreement": {
-    "transcript": "dsh.remote/v1\nenvironment=test\npairing_ref=pair_fixture_01\nchallenge=challenge_fixture_01\nclaim_nonce=claim_fixture_01\nhost_fingerprint=host_fixture_01\ncontroller_fingerprint=controller_fixture_01",
-    "transcript_sha256": "46f4f1305438c8ac723d682b04b4f3a5645a5f5788b7e4a752476054999e3873",
-    "host_private_key": "AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA",
-    "host_public_key": "B6N8vBQgk8i3VdwbEOhstCY3StFqqFPtC9_AsrhtHHw",
-    "controller_private_key": "ISIjJCUmJygpKissLS4vMDEyMzQ1Njc4OTo7PD0-P0A",
-    "controller_public_key": "WGmv9FBUlzLLqu1eXfmzCm2jHLDldCutWtShp2jxpns",
-    "shared_secret": "qE3Hw8jwWLGy3EzR6bXcCnmH-ItqlWTN4zkfxCEVnnc",
-    "controller_to_host_key": "KWIX-OTyx66IQ0dPMX0MTHOhZWmyjl5rEEXvTZ-M_fk",
-    "host_to_controller_key": "3L0NJSyiT0GjAN3YnUmL6Z-c70F9YRO_-41rC2ZeLZY",
-    "confirmation_key": "K19H0HGzlKEZNXqNRtXG6CMvH2OrdfZCs9aH5NveXB8",
-    "controller_confirmation": "HvRn11AUwDohu-UyolN44cb6fQ10Fe32Se31RtjNwgg",
-    "host_confirmation": "VUbm-eyXJNRFj4LlOofbqsVNof3FCoHoLdv0cVtqO6o"
+  "host_service_register": {
+    "type": "service.register",
+    "request_id": "request_register_fixture_01",
+    "namespace": "dsh_remote",
+    "service": "host",
+    "protocol": "dsh.remote",
+    "protocol_major": 1,
+    "descriptor": {
+      "runtime_ref": "runtime_fixture_01",
+      "capabilities": ["session.list", "session.prompt"]
+    }
   },
-  "grant": {
-    "private_seed": "nWGxne_9WmC6hEr0kuwsxERJxWl7MmkZcDusAxyuf2A",
-    "public_key": "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo",
-    "device_private_seed": "0NHS09TV1tfY2drb3N3e3-Dh4uPk5ebn6Onq6-zt7u8",
-    "device_public_key": "bw8O6z-_-SXGbQPhnc5I1e3J_-5RzSaucd055W9_3aI",
-    "protected": "{\"alg\":\"EdDSA\",\"kid\":\"remote-test-2026-08\",\"typ\":\"JWT\"}",
-    "claims": "{\"iss\":\"jotmo-backend/dsh-remote\",\"aud\":\"jotmo-realtime/remote-channel\",\"sub\":\"binding_fixture_01\",\"jti\":\"grant_fixture_01\",\"iat\":1787760000,\"nbf\":1787759970,\"exp\":1787760120,\"user_id\":1001,\"client_id\":2001,\"grant_kind\":\"control\",\"channel_ref\":\"channel_fixture_01\",\"runtime_ref\":\"runtime_fixture_01\",\"host_profile_ref\":\"profile_fixture_01\",\"host_client_ref\":\"host_client_fixture_01\",\"credential_ref\":\"credential_fixture_01\",\"key_epoch\":1,\"sender_role\":\"controller\",\"allowed_directions\":[\"request\"],\"scope\":[\"session.read\",\"session.prompt\"],\"subject_revisions\":{\"credential\":1,\"binding\":1,\"runtime\":1,\"global\":1},\"cnf\":{\"key_fingerprint\":\"gF0vfOTYfcKmnOVpHQRkUe_y1VPmSLhXDydcnkVEvjc\",\"public_key\":\"bw8O6z-_-SXGbQPhnc5I1e3J_-5RzSaucd055W9_3aI\"}}",
-    "compact_jws": "eyJhbGciOiJFZERTQSIsImtpZCI6InJlbW90ZS10ZXN0LTIwMjYtMDgiLCJ0eXAiOiJKV1QifQ.eyJpc3MiOiJqb3Rtby1iYWNrZW5kL2RzaC1yZW1vdGUiLCJhdWQiOiJqb3Rtby1yZWFsdGltZS9yZW1vdGUtY2hhbm5lbCIsInN1YiI6ImJpbmRpbmdfZml4dHVyZV8wMSIsImp0aSI6ImdyYW50X2ZpeHR1cmVfMDEiLCJpYXQiOjE3ODc3NjAwMDAsIm5iZiI6MTc4Nzc1OTk3MCwiZXhwIjoxNzg3NzYwMTIwLCJ1c2VyX2lkIjoxMDAxLCJjbGllbnRfaWQiOjIwMDEsImdyYW50X2tpbmQiOiJjb250cm9sIiwiY2hhbm5lbF9yZWYiOiJjaGFubmVsX2ZpeHR1cmVfMDEiLCJydW50aW1lX3JlZiI6InJ1bnRpbWVfZml4dHVyZV8wMSIsImhvc3RfcHJvZmlsZV9yZWYiOiJwcm9maWxlX2ZpeHR1cmVfMDEiLCJob3N0X2NsaWVudF9yZWYiOiJob3N0X2NsaWVudF9maXh0dXJlXzAxIiwiY3JlZGVudGlhbF9yZWYiOiJjcmVkZW50aWFsX2ZpeHR1cmVfMDEiLCJrZXlfZXBvY2giOjEsInNlbmRlcl9yb2xlIjoiY29udHJvbGxlciIsImFsbG93ZWRfZGlyZWN0aW9ucyI6WyJyZXF1ZXN0Il0sInNjb3BlIjpbInNlc3Npb24ucmVhZCIsInNlc3Npb24ucHJvbXB0Il0sInN1YmplY3RfcmV2aXNpb25zIjp7ImNyZWRlbnRpYWwiOjEsImJpbmRpbmciOjEsInJ1bnRpbWUiOjEsImdsb2JhbCI6MX0sImNuZiI6eyJrZXlfZmluZ2VycHJpbnQiOiJnRjB2Zk9UWWZjS21uT1ZwSFFSa1VlX3kxVlBtU0xoWER5ZGNua1ZFdmpjIiwicHVibGljX2tleSI6ImJ3OE82ei1fLVNYR2JRUGhuYzVJMWUzSl8tNVJ6U2F1Y2QwNTVXOV8zYUkifX0.I6vm_krlxya8AvpjgssvxkaQirDs-obfyi6bKwQFd4s8GwBCGTehNAZb6STVE93AT_fbBVixe-FoQaQY9fnKDw",
-    "authorization_ref": "authorization_fixture_01",
-    "authorization_nonce": "YGFiY2RlZmdoaWprbG1ub3BxcnN0dXZ3eHl6e3x9fn8",
-    "connection_generation": 1787760000123456,
-    "proof_transcript": "dsh-remote-channel-pop-v1\ngrant_fixture_01\nchannel_fixture_01\ncontroller\nauthorization_fixture_01\n1787760000123456\nYGFiY2RlZmdoaWprbG1ub3BxcnN0dXZ3eHl6e3x9fn8",
-    "proof_signature": "lKujXjm0O2tI6lKwiy9ysZXuIdSQdPWYdiP0SqiKl2xqogqBY0r29ktfLfKOIzXNxpTl3t_dX3gw9Iu6gjToDw"
+  "controller_publish": {
+    "type": "channel.publish",
+    "request_id": "request_publish_fixture_01",
+    "namespace": "dsh_remote",
+    "channel_ref": "runtime_fixture_01",
+    "runtime_ref": "runtime_fixture_01",
+    "host_profile_ref": "profile_fixture_01",
+    "host_client_ref": "host_client_fixture_01",
+    "host_lease_generation": 17,
+    "command_id": "command_fixture_01",
+    "direction": "request",
+    "payload": {
+      "protocol": "dsh.remote",
+      "protocol_major": 1,
+      "kind": "request",
+      "request_ref": "request_fixture_01",
+      "host_generation": 7,
+      "issued_at": 1787760000000,
+      "execute_before": 1787760030000,
+      "operation": "session.list",
+      "body": {}
+    }
   },
-  "payload": {
-    "nonce": "oKGio6SlpqeoqaqrrK2ur7CxsrO0tba3",
-    "aad": "RvTxMFQ4yKxyPWgrBLTzpWRaX1eIt-SnUkdgVJmeOHM",
-    "plaintext": "{\"protocol\":\"dsh.remote\",\"protocol_major\":1,\"kind\":\"request\",\"request_ref\":\"request_fixture_01\",\"host_generation\":7,\"issued_at\":1787760000000,\"execute_before\":1787760030000,\"operation\":\"session.history\",\"body\":{\"session_ref\":\"session_fixture_01\"}}",
-    "ciphertext_and_tag": "yiuARHLFfe6NxKGl0cvCNJnPy2LwPdDM6IkwDtidjEyoDj-cL2mD4adgDzAtQUYUVrqnqcZQKoL_92jGKq35vGBNfvcKq6_MGDEeZMjlfJaMxn6B7-5ows6LdCaO25Y18RjqUEXvkBtfelnSTsn5z-tjys1jMq2BQx9Yvf1f2XDQOm9k-kswn0pHbaB2JggcISnrYM45lJRHB6H1mzGi5-hCktXw1wrBrfvqEi0NHN-7JWCx6_xAr4b-0Wr9fiFW2Q4ySUvUnyaLYsf1eVcxqPFJtBc7cOFgSFjs41n1WVleIn6QvpHqiBtlgUrHv6Qfszax3EwCh9DbhxGQEj4SHPvMcO7Avg8"
+  "trusted_event_metadata": {
+    "sender_role": "controller",
+    "runtime_ref": "runtime_fixture_01",
+    "accepted_at": 1787760000100,
+    "target_host_lease_generation": 17
   }
 }

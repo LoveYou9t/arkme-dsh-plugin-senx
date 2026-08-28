@@ -1,38 +1,35 @@
-import { describe, expect, it } from 'vitest'
-import { DshRemoteHttpControlPlane, type DshRemoteHttpRequester } from '../src/dsh-remote/control-plane.js'
+import { describe, expect, it, vi } from 'vitest'
+import { DshRemoteHttpControlPlane, mapDshRemoteControlPlaneError } from '../src/dsh-remote/control-plane.js'
 
-class BindingRequester implements DshRemoteHttpRequester {
-  async get(path: string): Promise<Record<string, unknown>> {
-    expect(path).toBe('/api/v1/dsh-remote/bindings')
-    return {
-      bindings: [{
-        binding: {
-          binding_ref: 'binding_01', controller_credential_ref: 'controller_01',
-          binding_revision: 3, status: 'active', scopes: ['session.history'],
-          created_at: 1_700_000_000_000, last_used_at: 1_700_000_100_000,
-        },
-        desktop: { desktop_ref: 'desktop_01', display_name: 'MacBook' },
-        controller: {
-          credential_ref: 'controller_01', device_name: "Alice's iPhone",
-          platform: 'ios', status: 'active',
-        },
-      }],
+describe('Backend login-only DSH remote control plane', () => {
+  it('uses only desktop, Runtime, projection, and history append endpoints', async () => {
+    const post = vi.fn(async (path: string, body: Record<string, unknown>) => ({ path, ...body }))
+    const plane = new DshRemoteHttpControlPlane({ post })
+    await plane.registerDesktop({ display_name: 'Work Mac', platform: 'darwin' })
+    await plane.registerRuntime('desktop-01', { profile_ref: 'web' })
+    await plane.syncWorkspaces({ runtime_ref: 'runtime-01', items: [] })
+    await plane.syncSessions({ runtime_ref: 'runtime-01', items: [] })
+    await plane.appendSessionEvents({ runtime_ref: 'runtime-01', entries: [] })
+    expect(post.mock.calls.map(call => call[0])).toEqual([
+      '/api/v1/dsh-remote/desktops/register',
+      '/api/v1/dsh-remote/desktops/desktop-01/runtimes/register',
+      '/api/v1/dsh-remote/workspaces/sync',
+      '/api/v1/dsh-remote/sessions/sync',
+      '/api/v1/dsh-remote/session-events/append',
+    ])
+    expect(JSON.stringify(post.mock.calls)).not.toMatch(/pairing|binding|credential|grant/)
+  })
+
+  it('preserves canonical login, Runtime, projection, and replay errors', () => {
+    for (const code of [
+      'REMOTE_LOGIN_REQUIRED', 'RUNTIME_OFFLINE', 'HOST_GENERATION_STALE',
+      'REMOTE_NOT_FOUND', 'REMOTE_PROJECTION_CONFLICT',
+      'REMOTE_REALTIME_UNAVAILABLE', 'REPLAY_GAP',
+    ] as const) {
+      expect(mapDshRemoteControlPlaneError(Object.assign(new Error(code), { code }))).toMatchObject({ code })
     }
-  }
-
-  async post(): Promise<Record<string, unknown>> {
-    throw new Error('unexpected POST')
-  }
-}
-
-describe('DshRemoteHttpControlPlane binding projection', () => {
-  it('uses the controller device identity instead of the controlled desktop label', async () => {
-    const plane = new DshRemoteHttpControlPlane(new BindingRequester())
-    await expect(plane.listBindings()).resolves.toEqual([{
-      bindingRef: 'binding_01', controllerCredentialRef: 'controller_01',
-      controllerDisplayName: "Alice's iPhone", controllerPlatform: 'ios',
-      revision: 3, status: 'active', scopes: ['session.history'],
-      boundAtMillis: 1_700_000_000_000, lastUsedAtMillis: 1_700_000_100_000,
-    }])
+    expect(mapDshRemoteControlPlaneError(new Error('unknown'))).toMatchObject({
+      code: 'REMOTE_TRANSPORT_FAILED', retryable: true,
+    })
   })
 })

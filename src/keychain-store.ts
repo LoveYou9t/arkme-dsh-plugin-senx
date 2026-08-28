@@ -131,6 +131,8 @@ export interface ArkmeSecureValueStore {
 }
 
 export type ArkmeMacOSSecureValueWriter = (args: readonly string[], payload: string) => Promise<void>
+export type ArkmeMacOSSecureValueReader = (account: string, service: string) => Promise<string | undefined>
+export type ArkmeMacOSSecureValueDeleter = (account: string, service: string) => Promise<void>
 
 const MACOS_KEYCHAIN_JXA_SCRIPT = String.raw`
 ObjC.import('Foundation')
@@ -153,6 +155,101 @@ function run(argv) {
 }
 `
 
+const MACOS_KEYCHAIN_READ_JXA_SCRIPT = String.raw`
+ObjC.import('Foundation')
+ObjC.import('Security')
+function run(argv) {
+  if (argv.length !== 2) throw new Error('invalid Keychain coordinates')
+  const query = $.NSMutableDictionary.dictionary
+  query.setObjectForKey($("genp"), $("class"))
+  query.setObjectForKey($(argv[0]), $("acct"))
+  query.setObjectForKey($(argv[1]), $("svce"))
+  query.setObjectForKey($.NSNumber.numberWithBool(true), $("r_Data"))
+  query.setObjectForKey($("m_LimitOne"), $("m_Limit"))
+  const result = Ref()
+  const status = Number($.SecItemCopyMatching(query, result))
+  if (status === -25300) return JSON.stringify({ found: false })
+  if (status !== 0) throw new Error('Keychain read failed with status ' + String(status))
+  const data = ObjC.castRefToObject(result[0])
+  const encoded = data.base64EncodedStringWithOptions(0)
+  return JSON.stringify({ found: true, payload: ObjC.unwrap(encoded) })
+}
+`
+
+const MACOS_KEYCHAIN_DELETE_JXA_SCRIPT = String.raw`
+ObjC.import('Foundation')
+ObjC.import('Security')
+function run(argv) {
+  if (argv.length !== 2) throw new Error('invalid Keychain coordinates')
+  const query = $.NSMutableDictionary.dictionary
+  query.setObjectForKey($("genp"), $("class"))
+  query.setObjectForKey($(argv[0]), $("acct"))
+  query.setObjectForKey($(argv[1]), $("svce"))
+  const status = Number($.SecItemDelete(query))
+  if (status !== 0 && status !== -25300) {
+    throw new Error('Keychain delete failed with status ' + String(status))
+  }
+}
+`
+
+async function runMacOSKeychainJXA(
+  script: string,
+  args: readonly string[],
+  operation: '读取' | '写入' | '删除',
+  stdin?: string,
+): Promise<string> {
+  return await new Promise<string>((resolve, reject) => {
+    const child = spawn('/usr/bin/osascript', [
+      '-l', 'JavaScript', '-e', script, ...args,
+    ], {
+      detached: true,
+      shell: false,
+      stdio: ['pipe', 'pipe', 'pipe'],
+    })
+    let stdout = ''
+    let stderr = ''
+    let settled = false
+    const finish = (error?: Error): void => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      if (error === undefined) resolve(stdout.trim())
+      else reject(error)
+    }
+    const terminate = (): void => {
+      if (child.pid !== undefined) {
+        try { process.kill(-child.pid, 'SIGKILL') }
+        catch { child.kill('SIGKILL') }
+      } else child.kill('SIGKILL')
+    }
+    const timer = setTimeout(() => {
+      terminate()
+      finish(new Error(`${operation} macOS Keychain 超时`))
+    }, 5_000)
+    timer.unref()
+    child.stdout.setEncoding('utf8')
+    child.stdout.on('data', chunk => {
+      if (stdout.length + String(chunk).length > 1024 * 1024) {
+        terminate()
+        finish(new Error(`macOS Keychain ${operation}结果超出限制`))
+        return
+      }
+      stdout += String(chunk)
+    })
+    child.stderr.setEncoding('utf8')
+    child.stderr.on('data', chunk => {
+      if (stderr.length < 64 * 1024) stderr += String(chunk).slice(0, 64 * 1024 - stderr.length)
+    })
+    child.once('error', error => finish(new Error(`无法启动 macOS Keychain ${operation}命令`, { cause: error })))
+    child.once('close', code => {
+      if (code === 0) finish()
+      else finish(new Error(`macOS Keychain ${operation}失败（退出码 ${String(code)}）：${stderr.trim().slice(0, 512)}`))
+    })
+    child.stdin.once('error', error => finish(new Error(`无法向 macOS Keychain ${operation}命令写入数据`, { cause: error })))
+    child.stdin.end(stdin ?? '', 'utf8')
+  })
+}
+
 function macOSSecureValueCoordinates(args: readonly string[]): { account: string; service: string } {
   if (args.length !== 7 || args[0] !== 'add-generic-password' || args[1] !== '-a'
     || args[3] !== '-s' || args[5] !== '-U' || args[6] !== '-w'
@@ -167,47 +264,34 @@ export async function writeArkmeMacOSSecureValue(
   payload: string,
 ): Promise<void> {
   const coordinates = macOSSecureValueCoordinates(args)
-  await new Promise<void>((resolve, reject) => {
-    // `security ... -w` reads a terminal password field that truncates long
-    // JSON credentials. JXA calls the native Security Framework and receives
-    // the complete secret as NSData over stdin, never argv or a persisted file.
-    const child = spawn('/usr/bin/osascript', [
-      '-l', 'JavaScript', '-e', MACOS_KEYCHAIN_JXA_SCRIPT,
-      coordinates.account, coordinates.service,
-    ], {
-      detached: true,
-      shell: false,
-      stdio: ['pipe', 'ignore', 'pipe'],
-    })
-    let stderr = ''
-    let settled = false
-    const finish = (error?: Error): void => {
-      if (settled) return
-      settled = true
-      clearTimeout(timer)
-      if (error === undefined) resolve()
-      else reject(error)
-    }
-    const timer = setTimeout(() => {
-      if (child.pid !== undefined) {
-        try { process.kill(-child.pid, 'SIGKILL') }
-        catch { child.kill('SIGKILL') }
-      } else child.kill('SIGKILL')
-      finish(new Error('写入 macOS Keychain 超时'))
-    }, 5_000)
-    timer.unref()
-    child.stderr.setEncoding('utf8')
-    child.stderr.on('data', chunk => {
-      if (stderr.length < 64 * 1024) stderr += String(chunk).slice(0, 64 * 1024 - stderr.length)
-    })
-    child.once('error', error => finish(new Error('无法启动 macOS Keychain 写入命令', { cause: error })))
-    child.once('close', code => {
-      if (code === 0) finish()
-      else finish(new Error(`macOS Keychain 写入失败（退出码 ${String(code)}）：${stderr.trim().slice(0, 512)}`))
-    })
-    child.stdin.once('error', error => finish(new Error('无法向 macOS Keychain 安全输入凭据', { cause: error })))
-    child.stdin.end(payload, 'utf8')
-  })
+  // `security ... -w` reads a terminal password field that truncates long
+  // JSON credentials. JXA calls the native Security Framework and receives
+  // the complete secret as NSData over stdin, never argv or a persisted file.
+  await runMacOSKeychainJXA(
+    MACOS_KEYCHAIN_JXA_SCRIPT,
+    [coordinates.account, coordinates.service],
+    '写入',
+    payload,
+  )
+}
+
+export async function readArkmeMacOSSecureValue(account: string, service: string): Promise<string | undefined> {
+  const output = await runMacOSKeychainJXA(MACOS_KEYCHAIN_READ_JXA_SCRIPT, [account, service], '读取')
+  let result: unknown
+  try {
+    result = JSON.parse(output)
+  } catch (error) {
+    throw new Error('macOS Keychain 读取结果无效', { cause: error })
+  }
+  if (result === null || typeof result !== 'object') throw new Error('macOS Keychain 读取结果无效')
+  const record = result as Record<string, unknown>
+  if (record.found === false) return undefined
+  if (record.found !== true || typeof record.payload !== 'string') throw new Error('macOS Keychain 读取结果无效')
+  return Buffer.from(record.payload, 'base64').toString('utf8')
+}
+
+export async function deleteArkmeMacOSSecureValue(account: string, service: string): Promise<void> {
+  await runMacOSKeychainJXA(MACOS_KEYCHAIN_DELETE_JXA_SCRIPT, [account, service], '删除')
 }
 
 export class ArkmeMacOSSecureValueStore implements ArkmeSecureValueStore {
@@ -215,19 +299,15 @@ export class ArkmeMacOSSecureValueStore implements ArkmeSecureValueStore {
     private readonly service: string,
     private readonly writer: ArkmeMacOSSecureValueWriter = writeArkmeMacOSSecureValue,
     private readonly platform: NodeJS.Platform = process.platform,
+    private readonly reader: ArkmeMacOSSecureValueReader = readArkmeMacOSSecureValue,
+    private readonly deleter: ArkmeMacOSSecureValueDeleter = deleteArkmeMacOSSecureValue,
   ) {}
 
   async read(account: string): Promise<string | undefined> {
     this.requireMacOS()
     try {
-      const { stdout } = await execFileAsync('/usr/bin/security', [
-        'find-generic-password', '-a', account, '-s', this.service, '-w',
-      ], { encoding: 'utf8', maxBuffer: 1024 * 1024, timeout: 5000 })
-      return stdout.trim()
+      return await this.reader(account, this.service)
     } catch (error) {
-      const code = (error as { code?: unknown }).code
-      const stderr = String((error as { stderr?: unknown }).stderr ?? '')
-      if (code === 44 || code === 45 || stderr.includes('could not be found')) return undefined
       throw new Error('无法读取 macOS Keychain 中的 Arkme 安全数据', { cause: error })
     }
   }
@@ -242,13 +322,8 @@ export class ArkmeMacOSSecureValueStore implements ArkmeSecureValueStore {
   async delete(account: string): Promise<void> {
     this.requireMacOS()
     try {
-      await execFileAsync('/usr/bin/security', [
-        'delete-generic-password', '-a', account, '-s', this.service,
-      ], { encoding: 'utf8', maxBuffer: 1024 * 1024, timeout: 5000 })
+      await this.deleter(account, this.service)
     } catch (error) {
-      const code = (error as { code?: unknown }).code
-      const stderr = String((error as { stderr?: unknown }).stderr ?? '')
-      if (code === 44 || code === 45 || stderr.includes('could not be found')) return
       throw new Error('无法删除 macOS Keychain 中的 Arkme 安全数据', { cause: error })
     }
   }

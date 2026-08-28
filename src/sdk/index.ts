@@ -257,16 +257,10 @@ export type {
 export { ARKME_EXTENSION_RUNTIME_UNAVAILABLE_MESSAGE } from '../extensions/types.js'
 export { ARKME_PROVIDER_CONTRACT_VERSION } from '../types.js'
 export type {
-  DshRemoteBindingProjection,
   DshRemoteCapability,
-  DshRemotePairingTicket,
   DshRemoteStatus,
 } from '../dsh-remote/types.js'
-import type {
-  DshRemoteBindingProjection,
-  DshRemotePairingTicket,
-  DshRemoteStatus,
-} from '../dsh-remote/types.js'
+import type { DshRemoteStatus } from '../dsh-remote/types.js'
 export type {
   ArkmeOutgoingCallFailureCode,
   ArkmeOutgoingCallMediaType,
@@ -1463,28 +1457,6 @@ export class ArkmeSdk {
 
   async remoteStatus(signal?: AbortSignal): Promise<DshRemoteStatus> {
     return await this.call<DshRemoteStatus>('remote.getStatus', undefined, signal)
-  }
-
-  async setRemoteEnabled(enabled: boolean, signal?: AbortSignal): Promise<DshRemoteStatus> {
-    return await this.call<DshRemoteStatus>('remote.setEnabled', { enabled }, signal)
-  }
-
-  async createRemotePairingAttempt(signal?: AbortSignal): Promise<DshRemotePairingTicket> {
-    return await this.call<DshRemotePairingTicket>('remote.createPairingAttempt', undefined, signal)
-  }
-
-  async cancelRemotePairingAttempt(pairingRef: string, signal?: AbortSignal): Promise<void> {
-    if (pairingRef.trim() === '') throw new TypeError('Remote pairing reference must not be empty')
-    await this.call('remote.cancelPairingAttempt', { pairingRef: pairingRef.trim() }, signal)
-  }
-
-  async remoteBindings(signal?: AbortSignal): Promise<DshRemoteBindingProjection[]> {
-    return await this.call<DshRemoteBindingProjection[]>('remote.listBindings', undefined, signal)
-  }
-
-  async revokeRemoteBinding(bindingRef: string, signal?: AbortSignal): Promise<void> {
-    if (bindingRef.trim() === '') throw new TypeError('Remote binding reference must not be empty')
-    await this.call('remote.revokeBinding', { bindingRef: bindingRef.trim() }, signal)
   }
 
   async renameRemoteDesktop(displayName: string, signal?: AbortSignal): Promise<DshRemoteStatus> {

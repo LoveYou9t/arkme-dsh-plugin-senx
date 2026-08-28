@@ -3,29 +3,27 @@ import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { securePrivateDirectory, securePrivateFile } from '../private-filesystem.js'
 import { DshRemoteError } from './errors.js'
-import type { DshRemoteBindingProjection, DshRemoteCapability, DshRemoteRuntimeProjection } from './types.js'
+import type { DshRemoteCapability, DshRemoteRuntimeProjection } from './types.js'
 
 const MAX_RUNTIMES_PER_ACCOUNT = 16
 
 interface AccountRuntimeState {
   displayName?: string
   desktopRef?: string
-  credentialRef?: string
   runtimes: Record<string, DshRemoteRuntimeProjection>
-  bindings: Record<string, DshRemoteBindingProjection>
 }
 
 interface PersistedRuntimeState {
-  schemaVersion: 1
+  schemaVersion: 2
   accounts: Record<string, AccountRuntimeState>
 }
 
 function emptyState(): PersistedRuntimeState {
-  return { schemaVersion: 1, accounts: {} }
+  return { schemaVersion: 2, accounts: {} }
 }
 
 function accountState(state: PersistedRuntimeState, accountId: string): AccountRuntimeState {
-  return state.accounts[accountId] ?? { runtimes: {}, bindings: {} }
+  return state.accounts[accountId] ?? { runtimes: {} }
 }
 
 export class DshRemoteRuntimeStore {
@@ -55,26 +53,12 @@ export class DshRemoteRuntimeStore {
         ...(account.desktopRef === undefined ? {} : { desktopRef: account.desktopRef }),
         profileRef: input.profileRef,
         accountId: input.accountId,
-        remoteEnabled: current?.remoteEnabled ?? false,
         hostGeneration: (current?.hostGeneration ?? 0) + 1,
         capabilities: [...new Set(input.capabilities)].sort(),
         updatedAtMillis: input.nowMillis ?? Date.now(),
       }
       account.runtimes[input.profileRef] = result
       state.accounts[input.accountId] = account
-    })
-    return result
-  }
-
-  async setRemoteEnabled(accountId: string, profileRef: string, enabled: boolean): Promise<DshRemoteRuntimeProjection> {
-    let result!: DshRemoteRuntimeProjection
-    await this.update(state => {
-      const account = accountState(state, accountId)
-      const runtime = account.runtimes[profileRef]
-      if (runtime === undefined) throw new DshRemoteError('REMOTE_STORAGE_FAILED', '远控 Runtime 尚未注册')
-      result = { ...runtime, remoteEnabled: enabled, updatedAtMillis: Date.now() }
-      account.runtimes[profileRef] = result
-      state.accounts[accountId] = account
     })
     return result
   }
@@ -112,11 +96,10 @@ export class DshRemoteRuntimeStore {
     return result
   }
 
-  async bindDesktop(accountId: string, input: { desktopRef: string; credentialRef: string }): Promise<void> {
+  async bindDesktop(accountId: string, input: { desktopRef: string }): Promise<void> {
     await this.update(state => {
       const account = accountState(state, accountId)
       account.desktopRef = input.desktopRef
-      account.credentialRef = input.credentialRef
       for (const [profileRef, runtime] of Object.entries(account.runtimes)) {
         account.runtimes[profileRef] = { ...runtime, desktopRef: input.desktopRef }
       }
@@ -134,29 +117,17 @@ export class DshRemoteRuntimeStore {
     })
   }
 
-  async upsertBindings(accountId: string, bindings: DshRemoteBindingProjection[]): Promise<void> {
-    await this.update(state => {
-      const account = accountState(state, accountId)
-      account.bindings = Object.fromEntries(bindings.map(binding => [binding.bindingRef, { ...binding }]))
-      state.accounts[accountId] = account
-    })
-  }
-
   async account(accountId: string): Promise<{
     displayName?: string
     desktopRef?: string
-    credentialRef?: string
     runtimes: DshRemoteRuntimeProjection[]
-    bindings: DshRemoteBindingProjection[]
   }> {
     return await this.read(state => {
       const account = accountState(state, accountId)
       return {
         ...(account.displayName === undefined ? {} : { displayName: account.displayName }),
         ...(account.desktopRef === undefined ? {} : { desktopRef: account.desktopRef }),
-        ...(account.credentialRef === undefined ? {} : { credentialRef: account.credentialRef }),
         runtimes: Object.values(account.runtimes).map(runtime => ({ ...runtime })),
-        bindings: Object.values(account.bindings).map(binding => ({ ...binding })),
       }
     })
   }
@@ -184,9 +155,30 @@ export class DshRemoteRuntimeStore {
   private async load(): Promise<PersistedRuntimeState> {
     if (this.state !== undefined) return this.state
     try {
-      const parsed = JSON.parse(await readFile(this.path, 'utf8')) as PersistedRuntimeState
-      if (parsed.schemaVersion !== 1 || parsed.accounts === null || typeof parsed.accounts !== 'object') throw new Error('schema mismatch')
-      this.state = parsed
+      const raw = JSON.parse(await readFile(this.path, 'utf8')) as Record<string, unknown>
+      if ((raw.schemaVersion !== 1 && raw.schemaVersion !== 2) || raw.accounts === null || typeof raw.accounts !== 'object') {
+        throw new Error('schema mismatch')
+      }
+      const accounts: Record<string, AccountRuntimeState> = {}
+      for (const [accountId, value] of Object.entries(raw.accounts as Record<string, unknown>)) {
+        if (value === null || typeof value !== 'object' || Array.isArray(value)) throw new Error('account schema mismatch')
+        const source = value as Record<string, unknown>
+        if (source.runtimes === null || typeof source.runtimes !== 'object' || Array.isArray(source.runtimes)) throw new Error('runtime schema mismatch')
+        const runtimes: Record<string, DshRemoteRuntimeProjection> = {}
+        for (const [profileRef, runtimeValue] of Object.entries(source.runtimes as Record<string, unknown>)) {
+          if (runtimeValue === null || typeof runtimeValue !== 'object' || Array.isArray(runtimeValue)) throw new Error('runtime schema mismatch')
+          const runtime = { ...(runtimeValue as Record<string, unknown>) }
+          delete runtime.remoteEnabled
+          runtimes[profileRef] = runtime as unknown as DshRemoteRuntimeProjection
+        }
+        accounts[accountId] = {
+          ...(typeof source.displayName === 'string' ? { displayName: source.displayName } : {}),
+          ...(typeof source.desktopRef === 'string' ? { desktopRef: source.desktopRef } : {}),
+          runtimes,
+        }
+      }
+      this.state = { schemaVersion: 2, accounts }
+      if (raw.schemaVersion !== 2) await this.persist(this.state)
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
         throw new DshRemoteError('REMOTE_STORAGE_FAILED', '远控 Runtime 状态已损坏', false, {}, { cause: error })

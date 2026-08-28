@@ -1,12 +1,13 @@
 {
   "contract": "dsh.remote/v1",
-  "schema_version": 1,
+  "schema_version": 2,
+  "authority": "authenticated-account",
   "files": {
-    "channel-authorization.schema.json": "15c3a6db3e65cf3603a938eea18f3fe123b1b7fd006ded4c967373225758ed23",
-    "channel-grant-claims.schema.json": "6a3effc013db3fcd110edaa8f2f165cc4dbc49f559439cef371912c62fd24e90",
-    "errors.json": "37544c35e818b014b137d09e6f883f302b316e283500dc498d9328c8074442bd",
-    "pairing-ticket.schema.json": "b5893111bfd39013da4ae449ef3587c753ee247f95b726846213206f10314cec",
-    "remote-envelope.schema.json": "280cad6102d5964b06b22ee57b7f46af3c577992630a67aa9ed35c7995f7a116",
-    "fixtures/protocol-v1.json": "9d102dc2298c39e806bc8e20f340316adbc5511aa1ca0fce4903db04bb1ec6fb"
+    "dsh-history-entry.schema.json": "f327364f10e8742172ec2588c7da78ed36a4e354851c2ed40ac6fe9a09748855",
+    "errors.json": "31d373e27168035a35a439a55f749c47b773fed116b63406b2c5b7ceb94b52d2",
+    "protocol-v1.json": "21eaff5aac47362e66e6b1cf48668926ff6ad0ddb3d4395a0607783a8971de4f",
+    "remote-channel.schema.json": "6b6f78e5a74819d01f058ac3dcc1f5ed5d4c5fdfac0801f3a2adccf7a80344fc",
+    "remote-envelope.schema.json": "a3e884c1e6bac278d82fe202851df53ce9e2d957ec88850154c5a3153f4a3c7f",
+    "transport-fragment.schema.json": "85adfece7c890ff0ad676d9b0092d7914144ee7fb3019d330e09649e08365d31"
   }
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { decryptDshRemotePayload, encryptDshRemotePayload, parseDshRemoteRequest } from '../src/dsh-remote/protocol-v1.js'
+import { parseDshRemoteRequest } from '../src/dsh-remote/protocol-v1.js'
 
 function request(overrides: Record<string, unknown> = {}) {
   return {
@@ -20,15 +20,5 @@ describe('dsh.remote/v1 envelopes', () => {
     expect(() => parseDshRemoteRequest(request({
       operation: 'session.prompt', body: { session_ref: 'session-1', mode: 'queue', content: { type: 'image', data: 'secret' } },
     }), { expectedHostGeneration: 7, nowMillis: 1_500 })).toThrow(/普通文本/)
-  })
-
-  it('binds XChaCha ciphertext to direction and key epoch', () => {
-    const key = Buffer.alloc(32, 8)
-    const encrypted = encryptDshRemotePayload(key, request(), {
-      keyEpoch: 2, direction: 'controller-to-host', nonce: Buffer.alloc(24, 4),
-    })
-    expect(decryptDshRemotePayload(key, encrypted, { keyEpoch: 2, direction: 'controller-to-host' })).toEqual(request())
-    expect(() => decryptDshRemotePayload(key, encrypted, { keyEpoch: 2, direction: 'host-to-controller' })).toThrow(/密钥世代/)
-    expect(() => decryptDshRemotePayload(key, { ...encrypted, aad_hash: 'bad' }, { keyEpoch: 2, direction: 'controller-to-host' })).toThrow(/元数据认证/)
   })
 })

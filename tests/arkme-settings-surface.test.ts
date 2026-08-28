@@ -34,17 +34,11 @@ describe('ArkmeSettingsSurface', () => {
     expect(source).toMatch(/const controller = new AbortController\(\)\s*setProfile\(undefined\)\s*setError\(''\)\s*void callArkme<ArkmeUserProfileSnapshot>\('user.profile'/)
   })
 
-  it('keeps remote settings discoverable when the Host reports an unavailable runtime', () => {
-    expect(source).toMatch(/callArkme<DshRemoteStatus>\('remote\.getStatus'[\s\S]*?\.then\(\(\) => \{[\s\S]*?setRemoteVisible\(true\)/)
-    expect(source).not.toContain('status.available || status.enabled || status.bindings.length > 0')
-    expect(source).toContain('{authenticated && remoteVisible && <SettingsGroup title="远程控制">')
-  })
-
-  it('opens remote settings as a modal without replacing the account settings surface', () => {
-    expect(source).not.toContain('if (remoteOpen) return')
-    expect(source).toContain('{remoteOpen && <ArkmeRemoteSettingsPanel onClose=')
-    expect(redesignCss).toContain('.arkme-remote-settings-dialog-backdrop')
-    expect(redesignCss).toContain('.arkme-remote-settings-dialog-body')
+  it('does not expose a separate mobile remote-control setting', () => {
+    expect(source).not.toContain('remote.getStatus')
+    expect(source).not.toContain('ArkmeRemoteSettingsPanel')
+    expect(source).not.toContain('title="远程连接"')
+    expect(source).not.toContain('title="手机远控"')
   })
 
   it('positions the DSH account section at the top before paint', () => {

@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest'
 import { DshRemoteCommandLedger } from '../src/dsh-remote/command-ledger.js'
 
 const identity = {
-  accountId: 'account-1', bindingRef: 'binding-1', runtimeRef: 'runtime-1', requestRef: 'request-1',
+  accountId: 'account-1', runtimeRef: 'runtime-1', requestRef: 'request-1',
   operation: 'session.prompt' as const,
   arguments: { sessionId: 'session-1', mode: 'queue', content: [{ type: 'text', text: 'top secret prompt' }] },
   executeBeforeMillis: 2_000,

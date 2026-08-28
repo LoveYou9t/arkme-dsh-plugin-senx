@@ -12,6 +12,13 @@ import {
   type DshRemoteWorkspaceView,
 } from './types.js'
 import { DshRemoteError } from './errors.js'
+import {
+  dshHistoryEntryUserRpcId,
+  snapshotDshHistoryEntry,
+  type DshRemoteHistoryEntry,
+} from './dsh-event-contract.js'
+
+export type { DshRemoteHistoryEntry } from './dsh-event-contract.js'
 
 interface RpcSuccess<T> { rpcId: string; result: { ok: true; value: T } }
 interface RpcFailure { rpcId: string; result: { ok: false; error: { code: string; message: string; details?: unknown } } }
@@ -35,7 +42,15 @@ interface SessionsApiLike {
   }> }>>
   create?(request: { rpcId: string; payload: { workspaceId: string; sessionId: string } }): Promise<RpcResponse<{ sessionId: string }>>
   history?(request: { rpcId: string; payload: { sessionId: string; beforeSeq?: number; maxMessages: number } }): Promise<RpcResponse<{
-    events: Array<{ event: { type: string; seq: number; time: number; data: unknown }; view?: unknown }>
+    events: Array<{ event: {
+      type: string
+      seq: number
+      time: number
+      data: unknown
+      sourceEventSeqs?: number[]
+      surfaceOp?: unknown
+      ignorable?: true
+    }; view?: unknown }>
     hasMore: boolean
     projections?: { asOfSeq: number; values: Record<string, unknown> }
   }>>
@@ -52,20 +67,6 @@ interface EventsApiLike {
     rpcId: string
     payload: Record<string, unknown>
   }>
-}
-
-export interface DshRemoteHistoryEntry {
-  event: {
-    type: string
-    seq: number
-    time: number
-    data: {
-      content?: Array<{ type: 'text'; text: string } | { type: 'unsupported'; reason: 'attachment' | 'unknown-content' }>
-      source?: { kind: string; rpcId?: string }
-      status?: string
-      summary?: string
-    }
-  }
 }
 
 export type DshRemoteApiProjectionEvent =
@@ -141,9 +142,8 @@ function jsonBytes(value: unknown): number { return Buffer.byteLength(JSON.strin
 
 // A live session event or one pending interaction is not itself pageable. Keep
 // each atomic projection well below the 40 KiB page-result budget so the
-// encrypted event and both Realtime wrappers remain below 60 KiB.
+// authorized event and both Realtime wrappers remain below 60 KiB.
 const MAX_ATOMIC_PROJECTION_BYTES = 24 * 1024
-const MAX_HISTORY_CONTENT_BYTES = 20 * 1024
 
 function boundedUtf8(value: string, maxBytes: number): string {
   if (Buffer.byteLength(value) <= maxBytes) return value
@@ -339,30 +339,32 @@ export class DshApiProxyAdapter {
         ...(input.beforeSeq === undefined ? {} : { beforeSeq: input.beforeSeq }),
       },
     }))
-    const entries = value.events.map(entry => this.projectHistoryEvent(entry.event))
+    const entries = value.events.map(snapshotDshHistoryEntry)
+    let truncatedByBudget = false
     while (entries.length > 0) {
-      const firstSeq = entries[0]?.event.seq
+      const firstSeq = value.events[0]?.event.seq
       const candidate = {
         entries,
-        hasMore: value.hasMore || entries.length < value.events.length,
-        ...(firstSeq === undefined || (!value.hasMore && entries.length === value.events.length) ? {} : { nextCursor: firstSeq }),
+        hasMore: value.hasMore || truncatedByBudget,
+        ...(firstSeq === undefined || (!value.hasMore && !truncatedByBudget) ? {} : { nextCursor: firstSeq }),
         ...(value.projections === undefined ? {} : { projectionAsOfSeq: value.projections.asOfSeq }),
       }
-      if (jsonBytes(candidate) <= DSH_REMOTE_MAX_PAGE_RESULT_BYTES && jsonBytes(candidate) <= DSH_REMOTE_MAX_SNAPSHOT_BYTES) break
+      if (jsonBytes(candidate) <= DSH_REMOTE_MAX_SNAPSHOT_BYTES) break
       entries.shift()
+      truncatedByBudget = true
     }
-    if (entries.length === 0 && value.events.length > 0) throw new DshRemoteError('CAPABILITY_UNSUPPORTED', '单条 DSH 历史投影超过远控帧容量')
-    const firstSeq = entries[0]?.event.seq
+    if (entries.length === 0 && truncatedByBudget) throw new DshRemoteError('CAPABILITY_UNSUPPORTED', '单条 DSH 历史投影超过远控帧容量')
+    const firstSeq = truncatedByBudget ? entries[0]?.event.seq : value.events[0]?.event.seq
     return {
       entries,
-      hasMore: value.hasMore || entries.length < value.events.length,
-      ...(firstSeq === undefined || (!value.hasMore && entries.length === value.events.length) ? {} : { nextCursor: firstSeq }),
+      hasMore: value.hasMore || truncatedByBudget,
+      ...(firstSeq === undefined || (!value.hasMore && !truncatedByBudget) ? {} : { nextCursor: firstSeq }),
       ...(value.projections === undefined ? {} : { projectionAsOfSeq: value.projections.asOfSeq }),
     }
   }
 
   historyContainsRpcId(entries: readonly DshRemoteHistoryEntry[], rpcIdValue: string): boolean {
-    return entries.some(entry => entry.event.type === 'user/message' && entry.event.data.source?.rpcId === rpcIdValue)
+    return entries.some(entry => dshHistoryEntryUserRpcId(entry) === rpcIdValue)
   }
 
   async createSession(input: { workspaceId: string; dshRpcId: string }): Promise<{ sessionId: string }> {
@@ -551,10 +553,8 @@ export class DshApiProxyAdapter {
         const event = payload.event as Record<string, unknown>
         if (typeof event.type === 'string' && typeof event.seq === 'number' && Number.isSafeInteger(event.seq) && event.seq >= 0
           && typeof event.time === 'number' && Number.isSafeInteger(event.time) && event.time >= 0) {
-          this.emitProjection({
-            kind: 'session-event', sessionId: payload.sessionId,
-            entry: this.projectHistoryEvent({ type: event.type, seq: event.seq, time: event.time, data: event.data }),
-          })
+          const entry = snapshotDshHistoryEntry({ event, view: payload.view })
+          this.emitProjection({ kind: 'session-event', sessionId: payload.sessionId, entry })
         }
       } else if (type === 'session/subscribed' && typeof payload.sessionId === 'string'
         && typeof payload.lastSeq === 'number' && Number.isSafeInteger(payload.lastSeq) && payload.lastSeq >= -1) {
@@ -638,58 +638,6 @@ export class DshApiProxyAdapter {
     if (!receipt.accepted) this.resolved()
     this.pendingInteractions.delete(rpcIdValue)
     this.emitInteractions()
-  }
-
-  private projectHistoryEvent(event: { type: string; seq: number; time: number; data: unknown }): DshRemoteHistoryEntry {
-    const base = { type: event.type.slice(0, 80), seq: event.seq, time: event.time }
-    if (event.type === 'user/message' || event.type === 'assistant/message') {
-      const data = event.data !== null && typeof event.data === 'object' && !Array.isArray(event.data)
-        ? event.data as Record<string, unknown> : {}
-      const rawContent = Array.isArray(data.content) ? data.content : []
-      const content: NonNullable<DshRemoteHistoryEntry['event']['data']['content']> = []
-      let contentTruncated = false
-      for (const raw of rawContent.slice(0, 32)) {
-        let projected: NonNullable<DshRemoteHistoryEntry['event']['data']['content']>[number]
-        if (raw !== null && typeof raw === 'object' && !Array.isArray(raw)
-          && (raw as Record<string, unknown>).type === 'text' && typeof (raw as Record<string, unknown>).text === 'string') {
-          const text = [...(raw as { text: string }).text].slice(0, DSH_REMOTE_MAX_TEXT_CODE_POINTS).join('')
-          projected = { type: 'text', text: boundedUtf8(text, 12 * 1024) }
-        } else if (raw !== null && typeof raw === 'object' && !Array.isArray(raw)
-          && ['image', 'file', 'attachment'].includes(String((raw as Record<string, unknown>).type))) {
-          projected = { type: 'unsupported', reason: 'attachment' }
-        } else {
-          projected = { type: 'unsupported', reason: 'unknown-content' }
-        }
-        if (jsonBytes([...content, projected]) > MAX_HISTORY_CONTENT_BYTES) { contentTruncated = true; break }
-        content.push(projected)
-      }
-      if (rawContent.length > 32) contentTruncated = true
-      if (contentTruncated) {
-        const marker = { type: 'unsupported' as const, reason: 'unknown-content' as const }
-        if (jsonBytes([...content, marker]) <= MAX_HISTORY_CONTENT_BYTES) content.push(marker)
-      }
-      const rawSource = data.source !== null && typeof data.source === 'object' && !Array.isArray(data.source)
-        ? data.source as Record<string, unknown> : undefined
-      const kind = typeof rawSource?.kind === 'string' ? rawSource.kind.slice(0, 32) : event.type === 'user/message' ? 'user' : 'assistant'
-      const source = {
-        kind,
-        ...(event.type === 'user/message' && typeof rawSource?.rpcId === 'string' && rawSource.rpcId.length <= 128
-          ? { rpcId: rawSource.rpcId }
-          : {}),
-      }
-      const projected = { event: { ...base, data: { content, source } } }
-      if (jsonBytes(projected) > MAX_ATOMIC_PROJECTION_BYTES) {
-        return { event: { ...base, data: { summary: '消息内容过大，请在桌面端查看', source } } }
-      }
-      return projected
-    }
-    if (event.type.startsWith('tool/')) {
-      return { event: { ...base, data: { summary: '工具活动仅可在桌面端查看' } } }
-    }
-    if (event.type === 'turn/start' || event.type === 'turn/end' || event.type === 'turn/cancelled') {
-      return { event: { ...base, data: { status: event.type.slice(5) } } }
-    }
-    return { event: { ...base, data: { summary: '该事件类型暂不支持移动端展示' } } }
   }
 
   private emitInteractions(): void {

@@ -551,7 +551,7 @@ export function createArkmeHostApi(service: ArkmeService, options: ArkmeHostApiO
       }
       const request = await readRequest(req)
       const params = request.params ?? {}
-      if (['extensions.delete', 'extensions.reviews.create', 'extensions.audit.check', 'extensions.install.start', 'extensions.install.pause', 'extensions.install.resume', 'extensions.enabled.set', 'extensions.metadata.update', 'extensions.share.rotate', 'extensions.preview.delete', 'extensions.preview.reorder', 'extensions.uninstall', 'extensions.restart', 'extensions.client.failure', 'extensions.persistent.invoke', 'extensions.bundle.invoke', 'extensions.mine.publish', 'remote.setEnabled', 'remote.createPairingAttempt', 'remote.cancelPairingAttempt', 'remote.revokeBinding', 'remote.renameDesktop']
+      if (['extensions.delete', 'extensions.reviews.create', 'extensions.audit.check', 'extensions.install.start', 'extensions.install.pause', 'extensions.install.resume', 'extensions.enabled.set', 'extensions.metadata.update', 'extensions.share.rotate', 'extensions.preview.delete', 'extensions.preview.reorder', 'extensions.uninstall', 'extensions.restart', 'extensions.client.failure', 'extensions.persistent.invoke', 'extensions.bundle.invoke', 'extensions.mine.publish', 'remote.renameDesktop']
         .includes(request.operation) && origin === undefined) {
         throw new ArkmePluginError('origin-required', '扩展变更必须从当前 DSH 页面发起', false, 403)
       }
@@ -636,11 +636,6 @@ export async function dispatchArkmeHostOperation(
     )
     case 'auth.logout': return await service.logout()
     case 'remote.getStatus': return requireRemoteHost(remoteHost).getStatus()
-    case 'remote.setEnabled': return await requireRemoteHost(remoteHost).setEnabled(requiredBooleanParam(params, 'enabled'))
-    case 'remote.createPairingAttempt': return await requireRemoteHost(remoteHost).createPairingAttempt()
-    case 'remote.cancelPairingAttempt': return await requireRemoteHost(remoteHost).cancelPairingAttempt(stringParam(params, 'pairingRef').trim())
-    case 'remote.listBindings': return await requireRemoteHost(remoteHost).listBindings()
-    case 'remote.revokeBinding': return await requireRemoteHost(remoteHost).revokeBinding(stringParam(params, 'bindingRef').trim())
     case 'remote.renameDesktop': return await requireRemoteHost(remoteHost).renameDesktop(stringParam(params, 'displayName'))
     case 'billing.quota': return await service.billingQuota()
     case 'billing.products': return await service.billingProducts()

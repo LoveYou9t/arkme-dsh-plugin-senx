@@ -8,42 +8,44 @@ import {
   type DshRemoteApiProjectionEvent,
 } from '../src/dsh-remote/api-proxy-adapter.js'
 import { DshRemoteCommandLedger } from '../src/dsh-remote/command-ledger.js'
-import { DesktopCredentialBroker } from '../src/dsh-remote/desktop-credential-broker.js'
-import { generateEd25519DeviceKey } from '../src/dsh-remote/crypto.js'
+import { DshRemoteError } from '../src/dsh-remote/errors.js'
 import { ArkmeRemoteRealtimeHost } from '../src/dsh-remote/host.js'
-import { DshRemoteRuntimeStore } from '../src/dsh-remote/runtime-store.js'
-import type { ArkmeSecureValueStore } from '../src/keychain-store.js'
-import type {
-  DshRemoteBindingProjection,
-  DshRemoteControlPlane,
-  DshRemoteRealtimeTransport,
-  DshRemoteRuntimeProjection,
-} from '../src/dsh-remote/types.js'
-
-class MemorySecrets implements ArkmeSecureValueStore {
-  private readonly values = new Map<string, string>()
-  async read(account: string) { return this.values.get(account) }
-  async write(account: string, value: string) { this.values.set(account, value) }
-  async delete(account: string) { this.values.delete(account) }
-}
+import type { DshRemoteControlPlane, DshRemoteRealtimeTransport } from '../src/dsh-remote/types.js'
+import type { DshRemoteRuntimeSecretBroker } from '../src/dsh-remote/runtime-secret-broker.js'
+import type { DshRemoteRuntimeStore } from '../src/dsh-remote/runtime-store.js'
 
 function ok<T>(value: T, rpcId: string) { return { rpcId, result: { ok: true as const, value } } }
 
-describe('Arkme remote Host canonical operation contract', () => {
-  it('maps public ApiProxy mux state to the frozen encrypted inner event shapes', async () => {
+function inertHost(apiProxy: DshApiProxyAdapter, input: {
+  controlPlane?: DshRemoteControlPlane
+  ledger?: DshRemoteCommandLedger
+  now?: () => number
+} = {}): ArkmeRemoteRealtimeHost {
+  return new ArkmeRemoteRealtimeHost({
+    featureEnabled: true, profileRef: 'web', hostClientRef: 'host-client-01',
+    readSession: async () => undefined,
+    secretBroker: {} as DshRemoteRuntimeSecretBroker,
+    runtimeStore: {} as DshRemoteRuntimeStore,
+    controlPlane: input.controlPlane ?? {} as DshRemoteControlPlane,
+    realtime: {} as DshRemoteRealtimeTransport,
+    apiProxy,
+    ledgerForAccount: () => input.ledger ?? (() => { throw new Error('unused') })(),
+    now: input.now ?? (() => 1_500),
+  })
+}
+
+describe('Arkme remote Host account contract', () => {
+  it('maps public ApiProxy events to Backend history and Runtime channel projections', async () => {
     const publishProjectionEvent = vi.fn(async () => undefined)
-    const host = new ArkmeRemoteRealtimeHost({
-      featureEnabled: true, environment: 'test', profileRef: 'web', hostClientRef: 'host-client-test',
-      readSession: async () => undefined, credentialBroker: {} as DesktopCredentialBroker,
-      runtimeStore: {} as DshRemoteRuntimeStore, controlPlane: {} as DshRemoteControlPlane,
-      realtime: {} as DshRemoteRealtimeTransport, apiProxy: new DshApiProxyAdapter({}),
-      ledgerForAccount: () => { throw new Error('unused') }, grantSigningKeys: {}, now: () => 1_500,
+    const appendSessionEvents = vi.fn(async () => ({}))
+    const host = inertHost(new DshApiProxyAdapter({}), {
+      controlPlane: { appendSessionEvents } as unknown as DshRemoteControlPlane,
     })
     Object.assign(host, {
-      started: true, connected: true, channelManager: { publishProjectionEvent },
+      started: true, connected: true, channelManager: { publishProjectionEvent }, accountId: '1',
       runtime: {
-        runtimeRef: 'runtime-test-01', profileRef: 'web', accountId: '1', remoteEnabled: true,
-        hostGeneration: 7, capabilities: ['session.events'], updatedAtMillis: 1,
+        runtimeRef: 'runtime-01', profileRef: 'web', accountId: '1', hostGeneration: 7,
+        capabilities: ['session.events'], updatedAtMillis: 1,
       },
     })
     const project = async (event: DshRemoteApiProjectionEvent) => {
@@ -51,38 +53,73 @@ describe('Arkme remote Host canonical operation contract', () => {
         .publishProjectionEvent(event)
     }
     await project({
-      kind: 'session-event', sessionId: 'session-test-01',
+      kind: 'session-event', sessionId: 'session-01',
       entry: { event: { type: 'assistant/message', seq: 8, time: 1_400, data: {
         content: [{ type: 'text', text: 'answer' }], source: { kind: 'assistant' },
       } } },
     })
+    expect(appendSessionEvents).toHaveBeenCalledWith(expect.objectContaining({
+      runtime_ref: 'runtime-01', host_generation: 7, session_ref: 'session-01',
+    }))
     expect(publishProjectionEvent.mock.calls[0]![0]).toMatchObject({
       kind: 'event', host_generation: 7, operation: 'session.history', session_seq: 8,
       projection_as_of_seq: 8,
-      body: { session_ref: 'session-test-01', entries: [{ event: { seq: 8 } }] },
     })
-    await project({
-      kind: 'mux-baseline', sessionId: 'session-test-01', lastSeq: 8, pendingInteractions: [],
-    })
+    await project({ kind: 'mux-baseline', sessionId: 'session-01', lastSeq: 8, pendingInteractions: [] })
     expect(publishProjectionEvent.mock.calls[1]![0]).toMatchObject({
       kind: 'event', operation: 'snapshot.get', projection_as_of_seq: 8,
-      body: { pending_interactions: [], reason: 'mux-generation', session_ref: 'session-test-01', last_seq: 8 },
+      body: { reason: 'mux-generation', session_ref: 'session-01', last_seq: 8 },
     })
     await project({
-      kind: 'interactions',
-      pendingInteractions: [{
-        kind: 'question', interactionRpcRef: 'question-overflow-test-01', sessionId: 'session-test-01',
+      kind: 'interactions', pendingInteractions: [{
+        kind: 'question', interactionRpcRef: 'question-01', sessionId: 'session-01',
         questions: [{ id: 'large', question: '四'.repeat(50_000) }],
       }],
     })
-    expect(publishProjectionEvent.mock.calls[2]![0]).toMatchObject({
-      kind: 'event', operation: 'snapshot.get', body: { reason: 'projection-overflow' },
-    })
+    expect(publishProjectionEvent.mock.calls[2]![0]).toMatchObject({ body: { reason: 'projection-overflow' } })
     expect(publishProjectionEvent.mock.calls[2]![0]).not.toHaveProperty('body.pending_interactions')
   })
 
-  it('maps snake_case prompt bodies to ApiProxy and replays a known rejection without re-execution', async () => {
-    const directory = await mkdtemp(join(tmpdir(), 'arkme remote host contract '))
+  it('syncs a newly-created session row before retrying its first Backend event append', async () => {
+    const publishProjectionEvent = vi.fn(async () => undefined)
+    const appendSessionEvents = vi.fn()
+      .mockRejectedValueOnce(new DshRemoteError(
+        'REMOTE_NOT_FOUND',
+        'missing session projection',
+      ))
+      .mockResolvedValueOnce({})
+    const host = inertHost(new DshApiProxyAdapter({}), {
+      controlPlane: { appendSessionEvents } as unknown as DshRemoteControlPlane,
+    })
+    const syncProjectionSnapshot = vi.fn(async () => undefined)
+    Object.assign(host, {
+      started: true,
+      connected: true,
+      channelManager: { publishProjectionEvent },
+      accountId: '1',
+      syncProjectionSnapshot,
+      runtime: {
+        runtimeRef: 'runtime-01', profileRef: 'web', accountId: '1', hostGeneration: 7,
+        capabilities: ['session.events'], updatedAtMillis: 1,
+      },
+    })
+
+    await (host as unknown as {
+      publishProjectionEvent(value: DshRemoteApiProjectionEvent): Promise<void>
+    }).publishProjectionEvent({
+      kind: 'session-event',
+      sessionId: 'new-session',
+      entry: { event: { type: 'assistant/message', seq: 0, time: 1_400, data: {} } },
+    })
+
+    expect(syncProjectionSnapshot).toHaveBeenCalledOnce()
+    expect(syncProjectionSnapshot).toHaveBeenCalledWith(true)
+    expect(appendSessionEvents).toHaveBeenCalledTimes(2)
+    expect(publishProjectionEvent).toHaveBeenCalledOnce()
+  })
+
+  it('uses account/runtime/request idempotency and replays a known DSH rejection without execution', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'dsh-host-command-'))
     const workspace = join(directory, 'workspace')
     await mkdir(workspace)
     const prompt = vi.fn(async (request: { rpcId: string }) => ({
@@ -99,26 +136,13 @@ describe('Arkme remote Host canonical operation contract', () => {
       },
     }
     const ledger = new DshRemoteCommandLedger(join(directory, 'ledger'), Buffer.alloc(32, 7), { now: () => 1_500 })
-    const host = new ArkmeRemoteRealtimeHost({
-      featureEnabled: true, environment: 'test', profileRef: 'web', hostClientRef: 'host-client-test',
-      readSession: async () => ({ userId: 1, clientId: 2 }), credentialBroker: new DesktopCredentialBroker(new MemorySecrets()),
-      runtimeStore: new DshRemoteRuntimeStore(directory), controlPlane: {} as DshRemoteControlPlane,
-      realtime: {} as DshRemoteRealtimeTransport, apiProxy: new DshApiProxyAdapter(api),
-      ledgerForAccount: () => ledger, grantSigningKeys: {}, now: () => 1_500,
-    })
-    const binding: DshRemoteBindingProjection = {
-      bindingRef: 'binding-test-01', controllerCredentialRef: 'controller-test-01',
-      controllerDisplayName: 'Phone', controllerPlatform: 'ios', revision: 1, status: 'active',
-      scopes: ['session.prompt'], boundAtMillis: 1,
-    }
-    const runtime: DshRemoteRuntimeProjection = {
-      runtimeRef: 'runtime-test-01', desktopRef: 'desktop-test-01', profileRef: 'web', accountId: '1',
-      remoteEnabled: true, hostGeneration: 7, capabilities: ['session.prompt'], updatedAtMillis: 1,
-    }
+    const host = inertHost(new DshApiProxyAdapter(api), { ledger, now: () => 1_500 })
     Object.assign(host, {
-      accountId: '1', identity: generateEd25519DeviceKey('1'), runtime, ledger,
-      started: true, connected: true, serviceLeaseGeneration: 9,
-      bindings: [binding],
+      accountId: '1', started: true, connected: true, serviceLeaseGeneration: 9, ledger,
+      runtime: {
+        runtimeRef: 'runtime-01', desktopRef: 'desktop-01', profileRef: 'web', accountId: '1',
+        hostGeneration: 7, capabilities: ['session.prompt'], updatedAtMillis: 1,
+      },
     })
     const request = {
       protocol: 'dsh.remote', protocol_major: 1, kind: 'request', request_ref: 'request-test-01',
@@ -126,11 +150,10 @@ describe('Arkme remote Host canonical operation contract', () => {
       body: { session_ref: 'session-1', mode: 'queue', content: { type: 'text', text: 'hello' } },
     }
     const context = {
-      bindingRef: binding.bindingRef, serviceLeaseGeneration: 9,
+      serviceLeaseGeneration: 9,
       metadata: {
-        senderRole: 'controller' as const, senderCredentialRef: binding.controllerCredentialRef,
-        authorizationRef: 'authorization-test-01', subjectRevision: 1, remoteAuthEpoch: 1,
-        acceptedAtMillis: 1_400, targetHostLeaseGeneration: 9,
+        senderRole: 'controller' as const, runtimeRef: 'runtime-01', acceptedAtMillis: 1_400,
+        targetHostLeaseGeneration: 9,
       },
     }
     const first = await host.dispatchAuthorizedRequest(request, context)
@@ -141,6 +164,33 @@ describe('Arkme remote Host canonical operation contract', () => {
     expect(prompt.mock.calls[0]![0]).toMatchObject({ payload: {
       sessionId: 'session-1', mode: 'queue', content: [{ type: 'text', text: 'hello' }],
     } })
+    expect(ledger.get({ accountId: '1', runtimeRef: 'runtime-01', requestRef: 'request-test-01' })).toMatchObject({
+      accountId: '1', runtimeRef: 'runtime-01', requestRef: 'request-test-01', state: 'completed',
+    })
     ledger.close()
+  })
+
+  it('rejects wrong account-channel metadata, stale lease, and delayed delivery before DSH execution', async () => {
+    const host = inertHost(new DshApiProxyAdapter({}), { now: () => 50_000 })
+    Object.assign(host, {
+      accountId: '1', started: true, connected: true, serviceLeaseGeneration: 9,
+      runtime: { runtimeRef: 'runtime-01', profileRef: 'web', accountId: '1', hostGeneration: 7, capabilities: [], updatedAtMillis: 1 },
+    })
+    const request = {
+      protocol: 'dsh.remote', protocol_major: 1, kind: 'request', request_ref: 'request-test-01',
+      host_generation: 7, issued_at: 49_000, execute_before: 60_000, operation: 'capabilities.get', body: {},
+    }
+    await expect(host.dispatchAuthorizedRequest(request, {
+      serviceLeaseGeneration: 9,
+      metadata: { senderRole: 'controller', runtimeRef: 'runtime-other', acceptedAtMillis: 49_000, targetHostLeaseGeneration: 9 },
+    })).rejects.toMatchObject({ code: 'REMOTE_REQUEST_INVALID' })
+    await expect(host.dispatchAuthorizedRequest(request, {
+      serviceLeaseGeneration: 8,
+      metadata: { senderRole: 'controller', runtimeRef: 'runtime-01', acceptedAtMillis: 49_000, targetHostLeaseGeneration: 8 },
+    })).rejects.toMatchObject({ code: 'HOST_GENERATION_STALE' })
+    await expect(host.dispatchAuthorizedRequest(request, {
+      serviceLeaseGeneration: 9,
+      metadata: { senderRole: 'controller', runtimeRef: 'runtime-01', acceptedAtMillis: 1, targetHostLeaseGeneration: 9 },
+    })).rejects.toMatchObject({ code: 'COMMAND_EXPIRED' })
   })
 })

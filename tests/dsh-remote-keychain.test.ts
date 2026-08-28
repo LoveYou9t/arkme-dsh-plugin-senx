@@ -28,7 +28,27 @@ describe('remote Desktop Credential macOS storage', () => {
     expect(source).toContain('readDataToEndOfFile')
     expect(source).toContain('SecItemUpdate')
     expect(source).toContain('SecItemAdd')
+    expect(source).toContain('SecItemCopyMatching')
+    expect(source).toContain('SecItemDelete')
     expect(source).not.toContain("spawn('/usr/bin/expect'")
     expect(source).not.toContain("spawn('/usr/bin/security', [...args]")
+  })
+
+  it('uses the same native Security Framework bridge to read and delete', async () => {
+    const reader = vi.fn(async () => '{"privateKey":"value"}')
+    const deleter = vi.fn(async () => undefined)
+    const store = new ArkmeMacOSSecureValueStore(
+      'dev.jotmo.remote',
+      vi.fn(async () => undefined),
+      'darwin',
+      reader,
+      deleter,
+    )
+
+    await expect(store.read('account-1')).resolves.toBe('{"privateKey":"value"}')
+    await store.delete('account-1')
+
+    expect(reader).toHaveBeenCalledWith('account-1', 'dev.jotmo.remote')
+    expect(deleter).toHaveBeenCalledWith('account-1', 'dev.jotmo.remote')
   })
 })

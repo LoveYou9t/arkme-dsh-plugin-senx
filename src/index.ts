@@ -51,12 +51,11 @@ import { ARKME_DEFAULT_SHARE_WEBSITE, type ArkmeEnvironment } from './types.js'
 import { DshApiProxyAdapter, type DshPublicApiProxyLike } from './dsh-remote/api-proxy-adapter.js'
 import { DshRemoteCommandLedger } from './dsh-remote/command-ledger.js'
 import { DshRemoteHttpControlPlane } from './dsh-remote/control-plane.js'
-import { DesktopCredentialBroker } from './dsh-remote/desktop-credential-broker.js'
 import { createDefaultDshRemoteSocket } from './dsh-remote/default-socket-factory.js'
-import { decodeBase64Url } from './dsh-remote/crypto.js'
 import { ArkmeRemoteRealtimeHost } from './dsh-remote/host.js'
 import { ArkmeRemoteRealtimeTransport, type DshRemoteSocketLike } from './dsh-remote/realtime-transport.js'
 import { DshRemoteRuntimeStore } from './dsh-remote/runtime-store.js'
+import { DshRemoteRuntimeSecretBroker } from './dsh-remote/runtime-secret-broker.js'
 import type { DshRemoteHostFacade } from './dsh-remote/types.js'
 
 export interface Config {
@@ -104,7 +103,6 @@ export interface Config {
   shareWebsite: string
   dshRemoteFeatureEnabled: boolean
   dshRemoteRealtimeBaseUrl: string
-  dshRemoteGrantSigningKeys: string
 }
 
 export const ARKME_PRODUCTION_TRUSTED_SIGNING_KEYS = '{"prod-ed25519-20260819-1":"m1MKKU16hyu1b1KKIXMG+zKEr/GmhmvyUEreJzthTxs="}'
@@ -153,7 +151,6 @@ export const Config: Schema<Config> = Schema.object({
   shareWebsite: Schema.string().default(ARKME_DEFAULT_SHARE_WEBSITE),
   dshRemoteFeatureEnabled: Schema.boolean().default(false),
   dshRemoteRealtimeBaseUrl: Schema.string().default(''),
-  dshRemoteGrantSigningKeys: Schema.string().default('{}'),
 })
 
 export const name = 'dsh-arkme'
@@ -206,24 +203,6 @@ export type ArkmeRemoteAuthenticatedSocketFactory = (input: {
   signal: AbortSignal
 }) => DshRemoteSocketLike | Promise<DshRemoteSocketLike>
 
-function dshRemoteGrantSigningKeys(value: string): Record<string, string> {
-  let parsed: unknown
-  try { parsed = JSON.parse(value) }
-  catch (error) { throw new Error('dsh-arkme: dshRemoteGrantSigningKeys must be a JSON object', { cause: error }) }
-  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
-    throw new Error('dsh-arkme: dshRemoteGrantSigningKeys must be a JSON object')
-  }
-  const result: Record<string, string> = {}
-  for (const [kid, publicKey] of Object.entries(parsed as Record<string, unknown>)) {
-    if (!/^[A-Za-z0-9._:-]{1,128}$/.test(kid) || typeof publicKey !== 'string'
-      || !/^[A-Za-z0-9_-]{43}$/.test(publicKey) || decodeBase64Url(publicKey).length !== 32) {
-      throw new Error('dsh-arkme: dshRemoteGrantSigningKeys contains an invalid Ed25519 key')
-    }
-    result[kid] = publicKey
-  }
-  return result
-}
-
 function dshRemoteClientId(accessToken: string): number | undefined {
   const parts = accessToken.split('.')
   if (parts.length !== 3) return undefined
@@ -246,9 +225,6 @@ export function apply(ctx: Context, config: Config): void {
   const sessionStore = createArkmeSessionStore(`${config.keychainServicePrefix}.${config.environment}`)
   const pendingSessionStore = createArkmeSessionStore(`${config.keychainServicePrefix}.${config.environment}.pending-binding`)
   const service = new ArkmeService(config, sessionStore, localDatabase, fetch, pendingSessionStore)
-  const grantSigningKeys = config.dshRemoteFeatureEnabled
-    ? dshRemoteGrantSigningKeys(config.dshRemoteGrantSigningKeys)
-    : {}
   let remoteHost: DshRemoteHostFacade | undefined
   const openClawStateDirectory = join(stateDirectory, 'openclaw')
   const openClawCli = createOpenClawCliAdapter({
@@ -424,20 +400,18 @@ export function apply(ctx: Context, config: Config): void {
       return await authenticatedSocketFactory({ ...input, accessToken: session.accessToken })
     })
     const apiProxy = new DshApiProxyAdapter(apiCtx.apiProxy as unknown as DshPublicApiProxyLike)
-    const credentialBroker = new DesktopCredentialBroker(createArkmeSecureValueStore(
+    const secretBroker = new DshRemoteRuntimeSecretBroker(createArkmeSecureValueStore(
       `${config.keychainServicePrefix}.${config.environment}.dsh-remote-desktop`,
     ))
     const host = new ArkmeRemoteRealtimeHost({
       featureEnabled: config.dshRemoteFeatureEnabled,
       transportAvailable: true,
-      environment: config.environment === 'prod' ? 'production' : 'test',
-      profileRef, hostClientRef, credentialBroker,
+      profileRef, hostClientRef, secretBroker,
       runtimeStore: new DshRemoteRuntimeStore(stateDirectory),
       controlPlane: new DshRemoteHttpControlPlane({
-        get: async (path, signal) => await service.dshRemoteGet<Record<string, unknown>>(path, signal),
         post: async (path, body, signal) => await service.dshRemotePost<Record<string, unknown>>(path, body, signal),
       }),
-      realtime, apiProxy, grantSigningKeys,
+      realtime, apiProxy,
       readSession: async () => {
         const session = await sessionStore.read()
         if (session === undefined) return undefined

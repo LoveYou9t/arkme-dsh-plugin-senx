@@ -1,123 +1,81 @@
-import { mkdtemp } from 'node:fs/promises'
+import { mkdtemp, readFile, writeFile, mkdir } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import type { ArkmeSecureValueStore } from '../src/keychain-store.js'
-import { DesktopCredentialBroker } from '../src/dsh-remote/desktop-credential-broker.js'
+import { DshRemoteRuntimeSecretBroker } from '../src/dsh-remote/runtime-secret-broker.js'
 import { DshRemoteRuntimeStore } from '../src/dsh-remote/runtime-store.js'
 
 class MemorySecrets implements ArkmeSecureValueStore {
   readonly values = new Map<string, string>()
-  async read(account: string) { return this.values.get(account) }
-  async write(account: string, payload: string) { this.values.set(account, payload) }
-  async delete(account: string) { this.values.delete(account) }
+  async read(account: string): Promise<string | undefined> { return this.values.get(account) }
+  async write(account: string, value: string): Promise<void> { this.values.set(account, value) }
+  async delete(account: string): Promise<void> { this.values.delete(account) }
 }
 
-describe('Desktop Credential Broker', () => {
-  it('shares one installation identity across Profiles while isolating accounts', async () => {
+describe('Runtime local persistence without device authorization', () => {
+  it('shares only the local ledger key across Profiles', async () => {
     const secrets = new MemorySecrets()
-    const firstProfile = new DesktopCredentialBroker(secrets)
-    const secondProfile = new DesktopCredentialBroker(secrets)
-    const accountOneFirst = await firstProfile.getOrCreate('account-1')
-    const accountOneSecond = await secondProfile.getOrCreate('account-1')
-    const accountTwo = await firstProfile.getOrCreate('account-2')
-    expect(accountOneSecond.publicKey).toBe(accountOneFirst.publicKey)
-    expect(accountTwo.publicKey).not.toBe(accountOneFirst.publicKey)
-    expect(await firstProfile.ledgerKey('account-1')).toHaveLength(32)
-    expect([...secrets.values.values()].join('')).not.toContain('accessToken')
+    const first = new DshRemoteRuntimeSecretBroker(secrets)
+    const second = new DshRemoteRuntimeSecretBroker(secrets)
+    expect(await first.ledgerKey('42')).toEqual(await second.ledgerKey('42'))
+    const stored = [...secrets.values.values()].join('\n')
+    expect(stored).toContain('"schemaVersion":2')
+    expect(stored).not.toMatch(/identity|privateJwk|publicKey|fingerprint/)
   })
 
-  it('rotates only the requested account and advances key epoch', async () => {
-    const broker = new DesktopCredentialBroker(new MemorySecrets())
-    const before = await broker.getOrCreate('account-1')
-    const rotated = await broker.rotate('account-1')
-    expect(rotated.keyEpoch).toBe(2)
-    expect(rotated.publicKey).not.toBe(before.publicKey)
-  })
-
-  it('shares immutable Binding trust across Profiles while isolating Runtime channel state', async () => {
+  it('migrates the old keychain payload by retaining only its ledger key', async () => {
     const secrets = new MemorySecrets()
-    const broker = new DesktopCredentialBroker(secrets)
-    const rootSecret = Buffer.alloc(32, 8)
-    const controllerPublicKey = 'A'.repeat(43)
-    const controllerKeyFingerprint = 'F'.repeat(43)
-    await broker.putBindingRoot({
-      accountId: 'account-1', bindingRef: 'binding-1', rootSecret,
-      controllerPublicKey, controllerKeyFingerprint,
-      controllerToHost: Buffer.alloc(32, 1), hostToController: Buffer.alloc(32, 2),
+    secrets.values.set('dsh-remote-desktop:42', JSON.stringify({
+      schemaVersion: 1, accountId: '42', ledgerKey: Buffer.alloc(32, 7).toString('base64url'),
+      identity: { algorithm: 'Ed25519', privateJwk: { d: 'secret' }, publicKey: 'obsolete' },
+    }))
+    const broker = new DshRemoteRuntimeSecretBroker(secrets)
+    expect(await broker.ledgerKey('42')).toEqual(Buffer.alloc(32, 7))
+    expect(JSON.parse(secrets.values.get('dsh-remote-desktop:42')!)).toEqual({
+      schemaVersion: 2, accountId: '42', ledgerKey: Buffer.alloc(32, 7).toString('base64url'),
     })
-    await broker.putChannelKeys({
-      accountId: 'account-1', bindingRef: 'binding-1', runtimeRef: 'runtime-1', channelRef: 'remotech-one',
-      keyEpoch: 2, rootSecret, controllerPublicKey, controllerKeyFingerprint,
-      controllerToHost: Buffer.alloc(32, 1), hostToController: Buffer.alloc(32, 2),
-      lastTransportSequence: 257,
-    })
-    await broker.putChannelKeys({
-      accountId: 'account-1', bindingRef: 'binding-1', runtimeRef: 'runtime-2', channelRef: 'remotech-two',
-      keyEpoch: 3, rootSecret, controllerPublicKey, controllerKeyFingerprint,
-      controllerToHost: Buffer.alloc(32, 3), hostToController: Buffer.alloc(32, 4),
-    })
-    expect((await broker.channelKeys({
-      accountId: 'account-1', bindingRef: 'binding-1', runtimeRef: 'runtime-1', channelRef: 'remotech-one',
-    }))).toMatchObject({ controllerToHost: Buffer.alloc(32, 1), lastTransportSequence: 257 })
-    expect((await broker.channelKeys({
-      accountId: 'account-1', bindingRef: 'binding-1', runtimeRef: 'runtime-2', channelRef: 'remotech-two',
-    }))).toMatchObject({ controllerToHost: Buffer.alloc(32, 3), lastTransportSequence: 0 })
-    expect(await broker.channelKeys({
-      accountId: 'account-1', bindingRef: 'binding-1', runtimeRef: 'runtime-1', channelRef: 'remotech-two',
-    })).toMatchObject({ keyEpoch: 1, rootSecret, lastTransportSequence: 0 })
-    await expect(broker.putBindingRoot({
-      accountId: 'account-1', bindingRef: 'binding-1', rootSecret: Buffer.alloc(32, 9),
-      controllerPublicKey, controllerKeyFingerprint,
-      controllerToHost: Buffer.alloc(32, 1), hostToController: Buffer.alloc(32, 2),
-    })).rejects.toMatchObject({ code: 'DEVICE_PROOF_INVALID' })
-    await broker.deleteBindingChannelKeys({ accountId: 'account-1', bindingRef: 'binding-1', runtimeRef: 'runtime-1' })
-    expect(await broker.channelKeys({
-      accountId: 'account-1', bindingRef: 'binding-1', runtimeRef: 'runtime-1', channelRef: 'remotech-one',
-    })).toBeUndefined()
-    expect(await broker.channelKeys({
-      accountId: 'account-1', bindingRef: 'binding-1', runtimeRef: 'runtime-2', channelRef: 'remotech-two',
-    })).toBeUndefined()
-    await expect(broker.putChannelKeys({
-      accountId: 'account-1', bindingRef: 'binding-1', runtimeRef: 'runtime-2', channelRef: 'remotech-two',
-      keyEpoch: 4, rootSecret, controllerPublicKey, controllerKeyFingerprint,
-      controllerToHost: Buffer.alloc(32, 5), hostToController: Buffer.alloc(32, 6),
-    })).rejects.toMatchObject({ code: 'BINDING_REVOKED' })
-    await expect(new DesktopCredentialBroker(secrets).putBindingRoot({
-      accountId: 'account-1', bindingRef: 'binding-1', rootSecret,
-      controllerPublicKey, controllerKeyFingerprint,
-      controllerToHost: Buffer.alloc(32, 1), hostToController: Buffer.alloc(32, 2),
-    })).rejects.toMatchObject({ code: 'BINDING_REVOKED' })
-  })
-})
-
-describe('DSH remote Runtime store', () => {
-  it('defaults every new Profile to disabled and increments generation on activation', async () => {
-    const directory = await mkdtemp(join(tmpdir(), 'arkme remote runtime '))
-    const store = new DshRemoteRuntimeStore(directory)
-    const first = await store.activateRuntime({ accountId: 'account-1', profileRef: 'profile-a', capabilities: ['workspace.list'] })
-    expect(first.remoteEnabled).toBe(false)
-    expect(first.hostGeneration).toBe(1)
-    await store.setRemoteEnabled('account-1', 'profile-a', true)
-    const restarted = await new DshRemoteRuntimeStore(directory).activateRuntime({
-      accountId: 'account-1', profileRef: 'profile-a', capabilities: ['workspace.list', 'session.list'],
-    })
-    expect(restarted.runtimeRef).toBe(first.runtimeRef)
-    expect(restarted.remoteEnabled).toBe(true)
-    expect(restarted.hostGeneration).toBe(2)
-    const adopted = await store.adoptRuntimeRef('account-1', 'profile-a', 'runtime-backend-01', 7)
-    expect(adopted.hostGeneration).toBe(7)
-    await expect(store.adoptRuntimeRef('account-1', 'profile-a', 'runtime-backend-01', 6))
-      .rejects.toMatchObject({ code: 'REMOTE_STORAGE_FAILED' })
   })
 
-  it('keeps account namespaces independent', async () => {
-    const directory = await mkdtemp(join(tmpdir(), 'arkme-remote-runtime-'))
+  it('keeps the replay cursor monotonic per account and Runtime', async () => {
+    const broker = new DshRemoteRuntimeSecretBroker(new MemorySecrets())
+    const route = { accountId: '42', runtimeRef: 'runtime-01', channelRef: 'runtime-01' }
+    await Promise.all([
+      broker.putRuntimeCursor({ ...route, lastTransportSequence: 20 }),
+      broker.putRuntimeCursor({ ...route, lastTransportSequence: 10 }),
+    ])
+    await expect(broker.runtimeCursor(route)).resolves.toBe(20)
+    await expect(broker.runtimeCursor({ ...route, runtimeRef: 'runtime-02', channelRef: 'runtime-02' })).resolves.toBe(0)
+  })
+
+  it('migrates runtime-state v1 without credential, Binding, or remote toggle state', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'dsh-runtime-state-'))
+    const remoteDirectory = join(directory, 'dsh-remote')
+    await mkdir(remoteDirectory)
+    await writeFile(join(remoteDirectory, 'runtime-state.json'), JSON.stringify({
+      schemaVersion: 1,
+      accounts: {
+        '42': {
+          desktopRef: 'desktop-01', credentialRef: 'obsolete', bindings: { old: { bindingRef: 'old' } },
+          runtimes: {
+            web: {
+              runtimeRef: 'runtime-01', desktopRef: 'desktop-01', profileRef: 'web', accountId: '42',
+              remoteEnabled: false, hostGeneration: 3, capabilities: ['session.list'], updatedAtMillis: 1,
+            },
+          },
+        },
+      },
+    }))
     const store = new DshRemoteRuntimeStore(directory)
-    await store.activateRuntime({ accountId: 'account-1', profileRef: 'web', capabilities: [] })
-    await store.activateRuntime({ accountId: 'account-2', profileRef: 'web', capabilities: [] })
-    await store.setRemoteEnabled('account-1', 'web', true)
-    expect((await store.account('account-1')).runtimes[0]?.remoteEnabled).toBe(true)
-    expect((await store.account('account-2')).runtimes[0]?.remoteEnabled).toBe(false)
+    await expect(store.account('42')).resolves.toEqual({
+      desktopRef: 'desktop-01',
+      runtimes: [{
+        runtimeRef: 'runtime-01', desktopRef: 'desktop-01', profileRef: 'web', accountId: '42',
+        hostGeneration: 3, capabilities: ['session.list'], updatedAtMillis: 1,
+      }],
+    })
+    const persisted = await readFile(join(remoteDirectory, 'runtime-state.json'), 'utf8')
+    expect(persisted).toContain('"schemaVersion": 2')
+    expect(persisted).not.toMatch(/credentialRef|bindings|remoteEnabled/)
   })
 })
