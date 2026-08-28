@@ -112,6 +112,8 @@ import type {
 } from '../extensions/types.js'
 import type { ArkmeMyExtensionPage, ArkmeMyExtensionPublishInput } from '../extensions/owned-types.js'
 import { normalizeGitHubRepositoryURL } from '../extensions/source.js'
+import type { ArkmeFilePolicy, ArkmeLocalFile, ArkmeFileSendInput, ArkmeFileSendTask, ArkmeFileReception } from '../file-transfer-contract.js'
+export type { ArkmeFileOpenResult, ArkmeFilePolicy, ArkmeLocalFile, ArkmeFileProgress, ArkmeFileSendInput, ArkmeFileSendTask, ArkmeFileReception } from '../file-transfer-contract.js'
 
 export type {
   ArkmeArrangementDetail,
@@ -1514,6 +1516,53 @@ export class ArkmeSdk {
     await this.call<void>('source.long-article.draft.delete', {
       sourceRef, ...(itemUid === undefined ? {} : { itemUid }),
     }, signal)
+  }
+
+  async fileCapabilities(signal?: AbortSignal): Promise<ArkmeFilePolicy> {
+    const policy = await this.call<ArkmeFilePolicy>('files.capabilities', undefined, signal)
+    if (policy.version !== 1) throw new Error(`Unsupported Arkme file contract version ${String(policy.version)}`)
+    return policy
+  }
+  async searchFiles(options: { query?: string; limit?: number; cursor?: string; signal?: AbortSignal } = {}): Promise<import('../types.js').ArkmeRecordSearchResult> {
+    const { signal, ...params } = options
+    return this.call('files.search', params, signal)
+  }
+  async localFiles(signal?: AbortSignal): Promise<ArkmeLocalFile[]> { return this.call('files.local.list', undefined, signal) }
+  async openLocalFile(fileRef: string, signal?: AbortSignal): Promise<import('../file-transfer-contract.js').ArkmeFileOpenResult> { return this.call('files.local.open', { fileRef }, signal) }
+  async removeLocalFile(fileRef: string): Promise<void> { return this.call('files.local.remove', { fileRef }) }
+  async sendFiles(input: ArkmeFileSendInput): Promise<ArkmeFileSendTask> { return this.call('files.send', { ...input.content, ...input }) }
+  async fileSendTasks(sourceRef?: string, signal?: AbortSignal): Promise<ArkmeFileSendTask[]> { return this.call('files.send.tasks', sourceRef === undefined ? {} : { sourceRef }, signal) }
+  async retryFileSend(taskRef: string): Promise<ArkmeFileSendTask> { return this.call('files.send.retry', { taskRef }) }
+  async discardFileSend(taskRef: string): Promise<void> { return this.call('files.send.discard', { taskRef }) }
+  async reconcileFileSend(taskRef: string): Promise<ArkmeFileSendTask> { return this.call('files.send.reconcile', { taskRef }) }
+  async stageFileBytes(contentBase64: string, metadata: Pick<ArkmeLocalFile, 'fileName' | 'mimeType'>): Promise<ArkmeLocalFile> { return this.call('files.stage-bytes', { contentBase64, ...metadata }) }
+  async receiveFile(mediaRef: string, start = false, signal?: AbortSignal): Promise<ArkmeFileReception> { return this.call('files.receive', { mediaRef, start }, signal) }
+  subscribeFileSends(sourceRef: string, listener: (tasks: ArkmeFileSendTask[]) => void, options: ArkmeSubscribeOptions = {}): () => void {
+    const controller = new AbortController()
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const poll = async () => {
+      try { const tasks = await this.fileSendTasks(sourceRef, controller.signal); if (!controller.signal.aborted) listener(tasks) }
+      catch (error) { if (!controller.signal.aborted) options.onError?.(error) }
+      finally { if (!controller.signal.aborted) timer = setTimeout(() => { void poll() }, Math.max(250, options.intervalMs ?? 750)) }
+    }
+    if (options.immediate !== false) void poll()
+    else timer = setTimeout(() => { void poll() }, Math.max(250, options.intervalMs ?? 750))
+    return () => { controller.abort(); if (timer !== undefined) clearTimeout(timer) }
+  }
+  localFileUrl(fileRef: string, download = false): string {
+    if (!/^arkme-file-v1\.[0-9a-f-]{36}$/.test(fileRef)) throw new TypeError('Invalid local file reference')
+    return `${this.route}/files/local?ref=${encodeURIComponent(fileRef)}${download ? '&download=1' : ''}`
+  }
+
+  /** Stage locally only. Cloud upload starts when sendFiles accepts a task. */
+  async stageFile(file: Blob & { name?: string }, options: { fileName?: string; signal?: AbortSignal } = {}): Promise<ArkmeLocalFile> {
+    const response = await this.fetchImpl(`${this.route}/files/stage`, {
+      method: 'POST', headers: { 'Content-Type': file.type || 'application/octet-stream', 'X-Arkme-File-Name': encodeURIComponent(options.fileName ?? file.name ?? 'attachment') },
+      body: file, ...(options.signal === undefined ? {} : { signal: options.signal }),
+    })
+    const payload = await response.json() as ArkmePluginResponse<ArkmeLocalFile>
+    if (!payload.ok) throw new ArkmeClientError(payload.error)
+    return payload.value
   }
 
   async upload(

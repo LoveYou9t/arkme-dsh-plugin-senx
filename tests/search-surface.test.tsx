@@ -73,7 +73,8 @@ describe('Arkme search surface', () => {
     expect(markup).toContain('>图片</span>')
     expect(markup).toContain('AI 视频')
     expect(markup).toContain('>语音</span>')
-    for (const label of ['图片/视频', '录音', '外部链接', '文件', '长文']) expect(markup).not.toContain(label)
+    expect(markup).toContain('>文件</span>')
+    for (const label of ['图片/视频', '录音', '外部链接', '长文']) expect(markup).not.toContain(label)
   })
 
   it('keeps the search results and AI video entry in the desktop document flow', async () => {

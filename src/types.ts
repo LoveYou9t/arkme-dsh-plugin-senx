@@ -1458,6 +1458,10 @@ export interface ArkmeContentBlock {
   sortOrder: number
   /** Backend media render role. 3 means a standalone chat sticker. */
   renderRole?: 1 | 3
+  /** Original bytes, distinct from an image preview. */
+  originalRef?: string
+  localFileRef?: string
+  uploadProgress?: import('./file-transfer-contract.js').ArkmeFileProgress
 }
 
 export interface ArkmeUploadedAsset {
@@ -2630,6 +2634,18 @@ export type ArkmePluginOperation =
   | 'favorite-stickers.add'
   | 'favorite-stickers.send'
   | 'favorite-stickers.manage'
+  | 'files.capabilities'
+  | 'files.search'
+  | 'files.stage-bytes'
+  | 'files.send.discard'
+  | 'files.send.reconcile'
+  | 'files.local.list'
+  | 'files.local.open'
+  | 'files.local.remove'
+  | 'files.send'
+  | 'files.send.tasks'
+  | 'files.send.retry'
+  | 'files.receive'
   | 'source.long-article.detail'
   | 'source.long-article.update'
   | 'source.long-article.draft.get'

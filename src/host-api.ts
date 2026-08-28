@@ -1226,6 +1226,21 @@ export async function dispatchArkmeHostOperation(
       stringParam(params, 'sourceRef'),
       stringParam(params, 'memberRef'),
     )
+    case 'files.capabilities': return service.fileCapabilities()
+    case 'files.local.list': return await service.fileList()
+    case 'files.local.open': return await service.fileOpenLocal(stringParam(params, 'fileRef'))
+    case 'files.local.remove': await service.fileRemove(stringParam(params, 'fileRef')); return { removed: true }
+    case 'files.search': return await service.fileSearch({ query: stringParam(params, 'query'), limit: numberParam(params, 'limit', 30), cursor: stringParam(params, 'cursor') })
+    case 'files.send.tasks': return await service.fileSendTasks(stringParam(params, 'sourceRef') || undefined)
+    case 'files.send.retry': return await service.fileSendRetry(stringParam(params, 'taskRef'))
+    case 'files.send.discard': return await service.fileSendDiscard(stringParam(params, 'taskRef'))
+    case 'files.send.reconcile': return await service.fileSendReconcile(stringParam(params, 'taskRef'))
+    case 'files.stage-bytes': return await service.fileStageBytes(stringParam(params, 'contentBase64'), { fileName: stringParam(params, 'fileName'), mimeType: stringParam(params, 'mimeType') || 'application/octet-stream' })
+    case 'files.receive': return await service.fileReceive(stringParam(params, 'mediaRef'), booleanParam(params, 'start'))
+    case 'files.send': return await service.fileSend({
+      sourceRef: stringParam(params, 'sourceRef'), recordUid: stringParam(params, 'recordUid'), relationUid: stringParam(params, 'relationUid'),
+      fileRefs: stringListParam(params, 'fileRefs'), content: richSendParam(params),
+    })
     case 'source.send-rich': return await service.sendSourceRich(
       stringParam(params, 'sourceRef'),
       richSendParam(params),
