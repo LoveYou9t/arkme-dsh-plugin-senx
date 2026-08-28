@@ -67,8 +67,9 @@ export function ArkmeBalanceSettingsRowView(props: ArkmeBalanceSettingsRowViewPr
 
   return <div className={`arkme-redesign-setting-row arkme-redesign-balance-row${showReserved ? '' : ' is-without-reserved'}`}>
     <button type="button" className="arkme-redesign-balance-main" onClick={props.onOpen}>
-      <strong>当前余额</strong>
+      <strong>AI 余额</strong>
       <small>{description}</small>
+      <span className="arkme-redesign-balance-usage">可用于在 DSH 会话中通过 Arkme 调用 AI 模型</span>
     </button>
     {showReserved && <div className="arkme-redesign-reserved-balance">
       <span className="arkme-redesign-reserved-title">
@@ -131,7 +132,7 @@ export function ArkmeRechargeDialogView(props: ArkmeRechargeDialogViewProps) {
       <header className="arkme-billing-dialog-header">
         <div>
           <h2>余额充值</h2>
-          <p>选择充值套餐和支付方式</p>
+          <p>充值后可在 DSH 会话中通过 Arkme 调用 AI 模型</p>
         </div>
         <button type="button" aria-label="关闭充值弹窗" onClick={props.onClose}>×</button>
       </header>
