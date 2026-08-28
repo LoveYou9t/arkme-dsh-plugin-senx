@@ -2818,24 +2818,31 @@ describe('ArkmeService', () => {
   it('lets an active regular member generate a rule and writes it only after confirmation', async () => {
     const sessions = new MemorySessionStore()
     sessions.session = { userId: 10001, accessToken: 'access', refreshToken: 'refresh' }
+    let enabled = false
+    const savedRules: Array<Record<string, unknown>> = []
     const requests: Array<{ url: string; body: Record<string, unknown> }> = []
     const service = new ArkmeService(config, sessions, new MemoryStateStore(), async (input, init) => {
       const url = String(input)
       const body = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>
       requests.push({ url, body })
       if (url.endsWith('/api/v1/chats/ai-polish/settings/query')) return json({ code: 200, data: {
-        config: { enabled: false, active_rule_uid: '', update_at: 10 }, rules: [],
+        config: { enabled, active_rule_uid: enabled ? 'candidate-1' : '', update_at: 10 }, rules: savedRules,
         viewer_role: 3, can_manage: true,
       } })
       if (url.endsWith('/api/v1/chats/ai-polish/rules/generate')) return json({ code: 200, data: {
         candidate: { candidate_uid: 'candidate-1', name: '清晰友好', rule_text: '表达清晰友好并保留事实。', prompt_version: 'v1' },
       } })
-      if (url.endsWith('/api/v1/chats/ai-polish/rules/upsert')) return json({ code: 200, data: {
-        rule: { rule_uid: 'candidate-1', name: body.name, rule_text: body.rule_text }, outcome: 'inserted',
-      } })
-      if (url.endsWith('/api/v1/chats/ai-polish/settings/update')) return json({ code: 200, data: {
+      if (url.endsWith('/api/v1/chats/ai-polish/rules/upsert')) {
+        const rule = { rule_uid: 'candidate-1', name: body.name, rule_text: body.rule_text }
+        savedRules.push(rule)
+        return json({ code: 200, data: { rule, outcome: 'inserted' } })
+      }
+      if (url.endsWith('/api/v1/chats/ai-polish/settings/update')) {
+        enabled = true
+        return json({ code: 200, data: {
         config: { enabled: true, active_rule_uid: 'candidate-1', update_at: body.update_at }, outcome: 'updated',
       } })
+      }
       throw new Error(`unexpected ${url}`)
     })
     const ref = sourceRefFor('group_chat', 'group-4', '规则群')
@@ -2851,9 +2858,10 @@ describe('ArkmeService', () => {
     await expect(service.confirmEnableGroupAiPolish(candidate.confirmationRef)).resolves.toEqual({
       groupName: '规则群', enabled: true, ruleName: '清晰友好', changed: true,
     })
-    expect(requests.slice(-2).map(request => request.url)).toEqual([
+    expect(requests.slice(-3).map(request => request.url)).toEqual([
       'https://chat.test/api/v1/chats/ai-polish/rules/upsert',
       'https://chat.test/api/v1/chats/ai-polish/settings/update',
+      'https://chat.test/api/v1/chats/ai-polish/settings/query',
     ])
   })
 

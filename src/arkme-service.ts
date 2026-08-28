@@ -143,6 +143,7 @@ import type {
   ArkmeGroupAiPolishNotice,
   ArkmeGroupAiPolishRuleCandidate,
   ArkmeGroupAiPolishSnapshot,
+  ArkmeGroupAiPolishThreadMessage,
   ArkmeGroupMemberList,
   ArkmeGroupMemberAddResult,
   ArkmeGroupMemberCandidateList,
@@ -603,6 +604,7 @@ export class ArkmeService {
         contactAdd: true,
         conversationQuickAdd: true,
         groupSettings: true,
+        groupAiPolish: true,
         extensionManagement: true,
         extensionMetadataEdit: true,
         extensionIcons: true,
@@ -983,7 +985,7 @@ export class ArkmeService {
   async generateGroupAiPolishRuleForSource(
     sourceRef: string,
     requirement: string,
-    options: { signal?: AbortSignal } = {},
+    options: { signal?: AbortSignal; threadMessages?: readonly ArkmeGroupAiPolishThreadMessage[]; targetRuleRef?: string } = {},
   ): Promise<ArkmeGroupAiPolishRuleCandidate> {
     return await this.aiPolish.generateGroupAiPolishRuleForSource(sourceRef, requirement, options)
   }
@@ -991,9 +993,17 @@ export class ArkmeService {
   async generateGroupAiPolishRule(
     groupName: string,
     requirement: string,
-    options: { signal?: AbortSignal } = {},
+    options: { signal?: AbortSignal; threadMessages?: readonly ArkmeGroupAiPolishThreadMessage[]; targetRuleRef?: string } = {},
   ): Promise<ArkmeGroupAiPolishRuleCandidate> {
     return await this.aiPolish.generateGroupAiPolishRule(groupName, requirement, options)
+  }
+
+  prepareEnableGroupAiPolish(groupName: string, ruleName = '', options: { signal?: AbortSignal } = {}): Promise<ArkmeGroupAiPolishRuleCandidate> {
+    return this.aiPolish.prepareEnableGroupAiPolish(groupName, ruleName, options)
+  }
+
+  prepareEnableGroupAiPolishRuleForSource(sourceRef: string, ruleRef: string, options: { signal?: AbortSignal } = {}): Promise<ArkmeGroupAiPolishRuleCandidate> {
+    return this.aiPolish.prepareEnableGroupAiPolishRuleForSource(sourceRef, ruleRef, options)
   }
 
   async confirmEnableGroupAiPolish(

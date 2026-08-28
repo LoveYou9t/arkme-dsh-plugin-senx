@@ -36,6 +36,10 @@ import type {
   ArkmeConversationMemberRecordPage,
   ArkmeCreateTextResult,
   ArkmeGroupMemberAddResult,
+  ArkmeGroupAiPolishMutationResult,
+  ArkmeGroupAiPolishRuleCandidate,
+  ArkmeGroupAiPolishSnapshot,
+  ArkmeGroupAiPolishThreadMessage,
   ArkmeGroupMemberCandidateList,
   ArkmeGroupInvitePreview,
   ArkmeGroupMemberList,
@@ -161,6 +165,11 @@ export type {
   ArkmeGroupMemberAddItemResult,
   ArkmeGroupMemberAddResult,
   ArkmeGroupMemberAddStatus,
+  ArkmeGroupAiPolishMutationResult,
+  ArkmeGroupAiPolishRule,
+  ArkmeGroupAiPolishRuleCandidate,
+  ArkmeGroupAiPolishSnapshot,
+  ArkmeGroupAiPolishThreadMessage,
   ArkmeGroupMemberCandidate,
   ArkmeGroupMemberCandidateList,
   ArkmeGroupMemberItem,
@@ -1113,6 +1122,63 @@ export class ArkmeSdk {
   async listGroupMembers(sourceRef: string, signal?: AbortSignal): Promise<ArkmeGroupMemberList> {
     if (sourceRef.trim() === '') throw new TypeError('Arkme group source reference must not be empty')
     return await this.call<ArkmeGroupMemberList>('group.members', { sourceRef, activeOnly: true }, signal)
+  }
+
+  async groupAiPolishSettings(sourceRef: string, signal?: AbortSignal): Promise<ArkmeGroupAiPolishSnapshot> {
+    if (sourceRef.trim() === '') throw new TypeError('Arkme group source reference must not be empty')
+    return await this.call<ArkmeGroupAiPolishSnapshot>('source.ai-polish.settings', { sourceRef }, signal)
+  }
+
+  async generateGroupAiPolishRule(
+    sourceRef: string,
+    requirement: string,
+    options: { threadMessages?: readonly ArkmeGroupAiPolishThreadMessage[]; targetRuleRef?: string; signal?: AbortSignal } = {},
+  ): Promise<ArkmeGroupAiPolishRuleCandidate> {
+    if (sourceRef.trim() === '' || requirement.trim() === '') {
+      throw new TypeError('Arkme group source reference and polish requirement must not be empty')
+    }
+    return await this.call<ArkmeGroupAiPolishRuleCandidate>('source.ai-polish.generate-rule', {
+      sourceRef, requirement,
+      ...(options.threadMessages === undefined ? {} : { threadMessages: options.threadMessages }),
+      ...(options.targetRuleRef === undefined || options.targetRuleRef.trim() === '' ? {} : { targetRuleRef: options.targetRuleRef.trim() }),
+    }, options.signal)
+  }
+
+  async prepareEnableGroupAiPolishRule(
+    sourceRef: string,
+    ruleRef: string,
+    signal?: AbortSignal,
+  ): Promise<ArkmeGroupAiPolishRuleCandidate> {
+    if (sourceRef.trim() === '' || ruleRef.trim() === '') {
+      throw new TypeError('Arkme group source and AI polish rule references must not be empty')
+    }
+    return await this.call<ArkmeGroupAiPolishRuleCandidate>('source.ai-polish.prepare-enable', {
+      sourceRef, ruleRef,
+    }, signal)
+  }
+
+  async confirmEnableGroupAiPolish(
+    confirmationRef: string,
+    signal?: AbortSignal,
+  ): Promise<ArkmeGroupAiPolishMutationResult> {
+    if (confirmationRef.trim() === '') throw new TypeError('Arkme AI polish confirmation reference must not be empty')
+    return await this.call<ArkmeGroupAiPolishMutationResult>('source.ai-polish.confirm-enable', { confirmationRef }, signal)
+  }
+
+  async prepareDisableGroupAiPolish(
+    sourceRef: string,
+    signal?: AbortSignal,
+  ): Promise<ArkmeGroupAiPolishRuleCandidate> {
+    if (sourceRef.trim() === '') throw new TypeError('Arkme group source reference must not be empty')
+    return await this.call<ArkmeGroupAiPolishRuleCandidate>('source.ai-polish.prepare-disable', { sourceRef }, signal)
+  }
+
+  async confirmDisableGroupAiPolish(
+    confirmationRef: string,
+    signal?: AbortSignal,
+  ): Promise<ArkmeGroupAiPolishMutationResult> {
+    if (confirmationRef.trim() === '') throw new TypeError('Arkme AI polish confirmation reference must not be empty')
+    return await this.call<ArkmeGroupAiPolishMutationResult>('source.ai-polish.confirm-disable', { confirmationRef }, signal)
   }
 
   async listSourceMembers(sourceRef: string, signal?: AbortSignal): Promise<ArkmeConversationMemberList> {

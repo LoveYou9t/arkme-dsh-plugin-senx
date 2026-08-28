@@ -1023,6 +1023,8 @@ export interface ArkmeProviderCapabilities {
     /** Built-in quick-add surface plus SDK/Host support for contacts, groups, and Bots. */
     conversationQuickAdd?: true
     groupSettings: true
+    /** Group AI expression-polish settings, rule previews, and confirmation-based mutations. */
+    groupAiPolish?: true
     /** Installed-extension inspection and desired enable/disable state are available. */
     extensionManagement?: true
     /** Owner-authorized extension name, description, and private/public visibility editing is available. */
@@ -1397,6 +1399,16 @@ export interface ArkmeGroupAiPolishRule {
   name: string
   ruleText: string
   isActive: boolean
+  /** Browser-safe conversation history persisted with the rule for mobile/desktop continuity. */
+  threadMessages?: ArkmeGroupAiPolishThreadMessage[]
+}
+
+export interface ArkmeGroupAiPolishThreadMessage {
+  id: string
+  role: 'ai' | 'user'
+  text: string
+  isRule?: boolean
+  ruleRef?: string
 }
 
 export interface ArkmeGroupAiPolishSnapshot {
@@ -1415,6 +1427,7 @@ export interface ArkmeGroupAiPolishRuleCandidate {
   ruleName: string
   ruleText: string
   confirmationRef: string
+  threadMessages?: ArkmeGroupAiPolishThreadMessage[]
 }
 
 export interface ArkmeGroupAiPolishMutationResult {
@@ -2592,6 +2605,7 @@ export type ArkmePluginOperation =
   | 'source.ai-polish.settings'
   | 'source.ai-polish.notices'
   | 'source.ai-polish.generate-rule'
+  | 'source.ai-polish.prepare-enable'
   | 'source.ai-polish.confirm-enable'
   | 'source.ai-polish.prepare-disable'
   | 'source.ai-polish.confirm-disable'

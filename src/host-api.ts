@@ -6,9 +6,9 @@ import { ArkmePluginUpdateError, ArkmePluginUpdateManager } from './plugin-updat
 import { ArkmeOutgoingCallError, type ArkmeOutgoingCallFailureCode } from './outgoing-call-contract.js'
 import type {
   ArkmeAiVideoJobStatus, ArkmeArrangementListStatus, ArkmeArrangementMutationIntent, ArkmeBotProvider,
-  ArkmeBillingPaymentMethod, ArkmeConversationMemberRecordMode, ArkmeDirectorySectionKind,
-  ArkmeBotMentionInput, ArkmeFavoriteStickerAddInput, ArkmeFavoriteStickerManageAction,
-  ArkmeHumanMentionInput, ArkmeMessageReadReceiptQueryItem,
+  ArkmeBillingPaymentMethod, ArkmeBotMentionInput, ArkmeConversationMemberRecordMode,
+  ArkmeDirectorySectionKind, ArkmeFavoriteStickerAddInput, ArkmeFavoriteStickerManageAction,
+  ArkmeGroupAiPolishThreadMessage, ArkmeHumanMentionInput, ArkmeMessageReadReceiptQueryItem,
   ArkmePluginRequest, ArkmePluginResponse, ArkmeRecordCursor,
   ArkmeRichSendInput, ArkmeSearchSceneKind, ArkmeSourceDirectory, ArkmeTimelineCursor,
   ArkmeWorldPublishFileAsset,
@@ -252,6 +252,24 @@ function stringListParam(params: Record<string, unknown>, key: string): string[]
 
 function messageActionRefsParam(params: Record<string, unknown>): string[] {
   return stringListParam(params, 'actionRefs').map(value => value.trim()).filter(value => value !== '')
+}
+
+function aiPolishThreadMessagesParam(params: Record<string, unknown>): ArkmeGroupAiPolishThreadMessage[] {
+  if (!Array.isArray(params.threadMessages)) return []
+  return params.threadMessages.slice(-40).flatMap(raw => {
+    if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return []
+    const item = raw as Record<string, unknown>
+    const id = typeof item.id === 'string' ? item.id.trim() : ''
+    const role = item.role === 'ai' || item.role === 'user' ? item.role : undefined
+    const text = typeof item.text === 'string' ? item.text.trim().slice(0, 4_000) : ''
+    if (id === '' || role === undefined || text === '') return []
+    const ruleRef = typeof item.ruleRef === 'string' ? item.ruleRef.trim() : ''
+    return [{
+      id, role, text,
+      ...(item.isRule === true ? { isRule: true } : {}),
+      ...(ruleRef === '' ? {} : { ruleRef }),
+    }]
+  })
 }
 
 function optionalPositiveIntegerParam(params: Record<string, unknown>, key: string): number | undefined {
@@ -1132,6 +1150,14 @@ export async function dispatchArkmeHostOperation(
     case 'source.ai-polish.generate-rule': return await service.generateGroupAiPolishRuleForSource(
       stringParam(params, 'sourceRef'),
       stringParam(params, 'requirement'),
+      {
+        threadMessages: aiPolishThreadMessagesParam(params),
+        ...(stringParam(params, 'targetRuleRef').trim() === '' ? {} : { targetRuleRef: stringParam(params, 'targetRuleRef').trim() }),
+      },
+    )
+    case 'source.ai-polish.prepare-enable': return await service.prepareEnableGroupAiPolishRuleForSource(
+      stringParam(params, 'sourceRef'),
+      stringParam(params, 'ruleRef'),
     )
     case 'source.ai-polish.confirm-enable': return await service.confirmEnableGroupAiPolish(
       stringParam(params, 'confirmationRef'),

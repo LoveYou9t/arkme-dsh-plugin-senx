@@ -284,6 +284,9 @@ function fakeService(): ArkmeCoreToolPorts & {
     generateGroupAiPolishRule: vi.fn(async (groupName: string) => ({
       groupName, ruleName: '友好简洁', ruleText: '表达友好、简洁，并保留事实。', confirmationRef: 'confirm-1',
     })),
+    prepareEnableGroupAiPolish: vi.fn(async (groupName: string) => ({
+      groupName, ruleName: '友好', ruleText: '保留事实，表达友好。', confirmationRef: 'existing-confirm-1',
+    })),
     confirmEnableGroupAiPolish: vi.fn(async () => ({
       groupName: '产品群', enabled: true, ruleName: '友好简洁', changed: true,
     })),
@@ -943,6 +946,21 @@ describe('Arkme conversation tools', () => {
     ) as string
     expect(service.confirmEnableGroupAiPolish).toHaveBeenCalledWith('confirm-1', { signal })
     expect(enabled).toContain('"enabled": true')
+  })
+
+  it('previews a saved group rule without generating a new rule or silently ignoring requirements', async () => {
+    const service = fakeService()
+    const tool = createArkmeCoreToolDefinitions(service).find(definition => definition.name === 'arkme_group_ai_polish_manage')!
+    const signal = new AbortController().signal
+    const preview = await tool.execute({ operation: 'prepare_enable', group_name: '产品群', rule_name: '友好' }, { signal } as never)
+    expect(preview).toContain('existing-confirm-1')
+    expect(service.prepareEnableGroupAiPolish).toHaveBeenCalledWith('产品群', '友好', { signal })
+    expect(service.generateGroupAiPolishRule).not.toHaveBeenCalled()
+    expect(service.confirmEnableGroupAiPolish).not.toHaveBeenCalled()
+    await expect(tool.execute({ operation: 'prepare_enable', group_name: '产品群', requirement: '新要求' }, { signal } as never))
+      .rejects.toThrow('generate_rule')
+    await expect(tool.execute({ operation: 'prepare_enable' }, { signal } as never)).rejects.toThrow('群名称')
+    await expect(tool.execute({ operation: 'confirm_enable' }, { signal } as never)).rejects.toThrow('确认引用')
   })
 
   it('renames one exact group source through an explicit write tool', async () => {

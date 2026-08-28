@@ -19,6 +19,7 @@ import type {
   ArkmeBotList, ArkmeGroupBotCandidate, ArkmeGroupBotCandidateList,
 } from '../types.js'
 import { callArkme, ArkmeClientError } from './api.js'
+import { isArkmeRequestAbort, retryArkmeRead } from './read-retry.js'
 import { verifyPhoneCaptcha } from './geetest.js'
 import { ArkmeSourceAvatar, ArkmeUserAvatar } from './ArkmeAvatar.js'
 import { ArkmeGroupChatControls } from './ArkmeGroupChatControls.js'
@@ -972,6 +973,34 @@ function mergeItems(current: ArkmeTimelineItem[], incoming: ArkmeTimelineItem[])
   return [...map.values()].sort((a, b) => a.sendAtMillis - b.sendAtMillis || a.itemUid.localeCompare(b.itemUid))
 }
 
+function applySourceSendResult(
+  current: ArkmeTimelineItem[],
+  optimisticItemUid: string,
+  result: ArkmeSourceSendResult,
+): ArkmeTimelineItem[] {
+  const returned = current.find(item => item.itemUid === result.itemUid)
+  const optimistic = current.find(item => item.itemUid === optimisticItemUid)
+  const candidate = returned ?? optimistic
+  if (candidate === undefined) return current
+  const { aiPolish: _optimisticAiPolish, ...base } = candidate
+  const confirmed: ArkmeTimelineItem = {
+    ...base,
+    itemUid: result.itemUid,
+    status: result.status,
+    ...(result.sequence === undefined ? {} : { sequence: result.sequence }),
+    ...(result.aiPolish === undefined ? {} : {
+      aiPolish: result.aiPolish,
+      ...(result.aiPolish.state === 'polished' && result.aiPolish.polishedText !== undefined
+        ? { textContent: result.aiPolish.polishedText }
+        : {}),
+    }),
+  }
+  return mergeItems(
+    current.filter(item => item.itemUid !== optimisticItemUid && item.itemUid !== result.itemUid),
+    [confirmed],
+  )
+}
+
 interface ArkmeTimelineViewState {
   sourceRef: string
   items: ArkmeTimelineItem[]
@@ -1850,6 +1879,7 @@ export function ArkmeSurface({
   const cacheAccountUserIdRef = useRef<number>()
   const timelineGenerationRef = useRef(0)
   const timelineRequestAbortRef = useRef<AbortController>()
+  const timelineRequestKeyRef = useRef('')
   const pendingViewportRestoreRef = useRef<{
     sourceRef: string
     viewport: ArkmeConversationViewportSnapshot | undefined
@@ -2199,20 +2229,28 @@ export function ArkmeSurface({
     if (source === undefined) return
     const sourceRef = source.sourceRef
     const generation = timelineGenerationRef.current
+    const requestKey = `${sourceRef}:${cursor === undefined ? 'initial' : JSON.stringify(cursor)}`
+    const activeController = timelineRequestAbortRef.current
+    if (activeController !== undefined && !activeController.signal.aborted
+      && timelineRequestKeyRef.current === requestKey) return
     const hadCachedTimeline = conversationCacheRef.current.getTimeline(sourceRef) !== undefined
     const controller = new AbortController()
     timelineRequestAbortRef.current?.abort()
     timelineRequestAbortRef.current = controller
+    timelineRequestKeyRef.current = requestKey
     let page: ArkmeTimelinePage
     try {
-      page = await callArkme<ArkmeTimelinePage>('source.timeline', {
+      page = await retryArkmeRead(() => callArkme<ArkmeTimelinePage>('source.timeline', {
         sourceRef, limit, ...(cursor === undefined ? {} : { cursor }),
-      }, controller.signal)
+      }, controller.signal), { signal: controller.signal })
     } catch (caught) {
-      if (controller.signal.aborted) return
+      if (isArkmeRequestAbort(caught, controller.signal)) return
       throw caught
     } finally {
-      if (timelineRequestAbortRef.current === controller) timelineRequestAbortRef.current = undefined
+      if (timelineRequestAbortRef.current === controller) {
+        timelineRequestAbortRef.current = undefined
+        timelineRequestKeyRef.current = ''
+      }
     }
     if (generation !== timelineGenerationRef.current) return
     const cached = conversationCacheRef.current.getTimeline(sourceRef)
@@ -2295,6 +2333,7 @@ export function ArkmeSurface({
     timelineGenerationRef.current += 1
     timelineRequestAbortRef.current?.abort()
     timelineRequestAbortRef.current = undefined
+    timelineRequestKeyRef.current = ''
     const accountUserId = auth?.status === 'authenticated' ? auth.userId : undefined
     const accountChanged = cacheAccountUserIdRef.current !== accountUserId
     if (!accountChanged && timelineStateSourceRef !== '' && bodyRef.current !== null) {
@@ -2433,7 +2472,11 @@ export function ArkmeSurface({
     pendingViewportRestoreRef.current = { sourceRef: source.sourceRef, viewport }
     const existingIds = new Set(items.map(item => item.itemUid))
     const incomingCount = deltaItems.filter(item => !existingIds.has(item.itemUid)).length
-    setItems(nextItems)
+    setTimelineView(current => {
+      if (current.sourceRef !== source.sourceRef) return current
+      const mergedItems = mergeItems(current.items, deltaItems)
+      return sameStateValue(current.items, mergedItems) ? current : { ...current, items: mergedItems }
+    })
     if (viewport?.stickToBottom === false && incomingCount > 0) {
       setNewMessageCount(current => current + incomingCount)
     } else {
@@ -2453,6 +2496,7 @@ export function ArkmeSurface({
         sourceRef: source.sourceRef,
       }).then(notices => { if (!cancelled) setAiPolishNotices(notices) }).catch(() => undefined)
     }
+    refreshPresentation()
     const timer = setInterval(refreshPresentation, 3_000)
     return () => { cancelled = true; clearInterval(timer) }
   }, [authenticated, source?.sourceRef])
@@ -2728,24 +2772,17 @@ export function ArkmeSurface({
           ...(pendingHumanMentions.length === 0 ? {} : { humanMentions: pendingHumanMentions }),
           ...(pendingBotMentions.length === 0 ? {} : { botMentions: pendingBotMentions }),
         })
-      setItems(current => current.map(item => {
-        if (item.itemUid !== recordUid) return item
-        const { aiPolish: _optimisticAiPolish, ...base } = item
-        return {
-          ...base,
-          itemUid: result.itemUid,
-          status: result.status,
-          ...(result.sequence === undefined ? {} : { sequence: result.sequence }),
-          ...(result.aiPolish === undefined ? {} : {
-            aiPolish: result.aiPolish,
-            ...(result.aiPolish.state === 'polished' && result.aiPolish.polishedText !== undefined
-              ? { textContent: result.aiPolish.polishedText }
-              : {}),
-          }),
-        }
-      }))
+      setItems(current => applySourceSendResult(current, recordUid, result))
       if (result.localState !== 'failed' && isArkmeChatDirectorySource(targetSource)
         && result.sequence !== undefined) {
+        const cachedTimeline = conversationCacheRef.current.getTimeline(targetSource.sourceRef)
+        if (cachedTimeline !== undefined) {
+          conversationCacheRef.current.storeTimeline(targetSource.sourceRef, {
+            ...cachedTimeline,
+            items: applySourceSendResult(mergeItems(cachedTimeline.items, [optimistic]), recordUid, result),
+            latestSequence: Math.max(cachedTimeline.latestSequence ?? 0, result.sequence),
+          })
+        }
         arkmeMessageReadReceipts.provision({
           sourceRef: targetSource.sourceRef,
           sourceKey: targetSource.sourceKey ?? targetSource.sourceRef,
@@ -3690,7 +3727,7 @@ export function ArkmeSurface({
                 </span>
                 {authenticated && conversationBackdropVisible && source?.kind === 'group_chat'
                   && aiPolishSettings?.enabled === true
-                  && <span style={styles.headerSubtitle}>AI润色已开启</span>}
+                  && <span style={styles.headerSubtitle}>AI润色已开启{aiPolishSettings.activeRuleName.trim() === '' ? '' : ` · ${aiPolishSettings.activeRuleName}`}</span>}
               </div>}
             {authenticated && conversationBackdropVisible && isArkmeSelfWorkspaceSource(selectedSource)
               && source?.isMuted === true && <span style={styles.titleMuteIcon}><ArkmeMuteIcon size={16} /></span>}
@@ -3703,6 +3740,8 @@ export function ArkmeSurface({
           {authenticated && conversationBackdropVisible && source?.kind === 'group_chat' && <ArkmeGroupChatControls
             source={source}
             overlayHostRef={panelRef}
+            aiPolishSettings={aiPolishSettings}
+            onAiPolishSettingsChanged={setAiPolishSettings}
             onSourceActivated={activateSource}
             membersOpen={groupMembersOpen}
             onMembersOpenChange={open => { if (open) activateContextPanel('members'); else setGroupMembersOpen(false) }}

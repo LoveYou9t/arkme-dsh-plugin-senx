@@ -58,6 +58,8 @@ function fakeService() {
     groupInvitePreview: vi.fn(async () => ({ inviteLink: 'https://example.test/invite' })),
     listGroupBots: vi.fn(async () => ({ items: [] })),
     addGroupBot: vi.fn(async () => ({ installed: true })),
+    generateGroupAiPolishRuleForSource: vi.fn(async () => ({ confirmationRef: 'confirm-1' })),
+    prepareEnableGroupAiPolishRuleForSource: vi.fn(async () => ({ confirmationRef: 'confirm-2' })),
     listMyWorldFeed: vi.fn(async (input: unknown) => input),
     listUserWorldFeed: vi.fn(async (_userId: number, input: unknown) => input),
     publishWorldText: vi.fn(async (input: unknown) => input),
@@ -318,6 +320,32 @@ describe('group member Host API dispatch', () => {
     expect(service.groupInvitePreview).toHaveBeenCalledWith('group-ref')
     expect(service.listGroupBots).toHaveBeenCalledWith('group-ref')
     expect(service.addGroupBot).toHaveBeenCalledWith('group-ref', 'bot-ref')
+  })
+})
+
+describe('group AI polish Host API dispatch', () => {
+  it('forwards only source-bound rule data and a bounded browser-safe conversation', async () => {
+    const service = fakeService()
+    await dispatchArkmeHostOperation(service as never, 'source.ai-polish.generate-rule', {
+      sourceRef: 'group-ref', requirement: '更简洁', userId: 999,
+      targetRuleRef: 'rule-ref',
+      threadMessages: [
+        { id: 'r0', role: 'ai', text: '说明要求' },
+        { id: 'bad', role: 'system', text: '不能进入 Host owner' },
+        { id: 'r1', role: 'user', text: '更简洁', ruleRef: 'internal-rule-ref' },
+      ],
+    })
+    await dispatchArkmeHostOperation(service as never, 'source.ai-polish.prepare-enable', {
+      sourceRef: 'group-ref', ruleRef: 'rule-ref', userId: 999,
+    })
+    expect(service.generateGroupAiPolishRuleForSource).toHaveBeenCalledWith('group-ref', '更简洁', {
+      threadMessages: [
+        { id: 'r0', role: 'ai', text: '说明要求' },
+        { id: 'r1', role: 'user', text: '更简洁', ruleRef: 'internal-rule-ref' },
+      ],
+      targetRuleRef: 'rule-ref',
+    })
+    expect(service.prepareEnableGroupAiPolishRuleForSource).toHaveBeenCalledWith('group-ref', 'rule-ref')
   })
 })
 
