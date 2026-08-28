@@ -10,9 +10,9 @@ const expectedPublicMethods = [
   'fileCapabilities', 'fileSearch', 'fileSessionUser', 'fileStage', 'fileList', 'fileReadLocal', 'attachLocalFileOpener', 'fileOpenLocal', 'fileRemove', 'fileSend',
   'fileSendTasks', 'fileSendRetry', 'fileStageBytes', 'fileSendDiscard', 'fileSendReconcile', 'fileReceive',
   'startChatRealtime', 'chatRealtimeState', 'subscribeChatRealtime', 'chatRealtimeInitialEvent',
-  'attachOpenClawProvisioner', 'connectOpenClawBot', 'listBots', 'listBotPrivateChatDirectory', 'createBot', 'createBotSummary', 'revealBotSecret',
+  'attachOpenClawProvisioner', 'connectOpenClawBot', 'listBots', 'createBot', 'createBotSummary', 'revealBotSecret',
   'manageBotProfile', 'updateManagedBot', 'revealManagedBotToken', 'deleteManagedBot', 'botNotificationPreference', 'updateBotNotificationPreference',
-  'openBotChat', 'openBotPrivateChat', 'sendBotPrivateChatMessage', 'listGroupBots', 'addGroupBot', 'removeGroupBot', 'authStatus', 'clientConfig',
+  'openBotChat', 'listBotPrivateChatDirectory', 'openBotPrivateChat', 'refreshBotPrivateChat', 'sendBotPrivateChatMessage', 'markBotPrivateChatRead', 'listGroupBots', 'addGroupBot', 'removeGroupBot', 'authStatus', 'clientConfig',
   'billingQuota', 'billingProducts', 'createBillingOrder', 'billingOrderStatus',
   'providerCapabilities', 'providerState', 'requestOutgoingCall', 'claimOutgoingCallIntent',
   'resolveOutgoingCallIntent', 'prepareOutgoingCall', 'heartbeatOutgoingCall', 'releaseOutgoingCall',
@@ -63,7 +63,7 @@ const expectedPublicMethods = [
 
 const expectedServiceFiles = [
   'file-transfers.ts',
-  'service.ts', 'auth-service.ts', 'profile-service.ts', 'bot-service.ts', 'source-service.ts',
+  'service.ts', 'auth-service.ts', 'profile-service.ts', 'bot-service.ts', 'bot-conversation-service.ts', 'source-service.ts',
   'chat-service.ts', 'chat-realtime-service.ts', 'group-service.ts', 'group-ai-polish-service.ts',
   'record-service.ts', 'related-recording-service.ts', 'recording-service.ts', 'search-service.ts',
   'media-service.ts', 'world-service.ts', 'arrangement-service.ts', 'wechat-service.ts',
@@ -119,6 +119,17 @@ describe('Arkme service architecture', () => {
     const arkmeService = readFileSync(join(root, 'src/arkme-service.ts'), 'utf8')
     expect(botService).toContain('groupBotSummaryFromData')
     expect(arkmeService).not.toContain('BOT_CONVERSATION_OWNER')
+  })
+
+  it('keeps owner-specific Bot conversation transport behind a narrow adapter interface', () => {
+    const conversation = readFileSync(join(root, 'src/services/bot-conversation-service.ts'), 'utf8')
+    const facade = readFileSync(join(root, 'src/arkme-service.ts'), 'utf8')
+    expect(conversation).toContain('interface BotConversationOwnerAdapter')
+    expect(conversation).toContain('interface BotConversationRegistryPort')
+    expect(conversation).toContain('interface ChatBotConversationPort')
+    expect(conversation).toContain('class SubjectBotConversationAdapter implements BotConversationOwnerAdapter')
+    expect(conversation).toContain('class ChatBotConversationAdapter implements BotConversationOwnerAdapter')
+    expect(facade).not.toMatch(/\/api\/v1\/(bot\/private-chat|chat\/timeline)/)
   })
 
   it('keeps World cross-domain dependencies behind narrow ports', () => {

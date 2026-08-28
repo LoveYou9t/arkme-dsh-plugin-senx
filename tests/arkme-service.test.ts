@@ -2177,6 +2177,7 @@ describe('ArkmeService', () => {
       } })
       if (url.endsWith('/api/v1/chats/cursor/update')) return json({ code: 200, data: {
         chat_session_uid: body.chat_session_uid,
+        user_id: 10001,
         effective_read_seq: body.read_seq,
         read_at: 220,
         session_last_seq: 8,
