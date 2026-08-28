@@ -253,6 +253,25 @@ jobs:
             gh release create "$tag" --target "$RELEASE_SHA" --title "$tag" --generate-notes
           fi
 
+  trigger-jenkins:
+    needs: [prepare, publish]
+    if: needs.publish.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    environment: production
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.release_sha }}
+          fetch-depth: 1
+      - name: 触发 Arkme Jenkins 构建
+        env:
+          ARKME_BACKEND_BASE_URL: ${{ secrets.ARKME_BACKEND_BASE_URL }}
+          ARKME_CI_TRIGGER_SECRET: ${{ secrets.ARKME_CI_TRIGGER_SECRET }}
+        run: bash .github/scripts/trigger-arkme-jenkins.sh
+
   sync-dev:
     needs: [prepare, publish]
     if: needs.publish.result == 'success'
