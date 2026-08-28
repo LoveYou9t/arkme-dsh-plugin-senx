@@ -2,15 +2,17 @@ import { useEffect, useRef, useState, useSyncExternalStore, type CSSProperties }
 import { GearSix } from '@phosphor-icons/react/dist/icons/GearSix'
 import { RobotIcon } from '@phosphor-icons/react/dist/csr/Robot'
 import type {
-  ArkmeBotPrivateChatConversation,
-  ArkmeBotPrivateChatMessage,
-  ArkmeBotPrivateChatSendResult,
+  ArkmeBotConversation,
+  ArkmeBotConversationMessage,
+  ArkmeBotConversationReadResult,
+  ArkmeBotConversationSendResult,
   ArkmeBotSummary,
 } from '../types.js'
 import { callArkme } from './api.js'
 import { arkmeTheme } from './arkme-theme.js'
 import { ArkmeBotSettingsPanel } from './ArkmeBotSettingsPanel.js'
 import { arkmeUi } from './ui-controller.js'
+import { ArkmeLinkText } from './ArkmeLinkText.js'
 import { arkmeConversationComposerHeight, arkmeConversationComposerLayout } from './conversation-composer-presentation.js'
 
 const styles: Record<string, CSSProperties> = {
@@ -48,7 +50,7 @@ const styles: Record<string, CSSProperties> = {
   },
 }
 
-function mergeMessages(current: readonly ArkmeBotPrivateChatMessage[], incoming: readonly ArkmeBotPrivateChatMessage[]): ArkmeBotPrivateChatMessage[] {
+function mergeMessages(current: readonly ArkmeBotConversationMessage[], incoming: readonly ArkmeBotConversationMessage[]): ArkmeBotConversationMessage[] {
   const next = [...current]
   for (const message of incoming) {
     const duplicate = message.messageId !== ''
@@ -58,8 +60,24 @@ function mergeMessages(current: readonly ArkmeBotPrivateChatMessage[], incoming:
   return next
 }
 
-function botWithActivity(bot: ArkmeBotSummary, messages: readonly ArkmeBotPrivateChatMessage[]): ArkmeBotSummary {
-  const latest = messages.reduce<ArkmeBotPrivateChatMessage | undefined>((current, message) => {
+function mergePendingConfirmedMessages(
+  ownerMessages: readonly ArkmeBotConversationMessage[],
+  pendingMessages: readonly ArkmeBotConversationMessage[],
+): ArkmeBotConversationMessage[] {
+  const next = [...ownerMessages]
+  for (const message of pendingMessages) {
+    if (message.messageId !== '' && next.some(existing => existing.messageId === message.messageId)) continue
+    const insertionIndex = message.createdAtMillis > 0
+      ? next.findIndex(existing => existing.createdAtMillis > message.createdAtMillis)
+      : -1
+    if (insertionIndex < 0) next.push(message)
+    else next.splice(insertionIndex, 0, message)
+  }
+  return next
+}
+
+function botWithActivity(bot: ArkmeBotSummary, messages: readonly ArkmeBotConversationMessage[]): ArkmeBotSummary {
+  const latest = messages.reduce<ArkmeBotConversationMessage | undefined>((current, message) => {
     if (current === undefined || message.createdAtMillis >= current.createdAtMillis) return message
     return current
   }, undefined)
@@ -79,7 +97,7 @@ export function ArkmeBotConversationSurface({
   onDeleted?(): void
 }) {
   const ui = useSyncExternalStore(arkmeUi.subscribe, arkmeUi.getSnapshot, arkmeUi.getSnapshot)
-  const [messages, setMessages] = useState<ArkmeBotPrivateChatMessage[]>([])
+  const [messages, setMessages] = useState<ArkmeBotConversationMessage[]>([])
   const [draft, setDraft] = useState('')
   const [loading, setLoading] = useState(true)
   const [sending, setSending] = useState(false)
@@ -88,11 +106,14 @@ export function ArkmeBotConversationSurface({
   const bodyRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const loadedBotRef = useRef<string>()
+  const pendingConfirmedMessagesRef = useRef(new Map<string, ArkmeBotConversationMessage>())
   const sendInFlightRef = useRef(false)
+  const readInFlightRef = useRef<{ botRef: string; sequence: number }>()
+  const confirmedReadRef = useRef<{ botRef: string; sequence: number }>()
   const activeRef = useRef(true)
-  const conversationRecordRevision = bot.refreshOnRecordChanges === true
+  const conversationRevision = bot.conversationProjection === 'record'
     ? ui.recordRevision
-    : 0
+    : bot.conversationProjection === 'chat' ? ui.chatRevision : 0
 
   useEffect(() => {
     activeRef.current = true
@@ -102,20 +123,52 @@ export function ArkmeBotConversationSurface({
   useEffect(() => {
     const controller = new AbortController()
     const initialLoad = loadedBotRef.current !== bot.botRef
-    if (initialLoad) setLoading(true)
+    if (initialLoad) {
+      pendingConfirmedMessagesRef.current.clear()
+      setLoading(true)
+    }
     setError('')
     if (initialLoad) setMessages([])
-    void callArkme<ArkmeBotPrivateChatConversation>('bots.private-chat.open', { botRef: bot.botRef }, controller.signal)
+    const operation = initialLoad ? 'bots.private-chat.open' as const : 'bots.private-chat.refresh' as const
+    void callArkme<ArkmeBotConversation>(operation, { botRef: bot.botRef }, controller.signal)
       .then(value => {
         if (controller.signal.aborted) return
         loadedBotRef.current = bot.botRef
-        setMessages(value.messages)
-        onConversationActivity?.(value.bot)
+        for (const message of value.messages) {
+          if (message.messageId !== '') pendingConfirmedMessagesRef.current.delete(message.messageId)
+        }
+        const visibleMessages = mergePendingConfirmedMessages(
+          value.messages,
+          [...pendingConfirmedMessagesRef.current.values()],
+        )
+        setMessages(visibleMessages)
+        onConversationActivity?.(botWithActivity(bot, visibleMessages))
+        const sequence = value.latestSequence
+        if (sequence === undefined || !Number.isSafeInteger(sequence) || sequence <= 0) return
+        const confirmed = confirmedReadRef.current
+        if (confirmed?.botRef === bot.botRef && confirmed.sequence >= sequence) return
+        const inFlight = readInFlightRef.current
+        if (inFlight?.botRef === bot.botRef && inFlight.sequence >= sequence) return
+        const attempt = { botRef: bot.botRef, sequence }
+        readInFlightRef.current = attempt
+        void callArkme<ArkmeBotConversationReadResult>(
+          'bots.private-chat.mark-read', { botRef: bot.botRef, sequence },
+        ).then(result => {
+          const latestConfirmed = confirmedReadRef.current
+          if (result.effectiveReadSequence >= sequence
+            && (latestConfirmed?.botRef !== bot.botRef || latestConfirmed.sequence < sequence)) {
+            confirmedReadRef.current = attempt
+          }
+        }).catch(() => {
+          // Read acknowledgement is best-effort and must never hide an already rendered conversation.
+        }).finally(() => {
+          if (readInFlightRef.current === attempt) readInFlightRef.current = undefined
+        })
       })
       .catch(caught => { if (!controller.signal.aborted) setError(caught instanceof Error ? caught.message : String(caught)) })
       .finally(() => { if (!controller.signal.aborted && initialLoad) setLoading(false) })
     return () => { controller.abort() }
-  }, [bot.botRef, conversationRecordRevision])
+  }, [bot.botRef, conversationRevision])
 
   useEffect(() => { bodyRef.current?.scrollTo({ top: bodyRef.current.scrollHeight }) }, [messages.length])
   useEffect(() => {
@@ -132,9 +185,12 @@ export function ArkmeBotConversationSurface({
     setSending(true)
     setError('')
     try {
-      const result = await callArkme<ArkmeBotPrivateChatSendResult>('bots.private-chat.send', { botRef: bot.botRef, content })
+      const result = await callArkme<ArkmeBotConversationSendResult>('bots.private-chat.send', { botRef: bot.botRef, content })
       if (!activeRef.current) return
       const activityMessages = [result.userMessage, ...result.botMessages]
+      for (const message of activityMessages) {
+        if (message.messageId !== '') pendingConfirmedMessagesRef.current.set(message.messageId, message)
+      }
       setMessages(current => mergeMessages(current, activityMessages))
       onConversationActivity?.(botWithActivity(bot, activityMessages))
       setDraft('')
@@ -147,6 +203,7 @@ export function ArkmeBotConversationSurface({
     }
   }
 
+  const privateChatUnavailable = !bot.directChatAvailable
   const privateChatInboundOnly = bot.directChatAvailable && bot.privateChatOutboundEnabled === false
 
   return <section style={styles.shell} aria-label={`${bot.name} Bot 对话`}>
@@ -161,10 +218,12 @@ export function ArkmeBotConversationSurface({
         : messages.length === 0 ? <div style={styles.empty}>和 {bot.name} 打个招呼吧</div>
           : <div style={styles.messages}>{messages.map((message, index) => <div
             key={message.messageId || `${message.role}:${message.createdAtMillis}:${index}`} style={{ ...styles.row, ...(message.role === 'user' ? styles.rowUser : {}) }}
-          ><div style={{ ...styles.bubble, ...(message.role === 'user' ? styles.bubbleUser : styles.bubbleAssistant) }}>{message.content}</div></div>)}</div>}
+          ><div style={{ ...styles.bubble, ...(message.role === 'user' ? styles.bubbleUser : styles.bubbleAssistant) }}>
+            <ArkmeLinkText text={message.content} />
+          </div></div>)}</div>}
     </div>
-    {privateChatInboundOnly ? <footer className="arkme-conversation-composer" style={styles.composer}><div className="arkme-conversation-composer-inner" style={styles.composerInner}>
-      <div role="note" style={styles.loading}>Webhook Bot 仅接收外部系统推送</div>
+    {privateChatUnavailable || privateChatInboundOnly ? <footer className="arkme-conversation-composer" style={styles.composer}><div className="arkme-conversation-composer-inner" style={styles.composerInner}>
+      <div role="note" style={styles.loading}>{privateChatUnavailable ? '当前 Bot 会话暂不可用' : 'Webhook Bot 仅接收外部系统推送'}</div>
     </div></footer> : <footer className="arkme-conversation-composer" style={styles.composer}><div className="arkme-conversation-composer-inner" style={styles.composerInner}>
       <textarea
         ref={inputRef} value={draft} disabled={sending} style={styles.input} rows={1} maxLength={20_000}

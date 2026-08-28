@@ -15,7 +15,8 @@ export interface ArkmeBotCreateResult {
 }
 
 export interface ArkmeGroupBotItem extends Omit<ArkmeBotSummary,
-  'directChatAvailable' | 'privateChatOutboundEnabled' | 'refreshOnRecordChanges'> {
+  'directChatAvailable' | 'privateChatOutboundEnabled' | 'refreshOnRecordChanges'
+  | 'conversationProjection' | 'chatSourceKey' | 'unreadCount' | 'isMuted'> {
   installed: boolean
 }
 

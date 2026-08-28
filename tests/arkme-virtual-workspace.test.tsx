@@ -42,6 +42,8 @@ describe('Arkme conversation directory load state', () => {
     expect(workspaceSource).toContain('const createdQuickAddBot = async (bot: ArkmeBotSummary): Promise<void> =>')
     expect(workspaceSource).toContain('setBots(current => sortArkmeBotsByCreatedAt([bot, ...current.filter(item => item.botRef !== bot.botRef)]))')
     expect(workspaceSource).toContain('arkmeUi.openBotConversation(bot)')
+    expect(workspaceSource).toContain('(bot.unreadCount ?? 0) > 0')
+    expect(workspaceSource).toContain('bot.isMuted === true')
     expect(workspaceSource).toContain("callArkme<{ items: ArkmeBotSummary[] }>('bots.private-chat.directory'")
   })
 
