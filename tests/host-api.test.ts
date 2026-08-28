@@ -6,6 +6,9 @@ import { ARKME_RUNTIME_INSTANCE_ID } from '../src/runtime-instance.js'
 
 function fakeService() {
   return {
+    resolveLinkMetadata: vi.fn(async (
+      url: string,
+    ): Promise<{ url: string; title: string } | null> => ({ url, title: '即我 Jotmo' })),
     prepareOutgoingCall: vi.fn(async (input: unknown) => input),
     listCallHistory: vi.fn(async (input: unknown) => input),
     callDetail: vi.fn(async (callRef: string) => ({ callRef })),
@@ -41,7 +44,6 @@ function fakeService() {
     copySourceMessageLink: vi.fn(async (sourceRef: string, actionRefs: unknown, options: unknown) => ({ sourceRef, actionRefs, options })),
     resolveMessageCopyLink: vi.fn(async (sid: string, options: unknown) => ({ sid, options })),
     extendMessageCopyLink: vi.fn(async (sid: string, itemIndex: number, textContent: string, recordUid: string, options: unknown) => ({ sid, itemIndex, textContent, recordUid, options })),
-    resolveLinkMetadata: vi.fn(async (url: string, options: unknown) => ({ url, title: '分享链接', options })),
     forwardSourceMessages: vi.fn(async (sourceRef: string, actionRefs: unknown, options: unknown) => ({ sourceRef, actionRefs, options })),
     sendSourceText: vi.fn(async (_sourceRef: string, _text: string, options: unknown) => options),
     sendSourceRich: vi.fn(async () => undefined),
@@ -182,6 +184,78 @@ describe('favorite sticker Host API dispatch', () => {
 })
 
 describe('World publish Host API dispatch', () => {
+  it('dispatches link title resolution through its dedicated infrastructure owner', async () => {
+    const service = fakeService()
+    const request = new AbortController()
+
+    await expect(dispatchArkmeHostOperation(service as never, 'link.metadata', {
+      url: 'https://jotmo.ai/path',
+    }, undefined, undefined, undefined, undefined, request.signal)).resolves.toEqual({
+      url: 'https://jotmo.ai/path', title: '即我 Jotmo',
+    })
+    expect(service.resolveLinkMetadata).toHaveBeenCalledWith('https://jotmo.ai/path', { signal: request.signal })
+  })
+
+  it('owns the public SDK non-null fallback without forwarding that policy into infrastructure', async () => {
+    const service = fakeService()
+    service.resolveLinkMetadata.mockResolvedValueOnce(null)
+    const request = new AbortController()
+
+    await expect(dispatchArkmeHostOperation(service as never, 'source.link-metadata.resolve', {
+      url: ' https://example.com/a ', cookie: 'must-not-forward',
+    }, undefined, undefined, undefined, undefined, request.signal)).resolves.toEqual({
+      url: 'https://example.com/a', title: '分享链接', siteName: 'example.com',
+    })
+    expect(service.resolveLinkMetadata).toHaveBeenCalledWith(' https://example.com/a ', {
+      signal: request.signal,
+    })
+
+    service.resolveLinkMetadata.mockResolvedValueOnce(null)
+    await expect(dispatchArkmeHostOperation(service as never, 'source.link-metadata.resolve', {
+      url: 'https://github.com/arkme-senx/arkme-dsh-plugin/pull/145',
+    })).resolves.toEqual({
+      url: 'https://github.com/arkme-senx/arkme-dsh-plugin/pull/145',
+      title: 'Pull Request #145 · arkme-senx/arkme-dsh-plugin',
+      siteName: 'github.com',
+    })
+  })
+
+  it('requires a same-origin Browser request before starting link metadata work', async () => {
+    const service = fakeService()
+    const server = createServer(createArkmeHostApi(service as never, {
+      expectedPort: 3080,
+      allowNonLoopback: false,
+    }))
+    server.listen(0, '127.0.0.1')
+    await once(server, 'listening')
+    const address = server.address()
+    if (address === null || typeof address === 'string') throw new Error('test server address missing')
+    try {
+      const response = await fetch(`http://127.0.0.1:${String(address.port)}/arkme-self/api`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ operation: 'link.metadata', params: { url: 'https://jotmo.ai/' } }),
+      })
+
+      expect(response.status).toBe(403)
+      await expect(response.json()).resolves.toMatchObject({ ok: false, error: { code: 'origin-required' } })
+      expect(service.resolveLinkMetadata).not.toHaveBeenCalled()
+
+      const accepted = await fetch(`http://127.0.0.1:${String(address.port)}/arkme-self/api`, {
+        method: 'POST',
+        headers: { Origin: 'http://127.0.0.1:3080', 'Content-Type': 'application/json' },
+        body: JSON.stringify({ operation: 'link.metadata', params: { url: 'https://jotmo.ai/' } }),
+      })
+      expect(accepted.status).toBe(200)
+      expect(service.resolveLinkMetadata).toHaveBeenCalledWith('https://jotmo.ai/', {
+        signal: expect.any(AbortSignal),
+      })
+    } finally {
+      server.close()
+      await once(server, 'close')
+    }
+  })
+
   it('aborts an in-flight voiceprint generation when its Browser request disconnects', async () => {
     let upstreamSignal: AbortSignal | undefined
     const generationStarted = Promise.withResolvers<void>()
@@ -489,9 +563,6 @@ describe('message action Host API dispatch', () => {
     await dispatchArkmeHostOperation(service as never, 'source.message-copy-link.extend', {
       sid: 'U2HQgn1RhPJZaFmx', itemIndex: 1, textContent: ' 延展 ', recordUid: 'record-1', relationUid: 'must-not-forward',
     })
-    await dispatchArkmeHostOperation(service as never, 'source.link-metadata.resolve', {
-      url: ' https://example.com/a ', cookie: 'must-not-forward',
-    })
     await dispatchArkmeHostOperation(service as never, 'source.forward-messages', {
       sourceRef: 'source-ref', actionRefs: ['action-1'], recordUid: 'record-1', relationUid: 'rel-1',
       targetSourceRef: 'target-source-ref', commentText: ' 附言 ',
@@ -501,7 +572,6 @@ describe('message action Host API dispatch', () => {
     expect(service.copySourceMessageLink).toHaveBeenCalledWith('source-ref', ['action-1', 'action-2'], expect.any(Object))
     expect(service.resolveMessageCopyLink).toHaveBeenCalledWith('U2HQgn1RhPJZaFmx', expect.any(Object))
     expect(service.extendMessageCopyLink).toHaveBeenCalledWith('U2HQgn1RhPJZaFmx', 1, ' 延展 ', 'record-1', expect.any(Object))
-    expect(service.resolveLinkMetadata).toHaveBeenCalledWith(' https://example.com/a ', expect.any(Object))
     expect(service.forwardSourceMessages).toHaveBeenCalledWith('source-ref', ['action-1'], {
       recordUid: 'record-1',
       relationUid: 'rel-1',
