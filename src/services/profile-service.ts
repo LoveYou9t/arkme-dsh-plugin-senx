@@ -353,7 +353,11 @@ export class ProfileService {
         || stringValue(data.google_given_name).trim()
         || stringValue(data.name_slug).trim()
         || 'Arkme用户'
-      const avatarRef = stringValue(data.head_img).trim()
+      const rawAvatarRef = stringValue(data.head_img).trim()
+      const avatarUrl = /^https?:\/\//i.test(rawAvatarRef) ? rawAvatarRef : undefined
+      const avatarRef = avatarUrl === undefined
+        ? rawAvatarRef
+        : await this.sealProfileImageRef(session.userId, session.userId)
       const phone = maskedPhone(stringValue(data.phone))
       const email = maskedEmail(stringValue(data.email))
       const wechatName = stringValue(data.wechat_nick_name).trim()
@@ -363,7 +367,7 @@ export class ProfileService {
         displayName,
         nickname,
         avatarRef,
-        ...(/^https?:\/\//i.test(avatarRef) ? { avatarUrl: avatarRef } : {}),
+        ...(avatarUrl === undefined ? {} : { avatarUrl }),
         arkmeId: stringValue(data.jotmo_id).trim() || stringValue(data.name_slug).trim(),
         ...(canUpdateArkmeId === undefined ? {} : { canUpdateArkmeId }),
         accountType: numberValue(data.type),

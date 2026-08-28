@@ -24,7 +24,6 @@ import type {
   ArkmeGroupMemberRole,
   ArkmeGroupMemberStatus,
   ArkmeHumanMentionInput,
-  ArkmeLinkMetadata,
   ArkmeLongArticleDetail,
   ArkmeLongArticleDraft,
   ArkmeMessageCopyLinkExtendResult,
@@ -112,10 +111,7 @@ interface OfficialAuthorPrivateChatCreateResult {
 const OFFICIAL_AUTHOR_USER_ID = 11
 const OFFICIAL_AUTHOR_FALLBACK_DISPLAY_NAME = '即' + '我作者'
 const MAX_MESSAGE_COPY_LINK_ITEMS = 100
-const LINK_METADATA_MAX_BYTES = 128 * 1024
-const LINK_METADATA_MAX_REDIRECTS = 3
 const RECORD_UID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
-const HTML_ENTITY_MAP: Record<string, string> = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ' }
 
 export interface ArkmeChatRealtimePort {
   emitChatClientEvent(event: Parameters<import('./chat-realtime-service.js').ChatRealtimeService['emitChatClientEvent']>[0]): void
@@ -145,116 +141,6 @@ function favoriteStickerPersistenceItem(item: Record<string, unknown>): Record<s
   }
 }
 function listValue(value: unknown): unknown[] { return Array.isArray(value) ? value : [] }
-
-function htmlTextValue(value: string): string {
-  return value
-    .replace(/<script[\s\S]*?<\/script>/giu, ' ')
-    .replace(/<style[\s\S]*?<\/style>/giu, ' ')
-    .replace(/<[^>]+>/gu, ' ')
-    .replace(/&(#x[0-9a-f]+|#[0-9]+|[a-z]+);/giu, (_match, entity: string) => {
-      const normalized = entity.toLowerCase()
-      if (normalized.startsWith('#x')) {
-        const code = Number.parseInt(normalized.slice(2), 16)
-        return Number.isFinite(code) ? String.fromCodePoint(code) : ' '
-      }
-      if (normalized.startsWith('#')) {
-        const code = Number.parseInt(normalized.slice(1), 10)
-        return Number.isFinite(code) ? String.fromCodePoint(code) : ' '
-      }
-      return HTML_ENTITY_MAP[normalized] ?? ' '
-    })
-    .replace(/\s+/gu, ' ')
-    .trim()
-}
-
-function firstHtmlMetaContent(html: string, key: string): string {
-  const escaped = key.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')
-  const patterns = [
-    new RegExp(`<meta\\b(?=[^>]*(?:property|name)=["']${escaped}["'])(?=[^>]*content=["']([^"']*)["'])[^>]*>`, 'iu'),
-    new RegExp(`<meta\\b(?=[^>]*content=["']([^"']*)["'])(?=[^>]*(?:property|name)=["']${escaped}["'])[^>]*>`, 'iu'),
-  ]
-  for (const pattern of patterns) {
-    const value = pattern.exec(html)?.[1]
-    if (value !== undefined) return htmlTextValue(value)
-  }
-  return ''
-}
-
-function fallbackLinkTitle(url: URL): string {
-  const host = url.hostname.replace(/^www\./iu, '')
-  if (host === 'github.com') {
-    const parts = url.pathname.split('/').filter(Boolean)
-    if (parts.length >= 4 && parts[2] === 'pull') return `Pull Request #${parts[3]} · ${parts[0]}/${parts[1]}`
-    if (parts.length >= 2) return `${parts[0]}/${parts[1]}`
-  }
-  if (host === 'codeup.aliyun.com' || host.endsWith('.codeup.aliyun.com')) {
-    const parts = url.pathname.split('/').filter(Boolean)
-    const changeIndex = parts.indexOf('change')
-    const repository = changeIndex >= 2 ? parts[changeIndex - 1] : parts.at(-1)
-    const changeNo = changeIndex >= 0 ? parts[changeIndex + 1] : undefined
-    if (repository !== undefined && changeNo !== undefined) return `${repository} · Change #${changeNo}`
-  }
-  return '分享链接'
-}
-
-function ensureMetadataUrl(rawUrl: string): URL {
-  let url: URL
-  try {
-    url = new URL(rawUrl.trim())
-  } catch {
-    throw new ArkmePluginError('link-metadata-url-invalid', '链接暂不可预览', false, 400)
-  }
-  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
-    throw new ArkmePluginError('link-metadata-url-invalid', '链接暂不可预览', false, 400)
-  }
-  if (url.username !== '' || url.password !== '') {
-    throw new ArkmePluginError('link-metadata-url-forbidden', '链接暂不可预览', false, 403)
-  }
-  const hostname = url.hostname.toLowerCase()
-  if (hostname === 'localhost' || hostname.endsWith('.local')) {
-    throw new ArkmePluginError('link-metadata-url-forbidden', '链接暂不可预览', false, 403)
-  }
-  if (/^(?:127|10|0|169\.254|192\.168)\./u.test(hostname) || /^172\.(?:1[6-9]|2\d|3[0-1])\./u.test(hostname)) {
-    throw new ArkmePluginError('link-metadata-url-forbidden', '链接暂不可预览', false, 403)
-  }
-  if (hostname === '::1' || hostname.startsWith('fc') || hostname.startsWith('fd') || hostname.startsWith('fe80')) {
-    throw new ArkmePluginError('link-metadata-url-forbidden', '链接暂不可预览', false, 403)
-  }
-  return url
-}
-
-async function readResponseTextPrefix(response: Response): Promise<string> {
-  if (response.body === null) return await response.text()
-  const reader = response.body.getReader()
-  const chunks: Uint8Array[] = []
-  let bytes = 0
-  try {
-    while (bytes < LINK_METADATA_MAX_BYTES) {
-      const next = await reader.read()
-      if (next.done) break
-      chunks.push(next.value)
-      bytes += next.value.byteLength
-    }
-  } finally {
-    reader.releaseLock()
-  }
-  return new TextDecoder('utf-8', { fatal: false }).decode(Uint8Array.from(chunks.flatMap(chunk => [...chunk])))
-}
-
-function linkMetadataFromHtml(url: URL, html: string): ArkmeLinkMetadata {
-  const title = firstHtmlMetaContent(html, 'og:title')
-    || firstHtmlMetaContent(html, 'twitter:title')
-    || htmlTextValue(/<title\b[^>]*>([\s\S]*?)<\/title>/iu.exec(html)?.[1] ?? '')
-    || fallbackLinkTitle(url)
-  const description = firstHtmlMetaContent(html, 'og:description') || firstHtmlMetaContent(html, 'description')
-  const siteName = firstHtmlMetaContent(html, 'og:site_name') || url.hostname.replace(/^www\./iu, '')
-  return {
-    url: url.toString(),
-    title,
-    ...(description === '' ? {} : { description }),
-    ...(siteName === '' ? {} : { siteName }),
-  }
-}
 
 function chatMemberRole(value: unknown): ArkmeGroupMemberRole {
   if (value === 'owner' || value === 1) return 'owner'
@@ -1883,58 +1769,6 @@ export class ChatService {
         },
       }
     }
-
-  async resolveLinkMetadata(rawUrl: string, options: { signal?: AbortSignal } = {}): Promise<ArkmeLinkMetadata> {
-    const url = ensureMetadataUrl(rawUrl)
-    try {
-      return await this.fetchLinkMetadata(url, 0, options.signal)
-    } catch (error) {
-      if (error instanceof ArkmePluginError
-        && (error.code === 'link-metadata-url-invalid' || error.code === 'link-metadata-url-forbidden')) throw error
-      return { url: url.toString(), title: fallbackLinkTitle(url), siteName: url.hostname.replace(/^www\./iu, '') }
-    }
-  }
-
-  private async fetchLinkMetadata(url: URL, redirectCount: number, signal?: AbortSignal): Promise<ArkmeLinkMetadata> {
-    const controller = new AbortController()
-    const abort = (): void => { controller.abort(signal?.reason) }
-    if (signal?.aborted === true) abort()
-    else signal?.addEventListener('abort', abort, { once: true })
-    const timeout = setTimeout(() => { controller.abort() }, Math.min(8_000, this.runtime.config.requestTimeoutMs))
-    try {
-      const response = await this.runtime.fetchImpl(url, {
-        method: 'GET',
-        redirect: 'manual',
-        headers: {
-          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-          'Accept-Language': 'zh-CN',
-          'User-Agent': 'Mozilla/5.0 ArkmeDSHPlugin/0.1 LinkPreview',
-        },
-        signal: controller.signal,
-      })
-      if (response.status >= 300 && response.status < 400) {
-        if (redirectCount >= LINK_METADATA_MAX_REDIRECTS) {
-          return { url: url.toString(), title: fallbackLinkTitle(url), siteName: url.hostname.replace(/^www\./iu, '') }
-        }
-        const location = response.headers.get('location')
-        if (location === null || location.trim() === '') {
-          return { url: url.toString(), title: fallbackLinkTitle(url), siteName: url.hostname.replace(/^www\./iu, '') }
-        }
-        return await this.fetchLinkMetadata(ensureMetadataUrl(new URL(location, url).toString()), redirectCount + 1, signal)
-      }
-      if (!response.ok) {
-        return { url: url.toString(), title: fallbackLinkTitle(url), siteName: url.hostname.replace(/^www\./iu, '') }
-      }
-      const contentType = response.headers.get('content-type')?.toLowerCase() ?? ''
-      if (contentType !== '' && !contentType.includes('html') && !contentType.includes('xml') && !contentType.includes('text/')) {
-        return { url: url.toString(), title: fallbackLinkTitle(url), siteName: url.hostname.replace(/^www\./iu, '') }
-      }
-      return linkMetadataFromHtml(url, await readResponseTextPrefix(response))
-    } finally {
-      clearTimeout(timeout)
-      signal?.removeEventListener('abort', abort)
-    }
-  }
 
   async forwardSourceMessages(
       sourceRef: string,

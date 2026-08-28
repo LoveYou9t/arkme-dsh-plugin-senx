@@ -18,6 +18,7 @@ const expectedPublicMethods = [
   'resolveOutgoingCallIntent', 'prepareOutgoingCall', 'heartbeatOutgoingCall', 'releaseOutgoingCall',
   'listCallHistory', 'callDetail', 'retryCallSummary',
   'dispose', 'requestStats', 'resolveManagedAccessCredential', 'cachedProfile', 'extensionAuthors', 'listExtensionReviews',
+  'resolveLinkMetadata',
   'searchContact', 'addContact',
   'listDirectory', 'directoryContactProfile', 'directoryContactWorld', 'openDirectoryContactChat', 'openDirectoryGroupChat',
   'unmarkedSpeakerOptions', 'retryUnmarkedSpeakerInference', 'unmarkedSpeakerSegments', 'markUnmarkedSpeaker',
@@ -35,7 +36,7 @@ const expectedPublicMethods = [
   'createGroup', 'groupSettings', 'setGroupMessageDnd',
   'renameGroup', 'leaveGroup', 'dissolveGroup', 'reportGroup', 'userCard',
   'openPrivateChatFromUser', 'openPrivateChatFromContact', 'officialAuthorProfile', 'openOfficialAuthorPrivateChat', 'openPrivateChatFromWorldAuthor', 'openPrivateChatFromMember', 'readSource', 'messageReadReceiptSummaries', 'messageReadReceiptDetail', 'relatedRecordingEligibility', 'relatedRecordings',
-  'recordRelatedRecordingsToolEvent', 'reportMessage', 'copySourceMessageLink', 'resolveMessageCopyLink', 'extendMessageCopyLink', 'resolveLinkMetadata', 'forwardSourceMessages',
+  'recordRelatedRecordingsToolEvent', 'reportMessage', 'copySourceMessageLink', 'resolveMessageCopyLink', 'extendMessageCopyLink', 'forwardSourceMessages',
   'sendSourceText', 'retryGroupAiPolish',
   'sendSourceRich', 'favoriteStickers', 'addFavoriteSticker', 'manageFavoriteSticker', 'sendFavoriteSticker', 'longArticleDetail', 'updateLongArticle', 'getLongArticleDraft',
   'putLongArticleDraft', 'removeLongArticleDraft', 'uploadLocalFile', 'fetchMedia', 'sendDirectText',
@@ -71,6 +72,7 @@ const expectedServiceFiles = [
   'community-service.ts', 'extension-review-service.ts', 'calendar-service.ts',
   'contact-service.ts', 'contact-directory-service.ts', 'unmarked-speaker-service.ts',
   'voiceprint-service.ts', 'call-history-service.ts', 'privacy-visibility.ts',
+  'link-metadata-service.ts',
 ].sort()
 
 function publicMethodNames(path: string): string[] {
@@ -155,5 +157,51 @@ describe('Arkme service architecture', () => {
     expect(surface).not.toMatch(/\bfetch\s*\(/)
     expect(enrollmentClient).toContain('export interface ArkmeVoiceprintEnrollmentClient')
     expect(enrollmentClient).toContain('class SameOriginArkmeVoiceprintEnrollmentClient')
+  })
+
+  it('keeps link recognition separate from asynchronous metadata resolution', () => {
+    const parser = readFileSync(join(root, 'src/client/text-link-parser.ts'), 'utf8')
+    const presentation = readFileSync(join(root, 'src/client/ArkmeLinkText.tsx'), 'utf8')
+    const client = readFileSync(join(root, 'src/client/link-metadata-client.ts'), 'utf8')
+    expect(parser).not.toMatch(/\bfetch\s*\(|callArkme|useEffect|useState/)
+    expect(presentation).not.toMatch(/\bfetch\s*\(|callArkme/)
+    expect(client).toContain('export interface ArkmeLinkMetadataResolver')
+    expect(client).not.toMatch(/from ['"]\.\.\/services\//)
+  })
+
+  it('reuses request admission infrastructure without a second Host cache or queue', () => {
+    const service = readFileSync(join(root, 'src/services/link-metadata-service.ts'), 'utf8')
+    expect(service).toContain('ArkmeRequestCoordinator')
+    expect(service).not.toMatch(/private readonly (?:cache|inFlight|queuedLoads)\b/)
+    expect(service).not.toMatch(/private activeLoads\b/)
+  })
+
+  it('keeps link metadata out of chat business while preserving one infrastructure owner', () => {
+    const facade = readFileSync(join(root, 'src/arkme-service.ts'), 'utf8')
+    const chat = readFileSync(join(root, 'src/services/chat-service.ts'), 'utf8')
+    const sdk = readFileSync(join(root, 'src/sdk/index.ts'), 'utf8')
+    const host = readFileSync(join(root, 'src/host-api.ts'), 'utf8')
+    const types = readFileSync(join(root, 'src/types.ts'), 'utf8')
+    const metadata = readFileSync(join(root, 'src/link-metadata.ts'), 'utf8')
+    const client = readFileSync(join(root, 'src/client/link-metadata-client.ts'), 'utf8')
+    const service = readFileSync(join(root, 'src/services/link-metadata-service.ts'), 'utf8')
+    expect(facade.match(/async resolveLinkMetadata\b/gu) ?? []).toHaveLength(1)
+    expect(chat).not.toMatch(/resolveLinkMetadata|fetchLinkMetadata|linkMetadataFromHtml/)
+    expect(sdk.match(/async resolveLinkMetadata\b/gu) ?? []).toHaveLength(1)
+    expect(sdk).toContain('source.link-metadata.resolve')
+    expect(sdk).toMatch(/async resolveLinkMetadata\([\s\S]*?\): Promise<ArkmeLinkMetadata> \{/u)
+    expect(types).toContain("| 'source.link-metadata.resolve'")
+    expect(types).not.toMatch(/export interface ArkmeLinkMetadata\b/)
+    expect(types).toContain("export type { ArkmeLinkMetadata } from './link-metadata.js'")
+    expect(sdk).toContain("export type { ArkmeLinkMetadata } from '../link-metadata.js'")
+    expect(metadata).toContain('export interface ArkmeLinkMetadata')
+    expect(metadata).toContain('export function arkmeKnownLinkMetadataFallback')
+    expect(metadata).toContain('export function arkmeRequiredLinkMetadataFallback')
+    expect(client).toContain('arkmeKnownLinkMetadataFallback')
+    expect(service).not.toContain('arkmeRequiredLinkMetadataFallback')
+    expect(host).toContain('arkmeRequiredLinkMetadataFallback')
+    expect(client).not.toMatch(/Pull Request #|Change #/u)
+    expect(service).not.toMatch(/Pull Request #|Change #/u)
+    expect(host.match(/service\.resolveLinkMetadata\(/gu) ?? []).toHaveLength(2)
   })
 })

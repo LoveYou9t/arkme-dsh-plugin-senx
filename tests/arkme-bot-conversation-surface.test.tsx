@@ -411,8 +411,7 @@ describe('ArkmeBotConversationSurface business gates', () => {
       renderer!.root.findByProps({ 'aria-label': '发送消息' }).props.onClick()
     })
 
-    const rows = renderer!.root.findAll(node => node.type === 'div' && node.children.includes('重复内容'))
-    expect(rows).toHaveLength(2)
+    expect(JSON.stringify(renderer!.toJSON()).match(/重复内容/gu)).toHaveLength(2)
   })
 
   it('does not infer duplicate identity for messages whose IDs are missing', async () => {
@@ -443,7 +442,6 @@ describe('ArkmeBotConversationSurface business gates', () => {
       renderer!.root.findByProps({ 'aria-label': '发送消息' }).props.onClick()
     })
 
-    const rows = renderer!.root.findAll(node => node.type === 'div' && node.children.includes('无法判定身份'))
-    expect(rows).toHaveLength(2)
+    expect(JSON.stringify(renderer!.toJSON()).match(/无法判定身份/gu)).toHaveLength(2)
   })
 })

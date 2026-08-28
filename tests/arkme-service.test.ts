@@ -1513,6 +1513,33 @@ describe('ArkmeService', () => {
     expect(requests[1]?.url).not.toContain('test-access-key-secret')
   })
 
+  it('resolves the current user remote profile avatar through its opaque reference', async () => {
+    const sessions = new MemorySessionStore()
+    sessions.session = { userId: 10001, accessToken: 'access', refreshToken: 'refresh' }
+    const state = new MemoryStateStore()
+    const avatarUrl = 'https://jotmo-userfiles-test.oss-cn-hangzhou.aliyuncs.com/avatar/self.png?x-oss-signature=own-avatar'
+    const png = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 4])
+    const service = new ArkmeService(config, sessions, state, async input => {
+      const url = String(input)
+      if (url.endsWith('/api/v1/auth/get-user-info')) return json({ code: 200, data: {
+        user_id: 10001, nick_name: '我', head_img: avatarUrl, name_slug: 'me', type: 1,
+      } })
+      if (url === avatarUrl) {
+        return new Response(png, {
+          status: 200,
+          headers: { 'Content-Type': 'image/png', 'Content-Length': String(png.byteLength) },
+        })
+      }
+      throw new Error(`unexpected ${url}`)
+    })
+
+    const snapshot = await service.refreshProfile()
+    const avatarRef = snapshot.profile!.avatarRef
+
+    expect(avatarRef).toMatch(/^arkme-profile-image-v1\./)
+    await expect(service.readImage(avatarRef)).resolves.toMatchObject({ mediaType: 'image/png', bytes: png.byteLength })
+  })
+
   it('rejects cross-user profile image references before signing', async () => {
     const sessions = new MemorySessionStore()
     sessions.session = { userId: 10001, accessToken: 'access', refreshToken: 'refresh' }

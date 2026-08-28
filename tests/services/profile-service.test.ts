@@ -46,6 +46,36 @@ describe('ProfileService', () => {
     expect(fetchImpl).toHaveBeenCalledTimes(1)
   })
 
+  it('projects a remote current-user avatar as an opaque image reference', async () => {
+    const sessions: ArkmeSessionStore = {
+      async read() { return { userId: 42, accessToken: 'access', refreshToken: 'refresh' } },
+      async write() {}, async delete() {},
+    }
+    let cached: ArkmeUserProfileSnapshot = { profile: null, revision: 0, cachedAtMillis: 0 }
+    const stateStore = {
+      async uniqueCode() { return 'profile-test-secret' },
+      async cachedProfile() { return cached },
+      async cacheProfile(_userId: number, profile: ArkmeUserProfile) {
+        cached = { profile, revision: 1, cachedAtMillis: Date.now() }
+        return cached
+      },
+    } as StateStore
+    const remoteAvatarUrl = 'https://jotmo-userfiles-test.oss-cn-hangzhou.aliyuncs.com/avatar.png?x-oss-signature=test'
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ code: 200, data: {
+      user_id: 42, nick_name: '小明', head_img: remoteAvatarUrl, name_slug: 'xiaoming', type: 1,
+      create_at: 123, phone: '', email: '', has_bind_apple: false, has_bind_wechat: true, has_bind_google: false,
+    } }), { status: 200 })) as typeof fetch
+    const service = new ProfileService(new ServiceRuntime(config, sessions, stateStore, fetchImpl))
+
+    const snapshot = await service.refreshProfile()
+
+    expect(snapshot.profile).toMatchObject({
+      userId: 42,
+      avatarRef: expect.stringMatching(/^arkme-profile-image-v1\./),
+      avatarUrl: remoteAvatarUrl,
+    })
+  })
+
   it('projects public jotmo_id as accountName without changing legacy displayName semantics', async () => {
     const activeSession = { userId: 42, accessToken: 'access', refreshToken: 'refresh' }
     const sessions: ArkmeSessionStore = {
