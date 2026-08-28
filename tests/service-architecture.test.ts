@@ -28,7 +28,7 @@ const expectedPublicMethods = [
   'arkoAsk', 'arkoRunStatus', 'arkoCancel', 'aiVideoPreflight', 'aiVideoCreate', 'aiVideoStatus',
   'aiVideoList', 'queryFileAssets', 'textAiVideoPreflight', 'textAiVideoCreate',
   'checkArkmeIdAvailability', 'setArkmeIdOnce', 'createTopic', 'renameTopic', 'dissolveTopic', 'topicDissolveStatus', 'activeTopicDissolve', 'moveTopicHierarchy', 'listSources', 'setChatDirectoryPolicy', 'listSourceMembers', 'sourceMemberRecords',
-  'dshBetaCommunityEntryState', 'interwovenMoments', 'interwovenMomentDetail',
+  'dshBetaCommunityEntryState', 'dshRemoteGet', 'dshRemotePost', 'interwovenMoments', 'interwovenMomentDetail',
   'joinDSHBetaCommunity', 'inspectGroupAiPolish', 'inspectGroupAiPolishByName',
   'readGroupAiPolishNotices', 'generateGroupAiPolishRuleForSource', 'generateGroupAiPolishRule',
   'prepareEnableGroupAiPolish', 'prepareEnableGroupAiPolishRuleForSource', 'confirmEnableGroupAiPolish', 'prepareDisableGroupAiPolishForSource', 'prepareDisableGroupAiPolish',
@@ -157,6 +157,14 @@ describe('Arkme service architecture', () => {
     expect(surface).not.toMatch(/\bfetch\s*\(/)
     expect(enrollmentClient).toContain('export interface ArkmeVoiceprintEnrollmentClient')
     expect(enrollmentClient).toContain('class SameOriginArkmeVoiceprintEnrollmentClient')
+  })
+
+  it('keeps the default-off DSH remote feature ahead of platform secret-store construction', () => {
+    const source = readFileSync(join(root, 'src/index.ts'), 'utf8')
+    const guard = source.indexOf('if (!config.dshRemoteFeatureEnabled) return')
+    const secretStore = source.indexOf('createArkmeSecureValueStore(', guard)
+    expect(guard).toBeGreaterThanOrEqual(0)
+    expect(secretStore).toBeGreaterThan(guard)
   })
 
   it('keeps link recognition separate from asynchronous metadata resolution', () => {

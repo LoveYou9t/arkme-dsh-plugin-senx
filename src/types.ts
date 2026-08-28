@@ -2587,6 +2587,8 @@ export type ArkmePluginOperation =
   | 'auth.phone.send'
   | 'auth.phone.verify'
   | 'auth.logout'
+  | 'remote.getStatus'
+  | 'remote.renameDesktop'
   | 'billing.quota'
   | 'billing.products'
   | 'billing.order.create'
