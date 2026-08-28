@@ -21,6 +21,8 @@ import type { ArkmeExtensionCatalogItem, ArkmeExtensionCatalogPage, ArkmeExtensi
 import { effectiveExtensionPublisherRole } from './extensions/publisher-role.js'
 import { invokePersistentArkmeExtension } from './extensions/persistent-runtime.js'
 import { invokeArkmeBundle } from './extensions/bundle-runtime.js'
+import { DshRemoteError } from './dsh-remote/errors.js'
+import type { DshRemoteHostFacade } from './dsh-remote/types.js'
 import { ARKME_RUNTIME_INSTANCE_ID } from './runtime-instance.js'
 import { arkmeRequiredLinkMetadataFallback } from './link-metadata.js'
 
@@ -539,6 +541,7 @@ export interface ArkmeHostApiOptions {
   extensionManager?: () => ArkmeExtensionManager | undefined
   extensionInstallTasks?: () => ArkmeExtensionInstallTasks | undefined
   ownedExtensionInventory?: () => ArkmeOwnedExtensionInventory | undefined
+  remoteHost?: () => DshRemoteHostFacade | undefined
 }
 
 export function createArkmeHostApi(service: ArkmeService, options: ArkmeHostApiOptions) {
@@ -573,7 +576,7 @@ export function createArkmeHostApi(service: ArkmeService, options: ArkmeHostApiO
       if (request.operation === 'link.metadata' && origin === undefined) {
         throw new ArkmePluginError('origin-required', '网址名称解析必须从当前 DSH 页面发起', false, 403)
       }
-      if (['user.arkme-id.set', 'extensions.delete', 'extensions.reviews.create', 'extensions.audit.check', 'extensions.install.start', 'extensions.install.pause', 'extensions.install.resume', 'extensions.enabled.set', 'extensions.metadata.update', 'extensions.share.rotate', 'extensions.preview.delete', 'extensions.preview.reorder', 'extensions.uninstall', 'extensions.restart', 'extensions.client.failure', 'extensions.persistent.invoke', 'extensions.bundle.invoke', 'extensions.mine.publish']
+      if (['user.arkme-id.set', 'extensions.delete', 'extensions.reviews.create', 'extensions.audit.check', 'extensions.install.start', 'extensions.install.pause', 'extensions.install.resume', 'extensions.enabled.set', 'extensions.metadata.update', 'extensions.share.rotate', 'extensions.preview.delete', 'extensions.preview.reorder', 'extensions.uninstall', 'extensions.restart', 'extensions.client.failure', 'extensions.persistent.invoke', 'extensions.bundle.invoke', 'extensions.mine.publish', 'remote.renameDesktop']
         .includes(request.operation) && origin === undefined) {
         throw new ArkmePluginError('origin-required', '扩展变更必须从当前 DSH 页面发起', false, 403)
       }
@@ -586,6 +589,7 @@ export function createArkmeHostApi(service: ArkmeService, options: ArkmeHostApiO
         options.extensionInstallTasks?.(),
         options.ownedExtensionInventory?.(),
         controller.signal,
+        options.remoteHost?.(),
       )
       writeJson(res, 200, { ok: true, value })
     } catch (error) {
@@ -596,6 +600,8 @@ export function createArkmeHostApi(service: ArkmeService, options: ArkmeHostApiO
           ? new ArkmePluginError(error.code, error.message, error.retryable, error.retryable ? 503 : 409)
         : error instanceof ArkmeOutgoingCallError
           ? new ArkmePluginError(error.code, error.message, error.retryable, error.code === 'call-active' ? 409 : 400)
+        : error instanceof DshRemoteError
+          ? new ArkmePluginError(error.code, error.message, error.retryable, error.retryable ? 503 : 409)
           : new ArkmePluginError('internal-error', 'Arkme 插件处理失败', true, 500, { cause: error })
       writeJson(res, known.httpStatus, {
         ok: false,
@@ -619,6 +625,7 @@ export async function dispatchArkmeHostOperation(
   extensionInstallTasks?: ArkmeExtensionInstallTasks,
   ownedExtensionInventory?: ArkmeOwnedExtensionInventory,
   requestSignal?: AbortSignal,
+  remoteHost?: DshRemoteHostFacade,
 ): Promise<unknown> {
   switch (operation) {
     case 'provider.capabilities': return service.providerCapabilities()
@@ -662,6 +669,8 @@ export async function dispatchArkmeHostOperation(
       stringParam(params, 'code'),
     )
     case 'auth.logout': return await service.logout()
+    case 'remote.getStatus': return requireRemoteHost(remoteHost).getStatus()
+    case 'remote.renameDesktop': return await requireRemoteHost(remoteHost).renameDesktop(stringParam(params, 'displayName'))
     case 'billing.quota': return await service.billingQuota()
     case 'billing.products': return await service.billingProducts()
     case 'billing.order.create': return await service.createBillingOrder({
@@ -1553,6 +1562,11 @@ function requireUpdateManager(
     throw new ArkmePluginError('plugin-update-unavailable', '插件更新检查暂不可用', true, 503)
   }
   return updateManager
+}
+
+function requireRemoteHost(host: DshRemoteHostFacade | undefined): DshRemoteHostFacade {
+  if (host === undefined) throw new ArkmePluginError('CAPABILITY_UNSUPPORTED', '当前 DSH 未加载远控 Host', false, 503)
+  return host
 }
 
 function requireExtensionInstallTasks(tasks: ArkmeExtensionInstallTasks | undefined): ArkmeExtensionInstallTasks {
