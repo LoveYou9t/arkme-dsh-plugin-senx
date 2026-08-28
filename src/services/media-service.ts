@@ -636,6 +636,18 @@ export class MediaService {
             trustedSignedImageUrl(this.runtime.config.environment, ownAvatarUrl), byteLimit, signal, this.runtime.requestScope(session.userId),
           )
         }
+        const ownAvatarAssetRef = snapshot.profile?.avatarAssetRef?.trim() ?? ''
+        const assetMatch = /^file_asset:\/\/([A-Za-z0-9_-]{8,128})$/.exec(ownAvatarAssetRef)
+        if (assetMatch !== null) {
+          const asset = (await this.queryFileAssets([assetMatch[1]!], signal))
+            .find(item => item.fileAssetUid === assetMatch[1])
+          const assetUrl = asset?.previewUrl ?? asset?.downloadUrl
+          if (assetUrl !== undefined) {
+            return await this.downloadSignedImage(
+              trustedSignedImageUrl(this.runtime.config.environment, assetUrl), byteLimit, signal, this.runtime.requestScope(session.userId),
+            )
+          }
+        }
         const ownAvatarRef = snapshot.profile?.avatarRef.trim() ?? ''
         if (ownAvatarRef !== '' && !ownAvatarRef.startsWith('arkme-profile-image-v1.')) {
           return await this.readImage(ownAvatarRef, {
