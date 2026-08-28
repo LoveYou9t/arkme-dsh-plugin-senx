@@ -50,7 +50,6 @@ import type {
   ArkmeIdAvailabilitySnapshot,
   ArkmeIdMutationResult,
   ArkmeHumanMentionInput,
-  ArkmeLinkMetadata,
   ArkmeLongArticleDetail,
   ArkmeLongArticleDraft,
   ArkmeMessageCopyLinkExtendResult,
@@ -114,6 +113,9 @@ import type { ArkmeMyExtensionPage, ArkmeMyExtensionPublishInput } from '../exte
 import { normalizeGitHubRepositoryURL } from '../extensions/source.js'
 import type { ArkmeFilePolicy, ArkmeLocalFile, ArkmeFileSendInput, ArkmeFileSendTask, ArkmeFileReception } from '../file-transfer-contract.js'
 export type { ArkmeFileOpenResult, ArkmeFilePolicy, ArkmeLocalFile, ArkmeFileProgress, ArkmeFileSendInput, ArkmeFileSendTask, ArkmeFileReception } from '../file-transfer-contract.js'
+import type { ArkmeLinkMetadata } from '../link-metadata.js'
+
+export type { ArkmeLinkMetadata } from '../link-metadata.js'
 
 export type {
   ArkmeArrangementDetail,
@@ -190,7 +192,6 @@ export type {
   ArkmeIdAvailabilitySnapshot,
   ArkmeIdMutationResult,
   ArkmeHumanMentionInput,
-  ArkmeLinkMetadata,
   ArkmeLongArticleDetail,
   ArkmeLongArticleDraft,
   ArkmeMessageCopyLinkExtendResult,

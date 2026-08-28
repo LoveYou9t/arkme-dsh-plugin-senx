@@ -1,3 +1,5 @@
+export type { ArkmeLinkMetadata } from './link-metadata.js'
+
 export type ArkmeEnvironment = 'test' | 'prod'
 
 export const ARKME_PROVIDER_CONTRACT_VERSION = 1 as const
@@ -1654,13 +1656,6 @@ export interface ArkmeMessageCopyLinkResolveResult {
   recordContext?: ArkmeMessageCopyLinkRecordContext
 }
 
-export interface ArkmeLinkMetadata {
-  url: string
-  title: string
-  description?: string
-  siteName?: string
-}
-
 export interface ArkmeTimelinePage {
   source: ArkmeSourceItem
   items: ArkmeTimelineItem[]
@@ -2706,6 +2701,7 @@ export type ArkmePluginOperation =
 
 export type ArkmeHostOperation = ArkmePluginOperation
   | 'provider.instance'
+  | 'link.metadata'
   | 'directory.list'
   | 'directory.contact.profile'
   | 'directory.contact.world'
