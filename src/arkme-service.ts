@@ -35,6 +35,7 @@ import { ArkoService } from './services/arko-service.js'
 import { ArrangementService } from './services/arrangement-service.js'
 import { AuthService, jiwoScanLoginAvailable } from './services/auth-service.js'
 import { BotService, type ArkmeBotManageUpdateInput, type ArkmeBotRefPayload } from './services/bot-service.js'
+import { BotConversationService } from './services/bot-conversation-service.js'
 import { CalendarService } from './services/calendar-service.js'
 import { CallHistoryService } from './services/call-history-service.js'
 import { ChatRealtimeService } from './services/chat-realtime-service.js'
@@ -275,6 +276,7 @@ export class ArkmeService {
   private readonly record: RecordService
   private readonly search: SearchService
   private readonly bot: BotService
+  private readonly botConversation: BotConversationService
   private readonly outgoingCall: OutgoingCallService
   private readonly world: WorldService
   private readonly arko: ArkoService
@@ -371,6 +373,12 @@ export class ArkmeService {
       this.aiPolish,
       this.realtime,
       this.privacy,
+    )
+    this.botConversation = new BotConversationService(
+      this.runtime,
+      this.bot,
+      this.chat,
+      async () => { await this.realtime.invalidateRecordProjection() },
     )
     this.contactDirectory = new ContactDirectoryService(
       this.runtime, this.source, this.bot, this.profile, this.world, this.chat,
@@ -481,10 +489,6 @@ export class ArkmeService {
     return await this.bot.listBots(options)
   }
 
-  async listBotPrivateChatDirectory(options: { signal?: AbortSignal } = {}) {
-    return await this.bot.listBotPrivateChatDirectory(options)
-  }
-
   async createBot(
     input: ArkmeBotCreateInput,
     options: { signal?: AbortSignal } = {},
@@ -519,27 +523,23 @@ export class ArkmeService {
     await this.bot.deleteManagedBot(botRef, confirmationName, options)
   }
 
-  async botNotificationPreference(botRef: string, options: { signal?: AbortSignal } = {}): Promise<ArkmeBotNotificationPreference> {
-    return await this.bot.botNotificationPreference(botRef, options)
-  }
+  async botNotificationPreference(botRef: string, options: { signal?: AbortSignal } = {}): Promise<ArkmeBotNotificationPreference> { return await this.botConversation.notificationPreference(botRef, options) }
 
-  async updateBotNotificationPreference(botRef: string, muted: boolean, options: { signal?: AbortSignal } = {}): Promise<ArkmeBotNotificationPreference> {
-    return await this.bot.updateBotNotificationPreference(botRef, muted, options)
-  }
+  async updateBotNotificationPreference(botRef: string, muted: boolean, options: { signal?: AbortSignal } = {}): Promise<ArkmeBotNotificationPreference> { return await this.botConversation.updateNotificationPreference(botRef, muted, options) }
 
   async openBotChat(botRef: string, options: { signal?: AbortSignal } = {}): Promise<ArkmeSourceItem> {
     return await this.bot.openBotChat(botRef, options)
   }
 
-  async openBotPrivateChat(botRef: string, options: { signal?: AbortSignal } = {}) {
-    return await this.bot.openBotPrivateChat(botRef, options)
-  }
+  async listBotPrivateChatDirectory(options: { signal?: AbortSignal } = {}) { return await this.botConversation.directory(options) }
 
-  async sendBotPrivateChatMessage(botRef: string, content: string, options: { signal?: AbortSignal } = {}) {
-    const outcome = await this.bot.sendBotPrivateChatMessage(botRef, content, options)
-    if (outcome.recordProjectionChanged) await this.realtime.invalidateRecordProjection()
-    return outcome.result
-  }
+  async openBotPrivateChat(botRef: string, options: { signal?: AbortSignal } = {}) { return await this.botConversation.open(botRef, options) }
+
+  async refreshBotPrivateChat(botRef: string, options: { signal?: AbortSignal } = {}) { return await this.botConversation.refresh(botRef, options) }
+
+  async sendBotPrivateChatMessage(botRef: string, content: string, options: { signal?: AbortSignal } = {}) { return await this.botConversation.send(botRef, content, options) }
+
+  async markBotPrivateChatRead(botRef: string, sequence: number, options: { signal?: AbortSignal } = {}) { return await this.botConversation.markRead(botRef, sequence, options) }
 
   async listGroupBots(
     groupSourceRef: string,

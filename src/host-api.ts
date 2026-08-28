@@ -734,11 +734,18 @@ export async function dispatchArkmeHostOperation(
     case 'bots.private-chat.open': return await service.openBotPrivateChat(
       stringParam(params, 'botRef').trim(), requestSignal === undefined ? {} : { signal: requestSignal },
     )
+    case 'bots.private-chat.refresh': return await service.refreshBotPrivateChat(
+      stringParam(params, 'botRef').trim(), requestSignal === undefined ? {} : { signal: requestSignal },
+    )
     case 'bots.private-chat.directory': return await service.listBotPrivateChatDirectory(
       requestSignal === undefined ? {} : { signal: requestSignal },
     )
     case 'bots.private-chat.send': return await service.sendBotPrivateChatMessage(
       stringParam(params, 'botRef').trim(), stringParam(params, 'content'),
+      requestSignal === undefined ? {} : { signal: requestSignal },
+    )
+    case 'bots.private-chat.mark-read': return await service.markBotPrivateChatRead(
+      stringParam(params, 'botRef').trim(), numberParam(params, 'sequence', 0),
       requestSignal === undefined ? {} : { signal: requestSignal },
     )
     case 'unmarked-speakers.options': return await service.unmarkedSpeakerOptions(
