@@ -630,6 +630,12 @@ export class MediaService {
             // A missing current-user profile may still fall back to the public profile below.
           }
         }
+        const ownAvatarUrl = snapshot.profile?.avatarUrl
+        if (ownAvatarUrl !== undefined && ownAvatarUrl !== '') {
+          return await this.downloadSignedImage(
+            trustedSignedImageUrl(this.runtime.config.environment, ownAvatarUrl), byteLimit, signal, this.runtime.requestScope(session.userId),
+          )
+        }
         const ownAvatarRef = snapshot.profile?.avatarRef.trim() ?? ''
         if (ownAvatarRef !== '' && !ownAvatarRef.startsWith('arkme-profile-image-v1.')) {
           return await this.readImage(ownAvatarRef, {
