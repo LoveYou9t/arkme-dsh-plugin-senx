@@ -1,7 +1,7 @@
 name: 合并 master 后发布插件
 
 on:
-  pull_request_target:
+  pull_request:
     types: [closed]
     branches: [master]
 
@@ -253,26 +253,27 @@ jobs:
             gh release create "$tag" --target "$RELEASE_SHA" --title "$tag" --generate-notes
           fi
 
-  request-backend-build:
-    name: 调用 Backend 请求 Arkme 生产构建
+  dispatch-backend-build:
+    name: 派发 Arkme 生产构建请求
     needs: [prepare, publish]
     if: needs.publish.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 2
-    environment: production
     permissions:
-      contents: read
+      contents: write
     steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ needs.prepare.outputs.release_sha }}
-          fetch-depth: 1
-          persist-credentials: false
-      - name: 调用 Backend 请求 Arkme 生产构建
+      - name: 从默认分支派发生产构建请求
         env:
-          ARKME_BACKEND_BASE_URL: ${{ secrets.ARKME_BACKEND_BASE_URL }}
-          ARKME_CI_TRIGGER_SECRET: ${{ secrets.ARKME_CI_TRIGGER_SECRET }}
-        run: bash .github/scripts/request-arkme-build.sh
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_SHA: ${{ needs.prepare.outputs.release_sha }}
+          VERSION: ${{ needs.publish.outputs.version }}
+        run: |
+          payload=$(jq -n \
+            --arg release_sha "$RELEASE_SHA" \
+            --arg version "$VERSION" \
+            '{event_type: "arkme-plugin-release-published", client_payload: {release_sha: $release_sha, version: $version}}')
+          printf '%s' "$payload" | gh api --method POST "repos/${GH_REPO}/dispatches" --input -
 
   sync-dev:
     needs: [prepare, publish]
