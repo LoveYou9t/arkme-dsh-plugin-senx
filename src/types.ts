@@ -1126,6 +1126,8 @@ export interface ArkmeUserProfile {
   displayName: string
   nickname: string
   avatarRef: string
+  /** Backing file-asset reference for the signed-in user's avatar when the profile endpoint has not returned a public URL. */
+  avatarAssetRef?: string
   avatarUrl?: string
   arkmeId: string
   /** Whether this account can still use its one-time Arkme ID change. Omitted for legacy cached profiles. */

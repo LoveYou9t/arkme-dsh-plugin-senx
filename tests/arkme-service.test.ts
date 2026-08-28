@@ -949,6 +949,7 @@ describe('ArkmeService', () => {
       'https://chat.test/api/v1/chats/detail',
       'https://auth.test/api/v1/auth/get-user-info',
       'https://auth.test/api/v1/auth/get-public-users-by-ids',
+      'https://auth.test/api/v1/auth/get-public-users-by-ids',
       'https://webrtc.test/api/v1/trtc/credentials',
       'https://webrtc.test/api/v1/trtc/create-room',
     ])
@@ -1251,9 +1252,9 @@ describe('ArkmeService', () => {
     expect(first).toMatchObject({ status: 'authenticated', userId: 10001 })
     expect(concurrent).toEqual(first)
     expect(provider).toMatchObject({ authStatus: 'authenticated', userId: 10001 })
-    expect(fetchImpl).toHaveBeenCalledOnce()
+    expect(fetchImpl).toHaveBeenCalledTimes(2)
     await expect(service.authStatus()).resolves.toEqual(first)
-    expect(fetchImpl).toHaveBeenCalledOnce()
+    expect(fetchImpl).toHaveBeenCalledTimes(2)
   })
 
   it('falls back to the legacy name slug when the Arkme ID is absent', async () => {
@@ -1322,12 +1323,13 @@ describe('ArkmeService', () => {
     })
     expect(calls.map(call => [call.method, new URL(call.url).pathname])).toEqual([
       ['GET', '/api/v1/auth/get-user-info'],
+      ['POST', '/api/v1/auth/get-public-users-by-ids'],
       ['POST', '/api/v1/auth/check-jotmo-id-available'],
       ['POST', '/api/v1/auth/update-jotmo-id'],
       ['GET', '/api/v1/auth/get-user-info'],
     ])
-    expect(calls[1]?.body).toEqual({ name: 'New_id-01', scene: 'user_update' })
-    expect(calls[2]?.body).toEqual({ name: 'New_id-01' })
+    expect(calls[2]?.body).toEqual({ name: 'New_id-01', scene: 'user_update' })
+    expect(calls[3]?.body).toEqual({ name: 'New_id-01' })
     expect(state.profile).toMatchObject({ arkmeId: 'New_id-01', canUpdateArkmeId: false })
   })
 
@@ -1350,7 +1352,7 @@ describe('ArkmeService', () => {
     await expect(service.setArkmeIdOnce('Current_01')).resolves.toMatchObject({
       arkmeId: 'Current_01', changed: false, canUpdate: true,
     })
-    expect(fetchImpl).toHaveBeenCalledOnce()
+    expect(fetchImpl).toHaveBeenCalledTimes(2)
   })
 
   it('rejects an Arkme ID change after the account has used its one-time update', async () => {
@@ -1372,7 +1374,7 @@ describe('ArkmeService', () => {
     await expect(service.setArkmeIdOnce('Lucis666')).rejects.toMatchObject({
       code: 'arkme-id-modify-limited', retryable: false, httpStatus: 409,
     })
-    expect(fetchImpl).toHaveBeenCalledOnce()
+    expect(fetchImpl).toHaveBeenCalledTimes(2)
   })
 
   it('aborts the one-time Arkme ID write if the signed-in account changes after profile refresh', async () => {
@@ -1399,7 +1401,7 @@ describe('ArkmeService', () => {
     await expect(service.setArkmeIdOnce('New_account')).rejects.toMatchObject({
       code: 'account-changed', retryable: false, httpStatus: 409,
     })
-    expect(fetchImpl).toHaveBeenCalledOnce()
+    expect(fetchImpl).toHaveBeenCalledTimes(2)
   })
 
   it('validates Arkme IDs locally and maps authoritative availability reasons', async () => {
@@ -1426,7 +1428,7 @@ describe('ArkmeService', () => {
     await expect(service.setArkmeIdOnce('Taken_01')).rejects.toMatchObject({
       code: 'arkme-id-taken', retryable: false, httpStatus: 409,
     })
-    expect(fetchImpl).toHaveBeenCalledTimes(3)
+    expect(fetchImpl).toHaveBeenCalledTimes(4)
   })
 
   it('reconciles an unknown update outcome by reading back the current Arkme ID', async () => {
@@ -1538,6 +1540,40 @@ describe('ArkmeService', () => {
 
     expect(avatarRef).toMatch(/^arkme-profile-image-v1\./)
     await expect(service.readImage(avatarRef)).resolves.toMatchObject({ mediaType: 'image/png', bytes: png.byteLength })
+  })
+
+  it('falls back to the signed-in user file asset avatar when no public avatar is available', async () => {
+    const sessions = new MemorySessionStore()
+    sessions.session = { userId: 10001, accessToken: 'access', refreshToken: 'refresh' }
+    const state = new MemoryStateStore()
+    const assetRef = 'file_asset://01a03bce-e704-7073-a083-94ec6362e53d'
+    const assetUrl = 'https://jotmo-userfiles-test.oss-cn-hangzhou.aliyuncs.com/avatar/self.png?x-oss-signature=asset-avatar'
+    const png = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 4])
+    const service = new ArkmeService(config, sessions, state, async (input, init) => {
+      const url = String(input)
+      if (url.endsWith('/api/v1/auth/get-user-info')) return json({ code: 200, data: {
+        user_id: 10001, nick_name: '我', head_img: assetRef, name_slug: 'me', type: 1,
+      } })
+      if (url.endsWith('/api/v1/auth/get-public-users-by-ids')) return json({ code: 200, data: {
+        items: [{ user_id: 10001, nick_name: '我', head_img: '' }],
+      } })
+      if (url.endsWith('/api/v1/files/assets/query')) {
+        expect(JSON.parse(String(init?.body))).toEqual({ file_asset_uids: [assetRef.slice('file_asset://'.length)] })
+        return json({ code: 0, data: { items: [{
+          file_asset_uid: assetRef.slice('file_asset://'.length), status: 'ready', mime_type: 'image/png', preview_url: assetUrl,
+        }] } })
+      }
+      if (url === assetUrl) return new Response(png, {
+        status: 200, headers: { 'Content-Type': 'image/png', 'Content-Length': String(png.byteLength) },
+      })
+      throw new Error(`unexpected ${url}`)
+    })
+
+    const snapshot = await service.refreshProfile()
+    expect(snapshot.profile).toMatchObject({
+      avatarRef: expect.stringMatching(/^arkme-profile-image-v1\./), avatarAssetRef: assetRef,
+    })
+    await expect(service.readImage(snapshot.profile!.avatarRef)).resolves.toMatchObject({ mediaType: 'image/png', bytes: png.byteLength })
   })
 
   it('rejects cross-user profile image references before signing', async () => {
