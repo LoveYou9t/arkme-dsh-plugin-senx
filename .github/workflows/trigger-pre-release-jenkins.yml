@@ -1,0 +1,28 @@
+name: 合并 pre-release 后触发测试服 Jenkins
+
+on:
+  push:
+    branches: [pre-release]
+
+concurrency:
+  group: plugin-pre-release-jenkins
+  cancel-in-progress: false
+
+jobs:
+  trigger-jenkins:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    environment: pre-release
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+      - name: 触发 Arkme 测试服 Jenkins 构建
+        env:
+          ARKME_BACKEND_BASE_URL: ${{ secrets.ARKME_BACKEND_BASE_URL }}
+          ARKME_CI_TRIGGER_SECRET: ${{ secrets.ARKME_CI_TRIGGER_SECRET }}
+        run: bash .github/scripts/trigger-arkme-jenkins.sh

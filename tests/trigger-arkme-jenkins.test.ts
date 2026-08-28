@@ -18,6 +18,12 @@ const releaseWorkflow = path.join(
   'workflows',
   'publish-plugin-release.yml',
 )
+const preReleaseWorkflow = path.join(
+  repositoryRoot,
+  '.github',
+  'workflows',
+  'trigger-pre-release-jenkins.yml',
+)
 const codeOwnersFile = path.join(repositoryRoot, '.github', 'CODEOWNERS')
 const temporaryDirectories: string[] = []
 
@@ -182,6 +188,29 @@ describe('Arkme Jenkins 工作流安全边界', () => {
       'ARKME_CI_TRIGGER_SECRET: ${{ secrets.ARKME_CI_TRIGGER_SECRET }}',
     )
     expect(triggerJob).not.toContain('vars.ARKME_BACKEND_BASE_URL')
+  })
+
+  it('仅在受保护的 pre-release 更新后使用测试服 Environment Secret', async () => {
+    const workflow = await readFile(preReleaseWorkflow, 'utf8')
+
+    expect(workflow).toContain('push:')
+    expect(workflow).toContain('branches: [pre-release]')
+    expect(workflow).toContain('environment: pre-release')
+    expect(workflow).toContain('contents: read')
+    expect(workflow).toContain('ref: ${{ github.sha }}')
+    expect(workflow).toContain('persist-credentials: false')
+    expect(workflow).toContain(
+      'ARKME_BACKEND_BASE_URL: ${{ secrets.ARKME_BACKEND_BASE_URL }}',
+    )
+    expect(workflow).toContain(
+      'ARKME_CI_TRIGGER_SECRET: ${{ secrets.ARKME_CI_TRIGGER_SECRET }}',
+    )
+    expect(workflow).toContain(
+      'run: bash .github/scripts/trigger-arkme-jenkins.sh',
+    )
+    expect(workflow).not.toContain('pull_request_target')
+    expect(workflow).not.toContain('vars.ARKME_BACKEND_BASE_URL')
+    expect(workflow).not.toContain('npm publish')
   })
 
   it('要求指定 Code Owner 审核 CI 和密钥出口文件', async () => {
