@@ -2,6 +2,7 @@ import { createServer } from 'node:http'
 import { once } from 'node:events'
 import { describe, expect, it, vi } from 'vitest'
 import { createArkmeHostApi, dispatchArkmeHostOperation } from '../src/host-api.js'
+import { ARKME_RUNTIME_INSTANCE_ID } from '../src/runtime-instance.js'
 
 function fakeService() {
   return {
@@ -76,6 +77,15 @@ function fakeService() {
     setArkmeIdOnce: vi.fn(async (arkmeId: string) => ({ arkmeId, changed: true, canUpdate: false, revision: 2 })),
   }
 }
+
+describe('provider instance Host API dispatch', () => {
+  it('returns the same process identity used by the realtime transport', async () => {
+    await expect(dispatchArkmeHostOperation({} as never, 'provider.instance', {}))
+      .resolves.toEqual({ instanceId: ARKME_RUNTIME_INSTANCE_ID })
+    await expect(dispatchArkmeHostOperation({} as never, 'provider.instance', {}))
+      .resolves.toEqual({ instanceId: ARKME_RUNTIME_INSTANCE_ID })
+  })
+})
 
 describe('account settings Host API dispatch', () => {
   it('dispatches Arkme ID checks and writes without browser-owned account fields', async () => {

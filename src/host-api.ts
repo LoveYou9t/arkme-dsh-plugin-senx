@@ -1,5 +1,4 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import { randomUUID } from 'node:crypto'
 import { ArkmePluginError, ArkmeService } from './arkme-service.js'
 import { isArkmeBotAvatarRef } from './bot-avatar-ref.js'
 import { ArkmePluginUpdateError, ArkmePluginUpdateManager } from './plugin-update.js'
@@ -22,9 +21,9 @@ import type { ArkmeExtensionCatalogItem, ArkmeExtensionCatalogPage, ArkmeExtensi
 import { effectiveExtensionPublisherRole } from './extensions/publisher-role.js'
 import { invokePersistentArkmeExtension } from './extensions/persistent-runtime.js'
 import { invokeArkmeBundle } from './extensions/bundle-runtime.js'
+import { ARKME_RUNTIME_INSTANCE_ID } from './runtime-instance.js'
 
 const MAX_REQUEST_BYTES = 128 * 1024
-const ARKME_HOST_INSTANCE_ID = randomUUID()
 
 function isLoopback(address: string | undefined): boolean {
   return address === '127.0.0.1' || address === '::1' || address === '::ffff:127.0.0.1'
@@ -619,7 +618,7 @@ export async function dispatchArkmeHostOperation(
 ): Promise<unknown> {
   switch (operation) {
     case 'provider.capabilities': return service.providerCapabilities()
-    case 'provider.instance': return { instanceId: ARKME_HOST_INSTANCE_ID }
+    case 'provider.instance': return { instanceId: ARKME_RUNTIME_INSTANCE_ID }
     case 'provider.state': return await service.providerState()
     case 'chat.realtime.state': return service.chatRealtimeState()
     case 'plugin.update.status': return await requireUpdateManager(updateManager).status()
