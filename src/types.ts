@@ -1,3 +1,5 @@
+export type { ArkmeLinkMetadata } from './link-metadata.js'
+
 export type ArkmeEnvironment = 'test' | 'prod'
 
 export const ARKME_PROVIDER_CONTRACT_VERSION = 1 as const
@@ -115,7 +117,7 @@ export type ArkmeDirectorySectionKind =
 /** Browser-safe directory row. Provider-private identifiers never cross this boundary. */
 export type ArkmeDirectoryItem =
   | { kind: 'group'; sourceRef: string; displayName: string; avatarRef?: string; groupAvatar?: ArkmeGroupAvatarPresentation }
-  | { kind: 'bot'; botRef: string; displayName: string; avatarRef?: string }
+  | { kind: 'bot'; bot: ArkmeBotSummary }
   | { kind: 'unmarked-speaker'; candidateRef: string; speakerToken?: string; displayName: string; subtitle: string }
   | { kind: 'team'; rowKey: string; displayName: string; publicId?: string; avatarRef?: string }
   | { kind: 'contact'; contactRef: string; displayName: string; nickname: string; remark: string; accountName?: string; avatarRef?: string; letter: string }
@@ -394,6 +396,7 @@ export interface ArkmeCreateFileAssetRecordResult {
 
 export type ArkmeBotProvider = 'openclaw' | 'webhook'
 export type ArkmeBotStatus = 'online' | 'offline' | 'unknown'
+export type ArkmeBotConversationProjection = 'record' | 'chat' | 'none'
 
 export interface ArkmeBotSummary {
   botRef: string
@@ -408,12 +411,20 @@ export interface ArkmeBotSummary {
   privateChatOutboundEnabled?: boolean
   /** Whether canonical Record changes can update this Bot conversation. */
   refreshOnRecordChanges?: boolean
+  /** Owner-neutral projection channel used to refresh the current conversation. */
+  conversationProjection?: ArkmeBotConversationProjection
+  /** Account-bound opaque key matching the canonical Chat directory item, when Chat owns the conversation. */
+  chatSourceKey?: string
   /** Creation time supplied by the Bot service, when available. */
   createdAtMillis?: number
   /** Latest private-chat message time, when the conversation directory has been hydrated. */
   latestMessageAtMillis?: number
   /** Safe preview of the latest private-chat message. */
   latestMessagePreview?: string
+  /** Unread count projected from the canonical Chat conversation, when Chat owns the Bot conversation. */
+  unreadCount?: number
+  /** Notification mute projection from the canonical Chat conversation, when available. */
+  isMuted?: boolean
   /** Account-bound opaque reference resolved through image.read. */
   avatarRef?: string
 }
@@ -423,18 +434,20 @@ export interface ArkmeBotList {
 }
 
 /** Browser-safe projection of one Bot private-chat message. */
-export interface ArkmeBotPrivateChatMessage {
+export interface ArkmeBotConversationMessage {
+  /** Owner-local immutable occurrence identity. Subject message IDs and Chat relation IDs are never compared across owners. */
   messageId: string
+  /** Optional Record content identity; this is not the Chat relation identity. */
   recordUid?: string
   role: 'user' | 'assistant'
   content: string
   status: string
   createdAtMillis: number
-  attachments: ArkmeBotPrivateChatAttachment[]
+  attachments: ArkmeBotConversationAttachment[]
 }
 
 /** Safe attachment metadata; source file identifiers and remote URLs remain Host-owned. */
-export interface ArkmeBotPrivateChatAttachment {
+export interface ArkmeBotConversationAttachment {
   kind: string
   fileName: string
   mimeType: string
@@ -445,12 +458,12 @@ export interface ArkmeBotPrivateChatAttachment {
   sortOrder: number
 }
 
-export interface ArkmeBotPrivateChatConversation {
-  bot: ArkmeBotSummary
-  messages: ArkmeBotPrivateChatMessage[]
+export interface ArkmeBotConversation {
+  messages: ArkmeBotConversationMessage[]
+  latestSequence?: number
 }
 
-export interface ArkmeBotPrivateChatDirectory {
+export interface ArkmeBotConversationDirectory {
   items: ArkmeBotSummary[]
 }
 
@@ -485,10 +498,15 @@ export interface ArkmeBotNotificationPreference {
   muted: boolean
 }
 
-export interface ArkmeBotPrivateChatSendResult {
-  userMessage: ArkmeBotPrivateChatMessage
-  botMessages: ArkmeBotPrivateChatMessage[]
+export interface ArkmeBotConversationSendResult {
+  userMessage: ArkmeBotConversationMessage
+  botMessages: ArkmeBotConversationMessage[]
   status: string
+}
+
+export interface ArkmeBotConversationReadResult {
+  effectiveReadSequence: number
+  unreadCount: number
 }
 
 export interface ArkmeConversationWriteResult {
@@ -1318,6 +1336,8 @@ export interface ArkmeTimelineItem {
   selfTopic?: ArkmeTimelineSelfTopic
   /** Browser-safe Chat forward snapshot. It is present only for explicit `render_kind=forward_records` payloads. */
   forwardRecords?: ArkmeForwardRecordsPreview
+  /** Browser-safe shared recording snapshot. It is present only for explicit `render_kind=shared_recording_memory` payloads. */
+  sharedRecording?: ArkmeSharedRecordingPreview
 }
 
 /** Identity of one message returned by an Arkme private/group timeline. */
@@ -1396,6 +1416,29 @@ export interface ArkmeForwardRecordPreviewItem {
   contentBlocks?: ArkmeContentBlock[]
   mediaUnavailable?: true
   truncated?: true
+}
+
+export interface ArkmeSharedRecordingParticipant {
+  refUserId?: number
+  displayName: string
+  role: number
+}
+
+export interface ArkmeSharedRecordingPreview {
+  /** Backend record digest for opening the shared recording snapshot. */
+  sourceDigest: string
+  /** Browser-safe Host-bound detail reference for loading the full transcript on demand. */
+  detailRef?: string
+  sharedByUserId: number
+  sharedAtMillis: number
+  displayAtMillis: number
+  endAtMillis: number
+  timeRangeText: string
+  title: string
+  summary: string
+  transcript?: string
+  transcriptAvailable: boolean
+  participants: ArkmeSharedRecordingParticipant[]
 }
 
 export interface ArkmeTimelineAgentSource {
@@ -1656,13 +1699,6 @@ export interface ArkmeMessageCopyLinkResolveResult {
   recordContext?: ArkmeMessageCopyLinkRecordContext
 }
 
-export interface ArkmeLinkMetadata {
-  url: string
-  title: string
-  description?: string
-  siteName?: string
-}
-
 export interface ArkmeTimelinePage {
   source: ArkmeSourceItem
   items: ArkmeTimelineItem[]
@@ -1741,6 +1777,8 @@ export interface ArkmeRelatedRecordingParticipant {
 export interface ArkmeRelatedRecordingItem {
   /** Account-bound opaque identity. Browser and Agent consumers must not parse it. */
   recordingRef: string
+  /** UI-only opaque reference for shared/related recording details that need lazy transcript loading. */
+  sharedRecordingDetailRef?: string
   startAtMillis: number
   endAtMillis: number
   dateStamp?: number
@@ -1754,6 +1792,7 @@ export interface ArkmeRelatedRecordingItem {
   speakers: ArkmeRelatedRecordingSpeaker[]
   participants: ArkmeRelatedRecordingParticipant[]
   isSharedByOther: boolean
+  sharedByUserId?: number
 }
 
 export interface ArkmeRelatedRecordingMonthBucket {
@@ -2566,7 +2605,9 @@ export type ArkmePluginOperation =
   | 'bots.private-chat.notification.update'
   | 'bots.private-chat.directory'
   | 'bots.private-chat.open'
+  | 'bots.private-chat.refresh'
   | 'bots.private-chat.send'
+  | 'bots.private-chat.mark-read'
   | 'records.summary'
   | 'records.cache'
   | 'records.refresh'
@@ -2708,6 +2749,7 @@ export type ArkmePluginOperation =
 
 export type ArkmeHostOperation = ArkmePluginOperation
   | 'provider.instance'
+  | 'link.metadata'
   | 'directory.list'
   | 'directory.contact.profile'
   | 'directory.contact.world'
@@ -2760,6 +2802,7 @@ export type ArkmeHostOperation = ArkmePluginOperation
   | 'plugin.update.install-status'
   | 'source.interwoven-moments'
   | 'source.interwoven-detail'
+  | 'source.shared-recording-detail'
   | 'extensions.catalog.list'
   | 'extensions.classification.tree'
   | 'extensions.classification.items'

@@ -1,15 +1,16 @@
-name: 合并 pre-release 后触发测试服 Jenkins
+name: 更新 pre-release 后请求测试服构建
 
 on:
   push:
     branches: [pre-release]
 
 concurrency:
-  group: plugin-pre-release-jenkins
+  group: plugin-pre-release-build-request
   cancel-in-progress: false
 
 jobs:
-  trigger-jenkins:
+  request-backend-build:
+    name: 调用 Backend 请求 Arkme 测试服构建
     runs-on: ubuntu-latest
     timeout-minutes: 2
     environment: pre-release
@@ -21,8 +22,8 @@ jobs:
           ref: ${{ github.sha }}
           fetch-depth: 1
           persist-credentials: false
-      - name: 触发 Arkme 测试服 Jenkins 构建
+      - name: 调用 Backend 请求 Arkme 测试服构建
         env:
           ARKME_BACKEND_BASE_URL: ${{ secrets.ARKME_BACKEND_BASE_URL }}
           ARKME_CI_TRIGGER_SECRET: ${{ secrets.ARKME_CI_TRIGGER_SECRET }}
-        run: bash .github/scripts/trigger-arkme-jenkins.sh
+        run: bash .github/scripts/request-arkme-build.sh

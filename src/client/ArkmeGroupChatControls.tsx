@@ -49,6 +49,38 @@ const AI_POLISH_PANEL_WIDTH = 408
 
 export const ARKME_GROUP_HEADER_ICON_COLOR = arkmeTheme.secondary
 
+export const ARKME_CONVERSATION_HEADER_ACTIONS_STYLE: CSSProperties = {
+  marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 4,
+}
+
+export const ARKME_CONVERSATION_HEADER_BUTTON_STYLE: CSSProperties = {
+  width: 32, height: 32, padding: 4, border: 0, borderRadius: 4, background: 'transparent',
+  color: ARKME_GROUP_HEADER_ICON_COLOR, display: 'grid', placeItems: 'center', cursor: 'pointer',
+}
+
+export const ARKME_CONVERSATION_SETTINGS_MENU_WIDTH = GROUP_SETTINGS_MENU_WIDTH
+
+export const ARKME_CONVERSATION_SETTINGS_MENU_SCRIM_STYLE: CSSProperties = {
+  position: 'absolute', inset: 0, zIndex: 9,
+}
+
+export const ARKME_CONVERSATION_SETTINGS_POPOVER_STYLE: CSSProperties = {
+  position: 'absolute', zIndex: 10, width: GROUP_SETTINGS_MENU_WIDTH, maxWidth: 'calc(100% - 24px)', padding: '6px 8px',
+  borderRadius: 4, background: colors.panel, boxShadow: '0 4px 10px rgba(0,0,0,.1)', boxSizing: 'border-box',
+}
+
+export const ARKME_CONVERSATION_SETTINGS_MENU_ROW_STYLE: CSSProperties = {
+  width: '100%', height: 32, border: 0, borderRadius: 4, background: 'transparent', padding: '2px 8px',
+  display: 'flex', alignItems: 'center', gap: 10, textAlign: 'left', color: colors.text,
+  cursor: 'pointer', fontSize: 14, lineHeight: '20px', whiteSpace: 'nowrap', boxSizing: 'border-box',
+}
+
+export const ARKME_CONVERSATION_SETTINGS_MENU_STATUS_STYLE: CSSProperties = {
+  ...ARKME_CONVERSATION_SETTINGS_MENU_ROW_STYLE,
+  color: colors.secondary,
+  cursor: 'default',
+}
+
 const asset = (value: string) => `data:image/svg+xml;base64,${value}`
 // These are the production desktop-client assets, embedded so the published plugin remains self-contained.
 const icons = {
@@ -60,11 +92,8 @@ const icons = {
 }
 
 const styles: Record<string, CSSProperties> = {
-  headerActions: { marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 4 },
-  headerButton: {
-    width: 32, height: 32, padding: 4, border: 0, borderRadius: 4, background: 'transparent',
-    color: ARKME_GROUP_HEADER_ICON_COLOR, display: 'grid', placeItems: 'center', cursor: 'pointer',
-  },
+  headerActions: ARKME_CONVERSATION_HEADER_ACTIONS_STYLE,
+  headerButton: ARKME_CONVERSATION_HEADER_BUTTON_STYLE,
   icon: {
     width: 20, height: 20, display: 'block', backgroundColor: 'currentColor', opacity: .84,
     maskRepeat: 'no-repeat', maskPosition: 'center', maskSize: 'contain',
@@ -101,15 +130,12 @@ const styles: Record<string, CSSProperties> = {
   badge: { flex: 'none', color: colors.primary, fontSize: 11, lineHeight: '16px' },
   empty: { padding: '38px 18px', color: colors.secondary, fontSize: 13, textAlign: 'center' },
   loading: { padding: '14px 16px', color: colors.secondary, fontSize: 13, textAlign: 'center' },
-  menuScrim: { position: 'absolute', inset: 0, zIndex: 9 },
+  menuScrim: ARKME_CONVERSATION_SETTINGS_MENU_SCRIM_STYLE,
   aiModalScrim: {
     position: 'absolute', inset: 0, zIndex: 11, padding: 24, display: 'grid', placeItems: 'center',
     background: 'rgba(15, 23, 42, .14)', backdropFilter: 'blur(1px)', boxSizing: 'border-box',
   },
-  popover: {
-    position: 'absolute', zIndex: 10, width: GROUP_SETTINGS_MENU_WIDTH, maxWidth: 'calc(100% - 24px)', padding: '6px 8px',
-    borderRadius: 4, background: colors.panel, boxShadow: '0 4px 10px rgba(0,0,0,.1)', boxSizing: 'border-box',
-  },
+  popover: ARKME_CONVERSATION_SETTINGS_POPOVER_STYLE,
   aiPopover: {
     position: 'relative', width: AI_POLISH_PANEL_WIDTH, maxWidth: '100%', maxHeight: '100%',
     display: 'flex', flexDirection: 'column', overflow: 'hidden', border: `1px solid ${colors.border}`,
@@ -174,11 +200,7 @@ const styles: Record<string, CSSProperties> = {
     display: 'grid', placeItems: 'center', color: arkmeTheme.foreground, background: colors.text, cursor: 'pointer',
   },
   aiError: { padding: '7px 10px', color: arkmeTheme.danger, fontSize: 12, lineHeight: '18px' },
-  menuRow: {
-    width: '100%', height: 32, border: 0, borderRadius: 4, background: 'transparent', padding: '2px 8px',
-    display: 'flex', alignItems: 'center', gap: 10, textAlign: 'left', color: colors.text,
-    cursor: 'pointer', fontSize: 14, lineHeight: '20px', whiteSpace: 'nowrap', boxSizing: 'border-box',
-  },
+  menuRow: ARKME_CONVERSATION_SETTINGS_MENU_ROW_STYLE,
   switch: {
     marginLeft: 'auto', width: 40, height: 22, border: 0, borderRadius: 999, padding: 2,
     display: 'flex', alignItems: 'center', cursor: 'pointer', transition: 'background .15s ease',
@@ -221,7 +243,7 @@ function ClientIcon({ src, size = 20 }: { src: string; size?: number }) {
   }} />
 }
 
-function MoreIcon() {
+export function ArkmeConversationMoreIcon() {
   return <svg aria-hidden width="24" height="24" viewBox="0 0 24 24" fill="none" style={{ display: 'block' }}>
     <circle cx="5" cy="12" r="1.8" fill="currentColor" />
     <circle cx="12" cy="12" r="1.8" fill="currentColor" />
@@ -237,16 +259,20 @@ function MagicWandIcon() {
   </svg>
 }
 
-function IconButton(props: {
+export function ArkmeConversationHeaderIconButton(props: {
   label: string
   children: ReactNode
   buttonRef?: RefObject<HTMLButtonElement>
+  hasPopup?: boolean
+  expanded?: boolean
   onClick: () => void
 }) {
   return <button
     ref={props.buttonRef}
     type="button"
     aria-label={props.label}
+    aria-haspopup={props.hasPopup ? 'menu' : undefined}
+    aria-expanded={props.expanded}
     title={props.label}
     style={styles.headerButton}
     onMouseEnter={event => { event.currentTarget.style.background = colors.subtle }}
@@ -1370,8 +1396,8 @@ export function ArkmeGroupChatControls(props: {
 
   return <>
     <div style={styles.headerActions}>
-      <IconButton label="查看群成员" onClick={openMembers}><ClientIcon src={icons.members} size={24} /></IconButton>
-      <IconButton label="群聊设置" buttonRef={settingsButtonRef} onClick={toggleSettings}><MoreIcon /></IconButton>
+      <ArkmeConversationHeaderIconButton label="查看群成员" onClick={openMembers}><ClientIcon src={icons.members} size={24} /></ArkmeConversationHeaderIconButton>
+      <ArkmeConversationHeaderIconButton label="群聊设置" buttonRef={settingsButtonRef} hasPopup expanded={settingsOpen} onClick={toggleSettings}><ArkmeConversationMoreIcon /></ArkmeConversationHeaderIconButton>
     </div>
     {overlayHost !== null && createPortal(<>
       <GroupSettingsMenu

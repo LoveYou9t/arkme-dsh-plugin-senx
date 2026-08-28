@@ -20,8 +20,11 @@ function sameBot(left: ArkmeBotSummary | undefined, right: ArkmeBotSummary | und
     && left.directChatAvailable === right.directChatAvailable
     && left.privateChatOutboundEnabled === right.privateChatOutboundEnabled
     && left.refreshOnRecordChanges === right.refreshOnRecordChanges
+    && left.conversationProjection === right.conversationProjection
+    && left.chatSourceKey === right.chatSourceKey
     && left.createdAtMillis === right.createdAtMillis && left.latestMessageAtMillis === right.latestMessageAtMillis
-    && left.latestMessagePreview === right.latestMessagePreview
+    && left.latestMessagePreview === right.latestMessagePreview && left.unreadCount === right.unreadCount
+    && left.isMuted === right.isMuted
 }
 
 export interface ArkmeUiState {

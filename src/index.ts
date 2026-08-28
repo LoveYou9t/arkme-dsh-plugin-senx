@@ -12,9 +12,11 @@ import { createOpenClawCliAdapter, createOpenClawCommandRunner, createOpenClawFi
 import type {} from '@deepseek-ai/dsh-host-webserver'
 import { registerDSHAgentInputRecordSync } from './dsh-agent-input-sync.js'
 import { createArkmeHostApi } from './host-api.js'
+import { openDshHostPath } from './dsh-host-capabilities.js'
 import { ARKME_HARNESS_EMBED_PATH } from './harness-embed-contract.js'
 import {
   createHarnessEmbedRouteHandler,
+  dshRootDocumentHeaders,
   type DshWebBootGraph,
 } from './harness-embed-route.js'
 import { createOutgoingCallAssetHandler } from './outgoing-call-assets.js'
@@ -146,19 +148,10 @@ export const Config: Schema<Config> = Schema.object({
 })
 
 export const name = 'dsh-arkme'
-export const inject = ['webServer', 'tools', 'systemPrompt', 'pluginInventory', 'clientModules', 'apiProxy']
+export const inject = ['webServer', 'tools', 'systemPrompt', 'pluginInventory', 'clientModules']
 
 interface DshClientModulesLike {
   graph(): DshWebBootGraph
-}
-
-interface DshApiProxyLike {
-  host: {
-    openPath(
-      request: { rpcId: string; payload: { path: string } },
-      signal: AbortSignal,
-    ): Promise<{ result: { ok: true; value: { opened: true } } | { ok: false; error: { message: string } } }>
-  }
 }
 
 export function readDshRuntimeVersion(dshBinPath: string): string | undefined {
@@ -210,10 +203,7 @@ export function apply(ctx: Context, config: Config): void {
   const pendingSessionStore = createArkmeSessionStore(`${config.keychainServicePrefix}.${config.environment}.pending-binding`)
   const service = new ArkmeService({ ...config, fileStateDirectory: join(stateDirectory, 'files') }, sessionStore, localDatabase, fetch, pendingSessionStore)
   service.attachLocalFileOpener(async (path, signal) => {
-    const apiProxy = ctx.get('apiProxy') as DshApiProxyLike | undefined
-    if (apiProxy === undefined) throw new Error('当前 DSH 宿主未提供本机文件打开能力')
-    const response = await apiProxy.host.openPath({ rpcId: randomUUID(), payload: { path } }, signal)
-    if (!response.result.ok) throw new Error(response.result.error.message)
+    await openDshHostPath(ctx, path, signal)
   })
   const openClawStateDirectory = join(stateDirectory, 'openclaw')
   const openClawCli = createOpenClawCliAdapter({
@@ -410,9 +400,9 @@ export function apply(ctx: Context, config: Config): void {
     getGraph: () => clientModules.graph(),
     installedPackageNames: () => extensionStore.list().flatMap(item =>
       item.profilePackageName === undefined ? [] : [item.profilePackageName]),
-    readRootHtml: async () => {
+    readRootHtml: async request => {
       const response = await fetch(`http://127.0.0.1:${String(ctx.webServer.port)}/`, {
-        headers: { Accept: 'text/html' },
+        headers: dshRootDocumentHeaders(request),
         signal: AbortSignal.timeout(Math.min(config.requestTimeoutMs, 5_000)),
       })
       if (!response.ok) throw new Error(`DSH root document returned HTTP ${String(response.status)}`)
