@@ -50,4 +50,3 @@ The new backend uses Windows Generic Credentials rather than PowerShell Password
 - TypeScript tests validate helper response handling, process failure, timeout, and session-store behavior.
 - A Windows integration probe performs write, read, delete, and missing-read against a unique service name.
 - The packaged Electron Node runtime must return HTTP 200 with `logged-out` when no credential exists, persist a test credential, recover it after a new backend instance, and delete it.
-

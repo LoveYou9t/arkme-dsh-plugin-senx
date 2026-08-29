@@ -1310,7 +1310,7 @@ export class ChatService {
         ...(beforeSequence > 0 ? { nextCursor: { beforeSequence } } : {}),
       }
     }
-  
+
   async reportMessage(
       messageRef: string,
       reportType: 1 | 2 | 3 | 4,
