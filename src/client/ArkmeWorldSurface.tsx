@@ -10,7 +10,6 @@ import { SpinnerGap } from '@phosphor-icons/react/dist/icons/SpinnerGap'
 import { X } from '@phosphor-icons/react/dist/icons/X'
 import type {
   ArkmeImagePayload,
-  ArkmeConversationMemberItem,
   ArkmeOpenPrivateChatResult,
   ArkmeUploadedAsset,
   ArkmeWorldPublishResult,
@@ -32,7 +31,7 @@ import { callArkme, ArkmeClientError } from './api.js'
 import { ArkmeUserAvatar } from './ArkmeAvatar.js'
 import { ArkmeExtensionAvatar } from './ArkmeExtensionAvatar.js'
 import { ArkmeWorldEmptyNotice } from './ArkmeWorldEmptyNotice.js'
-import { ArkmeMemberProfileCard } from './ArkmeChatMemberActions.js'
+import { ArkmeMemberProfileCard, type ArkmeMemberProfileIdentity } from './ArkmeChatMemberActions.js'
 import { arkmeEmojiPlainText } from './arkme-emoji.js'
 import { arkmeTheme } from './arkme-theme.js'
 import { arkmeUi, type ArkmeWorldTarget } from './ui-controller.js'
@@ -1575,13 +1574,11 @@ function InteractionPanel({ item, onClose, onInteractionCreated, onCountResolved
 const loadingState = (): ArkmeWorldViewState => ({ status: 'loading', items: [] })
 
 /** First-party World page owned by the same product surface as recordings. */
-function worldAuthorCardMember(item: ArkmeWorldFeedItem): ArkmeConversationMemberItem {
+function worldAuthorCardMember(item: ArkmeWorldFeedItem): ArkmeMemberProfileIdentity {
   return {
-    memberRef: item.authorRef ?? '', displayName: item.authorName,
+    displayName: item.authorName,
     ...(item.avatarRef === undefined ? {} : { avatarRef: item.avatarRef }),
     ...(item.avatarFallback === undefined ? {} : { avatarFallback: item.avatarFallback }),
-    role: 'member', status: 'active', isSelf: false, isOwner: false,
-    joinedAtMillis: 0, recordCount: 0, mentionCount: 0,
   }
 }
 

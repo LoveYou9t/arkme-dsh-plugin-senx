@@ -1,5 +1,6 @@
 import type { ArkmeSourceItem, ArkmeSourceList } from '../types.js'
 import { callArkme } from './api.js'
+import { arkmeChatSourceIdentityKey, arkmeSourceIdentityKey } from './source-identity.js'
 
 const DEFAULT_ROOT_CACHE_MAX_AGE_MS = 30_000
 const ROOT_DIRECTORY_PAGE_LIMIT = 20
@@ -21,12 +22,6 @@ export interface ArkmeChatDirectorySnapshot {
 export interface ArkmeChatDirectorySourceUpdate {
   source: ArkmeSourceItem
   sourceKey?: string
-}
-
-export interface ArkmeChatDirectorySentProjection {
-  latestPreview: string
-  activeAtMillis: number
-  latestSequence: number
 }
 
 type ArkmeChatDirectoryMutation =
@@ -236,7 +231,6 @@ export class ArkmeChatDirectoryStore {
   private readonly readWatermarks = new Map<string, ArkmeChatReadWatermark>()
   private readonly optimisticReadWatermarks = new Map<string, ArkmeChatReadWatermark>()
   private readonly optimisticUnreadBackups = new Map<string, number>()
-  private readonly optimisticSentProjections = new Map<string, ArkmeChatDirectorySentProjection>()
   private readonly sourceKeysByRef = new Map<string, string>()
 
   constructor(options: ArkmeChatDirectoryStoreOptions = {}) {
@@ -268,7 +262,6 @@ export class ArkmeChatDirectoryStore {
     this.readWatermarks.clear()
     this.optimisticReadWatermarks.clear()
     this.optimisticUnreadBackups.clear()
-    this.optimisticSentProjections.clear()
     this.sourceKeysByRef.clear()
     if (this.snapshot.sources.length > 0 || this.snapshot.baselineReady || this.snapshot.isRefreshing) this.commit([])
   }
@@ -288,8 +281,9 @@ export class ArkmeChatDirectoryStore {
       for (let pageIndex = 0; pageIndex < MAX_ROOT_PAGES; pageIndex += 1) {
         const page = await this.loadPage(cursor, options.force === true)
         for (const source of page.items) {
-          if (seen.has(source.sourceRef)) continue
-          seen.add(source.sourceRef)
+          const identity = arkmeSourceIdentityKey(source)
+          if (seen.has(identity)) continue
+          seen.add(identity)
           loaded.push(source)
         }
         if (!page.hasMore || page.nextCursor === undefined) break
@@ -312,17 +306,9 @@ export class ArkmeChatDirectoryStore {
   }
 
   publish(sources: ArkmeSourceItem[]): void {
-    const protectedMutations = sources.flatMap(source => {
-      const protectedSource = this.protectOptimisticSentProjection(source)
-      return protectedSource === source ? [] : [{
-        type: 'upsert' as const,
-        source: protectedSource,
-        ...(protectedSource.sourceKey === undefined ? {} : { sourceKey: protectedSource.sourceKey }),
-      }]
-    })
     const merged = applyDirectoryMutations(
       sources,
-      [...protectedMutations, ...this.pendingMutations],
+      this.pendingMutations,
       this.combinedReadWatermarks(),
       { sourceKeysByRef: this.sourceKeysByRef },
     )
@@ -345,38 +331,12 @@ export class ArkmeChatDirectoryStore {
     this.upsertMany([{ source, ...(sourceKey === undefined ? {} : { sourceKey }) }])
   }
 
-  recordSent(source: ArkmeSourceItem, projection: ArkmeChatDirectorySentProjection): boolean {
-    if (source.kind !== 'private_chat' && source.kind !== 'group_chat') return false
-    const latestSequence = normalizedSequence(projection.latestSequence)
-    const activeAtMillis = Number.isFinite(projection.activeAtMillis) && projection.activeAtMillis > 0
-      ? Math.trunc(projection.activeAtMillis)
-      : 0
-    if (latestSequence <= 0 || activeAtMillis <= 0) return false
-    this.upsert({
-      ...source,
-      latestPreview: projection.latestPreview.trim() || '非文本内容',
-      activeAtMillis,
-      unreadCount: 0,
-      latestSequence,
-    })
-    rememberSourceKey({ sourceKeysByRef: this.sourceKeysByRef }, source.sourceRef, source.sourceKey)
-    this.optimisticSentProjections.set(
-      identityForSource({ sourceKeysByRef: this.sourceKeysByRef }, source.sourceRef, source.sourceKey),
-      {
-        latestPreview: projection.latestPreview.trim() || '非文本内容',
-        activeAtMillis,
-        latestSequence,
-      },
-    )
-    return true
-  }
-
   upsertMany(updates: Array<ArkmeSourceItem | ArkmeChatDirectorySourceUpdate>): void {
     const mutations = updates.map(update => {
       const normalized = sourceUpdate(update)
       return {
         type: 'upsert' as const,
-        source: this.protectOptimisticSentProjection(normalized.source, normalized.sourceKey),
+        source: normalized.source,
         ...(normalized.sourceKey === undefined ? {} : { sourceKey: normalized.sourceKey }),
       }
     })
@@ -522,7 +482,6 @@ export class ArkmeChatDirectoryStore {
     this.readWatermarks.clear()
     this.optimisticReadWatermarks.clear()
     this.optimisticUnreadBackups.clear()
-    this.optimisticSentProjections.clear()
     this.sourceKeysByRef.clear()
     if (this.snapshot.sources.length > 0 || this.snapshot.baselineReady || this.snapshot.isRefreshing) this.commit([])
   }
@@ -538,28 +497,6 @@ export class ArkmeChatDirectoryStore {
     for (const [key, watermark] of this.readWatermarks) mergeReadWatermark(combined, key, watermark)
     for (const [key, watermark] of this.optimisticReadWatermarks) mergeReadWatermark(combined, key, watermark)
     return combined
-  }
-
-  private protectOptimisticSentProjection(source: ArkmeSourceItem, sourceKey?: string): ArkmeSourceItem {
-    const effectiveSourceKey = sourceKey ?? source.sourceKey
-    rememberSourceKey({ sourceKeysByRef: this.sourceKeysByRef }, source.sourceRef, effectiveSourceKey)
-    const identity = identityForSource({ sourceKeysByRef: this.sourceKeysByRef }, source.sourceRef, effectiveSourceKey)
-    const optimistic = this.optimisticSentProjections.get(identity)
-    if (optimistic === undefined) return source
-    const sourceSequence = normalizedSequence(source.latestSequence)
-    const sourcePreview = source.latestPreview?.trim() ?? ''
-    if (sourceSequence > optimistic.latestSequence
-      || (sourceSequence === optimistic.latestSequence && sourcePreview === optimistic.latestPreview)) {
-      this.optimisticSentProjections.delete(identity)
-      return source
-    }
-    return {
-      ...source,
-      latestPreview: optimistic.latestPreview,
-      activeAtMillis: Math.max(source.activeAtMillis, optimistic.activeAtMillis),
-      unreadCount: 0,
-      latestSequence: optimistic.latestSequence,
-    }
   }
 
   private normalizedReadTarget(
@@ -607,21 +544,33 @@ export const arkmeChatDirectory = new ArkmeChatDirectoryStore()
 
 export interface ArkmeChatTimelineDeltaSnapshot {
   revision: number
-  itemsBySourceRef: Record<string, import('../types.js').ArkmeTimelineItem[]>
+  itemsBySourceKey: Record<string, import('../types.js').ArkmeTimelineItem[]>
 }
 
 export class ArkmeChatTimelineDeltaStore {
-  private snapshot: ArkmeChatTimelineDeltaSnapshot = { revision: 0, itemsBySourceRef: {} }
+  private snapshot: ArkmeChatTimelineDeltaSnapshot = { revision: 0, itemsBySourceKey: {} }
+  private accountUserId: number | undefined
   private readonly listeners = new Set<() => void>()
   readonly getSnapshot = (): ArkmeChatTimelineDeltaSnapshot => this.snapshot
   readonly subscribe = (listener: () => void): (() => void) => {
     this.listeners.add(listener)
     return () => { this.listeners.delete(listener) }
   }
-  publish(updates: Array<{ sourceRef: string; items: import('../types.js').ArkmeTimelineItem[] }>): void {
+  activateAccount(userId: number | undefined): void {
+    const normalized = Number.isSafeInteger(userId) && (userId ?? 0) > 0 ? userId : undefined
+    if (normalized === this.accountUserId) return
+    this.accountUserId = normalized
+    if (Object.keys(this.snapshot.itemsBySourceKey).length === 0) return
+    this.snapshot = { revision: this.snapshot.revision + 1, itemsBySourceKey: {} }
+    for (const listener of this.listeners) listener()
+  }
+  publish(updates: Array<{
+    source: Pick<ArkmeSourceItem, 'sourceRef' | 'sourceKey'>
+    items: import('../types.js').ArkmeTimelineItem[]
+  }>): void {
     this.snapshot = {
       revision: this.snapshot.revision + 1,
-      itemsBySourceRef: Object.fromEntries(updates.map(update => [update.sourceRef, [...update.items]])),
+      itemsBySourceKey: Object.fromEntries(updates.map(update => [arkmeChatSourceIdentityKey(update.source), [...update.items]])),
     }
     for (const listener of this.listeners) listener()
   }

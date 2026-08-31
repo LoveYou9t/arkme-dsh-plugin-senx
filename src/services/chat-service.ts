@@ -118,6 +118,14 @@ interface ArkmeChatMemberRefPayload {
   targetUserId: number
 }
 
+interface ArkmeChatHumanMentionRefPayload {
+  version: 1
+  viewerUserId: number
+  chatSessionUid: string
+  targetUserId: number
+  displayNameSnapshot: string
+}
+
 interface OfficialAuthorPrivateChatCreateResult {
   rm_subject_id?: unknown
   already_exist?: unknown
@@ -128,6 +136,8 @@ const OFFICIAL_AUTHOR_USER_ID = 11
 const OFFICIAL_AUTHOR_FALLBACK_DISPLAY_NAME = '即' + '我作者'
 const MAX_MESSAGE_COPY_LINK_ITEMS = 100
 const RECORD_UID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+const CHAT_MEMBER_REF_PREFIX = 'arkme-chat-member-v1'
+const CHAT_HUMAN_MENTION_REF_PREFIX = 'arkme-chat-human-mention-v1'
 
 export interface ArkmeChatRealtimePort {
   emitChatClientEvent(event: Parameters<import('./chat-realtime-service.js').ChatRealtimeService['emitChatClientEvent']>[0]): void
@@ -731,6 +741,12 @@ interface ChatMemberDisplayNames {
   secondaryName: string
 }
 
+interface ChatMemberProjectionOptions {
+  includeViewerLabels: boolean
+  includeHumanMentionRefs: boolean
+  signal?: AbortSignal
+}
+
 function resolveChatMemberDisplayNames(input: {
   userId: number
   remarkCandidates?: readonly unknown[]
@@ -751,6 +767,20 @@ function resolveChatMemberDisplayNames(input: {
   const secondaryName = [memberName, userName, remarkName]
     .find(value => isUsable(value) && value !== displayName) ?? ''
   return { displayName, memberName, secondaryName }
+}
+
+function projectChatMemberDisplayNames(
+  item: Record<string, unknown>,
+  userId: number,
+  viewerLabel?: string,
+  publicDisplayName?: string,
+): ChatMemberDisplayNames {
+  return resolveChatMemberDisplayNames({
+    userId,
+    remarkCandidates: [],
+    memberNameCandidates: [item.display_name_snapshot],
+    userNameCandidates: [viewerLabel, item.remark, publicDisplayName],
+  })
 }
 
 function normalizedJoinTimestamp(value: unknown): number {
@@ -1225,8 +1255,11 @@ export class ChatService {
       source.ownerRef,
       visibleRawItems,
       session,
-      source.kind === 'group_chat',
-      options.signal,
+      {
+        includeViewerLabels: source.kind === 'group_chat',
+        includeHumanMentionRefs: source.kind === 'group_chat',
+        ...(options.signal === undefined ? {} : { signal: options.signal }),
+      },
     )
     const signingKey = joinEventsEnabled ? await this.runtime.stateStore.uniqueCode() : ''
     const joinEvents = joinEventsEnabled
@@ -1266,8 +1299,11 @@ export class ChatService {
       source.ownerRef,
       rawMembers,
       session,
-      source.kind === 'group_chat',
-      options.signal,
+      {
+        includeViewerLabels: source.kind === 'group_chat',
+        includeHumanMentionRefs: source.kind === 'group_chat',
+        ...(options.signal === undefined ? {} : { signal: options.signal }),
+      },
     )
     const member = members.find(item => item.memberRef === memberRef)
     if (member === undefined) {
@@ -2298,8 +2334,8 @@ export class ChatService {
             },
           )
         } else if ((options.humanMentions?.length ?? 0) > 0 || (options.botMentions?.length ?? 0) > 0) {
-          const contentPayload = await this.humanMentionContentPayload(
-            source, textContent, text, options.humanMentions ?? [], session, options.signal, options.botMentions ?? [],
+          const contentPayload = await this.mentionContentPayload(
+            source, textContent, text, options.humanMentions ?? [], options.botMentions ?? [], session, options.signal,
           )
           sent = await this.sendChatSourceTextRaw(
             sourceRef, source.ownerRef, text, recordUid, relationUid, session, undefined, contentPayload,
@@ -2330,8 +2366,8 @@ export class ChatService {
       } else if ((options.botRefs?.length ?? 0) > 0) {
         throw new ArkmePluginError('mention-group-required', 'bot_refs 只能发送到群聊', false)
       } else if ((options.botMentions?.length ?? 0) > 0) {
-        const contentPayload = await this.humanMentionContentPayload(
-          source, textContent, text, [], session, options.signal, options.botMentions ?? [],
+        const contentPayload = await this.mentionContentPayload(
+          source, textContent, text, [], options.botMentions ?? [], session, options.signal,
         )
         sent = await this.sendChatSourceTextRaw(
           sourceRef, source.ownerRef, text, recordUid, relationUid, session, undefined, contentPayload, options.signal,
@@ -2355,64 +2391,21 @@ export class ChatService {
       return sent
     }
   
-  private async humanMentionContentPayload(
+  private async mentionContentPayload(
     source: ArkmeSourceRefPayload,
     rawText: string,
     normalizedText: string,
-    inputs: readonly ArkmeHumanMentionInput[],
+    humanInputs: readonly ArkmeHumanMentionInput[],
+    botInputs: readonly ArkmeBotMentionInput[],
     session: ArkmeSessionCredentials,
     signal?: AbortSignal,
-    botInputs: readonly ArkmeBotMentionInput[] = [],
   ): Promise<Record<string, unknown>> {
-    if (inputs.length > 50) throw new ArkmePluginError('human-mention-invalid', '单条消息 mention 数量过多', false)
+    if (humanInputs.length > 50) throw new ArkmePluginError('human-mention-invalid', '单条消息 mention 数量过多', false)
     if (botInputs.length > 50) throw new ArkmePluginError('bot-mention-invalid', '单条消息 Bot mention 数量过多', false)
-    const leadingTrim = rawText.length - rawText.trimStart().length
-    const rawMembers = inputs.length === 0 ? [] : await this.rawChatMembers(source.ownerRef, true, session, signal)
-    const membersByUserId = new Map(rawMembers.map(item => [Math.trunc(numberValue(item.user_id)), item]))
-    const mentions: Array<{ user_id: number; display_name_snapshot: string; start_index: number; length: number }> = []
-    for (const input of [...inputs].sort((left, right) => left.startIndex - right.startIndex)) {
-      const memberRef = input.memberRef?.trim() ?? ''
-      const startIndex = Math.trunc(input.startIndex) - leadingTrim
-      const length = Math.trunc(input.length)
-      if (startIndex < 0 || length < 2
-        || startIndex + length > normalizedText.length) {
-        throw new ArkmePluginError('human-mention-invalid', '真人 mention 引用或文本区间无效', false)
-      }
-      const visible = normalizedText.slice(startIndex, startIndex + length)
-      const displayName = visible.startsWith('@') ? visible.slice(1).trim() : ''
-      let userId: number
-      if (input.all === true) {
-        if (displayName !== '所有人') {
-          throw new ArkmePluginError('human-mention-text-mismatch', '真人 mention 文本已变化，请重新选择成员', false, 409)
-        }
-        userId = 0
-      } else {
-        if (memberRef === '') throw new ArkmePluginError('human-mention-invalid', '真人 mention 引用或文本区间无效', false)
-        const reference = await this.openChatMemberRef(memberRef, session.userId, source.ownerRef)
-        if (reference.targetUserId === session.userId) {
-          throw new ArkmePluginError('human-mention-self-invalid', '不能 @ 自己', false)
-        }
-        const rawMember = membersByUserId.get(reference.targetUserId)
-        if (rawMember === undefined) throw new ArkmePluginError('chat-member-ref-stale', '被 @ 成员已不在当前群聊', false, 409)
-        const expectedNames = [stringValue(rawMember.remark).trim(), stringValue(rawMember.display_name_snapshot).trim()]
-          .filter(value => value !== '')
-        if (displayName === '' || !expectedNames.includes(displayName)) {
-          throw new ArkmePluginError('human-mention-text-mismatch', '真人 mention 文本已变化，请重新选择成员', false, 409)
-        }
-        userId = reference.targetUserId
-      }
-      const previous = mentions.at(-1)
-      if (previous !== undefined && previous.start_index + previous.length > startIndex) {
-        throw new ArkmePluginError('human-mention-overlap', '真人 mention 文本区间重叠', false)
-      }
-      mentions.push({
-        user_id: userId,
-        display_name_snapshot: displayName,
-        start_index: startIndex,
-        length,
-      })
-    }
-    const botMentions = await this.botMentionMetadata(source, rawText, normalizedText, botInputs, session, signal)
+    const [mentions, botMentions] = await Promise.all([
+      this.humanMentionMetadata(source, rawText, normalizedText, humanInputs, session, signal),
+      this.botMentionMetadata(source, rawText, normalizedText, botInputs, session, signal),
+    ])
     const orderedRanges = [
       ...mentions.map(mention => ({ startIndex: mention.start_index, length: mention.length })),
       ...botMentions.map(mention => ({ startIndex: mention.start_index, length: mention.length })),
@@ -2448,6 +2441,72 @@ export class ChatService {
         ...(botMentions.length === 0 ? {} : { bot_mentions: botMentions }),
       },
     }
+  }
+
+  private async humanMentionMetadata(
+    source: ArkmeSourceRefPayload,
+    rawText: string,
+    normalizedText: string,
+    inputs: readonly ArkmeHumanMentionInput[],
+    session: ArkmeSessionCredentials,
+    signal?: AbortSignal,
+  ): Promise<Array<{ user_id: number; display_name_snapshot: string; start_index: number; length: number }>> {
+    const leadingTrim = rawText.length - rawText.trimStart().length
+    const requiresMemberDirectory = inputs.some(input => input.all !== true)
+    const rawMembers = requiresMemberDirectory
+      ? await this.rawChatMembers(source.ownerRef, true, session, signal)
+      : []
+    const membersByUserId = new Map(rawMembers.map(item => [Math.trunc(numberValue(item.user_id)), item]))
+    const mentions: Array<{ user_id: number; display_name_snapshot: string; start_index: number; length: number }> = []
+    for (const input of [...inputs].sort((left, right) => left.startIndex - right.startIndex)) {
+      const rawInput = input as unknown as Record<string, unknown>
+      const mentionRef = input.mentionRef?.trim() ?? ''
+      const memberRef = stringValue(rawInput.memberRef).trim()
+      const startIndex = Math.trunc(input.startIndex) - leadingTrim
+      const length = Math.trunc(input.length)
+      if (startIndex < 0 || length < 2
+        || startIndex + length > normalizedText.length) {
+        throw new ArkmePluginError('human-mention-invalid', '真人 mention 引用或文本区间无效', false)
+      }
+      const visible = normalizedText.slice(startIndex, startIndex + length)
+      const displayName = visible.startsWith('@') ? visible.slice(1) : ''
+      let userId: number
+      if (input.all === true) {
+        if (mentionRef !== '' || memberRef !== '') {
+          throw new ArkmePluginError('human-mention-invalid', '@所有人不能携带成员引用', false)
+        }
+        if (displayName !== '所有人') {
+          throw new ArkmePluginError('human-mention-text-mismatch', '真人 mention 文本已变化，请重新选择成员', false, 409)
+        }
+        userId = 0
+      } else {
+        if (mentionRef === '' || memberRef !== '') {
+          throw new ArkmePluginError('human-mention-invalid', '真人 mention 必须且只能携带 mention 引用', false)
+        }
+        const reference = await this.openChatHumanMentionRef(mentionRef, session.userId, source.ownerRef)
+        const targetUserId = reference.targetUserId
+        if (targetUserId === session.userId) {
+          throw new ArkmePluginError('human-mention-self-invalid', '不能 @ 自己', false)
+        }
+        const rawMember = membersByUserId.get(targetUserId)
+        if (rawMember === undefined) throw new ArkmePluginError('chat-member-ref-stale', '被 @ 成员已不在当前群聊', false, 409)
+        if (displayName === '' || displayName !== reference.displayNameSnapshot) {
+          throw new ArkmePluginError('human-mention-text-mismatch', '真人 mention 文本已变化，请重新选择成员', false, 409)
+        }
+        userId = targetUserId
+      }
+      const previous = mentions.at(-1)
+      if (previous !== undefined && previous.start_index + previous.length > startIndex) {
+        throw new ArkmePluginError('human-mention-overlap', '真人 mention 文本区间重叠', false)
+      }
+      mentions.push({
+        user_id: userId,
+        display_name_snapshot: displayName,
+        start_index: startIndex,
+        length,
+      })
+    }
+    return mentions
   }
 
   private async botMentionMetadata(
@@ -2716,8 +2775,9 @@ export class ChatService {
           throw new ArkmePluginError('mention-chat-required', 'Bot mention 只能发送到聊天', false)
         }
         if (longArticle) throw new ArkmePluginError('mention-rich-invalid', '长文暂不支持 mention', false)
-        const mentionPayload = await this.humanMentionContentPayload(
-          source, input.textContent ?? '', textContent, input.humanMentions ?? [], session, options.signal, input.botMentions ?? [],
+        const mentionPayload = await this.mentionContentPayload(
+          source, input.textContent ?? '', textContent, input.humanMentions ?? [], input.botMentions ?? [], session,
+          options.signal,
         )
         contentPayload = { ...(mediaContentPayload ?? {}), ...mentionPayload }
       }
@@ -3811,15 +3871,16 @@ export class ChatService {
     chatSessionUid: string,
     rawItems: Record<string, unknown>[],
     session: ArkmeSessionCredentials,
-    includeViewerLabels: boolean,
-    signal?: AbortSignal,
+    options: ChatMemberProjectionOptions,
   ): Promise<ArkmeConversationMemberItem[]> {
     const userIds = rawItems.map(item => Math.trunc(numberValue(item.user_id)))
       .filter(userId => Number.isSafeInteger(userId) && userId > 0)
     const [profiles, viewerLabels] = await Promise.all([
-      this.profile.publicProfileSummariesByUserIds(userIds, session, signal).catch(() => new Map()),
-      includeViewerLabels
-        ? this.source.privateDisplayNamesByUserIds(userIds, { ...(signal === undefined ? {} : { signal }) }).catch(() => new Map())
+      this.profile.publicProfileSummariesByUserIds(userIds, session, options.signal).catch(() => new Map()),
+      options.includeViewerLabels
+        ? this.source.privateDisplayNamesByUserIds(userIds, {
+            ...(options.signal === undefined ? {} : { signal: options.signal }),
+          }).catch(() => new Map())
         : Promise.resolve(new Map<number, string>()),
     ])
     const members: ArkmeConversationMemberItem[] = []
@@ -3827,17 +3888,17 @@ export class ChatService {
       const userId = Math.trunc(numberValue(item.user_id))
       if (!Number.isSafeInteger(userId) || userId <= 0) continue
       const profile = profiles.get(userId)
-      const { displayName, memberName, secondaryName } = resolveChatMemberDisplayNames({
-        userId,
-        remarkCandidates: [],
-        memberNameCandidates: [item.display_name_snapshot],
-        userNameCandidates: [viewerLabels.get(userId), item.remark, profile?.displayName],
-      })
+      const { displayName, memberName, secondaryName } = projectChatMemberDisplayNames(
+        item, userId, viewerLabels.get(userId), profile?.displayName,
+      )
       const role = chatMemberRole(item.role)
       const status = chatMemberStatus(item.status)
       const extra = parsedObject(item.extra)
       members.push({
         memberRef: await this.sealChatMemberRef(session.userId, chatSessionUid, userId),
+        ...(options.includeHumanMentionRefs && status === 'active' && userId !== session.userId ? {
+          mentionRef: await this.sealChatHumanMentionRef(session.userId, chatSessionUid, userId, displayName),
+        } : {}),
         displayName,
         ...(memberName === '' ? {} : { memberName }),
         ...(secondaryName === '' ? {} : { secondaryName }),
@@ -3971,10 +4032,19 @@ export class ChatService {
     return items
   }
 
-  private async sealChatMemberRef(viewerUserId: number, chatSessionUid: string, targetUserId: number): Promise<string> {
-    const encoded = encodeOpaqueJson({ version: 1, viewerUserId, chatSessionUid, targetUserId } satisfies ArkmeChatMemberRefPayload)
+  private async sealChatMemberRef(
+    viewerUserId: number,
+    chatSessionUid: string,
+    targetUserId: number,
+  ): Promise<string> {
+    const encoded = encodeOpaqueJson({
+      version: 1,
+      viewerUserId,
+      chatSessionUid,
+      targetUserId,
+    } satisfies ArkmeChatMemberRefPayload)
     const signature = createHmac('sha256', await this.runtime.stateStore.uniqueCode()).update(encoded).digest('base64url')
-    return `arkme-chat-member-v1.${encoded}.${signature}`
+    return `${CHAT_MEMBER_REF_PREFIX}.${encoded}.${signature}`
   }
 
   private async openChatMemberRef(
@@ -3983,7 +4053,7 @@ export class ChatService {
     expectedChatSessionUid: string,
   ): Promise<ArkmeChatMemberRefPayload> {
     const parts = memberRef.trim().split('.')
-    if (parts.length !== 3 || parts[0] !== 'arkme-chat-member-v1') {
+    if (parts.length !== 3 || parts[0] !== CHAT_MEMBER_REF_PREFIX) {
       throw new ArkmePluginError('chat-member-ref-invalid', '聊天成员引用无效', false)
     }
     const encoded = parts[1] ?? ''
@@ -4005,6 +4075,63 @@ export class ChatService {
       || result.chatSessionUid !== expectedChatSessionUid
       || !Number.isSafeInteger(result.targetUserId) || result.targetUserId <= 0) {
       throw new ArkmePluginError('chat-member-ref-invalid', '聊天成员引用与当前账号或会话不匹配', false, 403)
+    }
+    return result
+  }
+
+  private async sealChatHumanMentionRef(
+    viewerUserId: number,
+    chatSessionUid: string,
+    targetUserId: number,
+    displayNameSnapshot: string,
+  ): Promise<string> {
+    const normalizedDisplayNameSnapshot = normalizedJoinDisplayName(displayNameSnapshot)
+    if (normalizedDisplayNameSnapshot === '') {
+      throw new ArkmePluginError('chat-mention-ref-invalid', '真人 mention 展示名无效', false)
+    }
+    const encoded = encodeOpaqueJson({
+      version: 1,
+      viewerUserId,
+      chatSessionUid,
+      targetUserId,
+      displayNameSnapshot: normalizedDisplayNameSnapshot,
+    } satisfies ArkmeChatHumanMentionRefPayload)
+    const signature = createHmac('sha256', await this.runtime.stateStore.uniqueCode())
+      .update(`${CHAT_HUMAN_MENTION_REF_PREFIX}.${encoded}`).digest('base64url')
+    return `${CHAT_HUMAN_MENTION_REF_PREFIX}.${encoded}.${signature}`
+  }
+
+  private async openChatHumanMentionRef(
+    mentionRef: string,
+    expectedViewerUserId: number,
+    expectedChatSessionUid: string,
+  ): Promise<ArkmeChatHumanMentionRefPayload> {
+    const parts = mentionRef.trim().split('.')
+    if (parts.length !== 3 || parts[0] !== CHAT_HUMAN_MENTION_REF_PREFIX) {
+      throw new ArkmePluginError('chat-mention-ref-invalid', '真人 mention 引用无效', false)
+    }
+    const encoded = parts[1] ?? ''
+    const supplied = Buffer.from(parts[2] ?? '', 'base64url')
+    const expected = createHmac('sha256', await this.runtime.stateStore.uniqueCode())
+      .update(`${CHAT_HUMAN_MENTION_REF_PREFIX}.${encoded}`).digest()
+    if (supplied.length !== expected.length || !timingSafeEqual(supplied, expected)) {
+      throw new ArkmePluginError('chat-mention-ref-invalid', '真人 mention 引用无效', false)
+    }
+    let raw: Record<string, unknown>
+    try { raw = objectValue(decodeOpaqueJson(encoded)) }
+    catch (error) { throw new ArkmePluginError('chat-mention-ref-invalid', '真人 mention 引用无效', false, 400, { cause: error }) }
+    const result: ArkmeChatHumanMentionRefPayload = {
+      version: 1,
+      viewerUserId: Math.trunc(numberValue(raw.viewerUserId)),
+      chatSessionUid: stringValue(raw.chatSessionUid).trim(),
+      targetUserId: Math.trunc(numberValue(raw.targetUserId)),
+      displayNameSnapshot: normalizedJoinDisplayName(raw.displayNameSnapshot),
+    }
+    if (raw.version !== 1 || result.viewerUserId !== expectedViewerUserId
+      || result.chatSessionUid !== expectedChatSessionUid
+      || !Number.isSafeInteger(result.targetUserId) || result.targetUserId <= 0
+      || result.displayNameSnapshot === '') {
+      throw new ArkmePluginError('chat-mention-ref-invalid', '真人 mention 引用与当前账号或会话不匹配', false, 403)
     }
     return result
   }

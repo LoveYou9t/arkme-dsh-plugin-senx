@@ -1669,12 +1669,14 @@ export interface ArkmeRichSendInput {
   botMentions?: ArkmeBotMentionInput[]
 }
 
-export interface ArkmeHumanMentionInput {
-  memberRef?: string
-  all?: boolean
+interface ArkmeHumanMentionRange {
   startIndex: number
   length: number
 }
+
+export type ArkmeHumanMentionInput =
+  | (ArkmeHumanMentionRange & { mentionRef: string; memberRef?: never; all?: never })
+  | (ArkmeHumanMentionRange & { all: true; mentionRef?: never; memberRef?: never })
 
 export interface ArkmeBotMentionInput {
   botRef: string
@@ -1962,7 +1964,10 @@ export interface ArkmeGroupMemberList {
 }
 
 export interface ArkmeConversationMemberItem {
+  /** Stable account-and-session-scoped identity for member actions. */
   memberRef: string
+  /** Present only when this active non-self group member can be selected for a new human mention. */
+  mentionRef?: string
   displayName: string
   memberName?: string
   secondaryName?: string

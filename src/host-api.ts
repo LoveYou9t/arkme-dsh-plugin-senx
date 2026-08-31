@@ -465,8 +465,13 @@ function humanMentionsParam(params: Record<string, unknown>): ArkmeHumanMentionI
     }
     const item = value as Record<string, unknown>
     const all = item.all === true
+    const mentionRef = stringParam(item, 'mentionRef')
+    const memberRef = stringParam(item, 'memberRef')
+    if (all ? mentionRef !== '' || memberRef !== '' : mentionRef === '' || memberRef !== '') {
+      throw new ArkmePluginError('human-mention-invalid', '真人 mention 类型与引用不匹配', false, 400)
+    }
     return {
-      ...(all ? { all } : { memberRef: stringParam(item, 'memberRef') }),
+      ...(all ? { all } : { mentionRef }),
       startIndex: numberParam(item, 'startIndex', -1),
       length: numberParam(item, 'length', 0),
     }
