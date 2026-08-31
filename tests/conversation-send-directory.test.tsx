@@ -20,6 +20,7 @@ import { arkmeAuthStore } from '../src/client/auth-store.js'
 import { arkmeChatDirectory, arkmeChatTimelineDelta } from '../src/client/chat-directory-store.js'
 import { arkmeComposerDraftStore, arkmeSourceComposerDraftKey } from '../src/client/composer-draft-store.js'
 import { arkmeMessageReadReceipts } from '../src/client/message-read-receipt-store.js'
+import { arkmeTheme } from '../src/client/arkme-theme.js'
 import { arkmeUi } from '../src/client/ui-controller.js'
 
 const target: ArkmeSourceItem = {
@@ -224,6 +225,66 @@ describe('conversation send directory projection', () => {
     })
     return renderer!.root.findByProps({ 'aria-labelledby': 'arkme-forward-target-title' })
   }
+
+  async function enterMessageSelectMode() {
+    timeline = [{
+      itemUid: 'select-source', messageActionRef: 'opaque-select-action',
+      senderName: '狗才', isMe: true, sendAtMillis: 1, title: '',
+      textContent: '这是一条用于验证多选圆点锚定头像而不是整条长消息中心的长文本。'.repeat(12), status: 1,
+    }]
+    await act(async () => {
+      renderer = create(<ArkmeSurface productChrome={false} productNavigation={false} />, {
+        createNodeMock: element => element.props.className === 'arkme-conversation-panel'
+          ? { getBoundingClientRect: () => ({ left: 0, top: 0, width: 960, height: 720 }) }
+          : null,
+      })
+      await Promise.resolve()
+    })
+    const bubble = renderer!.root.findByProps({ 'aria-label': '打开快记详情' })
+    act(() => {
+      bubble.props.onContextMenu({
+        preventDefault: vi.fn(),
+        stopPropagation: vi.fn(),
+        clientX: 120,
+        clientY: 180,
+      })
+    })
+    const menu = renderer!.root.findByProps({ 'aria-label': '消息操作' })
+    act(() => { menu.findAllByProps({ role: 'menuitem' })[2]!.props.onClick() })
+  }
+
+  it('anchors the themed multi-select control to the avatar top and renders exit as a standard toolbar action', async () => {
+    await enterMessageSelectMode()
+
+    const row = renderer!.root.findByProps({ 'data-arkme-message-item-uid': 'select-source' })
+    expect(row.props.style).toMatchObject({
+      display: 'grid',
+      gridTemplateColumns: '32px minmax(0, 1fr)',
+      alignItems: 'start',
+      marginBottom: 18,
+    })
+    const checkbox = row.findByProps({ role: 'checkbox' })
+    expect(checkbox.props.style.position).toBeUndefined()
+    expect(checkbox.props.style).toMatchObject({ width: 32, height: 32, marginTop: 1 })
+    const avatar = row.find(node => node.type === 'span'
+      && node.props.style?.width === 34
+      && node.props.style?.height === 34)
+    expect(checkbox.props.style.marginTop + checkbox.props.style.height / 2).toBe(avatar.props.style.height / 2)
+    const circle = checkbox.findByType('span')
+    expect(circle.props.style).toMatchObject({
+      borderColor: arkmeTheme.accent,
+      background: arkmeTheme.accent,
+      color: arkmeTheme.foreground,
+    })
+
+    const toolbar = renderer!.root.findByProps({ role: 'toolbar' })
+    const exit = toolbar.findByProps({ 'aria-label': '退出多选' })
+    const exitParts = exit.findAllByType('span')
+    expect(exit.props.style).toMatchObject({ flexDirection: 'column', alignItems: 'center' })
+    expect(exitParts[0]!.props.style.background).toBe(arkmeTheme.elevated)
+    expect(exitParts[1]!.children).toEqual(['退出多选'])
+    expect(exit.findByType('svg').props.width).toBe(18)
+  })
 
   it('keeps the forward picker mounted while rapid comment changes are deferred', async () => {
     const dialog = await openForwardPicker()

@@ -5,6 +5,7 @@ import {
 import { createPortal } from 'react-dom'
 import { RobotIcon } from '@phosphor-icons/react/dist/csr/Robot'
 import { Waveform } from '@phosphor-icons/react/dist/icons/Waveform'
+import { X } from '@phosphor-icons/react/dist/icons/X'
 import qrcode from 'qrcode-generator'
 import type {
   ArkmeAuthSnapshot, ArkmeGroupAiPolishNotice, ArkmeGroupAiPolishSnapshot, ArkmeSourceReadResult,
@@ -363,23 +364,28 @@ const styles: Record<string, CSSProperties> = {
   rowMe: { justifyContent: 'flex-end' },
   rowOther: { justifyContent: 'flex-start' },
   sharedRecordingRow: { justifyContent: 'center' },
-  rowSelectMode: { position: 'relative', padding: '6px 0 6px 48px', boxSizing: 'border-box', cursor: 'pointer' },
+  rowSelectMode: {
+    display: 'grid', gridTemplateColumns: '32px minmax(0, 1fr)', alignItems: 'start', columnGap: 10,
+    marginBottom: 18, padding: '6px 0 6px 6px', boxSizing: 'border-box', cursor: 'pointer',
+  },
+  sharedRecordingRowSelectMode: { marginBottom: 42 },
   rowSelectedForAction: { background: arkmeTheme.layer2 },
   selectCheck: {
-    position: 'absolute', left: 6, top: '50%', transform: 'translateY(-50%)',
-    width: 32, height: 32, display: 'grid', placeItems: 'center', border: 0, padding: 0,
-    borderRadius: 999, background: 'transparent', color: '#fff', cursor: 'pointer',
+    width: 32, height: 32, display: 'grid', placeItems: 'center', justifySelf: 'center', marginTop: 1, border: 0, padding: 0,
+    borderRadius: 999, background: 'transparent', color: arkmeTheme.foreground, cursor: 'pointer',
   },
   selectCheckCircle: {
     width: 22, height: 22, display: 'grid', placeItems: 'center', boxSizing: 'border-box',
     border: `1.5px solid ${arkmeTheme.tertiary}`, borderRadius: 999, background: 'transparent',
-    color: '#fff',
+    color: arkmeTheme.foreground,
   },
-  selectCheckActive: { borderColor: '#07C160', background: '#07C160' },
+  selectCheckActive: { borderColor: arkmeTheme.accent, background: arkmeTheme.accent },
   messageLine: { maxWidth: '100%', display: 'flex', alignItems: 'flex-start', gap: 10, marginBottom: 18 },
+  messageLineSelectMode: { minWidth: 0, marginBottom: 0 },
   messageLineMe: { flexDirection: 'row-reverse' },
   forwardMessageLine: { width: 'auto' },
   sharedRecordingMessageLine: { width: 'min(600px, 100%)', justifyContent: 'center', marginBottom: 42 },
+  sharedRecordingMessageLineSelectMode: { justifySelf: 'center', marginBottom: 0 },
   messageBody: { minWidth: 0, flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 7 },
   messageBodyMe: { alignItems: 'flex-end' },
   forwardMessageBody: { flex: 1 },
@@ -448,10 +454,6 @@ const styles: Record<string, CSSProperties> = {
     color: arkmeTheme.text, boxShadow: 'none',
   },
   selectBarLabel: { lineHeight: '15px', whiteSpace: 'nowrap' },
-  selectBarClose: {
-    width: 'clamp(30px, 3.8vw, 34px)', height: 'clamp(30px, 3.8vw, 34px)', flex: 'none', display: 'grid', placeItems: 'center', border: 0, padding: 0,
-    background: 'transparent', color: arkmeTheme.text, cursor: 'pointer',
-  },
   forwardTargetBackdrop: {
     position: 'absolute', inset: 0, zIndex: 70, display: 'grid', placeItems: 'center',
     padding: 48, boxSizing: 'border-box', background: 'rgba(19,22,26,.30)',
@@ -1410,9 +1412,7 @@ function ArkmeSelectActionIcon({ kind, size = 22 }: { kind: 'copy' | 'link' | 's
     <path d="M7.39993 6.31991L15.8899 3.48991C19.6999 2.21991 21.7699 4.29991 20.5099 8.10991L17.6799 16.5999C15.7799 22.3099 12.6599 22.3099 10.7599 16.5999L9.91993 14.0799L7.39993 13.2399C1.68993 11.3399 1.68993 8.22991 7.39993 6.31991Z" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
     <path d="M10.1101 13.6501L13.6901 10.0601" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
   </svg>
-  return <svg width={size} height={size} viewBox="0 0 16 16" fill="none" aria-hidden>
-    <path d="M1.0804 2.81662C0.59579 2.33201 0.595791 1.5463 1.0804 1.06169C1.56501 0.577077 2.35072 0.577077 2.83533 1.06169L8.14213 6.36849L13.4489 1.06169C13.9335 0.577075 14.7193 0.577076 15.2039 1.06169C15.6885 1.5463 15.6885 2.33201 15.2039 2.81662L9.89707 8.12342L15.2225 13.4489C15.7071 13.9335 15.7071 14.7192 15.2225 15.2038C14.7379 15.6884 13.9522 15.6884 13.4676 15.2038L8.14213 9.87835L2.81666 15.2038C2.33205 15.6884 1.54634 15.6884 1.06173 15.2038C0.577121 14.7192 0.577121 13.9335 1.06173 13.4489L6.3872 8.12342L1.0804 2.81662Z" fill="currentColor" />
-  </svg>
+  return <X size={size} weight="regular" aria-hidden />
 }
 
 function ArkmeMessageActionIcon({ kind }: { kind: 'copy' | 'link' | 'select' | 'forward' }) {
@@ -4378,6 +4378,7 @@ export function ArkmeSurface({
                     ...(item.isMe ? styles.rowMe : styles.rowOther),
                     ...(isSharedRecordingCard ? styles.sharedRecordingRow : {}),
                     ...(activeSelectMode === undefined ? {} : styles.rowSelectMode),
+                    ...(activeSelectMode !== undefined && isSharedRecordingCard ? styles.sharedRecordingRowSelectMode : {}),
                     ...(selectedForAction ? styles.rowSelectedForAction : {}),
                     ...(highlightedTargetUid === item.itemUid ? styles.rowSearchTarget : {}),
                   }}
@@ -4416,6 +4417,7 @@ export function ArkmeSurface({
                       ...(item.isMe && !isSharedRecordingCard ? styles.messageLineMe : {}),
                       ...(isForwardMessageCard ? styles.forwardMessageLine : {}),
                       ...(isSharedRecordingCard ? styles.sharedRecordingMessageLine : {}),
+                      ...(activeSelectMode !== undefined && isSharedRecordingCard ? styles.sharedRecordingMessageLineSelectMode : {}),
                     }}>
                       {showMessageAvatars && !isSharedRecordingCard && <MessageAvatar
                         {...(avatarRef === undefined ? {} : { avatarRef })}
@@ -4544,13 +4546,13 @@ export function ArkmeSurface({
             <button
               type="button"
               style={{
-                ...styles.selectBarClose,
+                ...styles.selectBarButton,
                 ...(messageActionBusy !== undefined ? styles.selectBarButtonDisabled : {}),
               }}
               disabled={messageActionBusy !== undefined}
               aria-label={ARKME_MESSAGE_SELECT_ACTION_LABELS[3]}
               onClick={() => { setSelectMode(undefined) }}
-            ><ArkmeSelectActionIcon kind="close" size={20} /></button>
+            ><span style={styles.selectBarIconTile}><ArkmeSelectActionIcon kind="close" size={18} /></span><span style={styles.selectBarLabel}>{ARKME_MESSAGE_SELECT_ACTION_LABELS[3]}</span></button>
           </div>}
           {forwardSuccessFeedback !== undefined && <div style={styles.forwardSuccessBannerWrap}>
             <button
