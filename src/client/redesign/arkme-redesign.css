@@ -924,6 +924,9 @@ button.arkme-redesign-update-button:disabled { opacity: .55; cursor: default; }
 .arkme-billing-payment-content > img { width: 210px; height: 210px; border-radius: 10px; }
 .arkme-billing-payment-content > strong { font-size: 14px; line-height: 21px; font-weight: 600; }
 .arkme-billing-payment-content > p { margin: 0; color: #858992; font-size: 12px; line-height: 18px; }
+.arkme-billing-payment-content.is-paid > strong { color: #16794f; font-size: 18px; line-height: 25px; }
+.arkme-billing-payment-content.is-paid > .arkme-billing-error { justify-content: center; }
+.arkme-billing-payment-content.is-crediting > strong { color: #335f9e; }
 .arkme-billing-dialog-actions { padding: 0 22px 20px; display: flex; justify-content: center; flex-wrap: wrap; gap: 9px; }
 .arkme-billing-dialog-actions > button,
 .arkme-billing-primary-action {
