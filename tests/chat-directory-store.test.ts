@@ -495,6 +495,23 @@ describe('ArkmeChatDirectoryStore', () => {
     expect(store.getSnapshot().itemsBySourceKey['chat:stable-1']?.[0]).toMatchObject({ itemUid: 'item-1', sequence: 9 })
   })
 
+  it('keeps a source delta snapshot stable when only another conversation changes', () => {
+    const store = new ArkmeChatTimelineDeltaStore()
+    store.publish([{ source: { sourceRef: 'source-1', sourceKey: 'chat:stable-1' }, items: [{
+      itemUid: 'item-1', senderName: '联系人', isMe: false, sendAtMillis: 1,
+      title: '', textContent: '第一条', status: 1, sequence: 1,
+    }] }])
+    const selected = store.getSnapshotForSource('chat:stable-1')
+
+    store.publish([{ source: { sourceRef: 'source-2', sourceKey: 'chat:stable-2' }, items: [{
+      itemUid: 'item-2', senderName: '其他人', isMe: false, sendAtMillis: 2,
+      title: '', textContent: '其他会话', status: 1, sequence: 2,
+    }] }])
+
+    expect(store.getSnapshotForSource('chat:stable-1')).toBe(selected)
+    expect(store.getSnapshotForSource('chat:stable-2').items[0]).toMatchObject({ itemUid: 'item-2' })
+  })
+
   it('clears timeline deltas when the authenticated account changes', () => {
     const store = new ArkmeChatTimelineDeltaStore()
     store.activateAccount(1001)
@@ -508,6 +525,40 @@ describe('ArkmeChatDirectoryStore', () => {
     expect(store.getSnapshot()).toEqual({ revision: 2, itemsBySourceKey: {} })
   })
 
+  it('treats the same numeric user id in different environments as different accounts', () => {
+    const directory = new ArkmeChatDirectoryStore()
+    const deltas = new ArkmeChatTimelineDeltaStore()
+    directory.activateAccount('test:42')
+    deltas.activateAccount('test:42')
+    directory.publish([{
+      sourceRef: 'source-test', sourceKey: 'chat:same', kind: 'private_chat', displayName: '测试环境',
+      activeAtMillis: 1, unreadCount: 0,
+    }])
+    deltas.publish([{ source: { sourceRef: 'source-test', sourceKey: 'chat:same', latestSequence: 1 }, items: [{
+      itemUid: 'item-test', senderName: '测试', isMe: false, sendAtMillis: 1,
+      title: '', textContent: '测试环境', status: 1, sequence: 1,
+    }] }])
+
+    directory.activateAccount('prod:42')
+    deltas.activateAccount('prod:42')
+
+    expect(directory.getSnapshot().sources).toEqual([])
+    expect(deltas.getSnapshotForSource('chat:same').items).toEqual([])
+  })
+
+  it('clears both aggregate and source-scoped delta snapshots explicitly', () => {
+    const store = new ArkmeChatTimelineDeltaStore()
+    store.publish([{ source: { sourceRef: 'source-a', sourceKey: 'chat:a', latestSequence: 1 }, items: [{
+      itemUid: 'item-a', senderName: '账号 A', isMe: false, sendAtMillis: 1,
+      title: '', textContent: '消息', status: 1, sequence: 1,
+    }] }])
+
+    store.publish([])
+
+    expect(store.getSnapshot().itemsBySourceKey).toEqual({})
+    expect(store.getSnapshotForSource('chat:a')).toMatchObject({ revision: 0, items: [] })
+  })
+
   it('publishes revision-only interwoven invalidations without carrying realtime content', () => {
     const store = new ArkmeInterwovenInvalidationStore()
     const listener = vi.fn()
@@ -519,5 +570,33 @@ describe('ArkmeChatDirectoryStore', () => {
     expect(store.getSnapshot()).toEqual({ revision: 2 })
     expect(listener).toHaveBeenCalledTimes(2)
     expect(JSON.stringify(store.getSnapshot())).not.toContain('content')
+  })
+
+  it('scopes interwoven invalidation snapshots to the affected source', () => {
+    const store = new ArkmeInterwovenInvalidationStore()
+    store.activateAccount(1001)
+    const selected = store.getSnapshotForSource('chat:selected')
+    const other = store.getSnapshotForSource('chat:other')
+
+    store.invalidate('chat:other')
+
+    expect(store.getSnapshotForSource('chat:selected')).toBe(selected)
+    expect(store.getSnapshotForSource('chat:other')).not.toBe(other)
+
+    const beforeGlobal = store.getSnapshotForSource('chat:selected')
+    store.invalidate()
+    expect(store.getSnapshotForSource('chat:selected')).not.toBe(beforeGlobal)
+  })
+
+  it('never reuses a lower scoped revision after bounded source eviction', () => {
+    const store = new ArkmeInterwovenInvalidationStore()
+    store.activateAccount(1001)
+    store.invalidate('chat:selected')
+    const firstRevision = store.getSnapshotForSource('chat:selected').revision
+    for (let index = 0; index < 300; index += 1) store.invalidate(`chat:other:${String(index)}`)
+
+    store.invalidate('chat:selected')
+
+    expect(store.getSnapshotForSource('chat:selected').revision).toBeGreaterThan(firstRevision)
   })
 })

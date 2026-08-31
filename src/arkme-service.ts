@@ -1738,23 +1738,21 @@ export class ArkmeService {
   async publishWorldFileAssets(input: ArkmeWorldPublishFileAssetsInput): Promise<ArkmeWorldPublishResult> { return await this.world.publishWorldFileAssets(input) }
 
   async createText(recordUid: string, textContent: string): Promise<ArkmeCreateTextResult> {
-    return await this.record.createText(recordUid, textContent)
+    const result = await this.record.createText(recordUid, textContent)
+    await this.realtime.invalidateRecordProjection(); return result
   }
 
   async createTextForConversation(
     recordUid: string,
     textContent: string,
   ): Promise<ArkmeConversationWriteResult> {
-    return await this.record.createTextForConversation(recordUid, textContent)
+    const result = await this.record.createTextForConversation(recordUid, textContent)
+    if (result.localState !== 'failed') await this.realtime.invalidateRecordProjection(); return result
   }
 
   async createDSHAgentInputText(recordUid: string, textContent: string, sendAtMillis: number): Promise<ArkmeCreateTextResult> {
     const result = await this.record.createDSHAgentInputText(recordUid, textContent, sendAtMillis)
-    this.realtime.emitChatClientEvent({
-      type: 'projection-invalidated',
-      revision: this.realtime.nextChatClientRevision(),
-      projection: 'record',
-    })
+    await this.realtime.invalidateRecordProjection()
     return result
   }
 
@@ -1763,7 +1761,8 @@ export class ArkmeService {
   }
 
   async retryPending(recordUid: string): Promise<ArkmeCreateTextResult> {
-    return await this.record.retryPending(recordUid)
+    const result = await this.record.retryPending(recordUid)
+    await this.realtime.invalidateRecordProjection(); return result
   }
 
   private recordUid(raw: unknown): string {

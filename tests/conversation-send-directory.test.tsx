@@ -13,7 +13,9 @@ vi.mock('../src/client/api.js', () => ({
   },
 }))
 
-import { ArkmeSurface, arkmeGroupMentionCandidates } from '../src/client/ArkmeSidebar.js'
+import {
+  ArkmeSurface, arkmeGroupMentionCandidates, arkmeRealtimeDeltaCoversTimelineGap,
+} from '../src/client/ArkmeSidebar.js'
 import { ArkmeClientError } from '../src/client/api.js'
 import { ArkmeRichComposerInput } from '../src/client/ArkmeRichComposerInput.js'
 import { arkmeAuthStore } from '../src/client/auth-store.js'
@@ -184,6 +186,26 @@ describe('conversation send directory projection', () => {
       }
       throw new Error(`unexpected operation ${operation}`)
     })
+  })
+
+  it('suppresses an owner read only when retained delta items continuously cover a cached timeline gap', () => {
+    const cached = {
+      items: [{
+        itemUid: 'message-8', sequence: 8, senderName: '联系人', isMe: false,
+        sendAtMillis: 8, title: '', textContent: '第八条', status: 1,
+      }],
+      aiPolishNotices: [], hasMore: false, fetchedAtMillis: 1, latestSequence: 8,
+    }
+    const message = (sequence: number): ArkmeTimelineItem => ({
+      itemUid: `message-${String(sequence)}`, sequence, senderName: '联系人', isMe: false,
+      sendAtMillis: sequence, title: '', textContent: `第 ${String(sequence)} 条`, status: 1,
+    })
+
+    expect(arkmeRealtimeDeltaCoversTimelineGap(undefined, [message(9)], 9)).toBe(false)
+    expect(arkmeRealtimeDeltaCoversTimelineGap(cached, [], 8)).toBe(false)
+    expect(arkmeRealtimeDeltaCoversTimelineGap(cached, [message(10)], 10)).toBe(false)
+    expect(arkmeRealtimeDeltaCoversTimelineGap(cached, [message(9), message(10)], 10)).toBe(true)
+    expect(arkmeRealtimeDeltaCoversTimelineGap({ ...cached, latestSequence: 8, items: [message(9)] }, [message(10)], 10)).toBe(true)
   })
 
   afterEach(async () => {
@@ -857,7 +879,7 @@ describe('conversation send directory projection', () => {
     expect(JSON.stringify(renderer!.toJSON())).toContain('当前会话')
   })
 
-  it('keeps the current group mounted while its owner timeline refreshes after a capability rotation', async () => {
+  it('keeps the current group mounted and applies a complete realtime delta without a duplicate timeline read', async () => {
     const stableGroup: ArkmeSourceItem = {
       ...target,
       sourceRef: 'source-group-before-activity',
@@ -897,14 +919,13 @@ describe('conversation send directory projection', () => {
     timeline = [timeline[0]!, deltaItem]
 
     await act(async () => {
-      arkmeUi.selectSource(projected)
       arkmeChatTimelineDelta.publish([{ source: projected, items: [deltaItem] }])
       await Promise.resolve()
       await Promise.resolve()
     })
 
     expect(mocks.callArkme.mock.calls.filter(([operation]) => operation === 'source.timeline')).toHaveLength(
-      timelineCallsBeforeProjection + 1,
+      timelineCallsBeforeProjection,
     )
     expect(renderer!.root.find(node => node.type === 'ul'
       && typeof node.props.className === 'string'

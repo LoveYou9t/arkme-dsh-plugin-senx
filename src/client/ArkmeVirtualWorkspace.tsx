@@ -852,7 +852,10 @@ export function ArkmeNavigation({
   wide = true, avatarOnly = false, currentSessionId, embeddedProductShell = false, onClose, onActivateSurface, showHarnessEntry = false,
   lockedDirectory = false, sendToSelfSource, directoryLead, onCreateTask, searchDshMessages, onOpenDshSession, renderSlot,
 }: ArkmeNavigationProps) {
-  const ui = useSyncExternalStore(arkmeUi.subscribe, arkmeUi.getSnapshot, arkmeUi.getSnapshot)
+  const ui = useSyncExternalStore(arkmeUi.subscribe, arkmeUi.getViewSnapshot, arkmeUi.getViewSnapshot)
+  const recordRevision = useSyncExternalStore(
+    arkmeUi.subscribe, arkmeUi.getRecordRevision, arkmeUi.getRecordRevision,
+  )
   const authState = useSyncExternalStore(
     arkmeAuthStore.subscribe, arkmeAuthStore.getSnapshot, arkmeAuthStore.getSnapshot,
   )
@@ -1048,7 +1051,7 @@ export function ArkmeNavigation({
         setDirectory('root'); setSources([])
         return
       }
-    arkmeChatDirectory.activateAccount(snapshot.userId)
+    arkmeChatDirectory.activateAccount(`${snapshot.environment}:${String(snapshot.userId)}`)
     if (avatarCacheUserIdRef.current !== snapshot.userId) clearArkmeAvatarCache()
     avatarCacheUserIdRef.current = snapshot.userId
     authenticatedUserIdRef.current = snapshot.userId
@@ -1163,9 +1166,9 @@ export function ArkmeNavigation({
     return () => { directoryRequestAbortRef.current?.abort() }
   }, [authenticated, directory, loadDirectory])
   useEffect(() => {
-    if (!authenticated || directory !== 'send_to_self' || ui.recordRevision === 0) return
+    if (!authenticated || directory !== 'send_to_self' || recordRevision === 0) return
     void loadDirectory('send_to_self')
-  }, [authenticated, directory, loadDirectory, ui.recordRevision])
+  }, [authenticated, directory, loadDirectory, recordRevision])
   useEffect(() => {
     if (!authenticated || directory !== 'root') return
     let active = true

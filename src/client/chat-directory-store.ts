@@ -6,6 +6,14 @@ const DEFAULT_ROOT_CACHE_MAX_AGE_MS = 30_000
 const ROOT_DIRECTORY_PAGE_LIMIT = 20
 const MAX_ROOT_PAGES = 10
 
+export type ArkmeClientAccountScope = number | string | undefined
+
+function clientAccountScopeKey(scope: ArkmeClientAccountScope): string | undefined {
+  if (typeof scope === 'number') return Number.isSafeInteger(scope) && scope > 0 ? String(scope) : undefined
+  const normalized = scope?.trim()
+  return normalized === undefined || normalized === '' || normalized.length > 256 ? undefined : normalized
+}
+
 interface ArkmeChatDirectoryStoreOptions {
   loadPage?: (cursor?: string, force?: boolean) => Promise<ArkmeSourceList>
   maxAgeMs?: number
@@ -223,7 +231,7 @@ export class ArkmeChatDirectoryStore {
   private readonly now: () => number
   private refreshInFlight: Promise<ArkmeSourceItem[]> | undefined
   private refreshedAtMillis = 0
-  private accountUserId: number | undefined
+  private accountScopeKey: string | undefined
   private generation = 0
   private baselineReady = false
   private isRefreshing = false
@@ -249,10 +257,10 @@ export class ArkmeChatDirectoryStore {
     return () => { this.listeners.delete(listener) }
   }
 
-  activateAccount(userId: number | undefined): void {
-    const normalized = Number.isSafeInteger(userId) && (userId ?? 0) > 0 ? userId : undefined
-    if (normalized === this.accountUserId) return
-    this.accountUserId = normalized
+  activateAccount(scope: ArkmeClientAccountScope): void {
+    const normalized = clientAccountScopeKey(scope)
+    if (normalized === this.accountScopeKey) return
+    this.accountScopeKey = normalized
     this.generation += 1
     this.refreshInFlight = undefined
     this.refreshedAtMillis = 0
@@ -547,27 +555,66 @@ export interface ArkmeChatTimelineDeltaSnapshot {
   itemsBySourceKey: Record<string, import('../types.js').ArkmeTimelineItem[]>
 }
 
+export interface ArkmeChatTimelineSourceDeltaSnapshot {
+  revision: number
+  items: import('../types.js').ArkmeTimelineItem[]
+  latestSequence?: number
+}
+
+const EMPTY_CHAT_TIMELINE_SOURCE_DELTA: ArkmeChatTimelineSourceDeltaSnapshot = {
+  revision: 0,
+  items: [],
+}
+const MAX_SCOPED_REALTIME_SOURCES = 256
+
+function retainNewestMapEntries<Value>(map: Map<string, Value>): void {
+  while (map.size > MAX_SCOPED_REALTIME_SOURCES) {
+    const oldest = map.keys().next().value as string | undefined
+    if (oldest === undefined) return
+    map.delete(oldest)
+  }
+}
+
 export class ArkmeChatTimelineDeltaStore {
   private snapshot: ArkmeChatTimelineDeltaSnapshot = { revision: 0, itemsBySourceKey: {} }
-  private accountUserId: number | undefined
+  private readonly sourceSnapshots = new Map<string, ArkmeChatTimelineSourceDeltaSnapshot>()
+  private accountScopeKey: string | undefined
   private readonly listeners = new Set<() => void>()
   readonly getSnapshot = (): ArkmeChatTimelineDeltaSnapshot => this.snapshot
+  readonly getSnapshotForSource = (sourceKey: string): ArkmeChatTimelineSourceDeltaSnapshot => (
+    this.sourceSnapshots.get(sourceKey) ?? EMPTY_CHAT_TIMELINE_SOURCE_DELTA
+  )
   readonly subscribe = (listener: () => void): (() => void) => {
     this.listeners.add(listener)
     return () => { this.listeners.delete(listener) }
   }
-  activateAccount(userId: number | undefined): void {
-    const normalized = Number.isSafeInteger(userId) && (userId ?? 0) > 0 ? userId : undefined
-    if (normalized === this.accountUserId) return
-    this.accountUserId = normalized
+  activateAccount(scope: ArkmeClientAccountScope): void {
+    const normalized = clientAccountScopeKey(scope)
+    if (normalized === this.accountScopeKey) return
+    this.accountScopeKey = normalized
+    this.sourceSnapshots.clear()
     if (Object.keys(this.snapshot.itemsBySourceKey).length === 0) return
     this.snapshot = { revision: this.snapshot.revision + 1, itemsBySourceKey: {} }
     for (const listener of this.listeners) listener()
   }
   publish(updates: Array<{
-    source: Pick<ArkmeSourceItem, 'sourceRef' | 'sourceKey'>
+    source: Pick<ArkmeSourceItem, 'sourceRef' | 'sourceKey' | 'latestSequence'>
     items: import('../types.js').ArkmeTimelineItem[]
   }>): void {
+    if (updates.length === 0) this.sourceSnapshots.clear()
+    for (const update of updates) {
+      const sourceKey = arkmeChatSourceIdentityKey(update.source)
+      const previous = this.sourceSnapshots.get(sourceKey)
+      if (previous !== undefined && previous.latestSequence === update.source.latestSequence
+        && JSON.stringify(previous.items) === JSON.stringify(update.items)) continue
+      this.sourceSnapshots.delete(sourceKey)
+      this.sourceSnapshots.set(sourceKey, {
+        revision: (previous?.revision ?? 0) + 1,
+        items: [...update.items],
+        ...(update.source.latestSequence === undefined ? {} : { latestSequence: update.source.latestSequence }),
+      })
+    }
+    retainNewestMapEntries(this.sourceSnapshots)
     this.snapshot = {
       revision: this.snapshot.revision + 1,
       itemsBySourceKey: Object.fromEntries(updates.map(update => [arkmeChatSourceIdentityKey(update.source), [...update.items]])),
@@ -585,13 +632,50 @@ export interface ArkmeInterwovenInvalidationSnapshot {
 /** Realtime frames are invalidation hints only; interwoven content always comes from its owner read endpoint. */
 export class ArkmeInterwovenInvalidationStore {
   private snapshot: ArkmeInterwovenInvalidationSnapshot = { revision: 0 }
+  private accountScopeKey: string | undefined
+  private nextScopedRevision = 0
+  private globalRevision = 0
+  private readonly sourceRevisions = new Map<string, number>()
+  private readonly sourceSnapshots = new Map<string, { globalRevision: number; sourceRevision: number; snapshot: ArkmeInterwovenInvalidationSnapshot }>()
   private readonly listeners = new Set<() => void>()
   readonly getSnapshot = (): ArkmeInterwovenInvalidationSnapshot => this.snapshot
+  readonly getSnapshotForSource = (sourceKey: string): ArkmeInterwovenInvalidationSnapshot => {
+    const sourceRevision = this.sourceRevisions.get(sourceKey) ?? 0
+    const cached = this.sourceSnapshots.get(sourceKey)
+    if (cached?.globalRevision === this.globalRevision && cached.sourceRevision === sourceRevision) return cached.snapshot
+    const snapshot = { revision: Math.max(this.globalRevision, sourceRevision) }
+    this.sourceSnapshots.delete(sourceKey)
+    this.sourceSnapshots.set(sourceKey, { globalRevision: this.globalRevision, sourceRevision, snapshot })
+    retainNewestMapEntries(this.sourceSnapshots)
+    return snapshot
+  }
   readonly subscribe = (listener: () => void): (() => void) => {
     this.listeners.add(listener)
     return () => { this.listeners.delete(listener) }
   }
-  invalidate(): void {
+  activateAccount(scope: ArkmeClientAccountScope): void {
+    const normalized = clientAccountScopeKey(scope)
+    if (normalized === this.accountScopeKey) return
+    this.accountScopeKey = normalized
+    this.nextScopedRevision = 0
+    this.globalRevision = 0
+    this.sourceRevisions.clear()
+    this.sourceSnapshots.clear()
+    this.snapshot = { revision: this.snapshot.revision + 1 }
+    for (const listener of this.listeners) listener()
+  }
+  invalidate(sourceKey?: string): void {
+    if (sourceKey === undefined || sourceKey.trim() === '') {
+      this.globalRevision = ++this.nextScopedRevision
+      this.sourceSnapshots.clear()
+    } else {
+      const normalized = sourceKey.trim()
+      const revision = ++this.nextScopedRevision
+      this.sourceRevisions.delete(normalized)
+      this.sourceRevisions.set(normalized, revision)
+      this.sourceSnapshots.delete(normalized)
+      retainNewestMapEntries(this.sourceRevisions)
+    }
     this.snapshot = { revision: this.snapshot.revision + 1 }
     for (const listener of this.listeners) listener()
   }

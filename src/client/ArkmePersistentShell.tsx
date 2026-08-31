@@ -43,6 +43,9 @@ const styles: Record<string, CSSProperties> = {
   conversationLayer: {
     position: 'absolute', inset: 0, minWidth: 0, minHeight: 0,
   },
+  contactsLayer: {
+    position: 'absolute', inset: 0, zIndex: 2,
+  },
   details: { width: 0, height: 0, overflow: 'hidden' },
 }
 
@@ -58,7 +61,7 @@ function clampPersistentSidebarWidth(width: number): number {
 
 /** Permanent browser-side lifecycles that used to be owned by the optional DSH footer entry. */
 export function ArkmePersistentClientRuntime() {
-  const ui = useSyncExternalStore(arkmeUi.subscribe, arkmeUi.getSnapshot, arkmeUi.getSnapshot)
+  const ui = useSyncExternalStore(arkmeUi.subscribe, arkmeUi.getViewSnapshot, arkmeUi.getViewSnapshot)
   const authState = useSyncExternalStore(arkmeAuthStore.subscribe, arkmeAuthStore.getSnapshot, arkmeAuthStore.getSnapshot)
   const auth = authState.auth
 
@@ -96,7 +99,10 @@ export function ArkmePersistentSidebar({
   searchDshMessages = async () => ({ items: [], hasMore: false }), openDshSession = () => undefined,
 }: ArkmePersistentSidebarProps) {
   const sessionState = useSessions(state => state)
-  const ui = useSyncExternalStore(arkmeUi.subscribe, arkmeUi.getSnapshot, arkmeUi.getSnapshot)
+  const ui = useSyncExternalStore(arkmeUi.subscribe, arkmeUi.getViewSnapshot, arkmeUi.getViewSnapshot)
+  const recordRevision = useSyncExternalStore(
+    arkmeUi.subscribe, arkmeUi.getRecordRevision, arkmeUi.getRecordRevision,
+  )
   const authState = useSyncExternalStore(arkmeAuthStore.subscribe, arkmeAuthStore.getSnapshot, arkmeAuthStore.getSnapshot)
   const harnessMode = ui.mode === 'harness'
   const loginMode = ui.mode === 'login'
@@ -137,7 +143,7 @@ export function ArkmePersistentSidebar({
       }
     }).catch(() => undefined)
     return () => controller.abort()
-  }, [authenticatedUserId, ui.recordRevision])
+  }, [authenticatedUserId, recordRevision])
   const sendToSelfSource = sendToSelfState !== undefined && sendToSelfState.userId === authenticatedUserId
     ? sendToSelfState.source
     : undefined
@@ -310,7 +316,7 @@ export type ArkmePersistentWorkspaceProps = PropsRuntime<'conversation'>
 export function ArkmePersistentWorkspace({
   sessionId, closeDetails, t,
 }: ArkmePersistentWorkspaceProps) {
-  const ui = useSyncExternalStore(arkmeUi.subscribe, arkmeUi.getSnapshot, arkmeUi.getSnapshot)
+  const ui = useSyncExternalStore(arkmeUi.subscribe, arkmeUi.getViewSnapshot, arkmeUi.getViewSnapshot)
   const authState = useSyncExternalStore(arkmeAuthStore.subscribe, arkmeAuthStore.getSnapshot, arkmeAuthStore.getSnapshot)
   const contacts = useSyncExternalStore(arkmeContactsTab.subscribe, arkmeContactsTab.getSnapshot, arkmeContactsTab.getSnapshot)
   const authenticatedUserId = authState.auth?.status === 'authenticated' ? authState.auth.userId : undefined
@@ -319,13 +325,14 @@ export function ArkmePersistentWorkspace({
   const contactsMode = ui.mode === 'source' && ui.productMode === 'contacts'
   const webLockedHarness = !startupAuthGateEnabled() && authState.auth?.status !== 'authenticated'
   const harnessVisible = ui.mode === 'harness' || webLockedHarness
+  const conversationHidden = harnessVisible || contactsMode
+  const conversationActive = !conversationHidden && ui.calendarOpen !== true
   const contactsContextRef = useRef({ accountKey: contactsAccountKey, contactsMode })
   contactsContextRef.current = { accountKey: contactsAccountKey, contactsMode }
   useLayoutEffect(() => { closeDetails() }, [closeDetails])
   useLayoutEffect(() => {
     arkmeContactsTab.activateAccount(contactsAccountKey)
-    if (!contactsMode) arkmeContactsTab.clear()
-  }, [contactsAccountKey, contactsMode])
+  }, [contactsAccountKey])
 
   return <main data-arkme-owned="persistent-workspace" data-arkme-workspace {...(contactsMode ? { 'data-arkme-contacts-mobile-view': scopedContacts.selection.kind !== 'none' ? 'content' : 'directory' } : {})} style={styles.workspace} aria-label="Arkme 主界面">
     <ArkmePersistentClientRuntime />
@@ -334,7 +341,27 @@ export function ArkmePersistentWorkspace({
       visible={harnessVisible}
       nativeSettings={webLockedHarness}
     />
-    {contactsMode ? <div className="arkme-directory-detail-pane" data-arkme-contacts-workspace>
+    {!webLockedHarness && <div
+        data-arkme-owned="arkme-conversation-layer"
+        style={{
+          ...styles.conversationLayer,
+          visibility: conversationHidden ? 'hidden' : 'visible',
+          pointerEvents: conversationHidden ? 'none' : 'auto',
+          zIndex: conversationHidden ? 0 : 1,
+        }}
+        aria-hidden={conversationHidden ? true : undefined}
+      >
+        <ArkmeSurface
+          t={t}
+          productChrome={false}
+          productNavigation={false}
+          ownsQrLogin={!startupAuthGateEnabled()}
+          currentSessionId={sessionId}
+          onActivateSurface={() => undefined}
+          active={conversationActive}
+        />
+      </div>}
+    {contactsMode && <div className="arkme-directory-detail-pane" data-arkme-contacts-workspace style={styles.contactsLayer}>
       {scopedContacts.selection.kind !== 'none' && <button type="button" className="arkme-directory-mobile-back" onClick={() => { arkmeContactsTab.clear() }}>返回联系人目录</button>}
       <DirectoryDetailPane
         accountKey={contactsAccountKey ?? ''} selection={scopedContacts.selection}
@@ -352,25 +379,7 @@ export function ArkmePersistentWorkspace({
           onCandidateCleared={() => { arkmeContactsTab.clear() }} onDirectoryRefresh={() => { arkmeContactsTab.activateAccount(contactsAccountKey); arkmeContactsTab.refresh() }}
         />}
       />
-    </div> : !webLockedHarness && <div
-        data-arkme-owned="arkme-conversation-layer"
-        style={{
-          ...styles.conversationLayer,
-          visibility: harnessVisible ? 'hidden' : 'visible',
-          pointerEvents: harnessVisible ? 'none' : 'auto',
-          zIndex: harnessVisible ? 0 : 1,
-        }}
-        aria-hidden={harnessVisible ? true : undefined}
-      >
-        <ArkmeSurface
-          t={t}
-          productChrome={false}
-          productNavigation={false}
-          ownsQrLogin={!startupAuthGateEnabled()}
-          currentSessionId={sessionId}
-          onActivateSurface={() => undefined}
-        />
-      </div>}
+    </div>}
   </main>
 }
 

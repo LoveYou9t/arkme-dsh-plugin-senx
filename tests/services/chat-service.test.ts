@@ -111,9 +111,10 @@ describe('ChatService', () => {
     const record = {
       createTextForConversation: vi.fn(async (recordUid: string) => ({ recordUid, status: 1, localState: 'synced' })),
     }
+    const realtime = { invalidateRecordProjection: vi.fn(async () => undefined) }
     const chat = new ChatService(
       runtime as never, source as never, {} as never, {} as never, record as never,
-      {} as never, {} as never, {} as never, {} as never,
+      {} as never, {} as never, {} as never, realtime as never,
     )
     const captureContext = {
       clientName: 'Google Chrome（DeepSeek Harness）', networkName: '网络已连接', electric: 100, charge: 1,
@@ -133,6 +134,7 @@ describe('ChatService', () => {
     expect(record.createTextForConversation).toHaveBeenNthCalledWith(
       2, 'record-default_category', '浏览器纯文字', { recordDurationMillis: 2_700, captureContext },
     )
+    expect(realtime.invalidateRecordProjection).toHaveBeenCalledTimes(2)
   })
 
   it('writes an explicitly captured location for every supported conversation source', async () => {
@@ -912,6 +914,7 @@ describe('ChatService', () => {
       nextChatClientRevision: vi.fn(() => 5),
       emitChatClientEvent: vi.fn(),
       scheduleChatSessionProjection: vi.fn(),
+      invalidateRecordProjection: vi.fn(async () => undefined),
     }
     const chat = new ChatService(
       runtime as never, source as never, profile as never, {} as never, record as never,
@@ -965,8 +968,7 @@ describe('ChatService', () => {
       },
     ])
     expect(JSON.stringify(worldPostBodies)).not.toContain('parent_extend_record_uid')
-    expect(source.invalidateSourceListCache).toHaveBeenCalledWith(42, 'send_to_self')
-    expect(realtime.emitChatClientEvent).toHaveBeenCalledWith({ type: 'projection-invalidated', revision: 5, projection: 'record' })
+    expect(realtime.invalidateRecordProjection).toHaveBeenCalledOnce()
   })
 
   it('moves and deletes favorite stickers while preserving only stable server fields', async () => {
