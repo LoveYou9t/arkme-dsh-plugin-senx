@@ -104,6 +104,10 @@ import { arkmeConversationComposerLayout } from './conversation-composer-present
 import { restoreArkmeComposerFocus } from './composer-focus.js'
 import { arkmeSourceIdentityKey } from './source-identity.js'
 import {
+  arkmeComposerGroupMemberCount, arkmeComposerPlaceholderText,
+  type ArkmeComposerPlaceholderTarget,
+} from './composer-placeholder.js'
+import {
   ARKME_CONVERSATION_HEADER_HEIGHT, ArkmeInterwovenDetailAside, ArkmeInterwovenMentionCard,
   mergeConversationRows, resolveInterwovenGroupTarget,
   type ArkmeConversationRow, type ArkmeInterwovenDetailViewState,
@@ -214,6 +218,12 @@ export interface ArkmeSurfaceProps {
 export type ArkmeAuthView = 'login' | 'content'
 
 const EMPTY_SELF_SOURCES: readonly ArkmeSourceItem[] = []
+const EMPTY_CONVERSATION_MEMBERS: readonly ArkmeConversationMemberItem[] = []
+
+interface ArkmeConversationMemberSnapshot {
+  sourceRef: string
+  items: readonly ArkmeConversationMemberItem[]
+}
 export function arkmeShouldDismissAnchoredMenu(
   target: Node | null,
   menu: Pick<Node, 'contains'> | null,
@@ -979,10 +989,19 @@ export function arkmeSourceDestinationLabel(source: ArkmeSourceItem | undefined)
   return source?.displayName ?? '发给自己'
 }
 
-export function arkmeSourceComposerPlaceholder(source: ArkmeSourceItem | undefined): string {
-  return source === undefined || source.kind === 'send_to_self'
-    ? '发送给自己…'
-    : `发送到「${source.displayName}」…`
+function arkmeComposerPlaceholderTargetForSource(
+  source: ArkmeSourceItem | undefined,
+  currentMemberCount: number,
+): ArkmeComposerPlaceholderTarget {
+  if (source === undefined || source.kind === 'send_to_self'
+    || source.kind === 'default_category' || source.kind === 'topic') return { kind: 'record' }
+  if (source.kind === 'private_chat') return { kind: 'private_chat', displayName: source.displayName }
+  const memberCount = arkmeComposerGroupMemberCount(currentMemberCount, source.groupAvatar?.memberCount)
+  return {
+    kind: 'group_chat',
+    displayName: source.displayName,
+    ...(memberCount === undefined ? {} : { memberCount }),
+  }
 }
 
 export interface ArkmeComposerMentionTrigger {
@@ -1868,7 +1887,12 @@ export function ArkmeSurface({
   const [jiwoScanLoginEnabled, setJiwoScanLoginEnabled] = useState(false)
   const [testUserId, setTestUserId] = useState('')
   const [qr, setQr] = useState('')
-  const [conversationMembers, setConversationMembers] = useState<ArkmeConversationMemberItem[]>([])
+  const [conversationMemberSnapshot, setConversationMemberSnapshot] = useState<ArkmeConversationMemberSnapshot>({
+    sourceRef: '', items: EMPTY_CONVERSATION_MEMBERS,
+  })
+  const conversationMembers = conversationMemberSnapshot.sourceRef === source?.sourceRef
+    ? conversationMemberSnapshot.items
+    : EMPTY_CONVERSATION_MEMBERS
   const [conversationJoinEvents, setConversationJoinEvents] = useState<ArkmeConversationMemberJoinEvent[]>([])
   const [conversationMembersRefreshRevision, setConversationMembersRefreshRevision] = useState(0)
   const [groupMentionBots, setGroupMentionBots] = useState<ArkmeGroupBotCandidateList>()
@@ -1916,7 +1940,10 @@ export function ArkmeSurface({
   const [privateChatBusy, setPrivateChatBusy] = useState(false)
 
   useEffect(() => {
-    setConversationMembers([])
+    setConversationMemberSnapshot({
+      sourceRef: source?.sourceRef ?? '',
+      items: EMPTY_CONVERSATION_MEMBERS,
+    })
     setConversationJoinEvents([])
     setMemberMenu(undefined)
     setMemberProfile(undefined)
@@ -1931,7 +1958,10 @@ export function ArkmeSurface({
     }, controller.signal)
       .then(snapshot => {
         if (controller.signal.aborted) return
-        setConversationMembers(snapshot.items)
+        setConversationMemberSnapshot({
+          sourceRef: source.sourceRef,
+          items: snapshot.items,
+        })
         setConversationJoinEvents(source.kind === 'group_chat' ? snapshot.joinEvents ?? [] : [])
       })
       .catch(caught => {
@@ -4057,6 +4087,9 @@ export function ArkmeSurface({
     && (ui.mode === 'recordings' || ui.mode === 'world' || ui.mode === 'search' || ui.mode === 'extensions'
       || ui.mode === 'voiceprint' || ui.mode === 'calls')
   const conversationOverlayHost = panelRef.current
+  const composerPlaceholder = arkmeComposerPlaceholderText(
+    arkmeComposerPlaceholderTargetForSource(selectedSource, conversationMembers.length),
+  )
 
   return (
     <div
@@ -4652,7 +4685,7 @@ export function ArkmeSurface({
                   </button>
                 })}
             </div>}
-            <ArkmeRichComposerInput className="arkme-conversation-textarea" ref={textareaRef} style={styles.textarea!} value={draft} mentions={composerDraft.mentions} emojis={composerDraft.emojis} maxLength={20000} placeholder={arkmeSourceComposerPlaceholder(selectedSource)} ariaLabel={arkmeSourceComposerPlaceholder(selectedSource)} disabled={preparingFiles}
+            <ArkmeRichComposerInput key={composerDraftKey} className="arkme-conversation-textarea" ref={textareaRef} style={styles.textarea!} value={draft} mentions={composerDraft.mentions} emojis={composerDraft.emojis} maxLength={20000} placeholder={composerPlaceholder} ariaLabel={composerPlaceholder} disabled={preparingFiles}
               onTextChange={updateComposerText}
               onFocus={() => { setComposerInputFocused(true) }}
               onBlur={() => { setComposerInputFocused(false) }}
