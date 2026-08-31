@@ -36,6 +36,20 @@ const group: ArkmeSourceItem = {
   latestPreview: 'message-784', activeAtMillis: 48, unreadCount: 0, latestSequence: 784,
 }
 
+function activeMembers(count: number): ArkmeConversationMemberItem[] {
+  return Array.from({ length: count }, (_, index) => ({
+    memberRef: `member-${String(index)}`,
+    displayName: `成员${String(index)}`,
+    role: 'member',
+    status: 'active',
+    isSelf: false,
+    isOwner: false,
+    joinedAtMillis: index + 1,
+    recordCount: 0,
+    mentionCount: 0,
+  }))
+}
+
 describe('conversation send directory projection', () => {
   let renderer: ReactTestRenderer | undefined
   let timeline: ArkmeTimelineItem[]
@@ -381,6 +395,174 @@ describe('conversation send directory projection', () => {
     expect(sendCall?.[1]).not.toHaveProperty('humanMentions')
     expect(sendCall?.[1]).not.toHaveProperty('botMentions')
     expect(renderer!.root.findByProps({ 'data-arkme-read-receipt-indicator': 'unread' })).toBeDefined()
+  })
+
+  it('replaces the native editor when the selected draft identity changes', async () => {
+    await act(async () => {
+      renderer = create(<ArkmeSurface productChrome={false} productNavigation={false} />)
+      await Promise.resolve()
+    })
+    const firstComposer = renderer!.root.findByType(ArkmeRichComposerInput)
+
+    await act(async () => {
+      arkmeUi.selectSource(other)
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(renderer!.root.findByType(ArkmeRichComposerInput)).not.toBe(firstComposer)
+  })
+
+  it('keeps the current group live member count when an aborted previous request resolves late', async () => {
+    const groupA: ArkmeSourceItem = {
+      ...group,
+      sourceRef: 'source-group-a',
+      sourceKey: 'chat:group-a',
+      displayName: '群聊 A',
+      groupAvatar: { memberCount: 5, strategy: 'owner_recent_speakers', computedAtMillis: 1, slots: [] },
+    }
+    const groupB: ArkmeSourceItem = {
+      ...group,
+      sourceRef: 'source-group-b',
+      sourceKey: 'chat:group-b',
+      displayName: '群聊 B',
+      groupAvatar: { memberCount: 6, strategy: 'owner_recent_speakers', computedAtMillis: 1, slots: [] },
+    }
+    let resolveGroupA!: (value: unknown) => void
+    const pendingGroupA = new Promise(resolve => { resolveGroupA = resolve })
+    let groupASignal: AbortSignal | undefined
+    arkmeChatDirectory.publish([groupA, groupB])
+    arkmeUi.selectSource(groupA)
+    mocks.callArkme.mockImplementation(async (
+      operation: string,
+      params?: { sourceRef?: string },
+      signal?: AbortSignal,
+    ) => {
+      if (operation === 'user.profile') return {
+        profile: {
+          userId: 42, displayName: '狗才', nickname: '狗才', avatarRef: '', arkmeId: 'doge', accountType: 1,
+          createdAt: 1, bindings: { apple: false, wechat: true, google: false }, contact: {},
+        },
+        cachedAtMillis: 1,
+        revision: 1,
+      }
+      if (operation === 'source.members') {
+        if (params?.sourceRef === groupA.sourceRef) {
+          groupASignal = signal
+          return await pendingGroupA
+        }
+        if (params?.sourceRef === groupB.sourceRef) {
+          return { source: groupB, items: activeMembers(22), total: 22, activeCount: 22 }
+        }
+      }
+      if (operation === 'source.timeline') {
+        const timelineSource = params?.sourceRef === groupB.sourceRef ? groupB : groupA
+        return { source: timelineSource, items: [], hasMore: false }
+      }
+      if (operation === 'source.interwoven-moments') {
+        return { state: 'disabled', moments: [], preparedAtMillis: 48 }
+      }
+      throw new Error(`unexpected operation ${operation}`)
+    })
+
+    await act(async () => {
+      renderer = create(<ArkmeSurface productChrome={false} productNavigation={false} />)
+      await Promise.resolve()
+    })
+    expect(renderer!.root.findByType(ArkmeRichComposerInput).props).toMatchObject({
+      placeholder: '发消息到 群聊 A(5人)',
+      disabled: false,
+    })
+
+    await act(async () => {
+      arkmeUi.selectSource(groupB)
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(groupASignal?.aborted).toBe(true)
+    expect(renderer!.root.findByType(ArkmeRichComposerInput).props.placeholder).toBe('发消息到 群聊 B(22人)')
+
+    await act(async () => {
+      resolveGroupA({ source: groupA, items: activeMembers(11), total: 11, activeCount: 11 })
+      await Promise.resolve()
+    })
+
+    expect(renderer!.root.findByType(ArkmeRichComposerInput).props.placeholder).toBe('发消息到 群聊 B(22人)')
+  })
+
+  it('keeps the composer usable with the projected group count when member refresh fails', async () => {
+    const fallbackGroup: ArkmeSourceItem = {
+      ...group,
+      displayName: '故障恢复群',
+      groupAvatar: { memberCount: 9, strategy: 'owner_recent_speakers', computedAtMillis: 1, slots: [] },
+    }
+    arkmeChatDirectory.publish([fallbackGroup])
+    arkmeUi.selectSource(fallbackGroup)
+    mocks.callArkme.mockImplementation(async (operation: string) => {
+      if (operation === 'user.profile') return {
+        profile: {
+          userId: 42, displayName: '狗才', nickname: '狗才', avatarRef: '', arkmeId: 'doge', accountType: 1,
+          createdAt: 1, bindings: { apple: false, wechat: true, google: false }, contact: {},
+        },
+        cachedAtMillis: 1,
+        revision: 1,
+      }
+      if (operation === 'source.members') throw new Error('成员刷新失败')
+      if (operation === 'source.timeline') return { source: fallbackGroup, items: [], hasMore: false }
+      if (operation === 'source.interwoven-moments') {
+        return { state: 'disabled', moments: [], preparedAtMillis: 48 }
+      }
+      throw new Error(`unexpected operation ${operation}`)
+    })
+
+    await act(async () => {
+      renderer = create(<ArkmeSurface productChrome={false} productNavigation={false} />)
+      await Promise.resolve()
+    })
+
+    expect(renderer!.root.findByType(ArkmeRichComposerInput).props).toMatchObject({
+      placeholder: '发消息到 故障恢复群(9人)',
+      disabled: false,
+    })
+    expect(renderer!.root.findAll(node => node.type === 'div' && node.children.includes('成员刷新失败'))).not.toHaveLength(0)
+  })
+
+  it('falls back to the projected group count when the refreshed active count is zero', async () => {
+    const fallbackGroup: ArkmeSourceItem = {
+      ...group,
+      displayName: '零成员快照群',
+      groupAvatar: { memberCount: 9, strategy: 'owner_recent_speakers', computedAtMillis: 1, slots: [] },
+    }
+    arkmeChatDirectory.publish([fallbackGroup])
+    arkmeUi.selectSource(fallbackGroup)
+    mocks.callArkme.mockImplementation(async (operation: string) => {
+      if (operation === 'user.profile') return {
+        profile: {
+          userId: 42, displayName: '狗才', nickname: '狗才', avatarRef: '', arkmeId: 'doge', accountType: 1,
+          createdAt: 1, bindings: { apple: false, wechat: true, google: false }, contact: {},
+        },
+        cachedAtMillis: 1,
+        revision: 1,
+      }
+      if (operation === 'source.members') return {
+        source: fallbackGroup, items: [], total: 0, activeCount: 0,
+      }
+      if (operation === 'source.timeline') return { source: fallbackGroup, items: [], hasMore: false }
+      if (operation === 'source.interwoven-moments') {
+        return { state: 'disabled', moments: [], preparedAtMillis: 48 }
+      }
+      throw new Error(`unexpected operation ${operation}`)
+    })
+
+    await act(async () => {
+      renderer = create(<ArkmeSurface productChrome={false} productNavigation={false} />)
+      await Promise.resolve()
+    })
+
+    expect(renderer!.root.findByType(ArkmeRichComposerInput).props).toMatchObject({
+      placeholder: '发消息到 零成员快照群(9人)',
+      disabled: false,
+    })
   })
 
   it('sends a selected group member with the mention-scoped ref and restores the same structured draft on failure', async () => {
