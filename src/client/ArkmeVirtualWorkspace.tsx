@@ -29,6 +29,7 @@ import {
 import { arkmeUi } from './ui-controller.js'
 import { arkmeChatDirectory } from './chat-directory-store.js'
 import { arkmeNotificationActivation } from './notification-activation-store.js'
+import { arkmePrependSourceByIdentity, arkmeSourceIdentityKey } from './source-identity.js'
 import {
   arkmeSelfDirectorySources, arkmeSendToSelfDirectoryPresentation, arkmeSourceTimeLabel, isArkmeSelfWorkspaceSource,
   sortArkmeSources, type ArkmeSourceSort,
@@ -1217,7 +1218,7 @@ export function ArkmeNavigation({
     const source = notificationActivation.source
     if (!authenticated || source === undefined) return
     const shared = arkmeChatDirectory.getSnapshot().sources
-    const nextSources = [source, ...shared.filter(item => item.sourceRef !== source.sourceRef)]
+    const nextSources = arkmePrependSourceByIdentity(source, shared)
     arkmeChatDirectory.publish(nextSources)
     setDirectory('root')
     setSources(nextSources)
@@ -1456,7 +1457,7 @@ export function ArkmeNavigation({
     activateNativeEntry()
     const sharedSources = arkmeChatDirectory.getSnapshot().sources
     const currentSources = sharedSources.length > 0 ? sharedSources : sources
-    const nextSources = [source, ...currentSources.filter(item => item.sourceRef !== source.sourceRef)]
+    const nextSources = arkmePrependSourceByIdentity(source, currentSources)
     setSources(nextSources)
     arkmeChatDirectory.publish(nextSources)
     arkmeUi.selectSource(source)
@@ -1492,7 +1493,7 @@ export function ArkmeNavigation({
       const result = await callArkme<ArkmeOpenPrivateChatResult>('chat.official-author.private.open')
       const source = result.source
       activateNativeEntry()
-      const nextSources = [source, ...currentSources.filter(item => item.sourceRef !== source.sourceRef)]
+      const nextSources = arkmePrependSourceByIdentity(source, currentSources)
       setDirectory('root')
       setSources(nextSources)
       arkmeChatDirectory.publish(nextSources)
@@ -1510,7 +1511,7 @@ export function ArkmeNavigation({
     activateNativeEntry()
     const sharedSources = arkmeChatDirectory.getSnapshot().sources
     const currentSources = sharedSources.length > 0 ? sharedSources : sources
-    const optimistic = [source, ...currentSources.filter(item => item.sourceRef !== source.sourceRef)]
+    const optimistic = arkmePrependSourceByIdentity(source, currentSources)
     setDirectory('root')
     setSources(optimistic)
     arkmeChatDirectory.publish(optimistic)
@@ -1520,12 +1521,13 @@ export function ArkmeNavigation({
 
     const refreshed = await arkmeChatDirectory.refreshRoot({ force: true }).catch(() => undefined)
     if (refreshed === undefined) return
-    const reconciled = refreshed.some(item => item.sourceRef === source.sourceRef)
+    const sourceIdentity = arkmeSourceIdentityKey(source)
+    const reconciled = refreshed.some(item => arkmeSourceIdentityKey(item) === sourceIdentity)
       ? refreshed
       : optimistic
     setSources(reconciled)
     arkmeChatDirectory.publish(reconciled)
-    const selected = reconciled.find(item => item.sourceRef === source.sourceRef) ?? source
+    const selected = reconciled.find(item => arkmeSourceIdentityKey(item) === sourceIdentity) ?? source
     arkmeUi.selectSource(selected)
     persistCache({ directory: 'root', sources: { root: reconciled }, selectedSourceRef: selected.sourceRef })
   }

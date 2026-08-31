@@ -61,39 +61,6 @@ describe('ArkmeChatDirectoryStore', () => {
     expect(store.getSnapshot().sources.map(item => item.sourceRef)).toEqual(['source-2', 'source-1'])
   })
 
-  it('promotes a successfully sent chat message into the directory immediately', () => {
-    const store = new ArkmeChatDirectoryStore()
-    const target = {
-      sourceRef: 'source-harness', sourceKey: 'chat:harness', kind: 'private_chat' as const, displayName: 'Harness4',
-      latestPreview: '@狗才 1', activeAtMillis: 22, unreadCount: 0, latestSequence: 8,
-    }
-    const other = {
-      sourceRef: 'source-other', sourceKey: 'chat:other', kind: 'private_chat' as const, displayName: '其他会话',
-      latestPreview: '稍新的消息', activeAtMillis: 40, unreadCount: 1, latestSequence: 4,
-    }
-    store.publish([other, target])
-
-    expect(store.recordSent(target, {
-      latestPreview: '测试', activeAtMillis: 48, latestSequence: 9,
-    })).toBe(true)
-
-    expect(store.getSnapshot().sources.map(item => item.sourceRef)).toEqual(['source-harness', 'source-other'])
-    expect(store.getSnapshot().sources[0]).toMatchObject({
-      latestPreview: '测试', activeAtMillis: 48, unreadCount: 0, latestSequence: 9,
-    })
-
-    store.upsert({ ...target, latestPreview: '@狗才 1', activeAtMillis: 22, latestSequence: 9 })
-    expect(store.getSnapshot().sources[0]).toMatchObject({
-      latestPreview: '测试', activeAtMillis: 48, unreadCount: 0, latestSequence: 9,
-    })
-
-    store.publish([other, { ...target, latestPreview: '@狗才 1', activeAtMillis: 22, latestSequence: 9 }])
-    expect(store.getSnapshot().sources.map(item => item.sourceRef)).toEqual(['source-harness', 'source-other'])
-    expect(store.getSnapshot().sources[0]).toMatchObject({
-      latestPreview: '测试', activeAtMillis: 48, unreadCount: 0, latestSequence: 9,
-    })
-  })
-
   it('single-flights a paginated refresh and reuses its last-success TTL cache', async () => {
     const loadPage = vi.fn(async (cursor?: string) => cursor === undefined
       ? {
@@ -118,6 +85,31 @@ describe('ArkmeChatDirectoryStore', () => {
     expect(loadPage).toHaveBeenCalledTimes(2)
     await store.refreshRoot({ force: true })
     expect(loadPage).toHaveBeenCalledTimes(4)
+  })
+
+  it('deduplicates rotated capability refs for the same stable chat across directory pages', async () => {
+    const loadPage = vi.fn(async (cursor?: string) => cursor === undefined
+      ? {
+          directory: 'root' as const,
+          items: [{
+            sourceRef: 'source-current', sourceKey: 'chat:stable', kind: 'group_chat' as const,
+            displayName: '项目群', activeAtMillis: 2, unreadCount: 0,
+          }],
+          hasMore: true,
+          nextCursor: 'next',
+        }
+      : {
+          directory: 'root' as const,
+          items: [{
+            sourceRef: 'source-stale', sourceKey: 'chat:stable', kind: 'group_chat' as const,
+            displayName: '项目群', activeAtMillis: 1, unreadCount: 0,
+          }],
+          hasMore: false,
+        })
+    const store = new ArkmeChatDirectoryStore({ loadPage })
+
+    await expect(store.refreshRoot()).resolves.toMatchObject([{ sourceRef: 'source-current' }])
+    expect(store.getSnapshot().sources).toHaveLength(1)
   })
 
   it('loads the root directory in 20-item pages while continuing through the server cursor', async () => {
@@ -495,12 +487,25 @@ describe('ArkmeChatDirectoryStore', () => {
 
   it('publishes timeline deltas independently from directory snapshots', () => {
     const store = new ArkmeChatTimelineDeltaStore()
-    store.publish([{ sourceRef: 'source-1', items: [{
+    store.publish([{ source: { sourceRef: 'source-1', sourceKey: 'chat:stable-1' }, items: [{
       itemUid: 'item-1', senderName: '联系人', isMe: false, sendAtMillis: 1,
       title: '', textContent: '新消息', status: 1, sequence: 9,
     }] }])
     expect(store.getSnapshot()).toMatchObject({ revision: 1 })
-    expect(store.getSnapshot().itemsBySourceRef['source-1']?.[0]).toMatchObject({ itemUid: 'item-1', sequence: 9 })
+    expect(store.getSnapshot().itemsBySourceKey['chat:stable-1']?.[0]).toMatchObject({ itemUid: 'item-1', sequence: 9 })
+  })
+
+  it('clears timeline deltas when the authenticated account changes', () => {
+    const store = new ArkmeChatTimelineDeltaStore()
+    store.activateAccount(1001)
+    store.publish([{ source: { sourceRef: 'source-a', sourceKey: 'chat:shared-key' }, items: [{
+      itemUid: 'account-a-item', senderName: '账号 A', isMe: false, sendAtMillis: 1,
+      title: '', textContent: '账号 A 的消息', status: 1, sequence: 9,
+    }] }])
+
+    store.activateAccount(2002)
+
+    expect(store.getSnapshot()).toEqual({ revision: 2, itemsBySourceKey: {} })
   })
 
   it('publishes revision-only interwoven invalidations without carrying realtime content', () => {

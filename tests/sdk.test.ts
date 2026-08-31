@@ -637,7 +637,7 @@ describe('Arkme SDK', () => {
     })).resolves.toMatchObject({ itemUid: 'record-agent-1' })
     await expect(sdk.sendText('source-1', '@小林 请看', {
       recordUid: 'record-mention-1', relationUid: 'rel-mention-1',
-      humanMentions: [{ memberRef: 'member-1', startIndex: 0, length: 3 }],
+      humanMentions: [{ mentionRef: 'mention-1', startIndex: 0, length: 3 }],
     })).resolves.toMatchObject({ itemUid: 'record-mention-1' })
     await expect(sdk.sendText('source-1', '@所有人 请看', {
       recordUid: 'record-all-mention-1', relationUid: 'rel-all-mention-1',
@@ -681,7 +681,7 @@ describe('Arkme SDK', () => {
           textContent: '@小林 请看',
           recordUid: 'record-mention-1',
           relationUid: 'rel-mention-1',
-          humanMentions: [{ memberRef: 'member-1', startIndex: 0, length: 3 }],
+          humanMentions: [{ mentionRef: 'mention-1', startIndex: 0, length: 3 }],
         },
       },
       {

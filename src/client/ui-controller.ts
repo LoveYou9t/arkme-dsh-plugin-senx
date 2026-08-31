@@ -2,9 +2,10 @@ import type { ArkmeBotSummary, ArkmeSourceItem } from '../types.js'
 import { arkmeContactsTab } from './redesign/contacts/contacts-tab-store.js'
 import type { ArkmeExtensionShareAction } from './extension-share-deeplink.js'
 
-function sameSource(left: ArkmeSourceItem | undefined, right: ArkmeSourceItem | undefined): boolean {
+function sameSelectedSource(left: ArkmeSourceItem | undefined, right: ArkmeSourceItem | undefined): boolean {
   if (left === undefined || right === undefined) return left === right
-  return left.sourceRef === right.sourceRef && left.kind === right.kind && left.displayName === right.displayName
+  return left.sourceRef === right.sourceRef && left.sourceKey === right.sourceKey
+    && left.kind === right.kind && left.displayName === right.displayName
     && left.latestPreview === right.latestPreview && left.activeAtMillis === right.activeAtMillis
     && left.unreadCount === right.unreadCount && left.hasUnreadMention === right.hasUnreadMention
     && left.isMuted === right.isMuted && left.isPinned === right.isPinned
@@ -365,7 +366,7 @@ export class ArkmeUiController {
       && next.extensionAuthorFilter?.ownerName === this.state.extensionAuthorFilter?.ownerName
       && next.webLoginDialogOpen === this.state.webLoginDialogOpen
       && sameWorldTarget(next.worldTarget, this.state.worldTarget)
-      && sameSource(next.selectedSource, this.state.selectedSource)
+      && sameSelectedSource(next.selectedSource, this.state.selectedSource)
       && sameBot(next.selectedBot, this.state.selectedBot)) return
     this.state = next
     for (const listener of this.listeners) listener()

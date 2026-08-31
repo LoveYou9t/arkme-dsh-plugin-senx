@@ -1,6 +1,6 @@
 import { act, create, type ReactTestRenderer } from 'react-test-renderer'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { ArkmeSourceItem, ArkmeTimelineItem } from '../src/types.js'
+import type { ArkmeConversationMemberItem, ArkmeSourceItem, ArkmeTimelineItem } from '../src/types.js'
 
 const mocks = vi.hoisted(() => ({ callArkme: vi.fn() }))
 
@@ -13,12 +13,12 @@ vi.mock('../src/client/api.js', () => ({
   },
 }))
 
-import { ArkmeSurface } from '../src/client/ArkmeSidebar.js'
+import { ArkmeSurface, arkmeGroupMentionCandidates } from '../src/client/ArkmeSidebar.js'
 import { ArkmeClientError } from '../src/client/api.js'
 import { ArkmeRichComposerInput } from '../src/client/ArkmeRichComposerInput.js'
 import { arkmeAuthStore } from '../src/client/auth-store.js'
 import { arkmeChatDirectory, arkmeChatTimelineDelta } from '../src/client/chat-directory-store.js'
-import { arkmeComposerDraftStore } from '../src/client/composer-draft-store.js'
+import { arkmeComposerDraftStore, arkmeSourceComposerDraftKey } from '../src/client/composer-draft-store.js'
 import { arkmeMessageReadReceipts } from '../src/client/message-read-receipt-store.js'
 import { arkmeUi } from '../src/client/ui-controller.js'
 
@@ -182,6 +182,18 @@ describe('conversation send directory projection', () => {
     vi.unstubAllGlobals()
   })
 
+  it('does not expose a human mention action without a mention-scoped capability ref', () => {
+    const member: ArkmeConversationMemberItem = {
+      memberRef: 'member-action-only',
+      displayName: '仅成员身份',
+      role: 'member', status: 'active', isSelf: false, isOwner: false,
+      joinedAtMillis: 1, recordCount: 0, mentionCount: 0,
+    }
+
+    expect(arkmeGroupMentionCandidates('', [], [member]).map(candidate => candidate.kind))
+      .toEqual(['all'])
+  })
+
   async function openForwardPicker() {
     timeline = [{
       itemUid: 'forward-source', messageActionRef: 'opaque-forward-action',
@@ -284,16 +296,18 @@ describe('conversation send directory projection', () => {
     expect(renderer!.root.findAllByProps({ role: 'status' })).toHaveLength(0)
   })
 
-  it('updates and reorders the left conversation row when a send succeeds', async () => {
+  it('keeps the owner directory unchanged after send until the authoritative session projection arrives', async () => {
     await act(async () => {
       renderer = create(<ArkmeSurface productChrome={false} productNavigation={false} />)
       await Promise.resolve()
     })
     const composer = renderer!.root.findByType(ArkmeRichComposerInput)
     await act(async () => {
-      composer.props.onTextChange('测试')
+      composer.props.onTextChange('@普通文字')
+      composer.props.onSelectionChange('@普通文字', 5, 5)
       await Promise.resolve()
     })
+    const directoryBeforeSend = arkmeChatDirectory.getSnapshot()
     const sendButton = renderer!.root.findByProps({ 'aria-label': '发送消息' })
     await act(async () => {
       sendButton.props.onClick()
@@ -301,12 +315,194 @@ describe('conversation send directory projection', () => {
       await Promise.resolve()
     })
 
-    expect(arkmeChatDirectory.getSnapshot().sources.map(source => source.sourceRef))
-      .toEqual(['source-harness', 'source-other'])
-    expect(arkmeChatDirectory.getSnapshot().sources[0]).toMatchObject({
-      latestPreview: '测试', activeAtMillis: 48, unreadCount: 0, latestSequence: 9,
-    })
+    expect(arkmeChatDirectory.getSnapshot()).toEqual(directoryBeforeSend)
+    const sendCall = mocks.callArkme.mock.calls.find(([operation]) => operation === 'source.send-text')
+    expect(sendCall?.[1]).not.toHaveProperty('humanMentions')
+    expect(sendCall?.[1]).not.toHaveProperty('botMentions')
     expect(renderer!.root.findByProps({ 'data-arkme-read-receipt-indicator': 'unread' })).toBeDefined()
+  })
+
+  it('sends a selected group member with the mention-scoped ref and restores the same structured draft on failure', async () => {
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    const groupTarget: ArkmeSourceItem = {
+      ...target,
+      sourceRef: 'source-mention-group',
+      sourceKey: 'chat:mention-group',
+      kind: 'group_chat',
+      displayName: '协作群',
+    }
+    arkmeChatDirectory.clear()
+    arkmeChatDirectory.activateAccount(42)
+    arkmeChatDirectory.publish([other, groupTarget])
+    arkmeUi.selectSource(groupTarget)
+    mocks.callArkme.mockImplementation(async (operation: string, params?: Record<string, unknown>) => {
+      if (operation === 'user.profile') return {
+        profile: {
+          userId: 42, displayName: '狗才', nickname: '狗才', avatarRef: '', arkmeId: 'doge', accountType: 1,
+          createdAt: 1, bindings: { apple: false, wechat: true, google: false }, contact: {},
+        },
+        cachedAtMillis: 1,
+        revision: 1,
+      }
+      if (operation === 'source.members') return {
+        source: groupTarget,
+        items: [{
+          memberRef: 'arkme-chat-member-v1.stable.signature',
+          mentionRef: 'arkme-chat-human-mention-v1.mention.signature',
+          displayName: 'Tison',
+          role: 'member', status: 'active', isSelf: false, isOwner: false,
+          joinedAtMillis: 1, recordCount: 0, mentionCount: 0,
+        }],
+        total: 1,
+        activeCount: 1,
+      }
+      if (operation === 'source.timeline') return { source: groupTarget, items: [], hasMore: false }
+      if (operation === 'group.bots') throw new Error('Bot candidates unavailable')
+      if (operation === 'source.send-text') return {
+        sourceRef: groupTarget.sourceRef,
+        itemUid: params?.recordUid ?? 'record-new',
+        status: 1,
+        sequence: 9,
+        localState: 'synced',
+      }
+      throw new Error(`unexpected operation ${operation}`)
+    })
+
+    await act(async () => {
+      renderer = create(<ArkmeSurface productChrome={false} productNavigation={false} />)
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    const composer = renderer!.root.findByType(ArkmeRichComposerInput)
+    await act(async () => {
+      composer.props.onTextChange('  @T')
+      composer.props.onSelectionChange('  @T', 4, 4)
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    const tisonOption = renderer!.root.findAllByProps({ role: 'option' }).find(option =>
+      option.findAll(node => node.type === 'span' && node.children.join('') === 'Tison').length > 0)
+    expect(tisonOption).toBeDefined()
+    await act(async () => {
+      tisonOption!.props.onMouseDown({ preventDefault: vi.fn() })
+      await Promise.resolve()
+    })
+
+    const draftKey = arkmeSourceComposerDraftKey(42, groupTarget)!
+    expect(arkmeComposerDraftStore.get(draftKey)).toMatchObject({
+      text: '  @Tison ',
+      mentions: [{
+        mentionRef: 'arkme-chat-human-mention-v1.mention.signature',
+        displayName: 'Tison', startIndex: 2, length: 6,
+      }],
+    })
+    const directoryBeforeSend = arkmeChatDirectory.getSnapshot()
+
+    await act(async () => {
+      renderer!.root.findByProps({ 'aria-label': '发送消息' }).props.onClick()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(mocks.callArkme).toHaveBeenCalledWith('source.send-text', expect.objectContaining({
+      sourceRef: groupTarget.sourceRef,
+      textContent: '  @Tison ',
+      humanMentions: [{
+        mentionRef: 'arkme-chat-human-mention-v1.mention.signature',
+        startIndex: 2,
+        length: 6,
+      }],
+    }))
+    expect(warning).toHaveBeenCalledWith(
+      'dsh-arkme: mention bot refresh failed',
+      'Bot candidates unavailable',
+    )
+    expect(arkmeComposerDraftStore.get(draftKey).text).toBe('')
+    expect(arkmeChatDirectory.getSnapshot()).toEqual(directoryBeforeSend)
+
+    await act(async () => {
+      composer.props.onTextChange('  @T')
+      composer.props.onSelectionChange('  @T', 4, 4)
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    const fileMentionOption = renderer!.root.findAllByProps({ role: 'option' }).find(option =>
+      option.findAll(node => node.type === 'span' && node.children.join('') === 'Tison').length > 0)
+    expect(fileMentionOption).toBeDefined()
+    await act(async () => {
+      fileMentionOption!.props.onMouseDown({ preventDefault: vi.fn() })
+      arkmeComposerDraftStore.appendAttachments(draftKey, [{ localFile: {
+        fileRef: 'arkme-file-v1.00000000-0000-4000-8000-000000000001',
+        fileName: '说明.md', mimeType: 'text/markdown', size: 8, fileKind: 4,
+      } }])
+      await Promise.resolve()
+    })
+    vi.stubGlobal('crypto', { randomUUID: vi.fn()
+      .mockReturnValueOnce('00000000-0000-4000-8000-000000000002')
+      .mockReturnValueOnce('00000000-0000-4000-8000-000000000003') })
+    mocks.callArkme.mockImplementation(async (operation: string, params?: Record<string, unknown>) => {
+      if (operation === 'files.send') return {
+        taskRef: 'task-human-mention-file',
+        sourceRef: groupTarget.sourceRef,
+        recordUid: params?.recordUid,
+        relationUid: params?.relationUid,
+        fileRefs: params?.fileRefs,
+        content: {
+          textContent: params?.textContent,
+          humanMentions: params?.humanMentions,
+        },
+        files: [], state: 'queued', createdAtMillis: 48,
+      }
+      if (operation === 'files.send.tasks') return []
+      throw new Error(`unexpected operation ${operation}`)
+    })
+    await act(async () => {
+      renderer!.root.findByProps({ 'aria-label': '发送消息' }).props.onClick()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(mocks.callArkme).toHaveBeenCalledWith('files.send', expect.objectContaining({
+      sourceRef: groupTarget.sourceRef,
+      textContent: '  @Tison ',
+      humanMentions: [{
+        mentionRef: 'arkme-chat-human-mention-v1.mention.signature',
+        startIndex: 2,
+        length: 6,
+      }],
+    }))
+
+    await act(async () => {
+      composer.props.onTextChange('@T')
+      composer.props.onSelectionChange('@T', 2, 2)
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    const retryOption = renderer!.root.findAllByProps({ role: 'option' }).find(option =>
+      option.findAll(node => node.type === 'span' && node.children.join('') === 'Tison').length > 0)
+    expect(retryOption).toBeDefined()
+    await act(async () => {
+      retryOption!.props.onMouseDown({ preventDefault: vi.fn() })
+      await Promise.resolve()
+    })
+    vi.stubGlobal('crypto', { randomUUID: vi.fn()
+      .mockReturnValueOnce('record-retry')
+      .mockReturnValueOnce('relation-retry') })
+    mocks.callArkme.mockImplementation(async (operation: string) => {
+      if (operation === 'source.send-text') throw new Error('发送失败')
+      throw new Error(`unexpected operation ${operation}`)
+    })
+    await act(async () => {
+      renderer!.root.findByProps({ 'aria-label': '发送消息' }).props.onClick()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(arkmeComposerDraftStore.get(draftKey)).toMatchObject({
+      text: '@Tison ',
+      mentions: [{
+        mentionRef: 'arkme-chat-human-mention-v1.mention.signature',
+        displayName: 'Tison', startIndex: 0, length: 6,
+      }],
+    })
+    expect(arkmeChatDirectory.getSnapshot()).toEqual(directoryBeforeSend)
   })
 
   it('keeps the list mounted and avoids a timeline reload when an AI-polished send advances the selected projection', async () => {
@@ -384,6 +580,375 @@ describe('conversation send directory projection', () => {
     expect(conversationList()).toBe(listBefore)
     expect(renderer!.root.findByProps({ 'data-arkme-message-content-line': previousItem.itemUid })).toBe(previousRowBefore)
     expect(renderer!.root.findByProps({ 'data-arkme-message-content-line': polishedItem.itemUid })).toBeDefined()
+  })
+
+  it('does not refresh the selected owner timeline when only another conversation projection changes', async () => {
+    timeline = [{
+      itemUid: 'selected-message', sequence: 784, senderName: '我', isMe: true,
+      sendAtMillis: 40, title: '', textContent: '当前会话', status: 1,
+    }]
+    arkmeChatDirectory.publish([group, other])
+    arkmeUi.selectSource(group)
+    await act(async () => {
+      renderer = create(<ArkmeSurface productChrome={false} productNavigation={false} />)
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    const timelineCallsBeforeOtherUpdate = mocks.callArkme.mock.calls
+      .filter(([operation]) => operation === 'source.timeline').length
+
+    await act(async () => {
+      arkmeChatDirectory.upsert({
+        ...other,
+        latestPreview: '其他会话的新消息',
+        activeAtMillis: 49,
+        latestSequence: 5,
+      })
+      arkmeUi.chatChanged()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(mocks.callArkme.mock.calls.filter(([operation]) => operation === 'source.timeline'))
+      .toHaveLength(timelineCallsBeforeOtherUpdate)
+    expect(JSON.stringify(renderer!.toJSON())).toContain('当前会话')
+  })
+
+  it('keeps the current group mounted while its owner timeline refreshes after a capability rotation', async () => {
+    const stableGroup: ArkmeSourceItem = {
+      ...target,
+      sourceRef: 'source-group-before-activity',
+      sourceKey: 'chat:stable-group',
+      kind: 'group_chat',
+      displayName: '稳定群聊',
+      latestSequence: 8,
+    }
+    timeline = [{
+      itemUid: 'message-8', sequence: 8, senderName: 'Tison', isMe: false, sendAtMillis: 8,
+      title: '', textContent: '刷新前消息', status: 1,
+    }]
+    arkmeChatDirectory.publish([stableGroup, other])
+    arkmeUi.selectSource(stableGroup)
+
+    await act(async () => {
+      renderer = create(<ArkmeSurface productChrome={false} productNavigation={false} />)
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    const conversationList = renderer!.root.find(node => node.type === 'ul'
+      && typeof node.props.className === 'string'
+      && node.props.className.includes('arkme-conversation-records'))
+    const timelineCallsBeforeProjection = mocks.callArkme.mock.calls
+      .filter(([operation]) => operation === 'source.timeline').length
+    const projected = {
+      ...stableGroup,
+      sourceRef: 'source-group-after-activity',
+      latestPreview: '刷新后消息',
+      activeAtMillis: 9,
+      latestSequence: 9,
+    }
+    const deltaItem: ArkmeTimelineItem = {
+      itemUid: 'message-9', sequence: 9, senderName: '我', isMe: true, sendAtMillis: 9,
+      title: '', textContent: '刷新后消息', status: 1,
+    }
+    timeline = [timeline[0]!, deltaItem]
+
+    await act(async () => {
+      arkmeUi.selectSource(projected)
+      arkmeChatTimelineDelta.publish([{ source: projected, items: [deltaItem] }])
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(mocks.callArkme.mock.calls.filter(([operation]) => operation === 'source.timeline')).toHaveLength(
+      timelineCallsBeforeProjection + 1,
+    )
+    expect(renderer!.root.find(node => node.type === 'ul'
+      && typeof node.props.className === 'string'
+      && node.props.className.includes('arkme-conversation-records'))).toBe(conversationList)
+    const rendered = JSON.stringify(renderer!.toJSON())
+    expect(rendered).toContain('刷新前消息')
+    expect(rendered).toContain('刷新后消息')
+  })
+
+  it('reloads member capabilities when the selected group keeps its identity but rotates its source ref', async () => {
+    const before: ArkmeSourceItem = {
+      ...group,
+      sourceRef: 'source-group-before-member-refresh',
+      sourceKey: 'chat:stable-member-group',
+    }
+    const after: ArkmeSourceItem = {
+      ...before,
+      sourceRef: 'source-group-after-member-refresh',
+    }
+    arkmeChatDirectory.publish([before])
+    arkmeUi.selectSource(before)
+    mocks.callArkme.mockImplementation(async (operation: string, params?: Record<string, unknown>) => {
+      if (operation === 'user.profile') return {
+        profile: {
+          userId: 42, displayName: '狗才', nickname: '狗才', avatarRef: '', arkmeId: 'doge', accountType: 1,
+          createdAt: 1, bindings: { apple: false, wechat: true, google: false }, contact: {},
+        },
+        cachedAtMillis: 1,
+        revision: 1,
+      }
+      if (operation === 'source.members') return {
+        source: params?.sourceRef === after.sourceRef ? after : before,
+        items: [], total: 0, activeCount: 0,
+      }
+      if (operation === 'source.timeline') return { source: before, items: [], hasMore: false }
+      throw new Error(`unexpected operation ${operation}`)
+    })
+
+    await act(async () => {
+      renderer = create(<ArkmeSurface productChrome={false} productNavigation={false} />)
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(mocks.callArkme).toHaveBeenCalledWith('source.members', {
+      sourceRef: before.sourceRef,
+      activeOnly: true,
+    }, expect.any(AbortSignal))
+
+    await act(async () => {
+      arkmeUi.selectSource(after)
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(mocks.callArkme).toHaveBeenCalledWith('source.members', {
+      sourceRef: after.sourceRef,
+      activeOnly: true,
+    }, expect.any(AbortSignal))
+  })
+
+  it('does not expose member candidates returned by a previously selected group', async () => {
+    const groupA: ArkmeSourceItem = {
+      ...target, sourceRef: 'source-group-a', sourceKey: 'chat:group-a', kind: 'group_chat', displayName: 'A 群',
+    }
+    const groupB: ArkmeSourceItem = {
+      ...target, sourceRef: 'source-group-b', sourceKey: 'chat:group-b', kind: 'group_chat', displayName: 'B 群',
+    }
+    let resolveGroupA: ((value: unknown) => void) | undefined
+    const groupAMembers = new Promise(resolve => { resolveGroupA = resolve })
+    arkmeChatDirectory.clear()
+    arkmeChatDirectory.activateAccount(42)
+    arkmeChatDirectory.publish([groupA, groupB])
+    arkmeUi.selectSource(groupA)
+    mocks.callArkme.mockImplementation(async (operation: string, params?: Record<string, unknown>) => {
+      if (operation === 'user.profile') return {
+        profile: {
+          userId: 42, displayName: '狗才', nickname: '狗才', avatarRef: '', arkmeId: 'doge', accountType: 1,
+          createdAt: 1, bindings: { apple: false, wechat: true, google: false }, contact: {},
+        },
+        cachedAtMillis: 1,
+        revision: 1,
+      }
+      if (operation === 'source.members' && params?.sourceRef === groupA.sourceRef) return await groupAMembers
+      if (operation === 'source.members' && params?.sourceRef === groupB.sourceRef) return {
+        source: groupB,
+        items: [{
+          memberRef: 'member-b', mentionRef: 'mention-b', displayName: 'B 成员',
+          role: 'member', status: 'active', isSelf: false, isOwner: false,
+          joinedAtMillis: 1, recordCount: 0, mentionCount: 0,
+        }],
+        total: 1,
+        activeCount: 1,
+      }
+      if (operation === 'source.timeline') return {
+        source: params?.sourceRef === groupA.sourceRef ? groupA : groupB, items: [], hasMore: false,
+      }
+      if (operation === 'source.interwoven-moments') return { state: 'disabled', moments: [], preparedAtMillis: 48 }
+      if (operation === 'group.bots') return { source: groupB, items: [], total: 0 }
+      throw new Error(`unexpected operation ${operation}`)
+    })
+
+    await act(async () => {
+      renderer = create(<ArkmeSurface productChrome={false} productNavigation={false} />)
+      await Promise.resolve()
+    })
+    await act(async () => {
+      arkmeUi.selectSource(groupB)
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    await act(async () => {
+      resolveGroupA?.({
+        source: groupA,
+        items: [{
+          memberRef: 'member-a', mentionRef: 'mention-a', displayName: 'A 成员',
+          role: 'member', status: 'active', isSelf: false, isOwner: false,
+          joinedAtMillis: 1, recordCount: 0, mentionCount: 0,
+        }],
+        total: 1,
+        activeCount: 1,
+      })
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    const composer = renderer!.root.findByType(ArkmeRichComposerInput)
+    await act(async () => {
+      composer.props.onTextChange('@')
+      composer.props.onSelectionChange('@', 1, 1)
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    const rendered = JSON.stringify(renderer!.toJSON())
+    expect(rendered).toContain('B 成员')
+    expect(rendered).not.toContain('A 成员')
+  })
+
+  it('does not expose Bot candidates returned by a previously selected group', async () => {
+    const groupA: ArkmeSourceItem = {
+      ...target, sourceRef: 'source-bot-group-a', sourceKey: 'chat:bot-group-a', kind: 'group_chat', displayName: 'Bot A 群',
+    }
+    const groupB: ArkmeSourceItem = {
+      ...target, sourceRef: 'source-bot-group-b', sourceKey: 'chat:bot-group-b', kind: 'group_chat', displayName: 'Bot B 群',
+    }
+    let resolveGroupABots: ((value: unknown) => void) | undefined
+    const groupABots = new Promise(resolve => { resolveGroupABots = resolve })
+    arkmeChatDirectory.clear()
+    arkmeChatDirectory.activateAccount(42)
+    arkmeChatDirectory.publish([groupA, groupB])
+    arkmeUi.selectSource(groupA)
+    mocks.callArkme.mockImplementation(async (operation: string, params?: Record<string, unknown>) => {
+      if (operation === 'user.profile') return {
+        profile: {
+          userId: 42, displayName: '狗才', nickname: '狗才', avatarRef: '', arkmeId: 'doge', accountType: 1,
+          createdAt: 1, bindings: { apple: false, wechat: true, google: false }, contact: {},
+        },
+        cachedAtMillis: 1,
+        revision: 1,
+      }
+      if (operation === 'source.members') return {
+        source: params?.sourceRef === groupA.sourceRef ? groupA : groupB, items: [], total: 0, activeCount: 0,
+      }
+      if (operation === 'source.timeline') return {
+        source: params?.sourceRef === groupA.sourceRef ? groupA : groupB, items: [], hasMore: false,
+      }
+      if (operation === 'source.interwoven-moments') return { state: 'disabled', moments: [], preparedAtMillis: 48 }
+      if (operation === 'group.bots' && params?.sourceRef === groupA.sourceRef) return await groupABots
+      if (operation === 'group.bots' && params?.sourceRef === groupB.sourceRef) return {
+        source: groupB,
+        items: [{ botRef: 'bot-b', name: 'B 助手', description: '', provider: 'openclaw', installed: true }],
+        total: 1,
+      }
+      throw new Error(`unexpected operation ${operation}`)
+    })
+
+    await act(async () => {
+      renderer = create(<ArkmeSurface productChrome={false} productNavigation={false} />)
+      await Promise.resolve()
+    })
+    let composer = renderer!.root.findByType(ArkmeRichComposerInput)
+    await act(async () => {
+      composer.props.onTextChange('@')
+      composer.props.onSelectionChange('@', 1, 1)
+      await Promise.resolve()
+    })
+    await act(async () => {
+      arkmeUi.selectSource(groupB)
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    composer = renderer!.root.findByType(ArkmeRichComposerInput)
+    await act(async () => {
+      composer.props.onTextChange('@')
+      composer.props.onSelectionChange('@', 1, 1)
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    await act(async () => {
+      resolveGroupABots?.({
+        source: groupA,
+        items: [{ botRef: 'bot-a', name: 'A 助手', description: '', provider: 'openclaw', installed: true }],
+        total: 1,
+      })
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    const rendered = JSON.stringify(renderer!.toJSON())
+    expect(rendered).toContain('B 助手')
+    expect(rendered).not.toContain('A 助手')
+  })
+
+  it('reloads account-bound member candidates when the authenticated account changes', async () => {
+    const accountGroup: ArkmeSourceItem = {
+      ...target, sourceRef: 'source-account-group', sourceKey: 'chat:account-group', kind: 'group_chat', displayName: '账号群',
+    }
+    let resolveAccountA: ((value: unknown) => void) | undefined
+    const accountAMembers = new Promise(resolve => { resolveAccountA = resolve })
+    let memberRequestCount = 0
+    arkmeChatDirectory.clear()
+    arkmeChatDirectory.activateAccount(42)
+    arkmeChatDirectory.publish([accountGroup])
+    arkmeUi.selectSource(accountGroup)
+    mocks.callArkme.mockImplementation(async (operation: string) => {
+      if (operation === 'user.profile') return {
+        profile: {
+          userId: arkmeAuthStore.getSnapshot().auth?.status === 'authenticated'
+            ? arkmeAuthStore.getSnapshot().auth!.userId
+            : 0,
+          displayName: '当前账号', nickname: '当前账号', avatarRef: '', arkmeId: 'current', accountType: 1,
+          createdAt: 1, bindings: { apple: false, wechat: true, google: false }, contact: {},
+        },
+        cachedAtMillis: 1,
+        revision: 1,
+      }
+      if (operation === 'source.members') {
+        memberRequestCount += 1
+        if (memberRequestCount === 1) return await accountAMembers
+        return {
+          source: accountGroup,
+          items: [{
+            memberRef: 'member-account-b', mentionRef: 'mention-account-b', displayName: '账号 B 成员',
+            role: 'member', status: 'active', isSelf: false, isOwner: false,
+            joinedAtMillis: 1, recordCount: 0, mentionCount: 0,
+          }],
+          total: 1,
+          activeCount: 1,
+        }
+      }
+      if (operation === 'source.timeline') return { source: accountGroup, items: [], hasMore: false }
+      if (operation === 'source.interwoven-moments') return { state: 'disabled', moments: [], preparedAtMillis: 48 }
+      if (operation === 'group.bots') return { source: accountGroup, items: [], total: 0 }
+      throw new Error(`unexpected operation ${operation}`)
+    })
+
+    await act(async () => {
+      renderer = create(<ArkmeSurface productChrome={false} productNavigation={false} />)
+      await Promise.resolve()
+    })
+    await act(async () => {
+      arkmeAuthStore.setAuth({ status: 'authenticated', environment: 'test', userId: 43 })
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    await act(async () => {
+      resolveAccountA?.({
+        source: accountGroup,
+        items: [{
+          memberRef: 'member-account-a', mentionRef: 'mention-account-a', displayName: '账号 A 成员',
+          role: 'member', status: 'active', isSelf: false, isOwner: false,
+          joinedAtMillis: 1, recordCount: 0, mentionCount: 0,
+        }],
+        total: 1,
+        activeCount: 1,
+      })
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    const composer = renderer!.root.findByType(ArkmeRichComposerInput)
+    await act(async () => {
+      composer.props.onTextChange('@')
+      composer.props.onSelectionChange('@', 1, 1)
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    const rendered = JSON.stringify(renderer!.toJSON())
+    expect(memberRequestCount).toBe(2)
+    expect(rendered).toContain('账号 B 成员')
+    expect(rendered).not.toContain('账号 A 成员')
   })
 
   it('keeps one initial timeline request alive when the chat projection changes during loading', async () => {
@@ -502,7 +1067,7 @@ describe('conversation send directory projection', () => {
     expect(visibleMessageIds()).toEqual(timeline.map(item => item.itemUid))
 
     await act(async () => {
-      arkmeChatTimelineDelta.publish([{ sourceRef: group.sourceRef, items: [timeline[5]!] }])
+      arkmeChatTimelineDelta.publish([{ source: group, items: [timeline[5]!] }])
     })
     await act(async () => { arkmeUi.showHarness() })
     await act(async () => {

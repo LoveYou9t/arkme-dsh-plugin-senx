@@ -283,9 +283,13 @@ describe('Arkme native World surface', () => {
     expect(ownMarkup).not.toContain('aria-label="查看陈一涵的用户卡片"')
 
     const source = readFileSync(new URL('../src/client/ArkmeWorldSurface.tsx', import.meta.url), 'utf8')
-    expect(source).toContain("import { ArkmeMemberProfileCard } from './ArkmeChatMemberActions.js'")
+    expect(source).toContain("import { ArkmeMemberProfileCard, type ArkmeMemberProfileIdentity } from './ArkmeChatMemberActions.js'")
     expect(source).toContain("'chat.world.private.open'")
     expect(source).toContain('onSourceActivated?.(result.source)')
+    const projection = source.slice(source.indexOf('function worldAuthorCardMember'), source.indexOf('export function ArkmeWorldSurface'))
+    expect(projection).toContain('ArkmeMemberProfileIdentity')
+    expect(projection).not.toContain('memberRef:')
+    expect(projection).not.toContain("role: 'member'")
   })
 
   it('publishes a World-opened private chat to the shared directory before selecting it', () => {

@@ -52,6 +52,53 @@ function snapshotActionRef(input: Partial<Record<string, unknown>> = {}): string
 }
 
 describe('ChatService', () => {
+  it('propagates rich-send cancellation into human mention resolution', async () => {
+    const session = { userId: 42, accessToken: 'access', refreshToken: 'refresh' }
+    const authenticatedChatPost = vi.fn(async (path: string) => path === '/api/v1/chats/members/list'
+      ? { items: [{ user_id: 7, status: 1 }] }
+      : { record_uid: 'record-mention', rel_uid: 'relation-mention', seq: 9, audit_status: 1 })
+    const runtime = {
+      config: { richMediaSendEnabled: true, maxTextLength: 20_000 },
+      stateStore: { uniqueCode: vi.fn(async () => 'mention-signing-key') },
+      requireSession: vi.fn(async () => session),
+      authenticatedChatPost,
+    }
+    const source = {
+      openSourceRef: vi.fn(async () => ({
+        version: 1, userId: 42, kind: 'group_chat', ownerRef: 'group-1', displayName: '群聊',
+      })),
+    }
+    const realtime = {
+      emitChatClientEvent: vi.fn(), nextChatClientRevision: vi.fn(() => 1),
+      scheduleChatSessionProjection: vi.fn(),
+    }
+    const chat = new ChatService(
+      runtime as never, source as never, {} as never, {} as never, {} as never,
+      {} as never, {} as never, {} as never, realtime,
+    )
+    const payload = Buffer.from(JSON.stringify({
+      version: 1, viewerUserId: 42, chatSessionUid: 'group-1', targetUserId: 7,
+      displayNameSnapshot: '小林',
+    }), 'utf8').toString('base64url')
+    const mentionRef = `arkme-chat-human-mention-v1.${payload}.${createHmac('sha256', 'mention-signing-key')
+      .update(`arkme-chat-human-mention-v1.${payload}`).digest('base64url')}`
+    const signal = new AbortController().signal
+
+    await expect(chat.sendSourceRich('source-ref', {
+      textContent: '@小林 附件',
+      humanMentions: [{ mentionRef, startIndex: 0, length: 3 }],
+    }, { recordUid: 'record-mention', relationUid: 'relation-mention', signal }))
+      .resolves.toMatchObject({ itemUid: 'record-mention', sequence: 9 })
+
+    expect(authenticatedChatPost).toHaveBeenNthCalledWith(
+      1,
+      '/api/v1/chats/members/list',
+      { chat_session_uid: 'group-1', active_only: true },
+      session,
+      signal,
+    )
+  })
+
   it('passes browser capture metadata into send-to-self and default-category text writes', async () => {
     const runtime = {
       config: { maxTextLength: 20_000 },

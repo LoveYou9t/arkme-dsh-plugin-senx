@@ -326,8 +326,13 @@ export function arkmeMemberProfileNames(
   }
 }
 
+export type ArkmeMemberProfileIdentity = Pick<
+  ArkmeConversationMemberItem,
+  'displayName' | 'memberName' | 'secondaryName' | 'avatarRef'
+> & { avatarFallback?: ArkmeGroupAvatarFallback }
+
 export function ArkmeMemberProfileCard(props: {
-  member: ArkmeConversationMemberItem & { avatarFallback?: ArkmeGroupAvatarFallback }
+  member: ArkmeMemberProfileIdentity
   showTopicNickname?: boolean
   busy: boolean
   onClose: () => void

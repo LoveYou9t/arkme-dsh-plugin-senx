@@ -492,26 +492,53 @@ describe('conversation member Host API dispatch', () => {
     const service = fakeService()
     await dispatchArkmeHostOperation(service as never, 'source.send-text', {
       sourceRef: 'source-ref', textContent: '@小林 请看', recordUid: 'record-ref', relationUid: 'relation-ref',
-      humanMentions: [{ memberRef: 'member-ref', startIndex: 0, length: 3, userId: 999 }],
+      humanMentions: [{ mentionRef: 'mention-ref', startIndex: 0, length: 3, userId: 999 }],
     })
     expect(service.sendSourceText).toHaveBeenCalledWith('source-ref', '@小林 请看', {
       recordUid: 'record-ref',
       relationUid: 'relation-ref',
-      humanMentions: [{ memberRef: 'member-ref', startIndex: 0, length: 3 }],
+      humanMentions: [{ mentionRef: 'mention-ref', startIndex: 0, length: 3 }],
     })
+  })
+
+  it('rejects member action refs in the mention-scoped send contract', async () => {
+    const service = fakeService()
+    await expect(dispatchArkmeHostOperation(service as never, 'source.send-text', {
+      sourceRef: 'source-ref', textContent: '@小林 请看', recordUid: 'record-ref', relationUid: 'relation-ref',
+      humanMentions: [{ memberRef: 'member-ref', startIndex: 0, length: 3, userId: 999 }],
+    })).rejects.toMatchObject({ code: 'human-mention-invalid' })
+    expect(service.sendSourceText).not.toHaveBeenCalled()
+  })
+
+  it('rejects ambiguous human mention refs instead of choosing one implicitly', async () => {
+    const service = fakeService()
+    await expect(dispatchArkmeHostOperation(service as never, 'source.send-text', {
+      sourceRef: 'source-ref', textContent: '@小林 请看', recordUid: 'record-ref', relationUid: 'relation-ref',
+      humanMentions: [{ mentionRef: 'mention-ref', memberRef: 'member-ref', startIndex: 0, length: 3 }],
+    })).rejects.toMatchObject({ code: 'human-mention-invalid' })
+    expect(service.sendSourceText).not.toHaveBeenCalled()
   })
 
   it('keeps @所有人 human mention intent without requiring a member ref', async () => {
     const service = fakeService()
     await dispatchArkmeHostOperation(service as never, 'source.send-text', {
       sourceRef: 'source-ref', textContent: '@所有人 请看', recordUid: 'record-ref', relationUid: 'relation-ref',
-      humanMentions: [{ all: true, memberRef: 'browser-owned', startIndex: 0, length: 4 }],
+      humanMentions: [{ all: true, startIndex: 0, length: 4 }],
     })
     expect(service.sendSourceText).toHaveBeenCalledWith('source-ref', '@所有人 请看', {
       recordUid: 'record-ref',
       relationUid: 'relation-ref',
       humanMentions: [{ all: true, startIndex: 0, length: 4 }],
     })
+  })
+
+  it('rejects a member-scoped capability on an @所有人 range', async () => {
+    const service = fakeService()
+    await expect(dispatchArkmeHostOperation(service as never, 'source.send-text', {
+      sourceRef: 'source-ref', textContent: '@所有人 请看', recordUid: 'record-ref', relationUid: 'relation-ref',
+      humanMentions: [{ all: true, mentionRef: 'mention-ref', startIndex: 0, length: 4 }],
+    })).rejects.toMatchObject({ code: 'human-mention-invalid' })
+    expect(service.sendSourceText).not.toHaveBeenCalled()
   })
 
   it('keeps structured Bot mention ranges without exposing browser-owned fields', async () => {
@@ -885,6 +912,20 @@ describe('outgoing call Host API dispatch', () => {
     expect(service.sendSourceRich).toHaveBeenCalledWith('source-1', {
       title: '标题', textContent: '正文', displayKind: 1,
       assets: [{ fileAssetUid: 'asset-12345678', fileName: 'a.png', mimeType: 'image/png', size: 8, fileKind: 1 }],
+    }, { recordUid: 'record-1', relationUid: 'relation-1' })
+  })
+
+  it('keeps mention-scoped refs on rich sends without forwarding browser-owned identities', async () => {
+    const service = fakeService()
+    await dispatchArkmeHostOperation(service as never, 'source.send-rich', {
+      sourceRef: 'source-1', textContent: '@小林 请看', displayKind: 0,
+      recordUid: 'record-1', relationUid: 'relation-1',
+      humanMentions: [{ mentionRef: 'mention-ref', userId: 999, startIndex: 0, length: 3 }],
+    })
+    expect(service.sendSourceRich).toHaveBeenCalledWith('source-1', {
+      title: '', textContent: '@小林 请看', displayKind: 0,
+      assets: [],
+      humanMentions: [{ mentionRef: 'mention-ref', startIndex: 0, length: 3 }],
     }, { recordUid: 'record-1', relationUid: 'relation-1' })
   })
 

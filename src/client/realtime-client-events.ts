@@ -33,11 +33,13 @@ export function useArkmeRealtimeClientEvents(
   useEffect(() => {
     if (auth?.status !== 'authenticated' || auth.userId === undefined) {
       arkmeChatDirectory.activateAccount(undefined)
+      arkmeChatTimelineDelta.activateAccount(undefined)
       arkmeMessageReadReceipts.activateAccount(undefined)
       return
     }
     const authenticatedUserId = auth.userId
     arkmeChatDirectory.activateAccount(authenticatedUserId)
+    arkmeChatTimelineDelta.activateAccount(authenticatedUserId)
     arkmeMessageReadReceipts.activateAccount(authenticatedUserId)
     let stopped = false
     let observedRevision: number | undefined
@@ -117,7 +119,16 @@ export function useArkmeRealtimeClientEvents(
         })))
         const timelineUpdates = update.updates
           .filter(item => item.timelineItems.length > 0)
-          .map(item => ({ sourceRef: item.source.sourceRef, items: item.timelineItems }))
+          .map(item => {
+            const sourceKey = item.sourceKey ?? item.source.sourceKey
+            return {
+              source: {
+                sourceRef: item.source.sourceRef,
+                ...(sourceKey === undefined ? {} : { sourceKey }),
+              },
+              items: item.timelineItems,
+            }
+          })
         if (timelineUpdates.length > 0) arkmeChatTimelineDelta.publish(timelineUpdates)
         if (arkmeSelectedBotAffectedByChatDelta(arkmeUi.getSnapshot().selectedBot, update)) arkmeUi.chatChanged()
         arkmeInterwovenInvalidation.invalidate()
