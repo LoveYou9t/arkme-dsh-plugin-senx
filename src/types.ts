@@ -548,12 +548,18 @@ export interface ArkmeWorldAvatarFallback {
   label: string
 }
 
+export interface ArkmeWorldExtensionShare {
+  ref: string
+  url: string
+}
+
 /** Immutable display snapshot emitted after one extension version becomes public. */
 export interface ArkmeWorldExtensionPublication {
   extensionId: string
   version: string
   name: string
   description: string
+  share?: ArkmeWorldExtensionShare
   iconRef?: string
   previewRefs: string[]
   visibility: 'public'
