@@ -1903,13 +1903,13 @@ body[data-ds-dark-theme] .arkme-conversation-surface {
   outline-offset: 2px;
 }
 
-.arkme-world-extension-open:hover {
+.arkme-world-extension-activity:hover {
   background: var(--dsw-alias-interactive-bg-hover, rgba(38, 49, 72, 0.06)) !important;
 }
-.arkme-world-extension-open:active {
+.arkme-world-extension-activity:active {
   background: var(--dsw-alias-interactive-bg-active, rgba(38, 49, 72, 0.10)) !important;
 }
-.arkme-world-extension-open:focus-visible {
+.arkme-world-extension-activity:focus-visible {
   outline: 2px solid var(--dsw-alias-state-business-primary, #8295e8);
   outline-offset: 2px;
 }
@@ -1918,10 +1918,5 @@ body[data-ds-dark-theme] .arkme-conversation-surface {
     grid-template-columns: 48px minmax(0, 1fr) !important;
     gap: 11px !important;
     padding: 13px !important;
-  }
-  .arkme-world-extension-open {
-    grid-column: 2;
-    justify-self: start;
-    margin: 0 0 0 -8px !important;
   }
 }
