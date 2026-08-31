@@ -86,8 +86,8 @@ export function useArkmeRealtimeClientEvents(
           if (!changed || stopped) return
           try {
             await recoverArkmeProviderInstanceDirectory({
-              userId: authenticatedUserId,
-              activateAccount: () => { arkmeChatDirectory.activateAccount(authenticatedAccountScope) },
+              accountScope: authenticatedAccountScope,
+              activateAccount: scope => { arkmeChatDirectory.activateAccount(scope) },
               refreshRoot: async force => { await refreshUnread(force) },
               onRefreshed: () => {
                 if (stopped) return
