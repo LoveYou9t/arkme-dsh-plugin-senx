@@ -34,6 +34,7 @@ import type {
   ArkmeMessageCopyLinkPresentationNode,
   ArkmeMessageCopyLinkSnapshotItem,
   ArkmeMessageCopyLinkSourceAnchor,
+  ArkmeMessageSnapshotDetail,
   ArkmeMessageReadReceiptDetail,
   ArkmeMessageReadReceiptQueryItem,
   ArkmeMessageReadReceiptSummary,
@@ -42,6 +43,8 @@ import type {
   ArkmeOfficialAuthorProfile,
   ArkmeOpenPrivateChatResult,
   ArkmeRichSendInput,
+  ArkmeRecordCaptureContext,
+  ArkmeRecordLocationCapture,
   ArkmeSourceItem,
   ArkmeSourceReadResult,
   ArkmeSourceSendResult,
@@ -59,7 +62,8 @@ import { GroupAiPolishService } from './group-ai-polish-service.js'
 import { MediaService, type ArkmeMediaDescriptor } from './media-service.js'
 import { ProfileService } from './profile-service.js'
 import { ArkmePrivacyVisibilityService, arkmePrivacyLockedRecord, arkmePrivacyLockedTopic } from './privacy-visibility.js'
-import { RecordService } from './record-service.js'
+import { arkmeRecordCaptureContextPayload, RecordService } from './record-service.js'
+import type { ArkmeRelatedQuickNoteSourceLocator } from './related-quick-note-service.js'
 import { ArkmePluginError, ServiceRuntime, objectValue, stringValue } from './service.js'
 import { arkmeMentionMetadataMentionsViewer } from '../mention-metadata.js'
 import {
@@ -114,6 +118,14 @@ interface ArkmeChatMemberRefPayload {
   targetUserId: number
 }
 
+interface ArkmeChatHumanMentionRefPayload {
+  version: 1
+  viewerUserId: number
+  chatSessionUid: string
+  targetUserId: number
+  displayNameSnapshot: string
+}
+
 interface OfficialAuthorPrivateChatCreateResult {
   rm_subject_id?: unknown
   already_exist?: unknown
@@ -124,18 +136,311 @@ const OFFICIAL_AUTHOR_USER_ID = 11
 const OFFICIAL_AUTHOR_FALLBACK_DISPLAY_NAME = '即' + '我作者'
 const MAX_MESSAGE_COPY_LINK_ITEMS = 100
 const RECORD_UID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+const CHAT_MEMBER_REF_PREFIX = 'arkme-chat-member-v1'
+const CHAT_HUMAN_MENTION_REF_PREFIX = 'arkme-chat-human-mention-v1'
 
 export interface ArkmeChatRealtimePort {
   emitChatClientEvent(event: Parameters<import('./chat-realtime-service.js').ChatRealtimeService['emitChatClientEvent']>[0]): void
   nextChatClientRevision(): number
   scheduleChatSessionProjection(chatSessionUid: string, latestSequence: number): void
+  invalidateRecordProjection(): Promise<void>
 }
 
 function numberValue(value: unknown): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : 0
 }
 
+function finiteNumberValue(value: unknown): number | undefined {
+  if (typeof value === 'number' && Number.isFinite(value)) return value
+  if (typeof value === 'string' && value.trim() !== '') {
+    const parsed = Number(value)
+    if (Number.isFinite(parsed)) return parsed
+  }
+  return undefined
+}
+
+function positiveNumberValue(...values: unknown[]): number | undefined {
+  for (const value of values) {
+    const parsed = finiteNumberValue(value)
+    if (parsed !== undefined && parsed > 0) return parsed
+  }
+  return undefined
+}
+
+function nonNegativeNumberValue(...values: unknown[]): number | undefined {
+  for (const value of values) {
+    const parsed = finiteNumberValue(value)
+    if (parsed !== undefined && parsed >= 0) return parsed
+  }
+  return undefined
+}
+
 function booleanValue(value: unknown): boolean { return value === true }
+
+function timelineCaptureContext(payload: Record<string, unknown>): ArkmeRecordCaptureContext | undefined {
+  const raw = objectValue(payload.capture_context ?? payload.captureContext)
+  const clientName = stringValue(raw.client_name ?? raw.clientName ?? payload.client_name ?? payload.clientName ?? payload.device_name ?? payload.deviceName).trim()
+  const networkName = stringValue(raw.network_name ?? raw.networkName ?? payload.network_name ?? payload.networkName ?? payload.network).trim()
+  const electricity = objectValue(payload.electricity)
+  const electricValue = finiteNumberValue(raw.electric ?? payload.electric ?? electricity.electric)
+  const electric = electricValue === undefined ? undefined : Math.trunc(electricValue)
+  const charge = Math.trunc(numberValue(raw.charge ?? payload.charge ?? electricity.charge))
+  const context: ArkmeRecordCaptureContext = {
+    ...(clientName === '' ? {} : { clientName }),
+    ...(networkName === '' ? {} : { networkName }),
+    ...(electric === undefined || electric < 0 || electric > 100 ? {} : { electric }),
+    ...(charge < 1 || charge > 3 ? {} : { charge }),
+  }
+  return Object.keys(context).length === 0 ? undefined : context
+}
+
+function epochMillis(value: unknown): number | undefined {
+  const parsed = finiteNumberValue(value)
+  if (parsed === undefined || parsed <= 0) return undefined
+  return Math.trunc(parsed < 100_000_000_000 ? parsed * 1_000 : parsed)
+}
+
+/**
+ * Record lifecycle timestamps are canonical fields of the record itself.
+ * Payload and extra metadata may carry stale (or zero) copies, so they can
+ * only be used as a final fallback. This matches the Flutter record parser,
+ * which creates the Record timestamp model from record_core first.
+ */
+function firstRecordEpochMillis(
+  sources: readonly Record<string, unknown>[],
+  keys: readonly string[],
+): number | undefined {
+  for (const source of sources) {
+    for (const key of keys) {
+      const value = epochMillis(source[key])
+      if (value !== undefined) return value
+    }
+  }
+  return undefined
+}
+
+function firstSnapshotText(...values: unknown[]): string | undefined {
+  for (const value of values) {
+    const text = stringValue(value).trim()
+    if (text !== '') return text
+  }
+  return undefined
+}
+
+function snapshotDateLabel(value: number | undefined): string | undefined {
+  if (value === undefined) return undefined
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return undefined
+  return new Intl.DateTimeFormat('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit' }).format(date)
+}
+
+function snapshotMovement(value: Record<string, unknown>): string | undefined {
+  const rawSpeed = value.speed ?? value.speed_mps ?? value.speedMetersPerSecond
+  const speed = numberValue(rawSpeed)
+  if (typeof rawSpeed === 'number' && Number.isFinite(rawSpeed)) {
+    const kmh = Math.round(speed * 3.6)
+    return kmh <= 2 ? '静止' : kmh <= 5 ? `缓慢移动（${String(kmh)}km/h）` : kmh <= 60 ? `移动（${String(kmh)}km/h）` : `高速移动（${String(kmh)}km/h）`
+  }
+  if (typeof value.activity !== 'number' || !Number.isFinite(value.activity)) return undefined
+  const activity = Math.trunc(value.activity)
+  return activity === 0 ? '静止' : activity === 1 ? '步行' : activity === 2 ? '跑步' : activity === 3 ? '骑行' : activity === 4 ? '驾车' : undefined
+}
+
+function snapshotLocationCapture(value: Record<string, unknown>): ArkmeRecordLocationCapture | undefined {
+  const latitude = finiteNumberValue(value.lat ?? value.latitude)
+  const longitude = finiteNumberValue(value.lon ?? value.lng ?? value.longitude)
+  if (latitude === undefined || longitude === undefined || (latitude === 0 && longitude === 0)) return undefined
+  const altitudeMeters = nonNegativeNumberValue(value.alt ?? value.altitude ?? value.altitude_meters)
+  const accuracyMeters = nonNegativeNumberValue(value.accuracy ?? value.accuracy_meters ?? value.accuracyMeters)
+  const speedMetersPerSecond = nonNegativeNumberValue(value.speed ?? value.speed_mps ?? value.speedMetersPerSecond)
+  const capturedAtMillis = epochMillis(value.captured_at ?? value.capturedAt) ?? Date.now()
+  return {
+    latitude, longitude, capturedAtMillis,
+    ...(accuracyMeters === undefined ? {} : { accuracyMeters }),
+    ...(altitudeMeters === undefined ? {} : { altitudeMeters }),
+    ...(speedMetersPerSecond === undefined ? {} : { speedMetersPerSecond }),
+  }
+}
+
+function snapshotWeatherText(...values: unknown[]): string | undefined {
+  for (const value of values) {
+    const direct = stringValue(value).trim()
+    if (direct !== '') return direct
+    const weather = objectValue(value)
+    if (Object.keys(weather).length === 0) continue
+    const temperature = finiteNumberValue(weather.temp ?? weather.temperature)
+    const condition = firstSnapshotText(
+      weather.weather, weather.weatherText, weather.weather_text,
+      weather.condition_ch, weather.conditionCh, weather.condition,
+    )
+    if (temperature !== undefined || condition !== undefined) {
+      return `${temperature === undefined ? '' : `${String(Math.round(temperature))}°`}${temperature === undefined || condition === undefined ? '' : ' '}${condition ?? ''}`.trim()
+    }
+  }
+  return undefined
+}
+
+function snapshotLocationContext(value: unknown): Record<string, unknown> {
+  const root = objectValue(value)
+  const nested = objectValue(root.data)
+  const hasContext = (candidate: Record<string, unknown>): boolean => [
+    candidate.location, candidate.position_detail, candidate.positionDetail, candidate.weather,
+  ].some(entry => Object.keys(parsedObject(entry)).length > 0 || stringValue(entry).trim() !== '')
+  return hasContext(root) || !hasContext(nested) ? root : nested
+}
+
+/**
+ * `/records/detail` and `/records/location/context/get` intentionally split
+ * their metadata. Flutter overlays the latter onto the former, retaining
+ * every existing location field while allowing its resolved weather and
+ * address to win. Keep that same shape before projecting the dialog detail.
+ */
+function mergeSnapshotLocationContext(
+  raw: Record<string, unknown>,
+  contextValue: unknown,
+): Record<string, unknown> {
+  const context = snapshotLocationContext(contextValue)
+  if (Object.keys(context).length === 0) return raw
+  const location = {
+    ...parsedObject(raw.location), ...parsedObject(raw.location_detail),
+    ...parsedObject(context.location), ...parsedObject(context.location_detail),
+  }
+  const position = {
+    ...parsedObject(raw.position_detail), ...parsedObject(raw.positionDetail),
+    ...parsedObject(context.position_detail), ...parsedObject(context.positionDetail),
+  }
+  const weather = context.weather ?? context.weather_text ?? context.weatherText ?? raw.weather
+  return {
+    ...raw,
+    ...(Object.keys(location).length === 0 ? {} : { location }),
+    ...(Object.keys(position).length === 0 ? {} : { position_detail: position }),
+    ...(weather === undefined ? {} : { weather }),
+  }
+}
+
+function snapshotDetailFromChatRaw(raw: Record<string, unknown>, fallback: { itemUid: string; textContent: string; sendAtMillis: number }): ArkmeMessageSnapshotDetail {
+  const relation = objectValue(raw.relation)
+  // The mounted chat-record detail carries the complete record either at the
+  // response root or inside `record`; retain both shapes for older messages.
+  // Some older detail responses are the record itself rather than a wrapper
+  // containing record_core. Flutter accepts that shape too.
+  const recordCore = objectValue(raw.record_core ?? raw.recordCore ?? raw.record ?? raw)
+  const nestedRecord = objectValue(raw.record)
+  const record = { ...recordCore, ...nestedRecord }
+  // The records/detail response intentionally keeps a few metadata families
+  // at its root while the record core holds the normal timeline fields.  Do
+  // not use nullish fallbacks here: several of those families can coexist.
+  const rootPayload = {
+    ...parsedObject(raw.payload), ...parsedObject(raw.content_payload), ...parsedObject(raw.contentPayload),
+    ...parsedObject(raw.record_payload), ...parsedObject(raw.recordPayload),
+  }
+  const recordPayload = {
+    ...parsedObject(record.payload), ...parsedObject(record.content_payload), ...parsedObject(record.contentPayload),
+    ...parsedObject(record.record_payload), ...parsedObject(record.recordPayload),
+  }
+  const extra = {
+    ...parsedObject(raw.extra), ...parsedObject(raw.record_extra), ...parsedObject(raw.recordExtra),
+    ...parsedObject(raw.e), ...parsedObject(raw.i),
+  }
+  const recordExtra = {
+    ...parsedObject(record.extra), ...parsedObject(record.record_extra), ...parsedObject(record.recordExtra),
+    ...parsedObject(record.e), ...parsedObject(record.i),
+  }
+  const payload = { ...extra, ...recordExtra, ...rootPayload, ...recordPayload }
+  // Root position/location data belongs to the hydrated records/detail
+  // response and can be newer than the chat projection. Merge every variant
+  // instead of letting a sparse nested object hide it.
+  const position = {
+    ...parsedObject(payload.position_detail), ...parsedObject(payload.positionDetail),
+    ...parsedObject(record.position_detail), ...parsedObject(record.positionDetail),
+    ...parsedObject(raw.position_detail), ...parsedObject(raw.positionDetail),
+  }
+  const location = { ...parsedObject(payload.location), ...parsedObject(record.location), ...parsedObject(raw.location) }
+  const values = { ...raw, ...record, ...payload }
+  const recordDurationMillis = positiveNumberValue(
+    values.record_duration_millis, values.recordDurationMillis, values.cost_mill_sec, values.costMillSec,
+  )
+  const editDurationMillis = positiveNumberValue(
+    values.edit_duration_millis, values.editDurationMillis, values.incr_cost_mill_sec, values.incrCostMillSec,
+  )
+  // Match Flutter's RecordTimestampPresenter: the record timestamps (rather
+  // than the chat relation's attach time) describe the quick-memory lifecycle.
+  // Crucially, the detailed core wins over any same-named entry embedded in
+  // payload/extra metadata; those entries are frequently zero or stale.
+  const lifecycleSources = [recordCore, nestedRecord, raw, payload]
+  const startAtMillis = firstRecordEpochMillis(lifecycleSources, [
+    // Match Flutter's canonical order exactly: create_at, then created_at,
+    // then the send timestamp for older records that do not expose either.
+    'create_at', 'created_at', 'createAt', 'createdAt', 'create_time', 'createTime',
+    'create_time_stamp', 'createTimeStamp', 'create_timestamp', 'createTimestamp',
+    'create_at_ms', 'createAtMillis', 'created_at_ms', 'createdAtMillis',
+    // Flutter uses send_at as the last-resort create time for older records.
+    'send_at', 'sendAt', 'send_time', 'sendTime', 'send_time_stamp', 'sendTimeStamp',
+    'send_timestamp', 'sendTimestamp', 'send_at_ms', 'sendAtMillis',
+  ]) ?? epochMillis(relation.attach_at ?? relation.attachAt)
+  const sendAtMillis = firstRecordEpochMillis(lifecycleSources, [
+    'send_at', 'sendAt', 'send_time', 'sendTime', 'send_time_stamp', 'sendTimeStamp',
+    'send_timestamp', 'sendTimestamp', 'send_at_ms', 'sendAtMillis',
+  ]) ?? epochMillis(relation.attach_at ?? relation.attachAt) ?? epochMillis(fallback.sendAtMillis)
+  const updatedAtMillis = firstRecordEpochMillis(lifecycleSources, [
+    'update_at', 'updated_at', 'updateAt', 'updatedAt', 'update_time_stamp', 'updateTimeStamp',
+    'update_timestamp', 'updateTimestamp', 'update_at_ms', 'updateAtMillis',
+  ])
+  const completeAtMillis = updatedAtMillis !== undefined && updatedAtMillis > (sendAtMillis ?? 0)
+    ? updatedAtMillis
+    : sendAtMillis
+  // update time is completion, not synchronization. Flutter only renders a
+  // concrete sync timestamp from the dedicated upload timestamp field.
+  const syncedAtMillis = firstRecordEpochMillis(lifecycleSources, [
+    'upload_at', 'uploadAt', 'upload_timestamp', 'uploadTimeStamp', 'upload_time_stamp_v2',
+    'uploadTimeStampV2', 'upload_at_v2', 'uploadAtV2', 'upload_at_ms', 'uploadAtMillis',
+  ])
+  const captureContext = timelineCaptureContext(values)
+  const locationCapture = snapshotLocationCapture({ ...location, ...position, ...objectValue(values.position) })
+  const locationLabel = firstSnapshotText(
+    position.poi, position.poi_name, position.poiName, position.address, position.road,
+    location.poi_name, location.poiName, location.address, location.name,
+  )
+  const weather = snapshotWeatherText(position.weather, position.weatherText, location.weather, values.weather)
+  const altitudeMeters = nonNegativeNumberValue(location.altitude, location.alt, position.altitude, position.alt)
+  const movement = snapshotMovement({ ...values, ...location, ...position })
+  const backgroundFiles = [
+    ...listValue(values.file_assets), ...listValue(values.fileAssets), ...listValue(values.media_items), ...listValue(values.mediaItems),
+    ...listValue(values.media_refs), ...listValue(values.mediaRefs), ...listValue(values.media_display_items), ...listValue(values.mediaDisplayItems),
+    ...listValue(values.files), ...listValue(values.attachments),
+  ].map(objectValue)
+  const backgroundSound = backgroundFiles.some(file => Math.trunc(numberValue(file.content_file_role ?? file.contentFileRole)) === 4)
+    || backgroundFiles.some(file => Math.trunc(numberValue(file.binding_type ?? file.bindingType)) === 4)
+    || listValue(values.background_sound_amplitudes ?? values.backgroundSoundAmplitudes).length > 0
+    || listValue(parsedObject(values.background_sound ?? values.backgroundSound).amplitudes).length > 0
+    ? 'available' as const
+    : values.background_sound_enabled === false || values.backgroundSoundEnabled === false ? 'disabled' as const : 'not-recorded' as const
+  const status = numberValue(values.status)
+  const syncState = status === 2 ? 'syncing' as const : status < 0 ? 'failed' as const : syncedAtMillis !== undefined || status === 1 ? 'synced' as const : 'not-synced' as const
+  const belongDate = snapshotDateLabel(startAtMillis ?? completeAtMillis)
+  return {
+    itemUid: firstSnapshotText(relation.record_uid, values.record_uid, raw.record_uid) ?? fallback.itemUid,
+    // Prefer complete record-core content; a chat relation can carry an older
+    // render payload while the user has since revised the original record.
+    textContent: firstSnapshotText(record.text_content, record.textContent, values.text_content, values.textContent) ?? fallback.textContent,
+    ...(recordDurationMillis === undefined ? {} : { recordDurationMillis }),
+    ...(editDurationMillis === undefined ? {} : { editDurationMillis }),
+    ...(numberValue(values.view_times ?? values.viewTimes) > 0 ? { viewTimes: Math.trunc(numberValue(values.view_times ?? values.viewTimes)) } : {}),
+    ...(numberValue(values.share_times ?? values.shareTimes) > 0 ? { shareTimes: Math.trunc(numberValue(values.share_times ?? values.shareTimes)) } : {}),
+    ...(captureContext === undefined ? {} : { captureContext }),
+    backgroundSound,
+    ...(locationLabel === undefined ? {} : { locationLabel }),
+    ...(weather === undefined ? {} : { weather }),
+    ...(altitudeMeters === undefined ? {} : { altitudeMeters }),
+    ...(movement === undefined ? {} : { movement }),
+    ...(belongDate === undefined ? {} : { belongDate }),
+    ...(startAtMillis === undefined ? {} : { startAtMillis }),
+    ...(completeAtMillis === undefined ? {} : { completeAtMillis }),
+    ...(syncedAtMillis === undefined ? {} : { syncedAtMillis }),
+    syncState,
+    ...(locationCapture === undefined ? {} : { locationCapture }),
+  }
+}
 
 function favoriteStickerPersistenceItem(item: Record<string, unknown>): Record<string, unknown> {
   return {
@@ -173,6 +478,29 @@ function integerLikeValue(value: unknown): number {
   if (typeof value === 'string' && value.trim() !== '') {
     const parsed = Number(value.trim())
     if (Number.isFinite(parsed)) return Math.trunc(parsed)
+  }
+  return 0
+}
+
+function chatRecordOwnerUserId(
+  relation: Record<string, unknown>,
+  record: Record<string, unknown>,
+  payload: Record<string, unknown>,
+  senderUserId: number,
+): number {
+  // Flutter treats the relationship owner's id as authoritative for this
+  // endpoint.  A record or payload can be a copied/embedded projection, so
+  // consult those only if the relation has no owner, then fall back to the
+  // human sender for older timeline payloads.
+  const candidates = [
+    relation.record_owner_user_id, relation.recordOwnerUserId, relation.owner_user_id, relation.ownerUserId,
+    record.record_owner_user_id, record.recordOwnerUserId, record.owner_user_id, record.ownerUserId, record.user_id, record.userId,
+    payload.record_owner_user_id, payload.recordOwnerUserId, payload.owner_user_id, payload.ownerUserId, payload.user_id, payload.userId,
+    senderUserId,
+  ]
+  for (const candidate of candidates) {
+    const userId = integerLikeValue(candidate)
+    if (userId > 0) return userId
   }
   return 0
 }
@@ -414,6 +742,12 @@ interface ChatMemberDisplayNames {
   secondaryName: string
 }
 
+interface ChatMemberProjectionOptions {
+  includeViewerLabels: boolean
+  includeHumanMentionRefs: boolean
+  signal?: AbortSignal
+}
+
 function resolveChatMemberDisplayNames(input: {
   userId: number
   remarkCandidates?: readonly unknown[]
@@ -434,6 +768,20 @@ function resolveChatMemberDisplayNames(input: {
   const secondaryName = [memberName, userName, remarkName]
     .find(value => isUsable(value) && value !== displayName) ?? ''
   return { displayName, memberName, secondaryName }
+}
+
+function projectChatMemberDisplayNames(
+  item: Record<string, unknown>,
+  userId: number,
+  viewerLabel?: string,
+  publicDisplayName?: string,
+): ChatMemberDisplayNames {
+  return resolveChatMemberDisplayNames({
+    userId,
+    remarkCandidates: [],
+    memberNameCandidates: [item.display_name_snapshot],
+    userNameCandidates: [viewerLabel, item.remark, publicDisplayName],
+  })
 }
 
 function normalizedJoinTimestamp(value: unknown): number {
@@ -908,8 +1256,11 @@ export class ChatService {
       source.ownerRef,
       visibleRawItems,
       session,
-      source.kind === 'group_chat',
-      options.signal,
+      {
+        includeViewerLabels: source.kind === 'group_chat',
+        includeHumanMentionRefs: source.kind === 'group_chat',
+        ...(options.signal === undefined ? {} : { signal: options.signal }),
+      },
     )
     const signingKey = joinEventsEnabled ? await this.runtime.stateStore.uniqueCode() : ''
     const joinEvents = joinEventsEnabled
@@ -949,8 +1300,11 @@ export class ChatService {
       source.ownerRef,
       rawMembers,
       session,
-      source.kind === 'group_chat',
-      options.signal,
+      {
+        includeViewerLabels: source.kind === 'group_chat',
+        includeHumanMentionRefs: source.kind === 'group_chat',
+        ...(options.signal === undefined ? {} : { signal: options.signal }),
+      },
     )
     const member = members.find(item => item.memberRef === memberRef)
     if (member === undefined) {
@@ -1186,6 +1540,7 @@ export class ChatService {
         const rawRecords = listValue(data.items).filter(raw => !arkmePrivacyLockedRecord(raw)
           && !lockedRecordUids.has(this.record.recordUid(raw)))
         const media = await this.media.hydrateRecordMediaPage(rawRecords, session, options.signal)
+        const signingKey = await this.runtime.stateStore.uniqueCode()
         const items = (await Promise.all(rawRecords.map(async raw => {
           const recordUid = this.record.recordUid(raw)
           const displayItems = media.displayItemsByRecordUid.get(recordUid)
@@ -1202,7 +1557,12 @@ export class ChatService {
             } }),
             mediaUnavailable: media.unavailableRecordUids.has(recordUid),
           })
-        }))).filter(item => item.itemUid !== '')
+        }))).filter(item => item.itemUid !== '').map(item => this.withRecordMessageActionRef(
+          source,
+          item,
+          session.userId,
+          signingKey,
+        ))
         const nextSendAt = numberValue(data.next_cursor_send_at)
         const nextUid = stringValue(data.next_cursor_record_uid).trim()
         return {
@@ -1252,6 +1612,7 @@ export class ChatService {
         const rawRecords = listValue(data.records).filter(raw => !arkmePrivacyLockedRecord(raw)
           && !lockedRecordUids.has(this.record.recordUid(raw)))
         const media = await this.media.hydrateRecordMediaPage(rawRecords, session, options.signal)
+        const signingKey = await this.runtime.stateStore.uniqueCode()
         const records = rawRecords.map(raw => {
           const recordUid = this.record.recordUid(raw)
           const displayItems = media.displayItemsByRecordUid.get(recordUid)
@@ -1264,7 +1625,7 @@ export class ChatService {
         const nextUid = stringValue(data.next_cursor_record_uid).trim()
         return {
           source: await this.source.sourceItem(source),
-          items: records,
+          items: records.map(item => this.withRecordMessageActionRef(source, item, session.userId, signingKey)),
           hasMore: data.has_more === true,
           ...(nextSendAt > 0 && nextUid !== '' ? { nextCursor: { sendAtMillis: nextSendAt, itemUid: nextUid } } : {}),
         }
@@ -1310,7 +1671,7 @@ export class ChatService {
         ...(beforeSequence > 0 ? { nextCursor: { beforeSequence } } : {}),
       }
     }
-  
+
   async reportMessage(
       messageRef: string,
       reportType: 1 | 2 | 3 | 4,
@@ -1753,12 +2114,7 @@ export class ChatService {
       const publishedRecordUid = stringValue(data.record_uid).trim() || createdRecordUid
       const senderDisplayName = profile.nickname.trim() || profile.displayName.trim() || '我'
       const senderAvatarUrl = profile.avatarRef.trim()
-      this.source.invalidateSourceListCache(session.userId, 'send_to_self')
-      this.realtime.emitChatClientEvent({
-        type: 'projection-invalidated',
-        revision: this.realtime.nextChatClientRevision(),
-        projection: 'record',
-      })
+      await this.realtime.invalidateRecordProjection()
       return {
         sid: detail.sid,
         recordUid: publishedRecordUid,
@@ -1879,7 +2235,7 @@ export class ChatService {
           session,
           options.signal,
         )
-        this.source.invalidateSourceListCache(session.userId, 'send_to_self')
+        await this.realtime.invalidateRecordProjection()
         return await appendCommentWarning({ sourceRef: targetSourceRef, itemUid: stringValue(data.record_uid).trim() || recordUid, status: numberValue(data.status), localState: 'synced' })
       }
       const data = await this.runtime.authenticatedPost<Record<string, unknown>>(
@@ -1895,7 +2251,7 @@ export class ChatService {
         session,
         options.signal,
       )
-      this.source.invalidateSourceListCache(session.userId, 'send_to_self')
+      await this.realtime.invalidateRecordProjection()
       return await appendCommentWarning({ sourceRef: targetSourceRef, itemUid: stringValue(data.record_uid).trim() || recordUid, status: numberValue(data.status), localState: 'synced' })
     }
   
@@ -1904,8 +2260,10 @@ export class ChatService {
       textContent: string,
       options: {
         recordUid?: string
-        relationUid?: string
-        botRefs?: readonly string[]
+      relationUid?: string
+        recordDurationMillis?: number
+        captureContext?: ArkmeRecordCaptureContext
+      botRefs?: readonly string[]
         humanMentions?: readonly ArkmeHumanMentionInput[]
         botMentions?: readonly ArkmeBotMentionInput[]
         signal?: AbortSignal
@@ -1920,8 +2278,11 @@ export class ChatService {
       }
       const recordUid = options.recordUid?.trim() || randomUUID()
       if (source.kind === 'send_to_self' || source.kind === 'default_category') {
-        const result = await this.record.createTextForConversation(recordUid, text)
-        if (result.localState !== 'failed') this.source.invalidateSourceListCache(session.userId, 'send_to_self')
+        const result = await this.record.createTextForConversation(recordUid, text, {
+          ...(options.recordDurationMillis === undefined ? {} : { recordDurationMillis: options.recordDurationMillis }),
+          ...(options.captureContext === undefined ? {} : { captureContext: options.captureContext }),
+        })
+        if (result.localState !== 'failed') await this.realtime.invalidateRecordProjection()
         return {
           sourceRef,
           itemUid: result.recordUid,
@@ -1931,12 +2292,24 @@ export class ChatService {
         }
       }
       if (source.kind === 'topic') {
+        const captureContext = options.captureContext === undefined
+          ? undefined
+          : arkmeRecordCaptureContextPayload(options.captureContext)
         const result = await this.runtime.authenticatedPost<Record<string, unknown>>(
           '/api/v1/topics/records/create',
-          { topic_uid: source.ownerRef, record_uid: recordUid, template_kind: 1, title: '', text_content: text, send_at: Date.now() },
+          {
+            topic_uid: source.ownerRef, record_uid: recordUid, template_kind: 1, title: '', text_content: text,
+            ...(Math.max(0, Math.trunc(options.recordDurationMillis ?? 0)) === 0
+              ? {}
+              : { record_duration_millis: Math.max(0, Math.trunc(options.recordDurationMillis ?? 0)) }),
+            ...(captureContext === undefined || Object.keys(captureContext).length === 0
+              ? {}
+              : { capture_context: captureContext }),
+            send_at: Date.now(),
+          },
           session,
         )
-        this.source.invalidateSourceListCache(session.userId, 'send_to_self')
+        await this.realtime.invalidateRecordProjection()
         return { sourceRef, itemUid: stringValue(result.record_uid).trim() || recordUid, status: numberValue(result.status), localState: 'synced' }
       }
       const relationUid = options.relationUid?.trim() || randomUUID()
@@ -1949,15 +2322,24 @@ export class ChatService {
         }
         if (options.botRefs !== undefined && options.botRefs.length > 0) {
           sent = await this.groupBotMentionSend(
-            sourceRef, source, text, options.botRefs, recordUid, relationUid, session, options.signal, { agentAuthored },
+            sourceRef, source, text, options.botRefs, recordUid, relationUid, session, options.signal,
+            {
+              agentAuthored,
+              ...(options.recordDurationMillis === undefined ? {} : { recordDurationMillis: options.recordDurationMillis }),
+              ...(options.captureContext === undefined ? {} : { captureContext: options.captureContext }),
+            },
           )
         } else if ((options.humanMentions?.length ?? 0) > 0 || (options.botMentions?.length ?? 0) > 0) {
-          const contentPayload = await this.humanMentionContentPayload(
-            source, textContent, text, options.humanMentions ?? [], session, options.signal, options.botMentions ?? [],
+          const contentPayload = await this.mentionContentPayload(
+            source, textContent, text, options.humanMentions ?? [], options.botMentions ?? [], session, options.signal,
           )
           sent = await this.sendChatSourceTextRaw(
             sourceRef, source.ownerRef, text, recordUid, relationUid, session, undefined, contentPayload,
-            options.signal, { agentAuthored },
+            options.signal, {
+              agentAuthored,
+              ...(options.recordDurationMillis === undefined ? {} : { recordDurationMillis: options.recordDurationMillis }),
+              ...(options.captureContext === undefined ? {} : { captureContext: options.captureContext }),
+            },
           )
         } else {
           sent = await this.aiPolish.sendGroupSourceTextWithAiPolish(
@@ -1969,6 +2351,8 @@ export class ChatService {
             session,
             {
               agentAuthored,
+              ...(options.recordDurationMillis === undefined ? {} : { recordDurationMillis: options.recordDurationMillis }),
+              ...(options.captureContext === undefined ? {} : { captureContext: options.captureContext }),
               ...(options.signal === undefined ? {} : { signal: options.signal }),
             },
           )
@@ -1978,79 +2362,46 @@ export class ChatService {
       } else if ((options.botRefs?.length ?? 0) > 0) {
         throw new ArkmePluginError('mention-group-required', 'bot_refs 只能发送到群聊', false)
       } else if ((options.botMentions?.length ?? 0) > 0) {
-        const contentPayload = await this.humanMentionContentPayload(
-          source, textContent, text, [], session, options.signal, options.botMentions ?? [],
+        const contentPayload = await this.mentionContentPayload(
+          source, textContent, text, [], options.botMentions ?? [], session, options.signal,
         )
         sent = await this.sendChatSourceTextRaw(
-          sourceRef, source.ownerRef, text, recordUid, relationUid, session, undefined, contentPayload, options.signal, { agentAuthored },
+          sourceRef, source.ownerRef, text, recordUid, relationUid, session, undefined, contentPayload, options.signal,
+          {
+            agentAuthored,
+            ...(options.recordDurationMillis === undefined ? {} : { recordDurationMillis: options.recordDurationMillis }),
+            ...(options.captureContext === undefined ? {} : { captureContext: options.captureContext }),
+          },
         )
       } else {
         sent = await this.sendChatSourceTextRaw(
-          sourceRef, source.ownerRef, text, recordUid, relationUid, session, undefined, undefined, options.signal, { agentAuthored },
+          sourceRef, source.ownerRef, text, recordUid, relationUid, session, undefined, undefined, options.signal,
+          {
+            agentAuthored,
+            ...(options.recordDurationMillis === undefined ? {} : { recordDurationMillis: options.recordDurationMillis }),
+            ...(options.captureContext === undefined ? {} : { captureContext: options.captureContext }),
+          },
         )
       }
       if (agentAuthored && sent.localState === 'synced') void this.arko.agentSourceDisplayName(session)
       return sent
     }
   
-  private async humanMentionContentPayload(
+  private async mentionContentPayload(
     source: ArkmeSourceRefPayload,
     rawText: string,
     normalizedText: string,
-    inputs: readonly ArkmeHumanMentionInput[],
+    humanInputs: readonly ArkmeHumanMentionInput[],
+    botInputs: readonly ArkmeBotMentionInput[],
     session: ArkmeSessionCredentials,
     signal?: AbortSignal,
-    botInputs: readonly ArkmeBotMentionInput[] = [],
   ): Promise<Record<string, unknown>> {
-    if (inputs.length > 50) throw new ArkmePluginError('human-mention-invalid', '单条消息 mention 数量过多', false)
+    if (humanInputs.length > 50) throw new ArkmePluginError('human-mention-invalid', '单条消息 mention 数量过多', false)
     if (botInputs.length > 50) throw new ArkmePluginError('bot-mention-invalid', '单条消息 Bot mention 数量过多', false)
-    const leadingTrim = rawText.length - rawText.trimStart().length
-    const rawMembers = inputs.length === 0 ? [] : await this.rawChatMembers(source.ownerRef, true, session, signal)
-    const membersByUserId = new Map(rawMembers.map(item => [Math.trunc(numberValue(item.user_id)), item]))
-    const mentions: Array<{ user_id: number; display_name_snapshot: string; start_index: number; length: number }> = []
-    for (const input of [...inputs].sort((left, right) => left.startIndex - right.startIndex)) {
-      const memberRef = input.memberRef?.trim() ?? ''
-      const startIndex = Math.trunc(input.startIndex) - leadingTrim
-      const length = Math.trunc(input.length)
-      if (startIndex < 0 || length < 2
-        || startIndex + length > normalizedText.length) {
-        throw new ArkmePluginError('human-mention-invalid', '真人 mention 引用或文本区间无效', false)
-      }
-      const visible = normalizedText.slice(startIndex, startIndex + length)
-      const displayName = visible.startsWith('@') ? visible.slice(1).trim() : ''
-      let userId: number
-      if (input.all === true) {
-        if (displayName !== '所有人') {
-          throw new ArkmePluginError('human-mention-text-mismatch', '真人 mention 文本已变化，请重新选择成员', false, 409)
-        }
-        userId = 0
-      } else {
-        if (memberRef === '') throw new ArkmePluginError('human-mention-invalid', '真人 mention 引用或文本区间无效', false)
-        const reference = await this.openChatMemberRef(memberRef, session.userId, source.ownerRef)
-        if (reference.targetUserId === session.userId) {
-          throw new ArkmePluginError('human-mention-self-invalid', '不能 @ 自己', false)
-        }
-        const rawMember = membersByUserId.get(reference.targetUserId)
-        if (rawMember === undefined) throw new ArkmePluginError('chat-member-ref-stale', '被 @ 成员已不在当前群聊', false, 409)
-        const expectedNames = [stringValue(rawMember.remark).trim(), stringValue(rawMember.display_name_snapshot).trim()]
-          .filter(value => value !== '')
-        if (displayName === '' || !expectedNames.includes(displayName)) {
-          throw new ArkmePluginError('human-mention-text-mismatch', '真人 mention 文本已变化，请重新选择成员', false, 409)
-        }
-        userId = reference.targetUserId
-      }
-      const previous = mentions.at(-1)
-      if (previous !== undefined && previous.start_index + previous.length > startIndex) {
-        throw new ArkmePluginError('human-mention-overlap', '真人 mention 文本区间重叠', false)
-      }
-      mentions.push({
-        user_id: userId,
-        display_name_snapshot: displayName,
-        start_index: startIndex,
-        length,
-      })
-    }
-    const botMentions = await this.botMentionMetadata(source, rawText, normalizedText, botInputs, session, signal)
+    const [mentions, botMentions] = await Promise.all([
+      this.humanMentionMetadata(source, rawText, normalizedText, humanInputs, session, signal),
+      this.botMentionMetadata(source, rawText, normalizedText, botInputs, session, signal),
+    ])
     const orderedRanges = [
       ...mentions.map(mention => ({ startIndex: mention.start_index, length: mention.length })),
       ...botMentions.map(mention => ({ startIndex: mention.start_index, length: mention.length })),
@@ -2086,6 +2437,72 @@ export class ChatService {
         ...(botMentions.length === 0 ? {} : { bot_mentions: botMentions }),
       },
     }
+  }
+
+  private async humanMentionMetadata(
+    source: ArkmeSourceRefPayload,
+    rawText: string,
+    normalizedText: string,
+    inputs: readonly ArkmeHumanMentionInput[],
+    session: ArkmeSessionCredentials,
+    signal?: AbortSignal,
+  ): Promise<Array<{ user_id: number; display_name_snapshot: string; start_index: number; length: number }>> {
+    const leadingTrim = rawText.length - rawText.trimStart().length
+    const requiresMemberDirectory = inputs.some(input => input.all !== true)
+    const rawMembers = requiresMemberDirectory
+      ? await this.rawChatMembers(source.ownerRef, true, session, signal)
+      : []
+    const membersByUserId = new Map(rawMembers.map(item => [Math.trunc(numberValue(item.user_id)), item]))
+    const mentions: Array<{ user_id: number; display_name_snapshot: string; start_index: number; length: number }> = []
+    for (const input of [...inputs].sort((left, right) => left.startIndex - right.startIndex)) {
+      const rawInput = input as unknown as Record<string, unknown>
+      const mentionRef = input.mentionRef?.trim() ?? ''
+      const memberRef = stringValue(rawInput.memberRef).trim()
+      const startIndex = Math.trunc(input.startIndex) - leadingTrim
+      const length = Math.trunc(input.length)
+      if (startIndex < 0 || length < 2
+        || startIndex + length > normalizedText.length) {
+        throw new ArkmePluginError('human-mention-invalid', '真人 mention 引用或文本区间无效', false)
+      }
+      const visible = normalizedText.slice(startIndex, startIndex + length)
+      const displayName = visible.startsWith('@') ? visible.slice(1) : ''
+      let userId: number
+      if (input.all === true) {
+        if (mentionRef !== '' || memberRef !== '') {
+          throw new ArkmePluginError('human-mention-invalid', '@所有人不能携带成员引用', false)
+        }
+        if (displayName !== '所有人') {
+          throw new ArkmePluginError('human-mention-text-mismatch', '真人 mention 文本已变化，请重新选择成员', false, 409)
+        }
+        userId = 0
+      } else {
+        if (mentionRef === '' || memberRef !== '') {
+          throw new ArkmePluginError('human-mention-invalid', '真人 mention 必须且只能携带 mention 引用', false)
+        }
+        const reference = await this.openChatHumanMentionRef(mentionRef, session.userId, source.ownerRef)
+        const targetUserId = reference.targetUserId
+        if (targetUserId === session.userId) {
+          throw new ArkmePluginError('human-mention-self-invalid', '不能 @ 自己', false)
+        }
+        const rawMember = membersByUserId.get(targetUserId)
+        if (rawMember === undefined) throw new ArkmePluginError('chat-member-ref-stale', '被 @ 成员已不在当前群聊', false, 409)
+        if (displayName === '' || displayName !== reference.displayNameSnapshot) {
+          throw new ArkmePluginError('human-mention-text-mismatch', '真人 mention 文本已变化，请重新选择成员', false, 409)
+        }
+        userId = targetUserId
+      }
+      const previous = mentions.at(-1)
+      if (previous !== undefined && previous.start_index + previous.length > startIndex) {
+        throw new ArkmePluginError('human-mention-overlap', '真人 mention 文本区间重叠', false)
+      }
+      mentions.push({
+        user_id: userId,
+        display_name_snapshot: displayName,
+        start_index: startIndex,
+        length,
+      })
+    }
+    return mentions
   }
 
   private async botMentionMetadata(
@@ -2159,7 +2576,7 @@ export class ChatService {
       relationUid: string,
       session: ArkmeSessionCredentials,
       signal?: AbortSignal,
-      options: { agentAuthored?: boolean } = {},
+      options: { agentAuthored?: boolean; recordDurationMillis?: number; captureContext?: ArkmeRecordCaptureContext } = {},
     ): Promise<ArkmeSourceSendResult> {
       const uniqueRefs = new Set(botRefs.map(ref => ref.trim()))
       if (uniqueRefs.has('') || uniqueRefs.size !== botRefs.length) {
@@ -2230,7 +2647,7 @@ export class ChatService {
       initialAiPolish?: Record<string, unknown>,
       contentPayload?: Record<string, unknown>,
       signal?: AbortSignal,
-      options: { agentAuthored?: boolean } = {},
+      options: { agentAuthored?: boolean; recordDurationMillis?: number; captureContext?: ArkmeRecordCaptureContext } = {},
     ): Promise<ArkmeSourceSendResult> {
       const result = await this.postChatTextRecord(
         chatSessionUid,
@@ -2267,6 +2684,8 @@ export class ChatService {
     signal?: AbortSignal,
     options: {
       agentAuthored?: boolean
+      recordDurationMillis?: number
+      captureContext?: ArkmeRecordCaptureContext
       initialAiPolish?: Record<string, unknown>
       contentPayload?: Record<string, unknown>
     } = {},
@@ -2279,6 +2698,8 @@ export class ChatService {
         rel_uid: relationUid,
         template_kind: 1,
         text_content: text,
+        ...(Math.max(0, Math.trunc(options.recordDurationMillis ?? 0)) === 0 ? {} : { record_duration_millis: Math.max(0, Math.trunc(options.recordDurationMillis ?? 0)) }),
+        ...(options.captureContext === undefined ? {} : { capture_context: arkmeRecordCaptureContextPayload(options.captureContext) }),
         ...(options.agentAuthored === true ? { creation_source: 1 } : {}),
         ...(options.initialAiPolish === undefined ? {} : { initial_ai_polish: options.initialAiPolish }),
         ...(options.contentPayload === undefined ? {} : { content_payload: options.contentPayload }),
@@ -2308,6 +2729,8 @@ export class ChatService {
       const longArticle = displayKind === 1
       const maxContentLength = longArticle ? 40000 : this.runtime.config.maxTextLength
       const thinkingDurationMillis = Math.max(0, Math.trunc(input.thinkingDurationMillis ?? 0))
+      const recordDurationMillis = Math.max(0, Math.trunc(input.recordDurationMillis ?? (longArticle ? thinkingDurationMillis : 0)))
+      const captureContext = input.captureContext === undefined ? undefined : arkmeRecordCaptureContextPayload(input.captureContext)
       if (title.length > (longArticle ? 100 : 500) || textContent.length > maxContentLength || assets.length > 20
         || (textContent === '' && title === '' && assets.length === 0)) {
         throw new ArkmePluginError('rich-content-invalid', '富内容为空、过长或附件数量超限', false)
@@ -2348,8 +2771,9 @@ export class ChatService {
           throw new ArkmePluginError('mention-chat-required', 'Bot mention 只能发送到聊天', false)
         }
         if (longArticle) throw new ArkmePluginError('mention-rich-invalid', '长文暂不支持 mention', false)
-        const mentionPayload = await this.humanMentionContentPayload(
-          source, input.textContent ?? '', textContent, input.humanMentions ?? [], session, options.signal, input.botMentions ?? [],
+        const mentionPayload = await this.mentionContentPayload(
+          source, input.textContent ?? '', textContent, input.humanMentions ?? [], input.botMentions ?? [], session,
+          options.signal,
         )
         contentPayload = { ...(mediaContentPayload ?? {}), ...mentionPayload }
       }
@@ -2359,20 +2783,21 @@ export class ChatService {
         display_kind: displayKind,
         title,
         text_content: textContent,
-        ...(longArticle ? { record_duration_millis: thinkingDurationMillis } : {}),
+        ...(recordDurationMillis === 0 ? {} : { record_duration_millis: recordDurationMillis }),
+        ...(captureContext === undefined || Object.keys(captureContext).length === 0 ? {} : { capture_context: captureContext }),
         ...(contentPayload === undefined ? {} : { content_payload: contentPayload }),
         send_at: Date.now(),
       }
       if (source.kind === 'send_to_self' || source.kind === 'default_category') {
         const result = await this.runtime.authenticatedPost<Record<string, unknown>>('/api/v1/records/create', commonBody, session, options.signal)
-        this.source.invalidateSourceListCache(session.userId, 'send_to_self')
+        await this.realtime.invalidateRecordProjection()
         return { sourceRef, itemUid: stringValue(result.record_uid).trim() || recordUid, status: numberValue(result.status), localState: 'synced' }
       }
       if (source.kind === 'topic') {
         const result = await this.runtime.authenticatedPost<Record<string, unknown>>(
           '/api/v1/topics/records/create', { topic_uid: source.ownerRef, ...commonBody }, session, options.signal,
         )
-        this.source.invalidateSourceListCache(session.userId, 'send_to_self')
+        await this.realtime.invalidateRecordProjection()
         return { sourceRef, itemUid: stringValue(result.record_uid).trim() || recordUid, status: numberValue(result.status), localState: 'synced' }
       }
       const result = await this.runtime.authenticatedChatPost<Record<string, unknown>>(
@@ -2733,8 +3158,9 @@ export class ChatService {
         const payload = objectValue(record.payload)
         const uid = stringValue(relation.record_uid ?? payload.record_uid).trim()
         if (uid === '') continue
-        const senderUserId = numberValue(relation.sender_user_id)
+        const senderUserId = integerLikeValue(relation.sender_user_id)
         const relationUid = stringValue(relation.rel_uid ?? relation.relUid).trim()
+        const recordOwnerUserId = chatRecordOwnerUserId(relation, record, payload, senderUserId)
         const aiPolish = this.aiPolish.timelineAiPolish(record, payload)
         const sendAtMillis = numberValue(relation.attach_at ?? payload.send_at)
         const forwardRecords = await this.chatForwardRecordsPreview(item, session.userId, sendAtMillis)
@@ -2742,11 +3168,7 @@ export class ChatService {
           viewerUserId: session.userId,
           chatSessionUid,
           relationUid,
-          recordOwnerUserId: integerLikeValue(
-            record.record_owner_user_id ?? record.recordOwnerUserId
-            ?? payload.record_owner_user_id ?? payload.recordOwnerUserId
-            ?? relation.record_owner_user_id ?? relation.recordOwnerUserId,
-          ),
+          recordOwnerUserId,
           recordUid: uid,
           senderUserId: integerLikeValue(relation.sender_user_id),
           sequence: integerLikeValue(relation.seq),
@@ -2757,12 +3179,33 @@ export class ChatService {
           ? this.arko.currentUserAgentSourceFallback(session.userId, rawAgentSource)
           : rawAgentSource
         const contentBlocks = this.media.richContentBlocks(item, session.userId)
+        const senderName = stringValue(relation.display_name_snapshot).trim() || 'Arkme用户'
         const mentionsViewer = senderUserId !== session.userId
           && arkmeMentionMetadataMentionsViewer(record, payload, session.userId)
         items.push({
           itemUid: uid,
+          ...(relationUid === '' ? {} : {
+            messageActionRef: this.sealMessageActionRef(this.messageActionRefPayload({
+              sourceKind: 'chat_relation',
+              userId: session.userId,
+              sourceOwnerRef: chatSessionUid,
+              chatSessionUid,
+              relationUid,
+              recordOwnerUserId,
+              recordUid: uid,
+              senderUserId,
+              senderName,
+              title: stringValue(payload.title),
+              textContent: stringValue(payload.text_content),
+              sendAtMillis,
+              sourceSequence: numberValue(relation.seq),
+              templateKind: numberValue(payload.template_kind),
+              displayKind: numberValue(payload.display_kind),
+              contentBlocks,
+            }), signingKey),
+          }),
           ...(senderUserId > 0 ? { memberRef: await this.sealChatMemberRef(session.userId, chatSessionUid, senderUserId) } : {}),
-          senderName: stringValue(relation.display_name_snapshot).trim() || 'Arkme用户',
+          senderName,
           ...(agentSource === undefined ? {} : { agentSource }),
           ...(senderUserId > 0 ? { avatarRef: await this.profile.sealProfileImageRef(session.userId, senderUserId) } : {}),
           isMe: senderUserId === session.userId,
@@ -2781,6 +3224,31 @@ export class ChatService {
         })
       }
       return items
+    }
+
+  async relatedQuickNoteLocator(
+      sourceRef: string,
+      messageActionRef: string,
+    ): Promise<ArkmeRelatedQuickNoteSourceLocator> {
+      const session = await this.runtime.requireSession()
+      const normalizedSourceRef = sourceRef.trim()
+      const source = await this.source.openSourceRef(normalizedSourceRef, session.userId)
+      const reference = await this.openMessageActionRef(messageActionRef, session.userId, source)
+      const ownerUserId = reference.recordOwnerUserId > 0
+        ? reference.recordOwnerUserId
+        : reference.senderUserId
+      if (!Number.isSafeInteger(ownerUserId) || ownerUserId <= 0) {
+        throw new ArkmePluginError('related-quick-note-source-invalid', '当前快记缺少作者定位，请刷新后重试', false, 409)
+      }
+      return {
+        viewerUserId: session.userId,
+        sourceRef: normalizedSourceRef,
+        sourceOwnerRef: source.ownerRef,
+        contextType: reference.sourceKind === 'chat_relation' ? 'chat' : 'record',
+        recordUid: reference.recordUid,
+        recordOwnerUserId: ownerUserId,
+        chatSessionUid: reference.sourceKind === 'chat_relation' ? reference.chatSessionUid : '',
+      }
     }
   
   async chatForwardRecordsPreview(
@@ -3150,6 +3618,235 @@ export class ChatService {
     }
     return { ...projection, detailRef }
   }
+
+  async messageSnapshotDetail(
+    sourceRef: string,
+    actionRef: string,
+    options: { signal?: AbortSignal } = {},
+  ): Promise<ArkmeMessageSnapshotDetail> {
+    const session = await this.runtime.requireSession()
+    const source = await this.source.openSourceRef(sourceRef, session.userId)
+    const isChatSource = source.kind === 'private_chat' || source.kind === 'group_chat'
+    const isRecordSource = source.kind === 'send_to_self' || source.kind === 'default_category' || source.kind === 'topic'
+    if (!isChatSource && !isRecordSource) {
+      throw new ArkmePluginError('message-snapshot-source-unsupported', '当前对话暂不支持读取完整快记详情', false, 400)
+    }
+    // The detail endpoint is scoped to a concrete chat relation, not only to a
+    // record uid.  Use the account-bound action reference that was issued with
+    // the timeline item, so the UI cannot accidentally lose (or forge) the
+    // relation and owner identities that Flutter sends to this endpoint.
+    const reference = await this.openMessageActionRef(actionRef, session.userId, source)
+    if (reference.recordUid === '') {
+      throw new ArkmePluginError('message-snapshot-record-invalid', '快记记录身份无效，请刷新后重试', false, 400)
+    }
+    if (reference.senderUserId !== session.userId) {
+      throw new ArkmePluginError('message-snapshot-not-owned', '只能查看自己发送的快记详情', false, 403)
+    }
+    const recordOwnerUserId = reference.recordOwnerUserId > 0
+      ? reference.recordOwnerUserId
+      : reference.senderUserId
+    if (recordOwnerUserId <= 0) {
+      throw new ArkmePluginError('message-snapshot-owner-missing', '快记记录归属暂时无法确认，请刷新后重试', true, 502)
+    }
+    if (reference.sourceKind === 'record') {
+      if (!isRecordSource) {
+        throw new ArkmePluginError('message-snapshot-record-invalid', '快记记录身份与当前来源不匹配，请刷新后重试', false, 400)
+      }
+      return this.hydratedMessageSnapshotDetail(reference, session, options)
+    }
+    if (!isChatSource || reference.relationUid === '') {
+      throw new ArkmePluginError('message-snapshot-record-invalid', '快记记录身份无效，请刷新后重试', false, 400)
+    }
+    const data = await this.runtime.authenticatedChatPost<Record<string, unknown>>(
+      '/api/v1/chats/records/detail',
+      {
+        chat_session_uid: reference.chatSessionUid,
+        record_uid: reference.recordUid,
+        record_owner_user_id: recordOwnerUserId,
+        rel_uid: reference.relationUid,
+        ...(reference.sourceSequence <= 0 ? {} : { seq: reference.sourceSequence }),
+      },
+      session,
+      options.signal,
+      {
+        lane: 'interactive-read',
+        key: `message-snapshot-detail:${reference.chatSessionUid}:${reference.relationUid}:${reference.recordUid}:${String(reference.sourceSequence)}`,
+        failureCooldownMs: 1_000,
+      },
+    )
+    // This is the same mounted-record response used by the Flutter client.
+    // It establishes the chat relation identity before the owner-record
+    // hydration below supplies the full memory snapshot fields.
+    const chatRaw = objectValue(data.item)
+    if (Object.keys(chatRaw).length === 0) {
+      throw new ArkmePluginError('message-snapshot-detail-unavailable', '完整快记详情暂时无法读取，请稍后重试', true, 502)
+    }
+    return this.hydratedMessageSnapshotDetail(reference, session, options, chatRaw)
+  }
+
+  private async hydratedMessageSnapshotDetail(
+    reference: ArkmeMessageActionRefPayload,
+    session: ArkmeSessionCredentials,
+    options: { signal?: AbortSignal },
+    chatRaw: Record<string, unknown> = {},
+  ): Promise<ArkmeMessageSnapshotDetail> {
+    // Flutter follows a verified chat-detail lookup with the owner's record
+    // hydration. The second response is necessary for detail-only metadata
+    // such as location, weather, device context and lifecycle timestamps.
+    // Deliberately do not swallow this failure: showing a plausible but empty
+    // snapshot is worse than telling the user that the full detail failed.
+    const recordData = await this.runtime.authenticatedPost<Record<string, unknown>>(
+      '/api/v1/records/detail',
+      { record_uid: reference.recordUid },
+      session,
+      options.signal,
+      {
+        lane: 'interactive-read',
+        key: `message-snapshot-record-core:${reference.recordUid}`,
+        failureCooldownMs: 1_000,
+      },
+    )
+    const recordRaw = objectValue(recordData)
+    const chatRecord = objectValue(chatRaw.record)
+    // Flutter treats a flat response as the record core when older services do
+    // not wrap it in record_core. Keep that compatibility before hydrating the
+    // snapshot projection.
+    const recordCore = objectValue(recordRaw.record_core ?? recordRaw.recordCore ?? recordRaw.record ?? recordRaw)
+    const detailRecordUid = firstSnapshotText(
+      recordCore.record_uid, recordCore.recordUid, recordCore.uid,
+      recordRaw.record_uid, recordRaw.recordUid, recordRaw.uid,
+    )
+    const hasDetailPayload = [
+      recordRaw.payload, recordRaw.content_payload, recordRaw.contentPayload, recordRaw.record_payload, recordRaw.recordPayload,
+      recordRaw.location, recordRaw.position_detail, recordRaw.positionDetail, recordRaw.extra, recordRaw.record_extra, recordRaw.recordExtra,
+      recordRaw.weather, recordRaw.capture_context, recordRaw.captureContext, recordRaw.background_sound, recordRaw.backgroundSound,
+    ].some(value => Object.keys(parsedObject(value)).length > 0 || listValue(value).length > 0)
+    const hasRecordCoreDetail = Object.keys(recordCore).some(key => !['record_uid', 'recordUid', 'uid'].includes(key))
+    if (!hasRecordCoreDetail && !hasDetailPayload) {
+      throw new ArkmePluginError('message-snapshot-detail-unavailable', '完整快记详情暂时无法读取，请稍后重试', true, 502)
+    }
+    if (detailRecordUid !== reference.recordUid) {
+      throw new ArkmePluginError('message-snapshot-detail-mismatch', '完整快记详情与当前消息不匹配，请刷新后重试', true, 502)
+    }
+    // Flutter keeps record-detail wrapper metadata (location, position_detail,
+    // record_extra and content payload) alongside record_core. Preserve that
+    // wrapper while overlaying the detailed core over the sparse chat record.
+    // Older entries may have a wrapper without record_core, which must still
+    // contribute its metadata instead of falling back to an empty chat card.
+    const chatRecordPayload = {
+      ...parsedObject(chatRecord.payload), ...parsedObject(chatRecord.content_payload), ...parsedObject(chatRecord.contentPayload),
+      ...parsedObject(chatRecord.record_payload), ...parsedObject(chatRecord.recordPayload),
+    }
+    const detailPayload = {
+      ...parsedObject(recordRaw.payload), ...parsedObject(recordRaw.content_payload), ...parsedObject(recordRaw.contentPayload),
+      ...parsedObject(recordRaw.record_payload), ...parsedObject(recordRaw.recordPayload),
+      ...parsedObject(recordCore.payload), ...parsedObject(recordCore.content_payload), ...parsedObject(recordCore.contentPayload),
+      ...parsedObject(recordCore.record_payload), ...parsedObject(recordCore.recordPayload),
+    }
+    let raw: Record<string, unknown> = {
+      ...chatRaw,
+      ...recordRaw,
+      // Chat identity is authoritative when available; record sources use a
+      // synthetic relation only to retain the same detail projection shape.
+      relation: Object.keys(chatRaw).length === 0
+        ? { record_uid: reference.recordUid, record_owner_user_id: reference.recordOwnerUserId }
+        : objectValue(chatRaw.relation),
+      record: {
+        ...chatRecord,
+        ...recordCore,
+        payload: {
+          ...chatRecordPayload,
+          ...detailPayload,
+        },
+      },
+    }
+    // Flutter obtains weather and resolved place context from this record
+    // service endpoint after the core record has been read. `records/detail`
+    // alone frequently contains the coordinates but not the weather that the
+    // desktop detail dialog shows. This enrichment is optional for legacy
+    // records: an unavailable context must not hide the otherwise complete
+    // snapshot.
+    const locationContext = await this.runtime.authenticatedPost<Record<string, unknown>>(
+      '/api/v1/records/location/context/get',
+      { record_uid: reference.recordUid },
+      session,
+      options.signal,
+      {
+        lane: 'interactive-read',
+        key: `message-snapshot-location-context:${reference.recordUid}`,
+        failureCooldownMs: 10_000,
+      },
+    ).catch(() => undefined)
+    if (locationContext !== undefined) {
+      const context = snapshotLocationContext(locationContext)
+      const contextEnvelope = objectValue(locationContext)
+      const contextData = objectValue(contextEnvelope.data)
+      // Depending on the record-service gateway, the identity can remain on
+      // the outer envelope while location/weather live under `data`.
+      const contextRecordUid = firstSnapshotText(
+        contextEnvelope.record_uid, contextEnvelope.recordUid, contextEnvelope.uid,
+        contextData.record_uid, contextData.recordUid, contextData.uid,
+        context.record_uid, context.recordUid, context.uid,
+      )
+      if (contextRecordUid !== undefined && contextRecordUid !== reference.recordUid) {
+        throw new ArkmePluginError('message-snapshot-detail-mismatch', '快记地点上下文与当前消息不匹配，请刷新后重试', true, 502)
+      }
+      raw = mergeSnapshotLocationContext(raw, context)
+    }
+    const detail = snapshotDetailFromChatRaw(
+      raw,
+      {
+      itemUid: reference.recordUid,
+      textContent: reference.textContent,
+      sendAtMillis: reference.sendAtMillis,
+      },
+    )
+    if (detail.itemUid !== reference.recordUid) {
+      throw new ArkmePluginError('message-snapshot-detail-mismatch', '快记详情与当前消息不匹配，请刷新后重试', true, 502)
+    }
+    return detail
+  }
+
+  async saveMessageLocation(
+    sourceRef: string,
+    itemUid: string,
+    location: ArkmeRecordLocationCapture,
+    recordVersion: number | undefined,
+    options: { signal?: AbortSignal } = {},
+  ): Promise<void> {
+    const session = await this.runtime.requireSession()
+    const source = await this.source.openSourceRef(sourceRef, session.userId)
+    const recordUid = itemUid.trim()
+    if (recordUid === '' || !['private_chat', 'group_chat', 'send_to_self', 'default_category', 'topic'].includes(source.kind)) {
+      throw new ArkmePluginError('message-location-target-invalid', '当前消息不能写入位置快照', false, 400)
+    }
+    const latitude = location.latitude
+    const longitude = location.longitude
+    if (!Number.isFinite(latitude) || latitude < -90 || latitude > 90 || !Number.isFinite(longitude) || longitude < -180 || longitude > 180) {
+      throw new ArkmePluginError('message-location-invalid', '位置坐标无效', false, 400)
+    }
+    const altitude = location.altitudeMeters
+    const speed = location.speedMetersPerSecond
+    const accuracy = location.accuracyMeters
+    await this.runtime.authenticatedPost<Record<string, unknown>>(
+      '/api/v1/records/location/set',
+      {
+        record_uid: recordUid,
+        ...(recordVersion === undefined || recordVersion <= 0 ? {} : { expected_record_version: Math.trunc(recordVersion) }),
+        location: {
+          source_kind: 1,
+          lat: latitude,
+          lon: longitude,
+          ...(altitude === undefined || !Number.isFinite(altitude) ? {} : { alt: altitude }),
+          ...(speed === undefined || !Number.isFinite(speed) || speed < 0 ? {} : { speed }),
+          ...(accuracy === undefined || !Number.isFinite(accuracy) || accuracy < 0 ? {} : { accuracy }),
+          captured_at: Math.max(1, Math.trunc(location.capturedAtMillis)),
+        },
+      },
+      session,
+      options.signal,
+    )
+  }
   
   private async rawChatMembers(
     chatSessionUid: string,
@@ -3170,15 +3867,16 @@ export class ChatService {
     chatSessionUid: string,
     rawItems: Record<string, unknown>[],
     session: ArkmeSessionCredentials,
-    includeViewerLabels: boolean,
-    signal?: AbortSignal,
+    options: ChatMemberProjectionOptions,
   ): Promise<ArkmeConversationMemberItem[]> {
     const userIds = rawItems.map(item => Math.trunc(numberValue(item.user_id)))
       .filter(userId => Number.isSafeInteger(userId) && userId > 0)
     const [profiles, viewerLabels] = await Promise.all([
-      this.profile.publicProfileSummariesByUserIds(userIds, session, signal).catch(() => new Map()),
-      includeViewerLabels
-        ? this.source.privateDisplayNamesByUserIds(userIds, { ...(signal === undefined ? {} : { signal }) }).catch(() => new Map())
+      this.profile.publicProfileSummariesByUserIds(userIds, session, options.signal).catch(() => new Map()),
+      options.includeViewerLabels
+        ? this.source.privateDisplayNamesByUserIds(userIds, {
+            ...(options.signal === undefined ? {} : { signal: options.signal }),
+          }).catch(() => new Map())
         : Promise.resolve(new Map<number, string>()),
     ])
     const members: ArkmeConversationMemberItem[] = []
@@ -3186,17 +3884,17 @@ export class ChatService {
       const userId = Math.trunc(numberValue(item.user_id))
       if (!Number.isSafeInteger(userId) || userId <= 0) continue
       const profile = profiles.get(userId)
-      const { displayName, memberName, secondaryName } = resolveChatMemberDisplayNames({
-        userId,
-        remarkCandidates: [],
-        memberNameCandidates: [item.display_name_snapshot],
-        userNameCandidates: [viewerLabels.get(userId), item.remark, profile?.displayName],
-      })
+      const { displayName, memberName, secondaryName } = projectChatMemberDisplayNames(
+        item, userId, viewerLabels.get(userId), profile?.displayName,
+      )
       const role = chatMemberRole(item.role)
       const status = chatMemberStatus(item.status)
       const extra = parsedObject(item.extra)
       members.push({
         memberRef: await this.sealChatMemberRef(session.userId, chatSessionUid, userId),
+        ...(options.includeHumanMentionRefs && status === 'active' && userId !== session.userId ? {
+          mentionRef: await this.sealChatHumanMentionRef(session.userId, chatSessionUid, userId, displayName),
+        } : {}),
         displayName,
         ...(memberName === '' ? {} : { memberName }),
         ...(secondaryName === '' ? {} : { secondaryName }),
@@ -3238,6 +3936,7 @@ export class ChatService {
       if (uid === '') continue
       const relationUid = stringValue(relation.rel_uid).trim()
       const senderUserId = Math.trunc(numberValue(relation.sender_user_id))
+      const recordOwnerUserId = chatRecordOwnerUserId(relation, record, payload, senderUserId)
       const aiPolish = this.aiPolish.timelineAiPolish(record, payload)
       const sendAtMillis = numberValue(relation.attach_at ?? payload.send_at)
       const forwardRecords = await this.chatForwardRecordsPreview(item, session.userId, sendAtMillis)
@@ -3245,11 +3944,7 @@ export class ChatService {
         viewerUserId: session.userId,
         chatSessionUid: source.ownerRef,
         relationUid,
-        recordOwnerUserId: integerLikeValue(
-          record.record_owner_user_id ?? record.recordOwnerUserId
-          ?? payload.record_owner_user_id ?? payload.recordOwnerUserId
-          ?? relation.record_owner_user_id ?? relation.recordOwnerUserId,
-        ),
+        recordOwnerUserId,
         recordUid: uid,
         senderUserId,
         sequence: integerLikeValue(relation.seq),
@@ -3261,6 +3956,17 @@ export class ChatService {
         : rawAgentSource
       const contentBlocks = this.media.richContentBlocks(item, session.userId)
       const senderName = stringValue(relation.display_name_snapshot).trim() || 'Arkme用户'
+      const captureContext = timelineCaptureContext({ ...record, ...payload })
+      const recordDurationMillis = positiveNumberValue(
+        payload.record_duration_millis, record.record_duration_millis,
+        payload.recordDurationMillis, record.recordDurationMillis,
+        payload.cost_mill_sec, record.cost_mill_sec, payload.costMillSec, record.costMillSec,
+      )
+      const editDurationMillis = positiveNumberValue(
+        payload.edit_duration_millis, record.edit_duration_millis,
+        payload.editDurationMillis, record.editDurationMillis,
+        payload.incr_cost_mill_sec, record.incr_cost_mill_sec, payload.incrCostMillSec, record.incrCostMillSec,
+      )
       const itemIndex = items.push({
         itemUid: uid,
         ...(source.kind !== 'group_chat' || relationUid === '' || senderUserId === session.userId ? {} : {
@@ -3273,7 +3979,7 @@ export class ChatService {
             sourceOwnerRef: source.ownerRef,
             chatSessionUid: source.ownerRef,
             relationUid,
-            recordOwnerUserId: 0,
+            recordOwnerUserId,
             recordUid: uid,
             senderUserId,
             senderName,
@@ -3301,8 +4007,9 @@ export class ChatService {
         displayKind: numberValue(payload.display_kind),
         version: numberValue(payload.version ?? record.version),
         updateAtMillis: numberValue(payload.update_at ?? record.update_at),
-        recordDurationMillis: numberValue(payload.record_duration_millis),
-        editDurationMillis: numberValue(payload.edit_duration_millis),
+        ...(recordDurationMillis === undefined ? {} : { recordDurationMillis }),
+        ...(editDurationMillis === undefined ? {} : { editDurationMillis }),
+        ...(captureContext === undefined ? {} : { captureContext }),
         contentBlocks,
         ...(forwardRecords === undefined ? {} : { forwardRecords }),
         ...(sharedRecording === undefined ? {} : { sharedRecording }),
@@ -3321,10 +4028,19 @@ export class ChatService {
     return items
   }
 
-  private async sealChatMemberRef(viewerUserId: number, chatSessionUid: string, targetUserId: number): Promise<string> {
-    const encoded = encodeOpaqueJson({ version: 1, viewerUserId, chatSessionUid, targetUserId } satisfies ArkmeChatMemberRefPayload)
+  private async sealChatMemberRef(
+    viewerUserId: number,
+    chatSessionUid: string,
+    targetUserId: number,
+  ): Promise<string> {
+    const encoded = encodeOpaqueJson({
+      version: 1,
+      viewerUserId,
+      chatSessionUid,
+      targetUserId,
+    } satisfies ArkmeChatMemberRefPayload)
     const signature = createHmac('sha256', await this.runtime.stateStore.uniqueCode()).update(encoded).digest('base64url')
-    return `arkme-chat-member-v1.${encoded}.${signature}`
+    return `${CHAT_MEMBER_REF_PREFIX}.${encoded}.${signature}`
   }
 
   private async openChatMemberRef(
@@ -3333,7 +4049,7 @@ export class ChatService {
     expectedChatSessionUid: string,
   ): Promise<ArkmeChatMemberRefPayload> {
     const parts = memberRef.trim().split('.')
-    if (parts.length !== 3 || parts[0] !== 'arkme-chat-member-v1') {
+    if (parts.length !== 3 || parts[0] !== CHAT_MEMBER_REF_PREFIX) {
       throw new ArkmePluginError('chat-member-ref-invalid', '聊天成员引用无效', false)
     }
     const encoded = parts[1] ?? ''
@@ -3355,6 +4071,63 @@ export class ChatService {
       || result.chatSessionUid !== expectedChatSessionUid
       || !Number.isSafeInteger(result.targetUserId) || result.targetUserId <= 0) {
       throw new ArkmePluginError('chat-member-ref-invalid', '聊天成员引用与当前账号或会话不匹配', false, 403)
+    }
+    return result
+  }
+
+  private async sealChatHumanMentionRef(
+    viewerUserId: number,
+    chatSessionUid: string,
+    targetUserId: number,
+    displayNameSnapshot: string,
+  ): Promise<string> {
+    const normalizedDisplayNameSnapshot = normalizedJoinDisplayName(displayNameSnapshot)
+    if (normalizedDisplayNameSnapshot === '') {
+      throw new ArkmePluginError('chat-mention-ref-invalid', '真人 mention 展示名无效', false)
+    }
+    const encoded = encodeOpaqueJson({
+      version: 1,
+      viewerUserId,
+      chatSessionUid,
+      targetUserId,
+      displayNameSnapshot: normalizedDisplayNameSnapshot,
+    } satisfies ArkmeChatHumanMentionRefPayload)
+    const signature = createHmac('sha256', await this.runtime.stateStore.uniqueCode())
+      .update(`${CHAT_HUMAN_MENTION_REF_PREFIX}.${encoded}`).digest('base64url')
+    return `${CHAT_HUMAN_MENTION_REF_PREFIX}.${encoded}.${signature}`
+  }
+
+  private async openChatHumanMentionRef(
+    mentionRef: string,
+    expectedViewerUserId: number,
+    expectedChatSessionUid: string,
+  ): Promise<ArkmeChatHumanMentionRefPayload> {
+    const parts = mentionRef.trim().split('.')
+    if (parts.length !== 3 || parts[0] !== CHAT_HUMAN_MENTION_REF_PREFIX) {
+      throw new ArkmePluginError('chat-mention-ref-invalid', '真人 mention 引用无效', false)
+    }
+    const encoded = parts[1] ?? ''
+    const supplied = Buffer.from(parts[2] ?? '', 'base64url')
+    const expected = createHmac('sha256', await this.runtime.stateStore.uniqueCode())
+      .update(`${CHAT_HUMAN_MENTION_REF_PREFIX}.${encoded}`).digest()
+    if (supplied.length !== expected.length || !timingSafeEqual(supplied, expected)) {
+      throw new ArkmePluginError('chat-mention-ref-invalid', '真人 mention 引用无效', false)
+    }
+    let raw: Record<string, unknown>
+    try { raw = objectValue(decodeOpaqueJson(encoded)) }
+    catch (error) { throw new ArkmePluginError('chat-mention-ref-invalid', '真人 mention 引用无效', false, 400, { cause: error }) }
+    const result: ArkmeChatHumanMentionRefPayload = {
+      version: 1,
+      viewerUserId: Math.trunc(numberValue(raw.viewerUserId)),
+      chatSessionUid: stringValue(raw.chatSessionUid).trim(),
+      targetUserId: Math.trunc(numberValue(raw.targetUserId)),
+      displayNameSnapshot: normalizedJoinDisplayName(raw.displayNameSnapshot),
+    }
+    if (raw.version !== 1 || result.viewerUserId !== expectedViewerUserId
+      || result.chatSessionUid !== expectedChatSessionUid
+      || !Number.isSafeInteger(result.targetUserId) || result.targetUserId <= 0
+      || result.displayNameSnapshot === '') {
+      throw new ArkmePluginError('chat-mention-ref-invalid', '真人 mention 引用与当前账号或会话不匹配', false, 403)
     }
     return result
   }

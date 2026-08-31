@@ -1,6 +1,6 @@
 {
   "name": "@senguoyun/dsh-arkme",
-  "version": "0.1.31",
+  "version": "0.1.34",
   "description": "Arkme account, records, chat and interwoven-moments integration for DeepSeek Harness",
   "license": "UNLICENSED",
   "repository": {
@@ -64,10 +64,10 @@
     "updateNotice": {
       "schemaVersion": 1,
       "level": "normal",
-      "title": "Arkme 插件 0.1.31 更新",
-      "summary": "Codex/ts0828 02 登录用户头像",
-      "publishedAt": "2026-08-28T09:02:02.580Z",
-      "releaseNotesUrl": "https://github.com/arkme-senx/arkme-dsh-plugin/releases/tag/v0.1.31"
+      "title": "Arkme 插件 0.1.34 更新",
+      "summary": "Codex/ts0829 04 消息快照采集",
+      "publishedAt": "2026-08-29T11:41:43.420Z",
+      "releaseNotesUrl": "https://github.com/arkme-senx/arkme-dsh-plugin/releases/tag/v0.1.34"
     }
   },
   "scripts": {
@@ -78,6 +78,7 @@
     "bundle": "node scripts/clean-bundle.mjs && tsdown && node scripts/verify-executable-entrypoints.mjs",
     "typecheck": "tsc --project tsconfig.json --noEmit",
     "test": "vitest run",
+    "pack:runtime": "node scripts/build-runtime-artifact.mjs",
     "verify:call-assets": "node scripts/verify-call-assets.mjs",
     "verify:windows-credential-helper": "node scripts/verify-windows-credential-helper.mjs",
     "prepare": "pnpm run build"

@@ -380,6 +380,10 @@ export interface ArkmePendingWrite {
   createdAtMillis: number
   sendAtMillis: number
   attempts: number
+  /** Composer time that must survive the durable outbox retry path. */
+  recordDurationMillis?: number
+  /** Browser capture data that must survive the durable outbox retry path. */
+  captureContext?: ArkmeRecordCaptureContext
   lastError?: string
 }
 
@@ -1045,6 +1049,8 @@ export interface ArkmeProviderCapabilities {
     sourceTextSend: true
     /** Recipient read/unread summaries and group member detail for current-user-sent messages. */
     messageReadReceipts?: true
+    /** Peer group-chat messages expose an account-bound report action. */
+    messageReport?: true
     richContentRead: boolean
     richContentSend: boolean
     fileUpload: boolean
@@ -1301,6 +1307,46 @@ export interface ArkmeTimelineSelfTopic {
   title?: string
 }
 
+/** Static environment data captured when a user creates a chat record. */
+export interface ArkmeRecordCaptureContext {
+  clientName?: string
+  networkName?: string
+  electric?: number
+  charge?: number
+}
+
+/** Browser-safe device location saved for one record after an explicit user grant. */
+export interface ArkmeRecordLocationCapture {
+  latitude: number
+  longitude: number
+  /** Horizontal accuracy reported by the browser, in metres. */
+  accuracyMeters?: number
+  altitudeMeters?: number
+  speedMetersPerSecond?: number
+  capturedAtMillis: number
+}
+
+export interface ArkmeMessageSnapshotDetail {
+  itemUid: string
+  textContent: string
+  recordDurationMillis?: number
+  editDurationMillis?: number
+  viewTimes?: number
+  shareTimes?: number
+  captureContext?: ArkmeRecordCaptureContext
+  backgroundSound: 'available' | 'not-recorded' | 'disabled' | 'unknown'
+  locationCapture?: ArkmeRecordLocationCapture
+  locationLabel?: string
+  weather?: string
+  altitudeMeters?: number
+  movement?: string
+  belongDate?: string
+  startAtMillis?: number
+  completeAtMillis?: number
+  syncedAtMillis?: number
+  syncState?: 'synced' | 'syncing' | 'failed' | 'not-synced'
+}
+
 export interface ArkmeTimelineItem {
   itemUid: string
   /** Account-bound opaque reference for reporting this concrete group-chat message. */
@@ -1329,6 +1375,10 @@ export interface ArkmeTimelineItem {
   updateAtMillis?: number
   recordDurationMillis?: number
   editDurationMillis?: number
+  /** Snapshot metadata returned with the record when the originating client captured it. */
+  captureContext?: ArkmeRecordCaptureContext
+  /** Explicitly user-authorized location captured by this client for the record. */
+  locationCapture?: ArkmeRecordLocationCapture
   contentBlocks?: ArkmeContentBlock[]
   /** Record owner reported media refs, but their delivery projection was temporarily unavailable. */
   mediaUnavailable?: boolean
@@ -1338,6 +1388,48 @@ export interface ArkmeTimelineItem {
   forwardRecords?: ArkmeForwardRecordsPreview
   /** Browser-safe shared recording snapshot. It is present only for explicit `render_kind=shared_recording_memory` payloads. */
   sharedRecording?: ArkmeSharedRecordingPreview
+}
+
+/** Browser-safe summary of one quick note related to the current message or moment. */
+export interface ArkmeRelatedQuickNoteItem {
+  /** Viewer- and source-bound opaque reference used to open the related note. */
+  relatedRef: string
+  senderName: string
+  /** Opaque Provider image reference for the related note author. */
+  senderAvatarRef?: string
+  sendAtMillis: number
+  title: string
+  textPreview: string
+  sourceLabel?: string
+}
+
+export interface ArkmeRelatedQuickNoteList {
+  items: ArkmeRelatedQuickNoteItem[]
+  total: number
+}
+
+/** Allowlisted presentation fields for one related note; routing identifiers stay host-side. */
+export interface ArkmeRelatedQuickNoteDetail {
+  relatedRef: string
+  senderName: string
+  /** Opaque Provider image reference for the related note author. */
+  avatarRef?: string
+  isMe: boolean
+  sendAtMillis: number
+  title: string
+  textContent: string
+  status: number
+  recordVersion?: number
+  aiPolish?: ArkmeTimelineAiPolish
+  templateKind?: number
+  displayKind?: number
+  version?: number
+  updateAtMillis?: number
+  recordDurationMillis?: number
+  editDurationMillis?: number
+  contentBlocks?: ArkmeContentBlock[]
+  mediaUnavailable?: boolean
+  forwardRecords?: ArkmeForwardRecordsPreview
 }
 
 /** Identity of one message returned by an Arkme private/group timeline. */
@@ -1570,17 +1662,23 @@ export interface ArkmeRichSendInput {
   textContent?: string
   displayKind?: 0 | 1
   thinkingDurationMillis?: number
+  /** Time spent composing this record before it was sent. */
+  recordDurationMillis?: number
+  /** Browser/device data captured at send time, when available. */
+  captureContext?: ArkmeRecordCaptureContext
   assets?: ArkmeUploadedAsset[]
   humanMentions?: ArkmeHumanMentionInput[]
   botMentions?: ArkmeBotMentionInput[]
 }
 
-export interface ArkmeHumanMentionInput {
-  memberRef?: string
-  all?: boolean
+interface ArkmeHumanMentionRange {
   startIndex: number
   length: number
 }
+
+export type ArkmeHumanMentionInput =
+  | (ArkmeHumanMentionRange & { mentionRef: string; memberRef?: never; all?: never })
+  | (ArkmeHumanMentionRange & { all: true; mentionRef?: never; memberRef?: never })
 
 export interface ArkmeBotMentionInput {
   botRef: string
@@ -1610,6 +1708,8 @@ export interface ArkmeLongArticleDraft {
   durationMillis: number
   updatedAtMillis: number
 }
+
+export type ArkmeMessageReportType = 1 | 2 | 3 | 4
 
 export interface ArkmeMessageReportResult {
   messageRef: string
@@ -1868,7 +1968,10 @@ export interface ArkmeGroupMemberList {
 }
 
 export interface ArkmeConversationMemberItem {
+  /** Stable account-and-session-scoped identity for member actions. */
   memberRef: string
+  /** Present only when this active non-self group member can be selected for a new human mention. */
+  mentionRef?: string
   displayName: string
   memberName?: string
   secondaryName?: string
@@ -2662,9 +2765,12 @@ export type ArkmePluginOperation =
   | 'source.mark-read'
   | 'source.read-receipts.summary-list'
   | 'source.read-receipts.detail'
+  | 'source.message-report'
   | 'source.message-copy-link'
   | 'source.message-copy-link.resolve'
   | 'source.message-copy-link.extend'
+  | 'source.message-snapshot.detail'
+  | 'source.message-location.set'
   | 'source.link-metadata.resolve'
   | 'source.forward-messages'
   | 'source.send-text'
@@ -2735,6 +2841,10 @@ export type ArkmePluginOperation =
 	| 'extensions.share.detail'
 	| 'extensions.share.resolve'
   | 'extensions.installed-list'
+  | 'extensions.quarantine.status'
+  | 'extensions.quarantine.dismiss'
+  | 'extensions.quarantine.reenable'
+  | 'extensions.quarantine.health'
   | 'extensions.enabled-state'
   | 'extensions.persistent.client-state'
   | 'extensions.enabled.set'
@@ -2805,6 +2915,9 @@ export type ArkmeHostOperation = ArkmePluginOperation
   | 'source.interwoven-moments'
   | 'source.interwoven-detail'
   | 'source.shared-recording-detail'
+  | 'source.related-quick-notes.from-message'
+  | 'source.related-quick-notes.from-moment'
+  | 'source.related-quick-note.detail'
   | 'extensions.catalog.list'
   | 'extensions.classification.tree'
   | 'extensions.classification.items'

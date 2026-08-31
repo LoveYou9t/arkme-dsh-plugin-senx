@@ -15,6 +15,7 @@ import {
   classificationStatusHint, extensionDetailHasPreviews, extensionDetailMetricLabels, extensionEnableUnavailable,
   extensionEnabledLabel,
   extensionInstallFailureMessage, extensionInstallOwnerId, extensionInstallPercent, extensionTabLoadMode, extensionUpdateCardStatus,
+  sameExtensionInstallTaskSnapshot,
   extensionVersionLabel, installedExtensionCatalogItem, mergeInstalledExtensionCatalogItem,
   extensionNativeInstallWarning, filterMarketplaceMenuOptions, formatCompactCount, formatExtensionBytes, formatMarketplaceDate, marketplaceCategoryOptions, marketplaceListParams, MyExtensionCard, shouldLoadMoreDiscoverPage,
 } from '../../src/client/ArkmeMarketplace.js'
@@ -97,6 +98,16 @@ describe('Arkme marketplace UI', () => {
     expect(extensionTabLoadMode(new Set(), 'discover')).toBe('initial')
     expect(extensionTabLoadMode(new Set(['discover']), 'discover')).toBe('refresh')
     expect(extensionTabLoadMode(new Set(['discover']), 'installed')).toBe('initial')
+  })
+
+  it('keeps discover refinements scoped to the catalog and ignores timestamp-only install polling changes', () => {
+    const current = {
+      taskId: 'task-1', extensionId: 'ext-1', sessionId: 'session-1', done: false,
+      phase: 'downloading' as const, downloadedBytes: 25, totalBytes: 100,
+      message: '正在下载', updatedAtMillis: 100,
+    }
+    expect(sameExtensionInstallTaskSnapshot(current, { ...current, updatedAtMillis: 200 })).toBe(true)
+    expect(sameExtensionInstallTaskSnapshot(current, { ...current, downloadedBytes: 50, updatedAtMillis: 200 })).toBe(false)
   })
 
   it('filters category menu options locally with trimmed case-insensitive text', () => {
@@ -920,6 +931,13 @@ describe('Arkme marketplace UI', () => {
     expect(installedHtml).toContain('作者')
     expect(installedHtml).not.toContain('>更新</button>')
     expect(installedHtml.indexOf('aria-label="查看扩展：扩展"')).toBeLessThan(installedHtml.indexOf('role="switch"'))
+
+    const quarantinedHtml = renderToStaticMarkup(<ArkmeExtensionLifecycleRow
+      item={item} installed={{ ...installed, enabled: false, active: false }} kind="installed"
+      quarantineReason="扩展启动时加载失败，已自动停用" onOpen={() => {}} onToggle={() => {}}
+    />)
+    expect(quarantinedHtml).toContain('已自动停用')
+    expect(quarantinedHtml).toContain('扩展启动时加载失败，已自动停用')
 
     const updateHtml = renderToStaticMarkup(<ArkmeExtensionLifecycleRow
       item={item} installed={installed} kind="update" onOpen={() => {}} onUpdate={() => {}}

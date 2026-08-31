@@ -8,12 +8,12 @@ import { WarningCircle } from '@phosphor-icons/react/WarningCircle'
 import { WechatLogo } from '@phosphor-icons/react/WechatLogo'
 import { X } from '@phosphor-icons/react/X'
 import qrcode from 'qrcode-generator'
+import pluginManifest from '../../package.json' with { type: 'json' }
 import type {
   ArkmeAuthSnapshot,
   ArkmeClientConfig,
   ArkmeIdAvailabilitySnapshot,
   ArkmeIdMutationResult,
-  ArkmePluginUpdateStatus,
   ArkmeUserProfile,
   ArkmeUserProfileSnapshot,
 } from '../types.js'
@@ -24,8 +24,7 @@ import { ArkmeUserAvatar } from './ArkmeAvatar.js'
 import { arkmeAuthStore } from './auth-store.js'
 import { arkmeDesktopNotifications } from './desktop-notification-runtime.js'
 import { clearLastNavigationCache } from './navigation-cache.js'
-import { arkmePluginUpdateStore, type ArkmePluginUpdateStoreSnapshot } from './plugin-update-store.js'
-import { derivePluginUpdateItem } from './update-presentation.js'
+import { arkmeLocationCaptureEnabled, arkmeLocationPermissionState, requestArkmeRecordLocation, setArkmeLocationCaptureEnabled, subscribeArkmeLocationCapturePreference } from './record-capture-location.js'
 import { arkmeUi } from './ui-controller.js'
 import { arkmeUpdateUi } from './update-ui-controller.js'
 import { verifyPhoneCaptcha } from './geetest.js'
@@ -60,7 +59,7 @@ interface VersionSettingsRowProps {
   title: string
   version: string
   feedback?: string
-  actionLabel?: '检查更新' | '检查中…' | '立即更新'
+  actionLabel?: '检查更新' | '检查中…' | '立即更新' | '下载中…' | '打开安装包'
   disabled?: boolean
   loading?: boolean
   onAction?: () => void
@@ -211,6 +210,42 @@ function SettingsDialog({
       {children}
     </section>
   </div>
+}
+
+function LocationPermissionDialog({ userId, enabled, onClose }: { userId: number; enabled: boolean; onClose: () => void }) {
+  const [permission, setPermission] = useState<'granted' | 'denied' | 'prompt' | 'unavailable'>('prompt')
+  const [locationBusy, setLocationBusy] = useState(false)
+  const [status, setStatus] = useState('')
+  const refreshPermission = useCallback(() => { void arkmeLocationPermissionState().then(setPermission) }, [])
+  useEffect(() => { refreshPermission() }, [refreshPermission])
+  const request = async () => {
+    setLocationBusy(true)
+    setStatus('')
+    try {
+      // This is an explicit settings action. It is the only place besides the
+      // composer reminder that is allowed to trigger a browser permission UI.
+      await requestArkmeRecordLocation()
+      setArkmeLocationCaptureEnabled(userId, true)
+      setStatus('位置记录已开启')
+    } catch (caught) {
+      setStatus(caught instanceof Error ? caught.message : String(caught))
+    } finally {
+      await arkmeLocationPermissionState().then(setPermission)
+      setLocationBusy(false)
+    }
+  }
+  const browserPermission = permission === 'granted' ? '已允许' : permission === 'denied' ? '已拒绝' : permission === 'unavailable' ? '浏览器不支持' : '尚未授权'
+  return <SettingsDialog title="位置权限" onClose={onClose}>
+    <div className="arkme-account-form">
+      <p className="arkme-account-rule">开启后，私聊、群聊、发给自己和主题输入时会显示位置提示；只有你点击提示后，才会记录该条消息的位置。</p>
+      <p className="arkme-account-rule">插件记录：{enabled ? '已开启' : '未开启'} · 浏览器权限：{browserPermission}</p>
+      {status !== '' ? <p className={`arkme-account-dialog-status${status === '位置记录已开启' ? '' : ' is-error'}`} role="status">{status}</p> : null}
+      <div className="arkme-account-dialog-actions">
+        {enabled ? <button type="button" disabled={locationBusy} onClick={() => { setArkmeLocationCaptureEnabled(userId, false); setStatus('位置记录已关闭') }}>关闭位置记录</button> : <button type="button" disabled={locationBusy || permission === 'unavailable'} onClick={() => { void request() }}>{locationBusy ? '正在请求…' : '开启位置记录'}</button>}
+        <button type="button" onClick={onClose}>完成</button>
+      </div>
+    </div>
+  </SettingsDialog>
 }
 
 function ProfileQrDialog({
@@ -435,14 +470,6 @@ export function scrollArkmeSettingsSurface(
   target.scrollTop = 0
 }
 
-export interface ArkmePluginUpdateRow {
-  label: string
-  current: string
-  latest: string
-  action: 'check' | 'install' | 'busy' | 'view'
-  feedback?: string
-}
-
 export interface ArkmeAppUpdateRow {
   label: string
   current: string
@@ -456,19 +483,22 @@ function versionLabel(version: string | undefined): string {
   return `v${version?.trim() || '…'}`
 }
 
-interface ArkmeDesktopVersionScope {
-  readonly arkmeDesktop?: Readonly<{ appVersion?: string; harnessVersion?: string }>
+interface ArkmeDesktopScope {
+  readonly arkmeDesktop?: Readonly<{
+    appVersion?: string
+    harnessVersion?: string
+  }>
 }
 
 export function aboutArkmeVersion(
   currentVersion: string | undefined,
-  scope: ArkmeDesktopVersionScope = globalThis as unknown as ArkmeDesktopVersionScope,
+  scope: ArkmeDesktopScope = globalThis as unknown as ArkmeDesktopScope,
 ): string {
   return versionLabel(scope.arkmeDesktop?.appVersion ?? currentVersion)
 }
 
 export function aboutHarnessVersion(
-  scope: ArkmeDesktopVersionScope = globalThis as unknown as ArkmeDesktopVersionScope,
+  scope: ArkmeDesktopScope = globalThis as unknown as ArkmeDesktopScope,
 ): string {
   return versionLabel(scope.arkmeDesktop?.harnessVersion)
 }
@@ -511,54 +541,9 @@ export function buildArkmeAppUpdateRow(input: {
   }
 }
 
-export function buildArkmePluginUpdateRow(input: {
-  snapshot?: ArkmePluginUpdateStoreSnapshot
-  plugin?: Pick<ArkmePluginUpdateStatus, 'availability' | 'installedVersion' | 'latestVersion' | 'checking' | 'checkFailed'>
-  pluginBusy?: boolean
-  pluginError?: string
-}): ArkmePluginUpdateRow {
-  if (input.snapshot !== undefined) {
-    const snapshot = input.snapshot
-    const item = derivePluginUpdateItem(snapshot)
-    if (item?.active || item?.uncertain || item?.failed) return {
-      label: '核心插件', current: item.currentVersion, latest: item.latestVersion, action: 'view',
-      feedback: item.uncertain ? `${item.checkingStatus ? '正在检查更新状态…' : '更新状态待确认'} · 查看状态`
-        : item.failed ? '更新未完成 · 查看结果' : `${item.phaseMessage} · 查看进度`,
-    }
-    return buildArkmePluginUpdateRow({
-      ...(snapshot.status === undefined ? {} : { plugin: { ...snapshot.status,
-        ...(item === undefined && snapshot.install?.phase === 'succeeded' ? { availability: 'current' as const } : {}),
-      } }),
-      pluginBusy: snapshot.busy || snapshot.installStatusChecking === true,
-      pluginError: snapshot.error,
-    })
-  }
-  const pluginAvailable = input.plugin?.availability === 'available'
-  const pluginBusy = input.pluginBusy === true || input.plugin?.checking === true
-  const pluginFeedback = pluginBusy
-    ? '正在检查更新…'
-    : input.pluginError?.trim()
-      ? `检查失败：${input.pluginError.trim()}`
-      : input.plugin?.checkFailed === true
-        ? '检查失败：请稍后重试'
-        : input.plugin?.availability === 'current'
-          ? '已检查 · 当前已是最新版本'
-          : input.plugin?.availability === 'available'
-            ? '发现新版本，可以立即更新'
-            : undefined
-  return {
-    label: '核心插件',
-    current: versionLabel(input.plugin?.installedVersion),
-    latest: versionLabel(input.plugin?.latestVersion),
-    action: pluginBusy ? 'busy' : pluginAvailable ? 'install' : 'check',
-    ...(pluginFeedback === undefined ? {} : { feedback: pluginFeedback }),
-  }
-}
-
 export function ArkmeSettingsSurface() {
   const surfaceRef = useRef<HTMLDivElement>(null)
   const authState = useSyncExternalStore(arkmeAuthStore.subscribe, arkmeAuthStore.getSnapshot, arkmeAuthStore.getSnapshot)
-  const updateState = useSyncExternalStore(arkmePluginUpdateStore.subscribe, arkmePluginUpdateStore.getSnapshot, arkmePluginUpdateStore.getSnapshot)
   const appUpdateState = useSyncExternalStore(arkmeAppUpdateStore.subscribe, arkmeAppUpdateStore.getSnapshot, arkmeAppUpdateStore.getSnapshot)
   const [profile, setProfile] = useState<ArkmeUserProfile>()
   const [clientConfig, setClientConfig] = useState<ArkmeClientConfig>()
@@ -567,6 +552,7 @@ export function ArkmeSettingsSurface() {
   const [error, setError] = useState('')
   const [accountFeedback, setAccountFeedback] = useState('')
   const [activeAccountDialog, setActiveAccountDialog] = useState<'qr' | 'arkme-id' | 'phone' | null>(null)
+  const [locationDialogOpen, setLocationDialogOpen] = useState(false)
   const [notificationPermission, setNotificationPermission] = useState(() => arkmeDesktopNotifications.permission())
 
   const applyProfileSnapshot = useCallback((snapshot: ArkmeUserProfileSnapshot) => {
@@ -634,6 +620,12 @@ export function ArkmeSettingsSurface() {
   }
 
   const authenticated = authState.auth?.status === 'authenticated'
+  const authenticatedUserId = authenticated ? authState.auth?.userId : undefined
+  const locationCaptureEnabled = useSyncExternalStore(
+    subscribeArkmeLocationCapturePreference,
+    () => arkmeLocationCaptureEnabled(authenticatedUserId),
+    () => false,
+  )
   const bindingRequired = authState.auth?.status === 'binding-required'
   const displayName = authenticated
     ? profile?.displayName.trim() || profile?.nickname.trim() || '我的账户'
@@ -644,19 +636,17 @@ export function ArkmeSettingsSurface() {
   const notificationLabel = notificationPermission === 'granted'
     ? '已开启'
     : notificationPermission === 'denied' ? '已阻止' : notificationPermission === 'default' ? '未开启' : '不可用'
-  const harnessVersion = aboutHarnessVersion()
   const appUpdateRow = buildArkmeAppUpdateRow({
     ...(appUpdateState.status === undefined ? {} : { app: appUpdateState.status }),
     ...(appUpdateState.error === '' ? {} : { appError: appUpdateState.error }),
   })
-  const pluginUpdateRow = buildArkmePluginUpdateRow({ snapshot: updateState })
-
-  const runPluginUpdateAction = (row: ArkmePluginUpdateRow) => {
-    if (row.action === 'busy') return
-    if (row.action === 'install' || row.action === 'view') arkmeUpdateUi.open('plugin')
-    else void arkmePluginUpdateStore.checkInstallStatus()
-  }
-
+  const appUpdateActionLabel = appUpdateRow.action === 'check'
+    ? '检查更新'
+    : appUpdateRow.action === 'download'
+      ? '立即更新'
+      : appUpdateRow.action === 'open'
+        ? '打开安装包'
+        : appUpdateState.status?.status === 'downloading' ? '下载中…' : '检查中…'
   const runAppUpdateAction = (row: ArkmeAppUpdateRow) => {
     if (row.action === 'busy') return
     if (row.action === 'download') arkmeUpdateUi.open('app')
@@ -745,21 +735,27 @@ export function ArkmeSettingsSurface() {
         />
       </SettingsGroup>
 
+      {authenticated && authenticatedUserId !== undefined ? <SettingsGroup title="隐私与权限">
+        <SettingsRow
+          title="位置记录"
+          description={locationCaptureEnabled ? '已开启，输入时可记录本条消息的位置' : '未开启，不会采集位置'}
+          onClick={() => { setLocationDialogOpen(true) }}
+        />
+      </SettingsGroup> : null}
+
       <SettingsGroup title="更新" id="arkme-settings-about">
-        <SettingsRow
+        <VersionSettingsRow
           title="ArkME 客户端"
-          description={`${updateVersionText(appUpdateRow.current, appUpdateRow.latest)} · ${appUpdateRow.feedback ?? '尚未检查'}`
+          version={aboutArkmeVersion(appUpdateState.status?.currentVersion)}
+          feedback={`${updateVersionText(appUpdateRow.current, appUpdateRow.latest)} · ${appUpdateRow.feedback ?? '尚未检查'}`
             + (appUpdateRow.downloadedFilePath === undefined ? '' : ` · ${appUpdateRow.downloadedFilePath}`)}
+          actionLabel={appUpdateActionLabel}
           disabled={appUpdateRow.action === 'busy'}
-          {...(appUpdateRow.action === 'busy' ? {} : { onClick: () => { runAppUpdateAction(appUpdateRow) } })}
+          loading={appUpdateState.status?.status === 'checking'}
+          onAction={() => { runAppUpdateAction(appUpdateRow) }}
         />
-        <SettingsRow
-          title="ArkME 插件"
-          description={`${updateVersionText(pluginUpdateRow.current, pluginUpdateRow.latest)} · ${pluginUpdateRow.feedback ?? '尚未检查'}`}
-          disabled={pluginUpdateRow.action === 'busy'}
-          {...(pluginUpdateRow.action === 'busy' ? {} : { onClick: () => { runPluginUpdateAction(pluginUpdateRow) } })}
-        />
-        <VersionSettingsRow title="DeepSeek Harness" version={harnessVersion} />
+        <VersionSettingsRow title="ArkME 插件" version={`v${pluginManifest.version}`} />
+        <VersionSettingsRow title="DeepSeek Harness" version={aboutHarnessVersion()} />
         <SettingsRow title="用户协议" description="查看 Arkme 用户协议" href="https://www.arkme.ai/article/user-aggrement-v1.html" />
         <SettingsRow title="隐私条款" description="查看 Arkme 隐私条款" href="https://www.arkme.ai/article/privacy-aggrement-v1.html" />
       </SettingsGroup>
@@ -783,6 +779,9 @@ export function ArkmeSettingsSurface() {
           onClose={() => { setActiveAccountDialog(null) }}
           onUpdated={(snapshot) => { applyProfileSnapshot(snapshot); arkmeUi.authChanged(true) }}
         />
+      : null}
+    {locationDialogOpen && authenticatedUserId !== undefined
+      ? <LocationPermissionDialog userId={authenticatedUserId} enabled={locationCaptureEnabled} onClose={() => { setLocationDialogOpen(false) }} />
       : null}
   </div>
 }

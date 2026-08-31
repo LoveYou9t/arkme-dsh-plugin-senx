@@ -1,6 +1,6 @@
 import {
-  forwardRef, useImperativeHandle, useLayoutEffect, useRef,
-  type ClipboardEvent, type CSSProperties, type KeyboardEvent,
+  forwardRef, useImperativeHandle, useLayoutEffect, useRef, useState,
+  type ClipboardEvent, type CSSProperties, type FocusEvent, type KeyboardEvent,
 } from 'react'
 import type { ArkmeComposerEmoji, ArkmeComposerMention } from './composer-draft-store.js'
 import { ARKME_COMPOSER_EMOJI_PLACEHOLDER } from './composer-draft-store.js'
@@ -56,6 +56,8 @@ export interface ArkmeRichComposerInputProps {
   style: CSSProperties
   onTextChange(text: string): void
   onSelectionChange?(text: string, selectionStart: number, selectionEnd: number): void
+  onFocus?(event: FocusEvent<HTMLDivElement>): void
+  onBlur?(event: FocusEvent<HTMLDivElement>): void
   onPaste?(event: ClipboardEvent<HTMLDivElement>): void
   onKeyDown?(event: KeyboardEvent<HTMLDivElement>): void
 }
@@ -85,7 +87,8 @@ function editorSemanticText(root: HTMLElement): string {
     for (const child of node.childNodes) text += read(child)
     return text
   }
-  return read(root)
+  const text = read(root)
+  return text === '\n' && root.textContent === '' ? '' : text
 }
 
 function pointSemanticOffset(root: HTMLElement, targetNode: Node, targetOffset: number): number | undefined {
@@ -251,14 +254,14 @@ function renderEditorContents(
 export const ArkmeRichComposerInput = forwardRef<ArkmeRichComposerHandle, ArkmeRichComposerInputProps>(
   function ArkmeRichComposerInput({
     className, value, mentions, emojis, maxLength, placeholder, ariaLabel, disabled, style,
-    onTextChange, onSelectionChange, onPaste, onKeyDown,
+    onTextChange, onSelectionChange, onFocus, onBlur, onPaste, onKeyDown,
   }, forwardedRef) {
     const editorRef = useRef<HTMLDivElement>(null)
     const valueRef = useRef(value)
     const disabledRef = useRef(disabled)
     const selectionRef = useRef<ComposerSelection>({ start: value.length, end: value.length })
     const pendingSelectionRef = useRef<ComposerSelection>()
-    const composingRef = useRef(false)
+    const [editorHasContent, setEditorHasContent] = useState(value !== '')
     valueRef.current = value
     disabledRef.current = disabled
 
@@ -306,16 +309,17 @@ export const ArkmeRichComposerInput = forwardRef<ArkmeRichComposerHandle, ArkmeR
       const nextSelection = pendingSelectionRef.current
         ?? (active ? editorSelection(root, selectionRef.current) : selectionRef.current)
       renderEditorContents(root, value, mentions, emojis)
+      setEditorHasContent(value !== '')
       pendingSelectionRef.current = undefined
       selectionRef.current = nextSelection
       if (active) applySelection(nextSelection.start, nextSelection.end)
     }, [value, mentions, emojis])
 
-    const commitDom = (root: HTMLDivElement) => {
+    const commitDom = (root: HTMLDivElement, nextText = editorSemanticText(root)) => {
       const selection = editorSelection(root, selectionRef.current)
-      const nextText = editorSemanticText(root)
       if (nextText.length > maxLength) {
         renderEditorContents(root, valueRef.current, mentions, emojis)
+        setEditorHasContent(valueRef.current !== '')
         applySelection(selectionRef.current.start, selectionRef.current.end)
         return
       }
@@ -336,7 +340,7 @@ export const ArkmeRichComposerInput = forwardRef<ArkmeRichComposerHandle, ArkmeR
     }
 
     return <div style={{ ...styles.host, minHeight: style.minHeight, maxHeight: style.maxHeight }}>
-      {value === '' && <div aria-hidden style={{ ...style, ...styles.placeholder }}>{placeholder}</div>}
+      {value === '' && !editorHasContent && <div aria-hidden style={{ ...style, ...styles.placeholder }}>{placeholder}</div>}
       <div
         ref={editorRef}
         className={className}
@@ -349,9 +353,18 @@ export const ArkmeRichComposerInput = forwardRef<ArkmeRichComposerHandle, ArkmeR
         spellCheck
         style={{ ...style, ...styles.editor, position: 'relative', zIndex: 1 }}
         data-arkme-rich-composer="true"
-        onCompositionStart={() => { composingRef.current = true }}
-        onCompositionEnd={event => { composingRef.current = false; commitDom(event.currentTarget) }}
-        onInput={event => { if (!composingRef.current) commitDom(event.currentTarget) }}
+        onCompositionEnd={event => {
+          const text = editorSemanticText(event.currentTarget)
+          setEditorHasContent(text !== '')
+          commitDom(event.currentTarget, text)
+        }}
+        onInput={event => {
+          const text = editorSemanticText(event.currentTarget)
+          setEditorHasContent(text !== '')
+          if (!(event.nativeEvent as InputEvent).isComposing) commitDom(event.currentTarget, text)
+        }}
+        onFocus={onFocus}
+        onBlur={onBlur}
         onPaste={onPaste}
         onKeyDown={event => {
           onKeyDown?.(event)

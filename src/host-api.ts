@@ -8,8 +8,9 @@ import type {
   ArkmeBillingPaymentMethod, ArkmeBotMentionInput, ArkmeConversationMemberRecordMode,
   ArkmeDirectorySectionKind, ArkmeFavoriteStickerAddInput, ArkmeFavoriteStickerManageAction,
   ArkmeGroupAiPolishThreadMessage, ArkmeHumanMentionInput, ArkmeMessageReadReceiptQueryItem,
+  ArkmeMessageReportType,
   ArkmePluginRequest, ArkmePluginResponse, ArkmeRecordCursor,
-  ArkmeRichSendInput, ArkmeSearchSceneKind, ArkmeSourceDirectory, ArkmeTimelineCursor,
+  ArkmeRecordCaptureContext, ArkmeRecordLocationCapture, ArkmeRichSendInput, ArkmeSearchSceneKind, ArkmeSourceDirectory, ArkmeTimelineCursor,
   ArkmeWorldPublishFileAsset,
 } from './types.js'
 import type { ArkmeCaptchaResult } from './types.js'
@@ -17,6 +18,7 @@ import { ARKME_WORLD_PUBLISH_MAX_IMAGE_BYTES, ARKME_WORLD_PUBLISH_MAX_IMAGES } f
 import type { ArkmeExtensionManager } from './extensions/manager.js'
 import type { ArkmeExtensionInstallTasks } from './extensions/install-tasks.js'
 import type { ArkmeOwnedExtensionInventory } from './extensions/owned-inventory.js'
+import type { ArkmeDesktopExtensionQuarantine } from './extensions/desktop-quarantine.js'
 import type { ArkmeExtensionCatalogItem, ArkmeExtensionCatalogPage, ArkmeExtensionCatalogSort } from './extensions/types.js'
 import { effectiveExtensionPublisherRole } from './extensions/publisher-role.js'
 import { invokePersistentArkmeExtension } from './extensions/persistent-runtime.js'
@@ -26,7 +28,10 @@ import type { DshRemoteHostFacade } from './dsh-remote/types.js'
 import { ARKME_RUNTIME_INSTANCE_ID } from './runtime-instance.js'
 import { arkmeRequiredLinkMetadataFallback } from './link-metadata.js'
 
-const MAX_REQUEST_BYTES = 128 * 1024
+const MAX_STANDARD_REQUEST_BYTES = 128 * 1024
+const MAX_MESSAGE_ACTION_REF_CHARS = 1024 * 1024
+const MAX_MESSAGE_REPORT_REF_CHARS = 4_096
+const MAX_REQUEST_BYTES = MAX_MESSAGE_ACTION_REF_CHARS + (64 * 1024)
 
 function isLoopback(address: string | undefined): boolean {
   return address === '127.0.0.1' || address === '::1' || address === '::ffff:127.0.0.1'
@@ -55,6 +60,10 @@ async function readRequest(req: IncomingMessage): Promise<ArkmePluginRequest> {
   const source = value as Record<string, unknown>
   if (typeof source.operation !== 'string') {
     throw new ArkmePluginError('operation-required', '缺少操作类型', false)
+  }
+  if (bytes > MAX_STANDARD_REQUEST_BYTES
+    && source.operation !== 'source.related-quick-notes.from-message') {
+    throw new ArkmePluginError('request-too-large', '请求内容过大', false, 413)
   }
   return {
     operation: source.operation as ArkmePluginRequest['operation'],
@@ -114,6 +123,51 @@ function billingPaymentMethodParam(params: Record<string, unknown>): ArkmeBillin
 function numberParam(params: Record<string, unknown>, key: string, fallback: number): number {
   const value = params[key]
   return typeof value === 'number' && Number.isFinite(value) ? value : fallback
+}
+
+function captureContextParam(params: Record<string, unknown>): ArkmeRecordCaptureContext | undefined {
+  const raw = params.captureContext
+  if (raw === undefined) return undefined
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
+    throw new ArkmePluginError('capture-context-invalid', '记忆快照参数无效', false, 400)
+  }
+  const value = raw as Record<string, unknown>
+  const clientName = stringParam(value, 'clientName').trim().slice(0, 120)
+  const networkName = stringParam(value, 'networkName').trim().slice(0, 120)
+  const electric = typeof value.electric === 'number' && Number.isFinite(value.electric) ? Math.trunc(value.electric) : undefined
+  const charge = Math.trunc(numberParam(value, 'charge', 0))
+  const context: ArkmeRecordCaptureContext = {
+    ...(clientName === '' ? {} : { clientName }),
+    ...(networkName === '' ? {} : { networkName }),
+    ...(electric === undefined || electric < 0 || electric > 100 ? {} : { electric }),
+    ...(charge < 1 || charge > 3 ? {} : { charge }),
+  }
+  return Object.keys(context).length === 0 ? undefined : context
+}
+
+function recordLocationCaptureParam(params: Record<string, unknown>): ArkmeRecordLocationCapture {
+  const raw = params.location
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
+    throw new ArkmePluginError('record-location-invalid', '位置快照参数无效', false, 400)
+  }
+  const value = raw as Record<string, unknown>
+  const latitude = numberParam(value, 'latitude', Number.NaN)
+  const longitude = numberParam(value, 'longitude', Number.NaN)
+  if (!Number.isFinite(latitude) || latitude < -90 || latitude > 90 || !Number.isFinite(longitude) || longitude < -180 || longitude > 180) {
+    throw new ArkmePluginError('record-location-invalid', '位置坐标无效', false, 400)
+  }
+  const altitudeMeters = numberParam(value, 'altitudeMeters', Number.NaN)
+  const speedMetersPerSecond = numberParam(value, 'speedMetersPerSecond', Number.NaN)
+  const accuracyMeters = numberParam(value, 'accuracyMeters', Number.NaN)
+  const capturedAtMillis = Math.trunc(numberParam(value, 'capturedAtMillis', 0))
+  return {
+    latitude,
+    longitude,
+    capturedAtMillis: capturedAtMillis > 0 ? capturedAtMillis : Date.now(),
+    ...(Number.isFinite(accuracyMeters) && accuracyMeters >= 0 ? { accuracyMeters } : {}),
+    ...(Number.isFinite(altitudeMeters) ? { altitudeMeters } : {}),
+    ...(Number.isFinite(speedMetersPerSecond) && speedMetersPerSecond >= 0 ? { speedMetersPerSecond } : {}),
+  }
 }
 
 const ARKME_DIRECTORY_SECTIONS = new Set<ArkmeDirectorySectionKind>([
@@ -256,6 +310,30 @@ function messageActionRefsParam(params: Record<string, unknown>): string[] {
   return stringListParam(params, 'actionRefs').map(value => value.trim()).filter(value => value !== '')
 }
 
+function messageReportParam(params: Record<string, unknown>): {
+  messageRef: string
+  reportType: ArkmeMessageReportType
+  reason?: string
+  requestUid?: string
+} {
+  const messageRef = stringParam(params, 'messageRef').trim()
+  const reportType = numberParam(params, 'reportType', 0)
+  const reason = stringParam(params, 'reason').trim()
+  const requestUid = stringParam(params, 'requestUid').trim().toLowerCase()
+  if (messageRef === '' || messageRef.length > MAX_MESSAGE_REPORT_REF_CHARS
+    || !Number.isInteger(reportType) || ![1, 2, 3, 4].includes(reportType)
+    || (reportType === 4 && reason === '') || [...reason].length > 500
+    || (requestUid !== '' && !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(requestUid))) {
+    throw new ArkmePluginError('message-report-invalid', '举报类型或补充说明无效', false, 400)
+  }
+  return {
+    messageRef,
+    reportType: reportType as ArkmeMessageReportType,
+    ...(reason === '' ? {} : { reason }),
+    ...(requestUid === '' ? {} : { requestUid }),
+  }
+}
+
 function aiPolishThreadMessagesParam(params: Record<string, unknown>): ArkmeGroupAiPolishThreadMessage[] {
   if (!Array.isArray(params.threadMessages)) return []
   return params.threadMessages.slice(-40).flatMap(raw => {
@@ -332,6 +410,18 @@ function requiredInterwovenParam(params: Record<string, unknown>, key: string): 
   return value
 }
 
+function requiredRelatedQuickNoteParam(
+  params: Record<string, unknown>,
+  key: string,
+  maxLength = 4096,
+): string {
+  const value = stringParam(params, key).trim()
+  if (value === '' || value.length > maxLength) {
+    throw new ArkmePluginError('related-quick-note-param-invalid', '相关快记请求参数无效', false, 400)
+  }
+  return value
+}
+
 function outgoingMediaTypeParam(params: Record<string, unknown>): 'audio' | 'video' {
   const value = stringParam(params, 'mediaType')
   if (value !== 'audio' && value !== 'video') {
@@ -401,8 +491,13 @@ function humanMentionsParam(params: Record<string, unknown>): ArkmeHumanMentionI
     }
     const item = value as Record<string, unknown>
     const all = item.all === true
+    const mentionRef = stringParam(item, 'mentionRef')
+    const memberRef = stringParam(item, 'memberRef')
+    if (all ? mentionRef !== '' || memberRef !== '' : mentionRef === '' || memberRef !== '') {
+      throw new ArkmePluginError('human-mention-invalid', '真人 mention 类型与引用不匹配', false, 400)
+    }
     return {
-      ...(all ? { all } : { memberRef: stringParam(item, 'memberRef') }),
+      ...(all ? { all } : { mentionRef }),
       startIndex: numberParam(item, 'startIndex', -1),
       length: numberParam(item, 'length', 0),
     }
@@ -450,6 +545,8 @@ function botRefsParam(params: Record<string, unknown>): string[] {
 function richSendParam(params: Record<string, unknown>): ArkmeRichSendInput {
   const rawAssets = Array.isArray(params.assets) ? params.assets : []
   const thinkingDurationMillis = Math.max(0, Math.trunc(numberParam(params, 'thinkingDurationMillis', 0)))
+  const recordDurationMillis = Math.max(0, Math.trunc(numberParam(params, 'recordDurationMillis', 0)))
+  const captureContext = captureContextParam(params)
   const humanMentions = humanMentionsParam(params)
   const botMentions = botMentionsParam(params)
   return {
@@ -457,6 +554,8 @@ function richSendParam(params: Record<string, unknown>): ArkmeRichSendInput {
     textContent: stringParam(params, 'textContent'),
     displayKind: numberParam(params, 'displayKind', 0) === 1 ? 1 : 0,
     ...(thinkingDurationMillis === 0 ? {} : { thinkingDurationMillis }),
+    ...(recordDurationMillis === 0 ? {} : { recordDurationMillis }),
+    ...(captureContext === undefined ? {} : { captureContext }),
     ...(humanMentions.length === 0 ? {} : { humanMentions }),
     ...(botMentions.length === 0 ? {} : { botMentions }),
     assets: rawAssets.flatMap(raw => {
@@ -542,6 +641,7 @@ export interface ArkmeHostApiOptions {
   extensionInstallTasks?: () => ArkmeExtensionInstallTasks | undefined
   ownedExtensionInventory?: () => ArkmeOwnedExtensionInventory | undefined
   remoteHost?: () => DshRemoteHostFacade | undefined
+  desktopQuarantine?: Pick<ArkmeDesktopExtensionQuarantine, 'status' | 'dismiss' | 'reenable' | 'health'>
 }
 
 export function createArkmeHostApi(service: ArkmeService, options: ArkmeHostApiOptions) {
@@ -576,7 +676,7 @@ export function createArkmeHostApi(service: ArkmeService, options: ArkmeHostApiO
       if (request.operation === 'link.metadata' && origin === undefined) {
         throw new ArkmePluginError('origin-required', '网址名称解析必须从当前 DSH 页面发起', false, 403)
       }
-      if (['user.arkme-id.set', 'extensions.delete', 'extensions.reviews.create', 'extensions.audit.check', 'extensions.install.start', 'extensions.install.pause', 'extensions.install.resume', 'extensions.enabled.set', 'extensions.metadata.update', 'extensions.share.rotate', 'extensions.preview.delete', 'extensions.preview.reorder', 'extensions.uninstall', 'extensions.restart', 'extensions.client.failure', 'extensions.persistent.invoke', 'extensions.bundle.invoke', 'extensions.mine.publish', 'remote.renameDesktop']
+      if (['user.arkme-id.set', 'extensions.delete', 'extensions.reviews.create', 'extensions.audit.check', 'extensions.install.start', 'extensions.install.pause', 'extensions.install.resume', 'extensions.enabled.set', 'extensions.metadata.update', 'extensions.share.rotate', 'extensions.preview.delete', 'extensions.preview.reorder', 'extensions.uninstall', 'extensions.restart', 'extensions.client.failure', 'extensions.persistent.invoke', 'extensions.bundle.invoke', 'extensions.mine.publish', 'extensions.quarantine.dismiss', 'extensions.quarantine.reenable', 'remote.renameDesktop']
         .includes(request.operation) && origin === undefined) {
         throw new ArkmePluginError('origin-required', '扩展变更必须从当前 DSH 页面发起', false, 403)
       }
@@ -590,6 +690,7 @@ export function createArkmeHostApi(service: ArkmeService, options: ArkmeHostApiO
         options.ownedExtensionInventory?.(),
         controller.signal,
         options.remoteHost?.(),
+        options.desktopQuarantine,
       )
       writeJson(res, 200, { ok: true, value })
     } catch (error) {
@@ -626,6 +727,7 @@ export async function dispatchArkmeHostOperation(
   ownedExtensionInventory?: ArkmeOwnedExtensionInventory,
   requestSignal?: AbortSignal,
   remoteHost?: DshRemoteHostFacade,
+  desktopQuarantine?: Pick<ArkmeDesktopExtensionQuarantine, 'status' | 'dismiss' | 'reenable' | 'health'>,
 ): Promise<unknown> {
   switch (operation) {
     case 'provider.capabilities': return service.providerCapabilities()
@@ -1093,6 +1195,21 @@ export async function dispatchArkmeHostOperation(
       requiredInterwovenParam(params, 'sourceRef'),
       requiredInterwovenParam(params, 'momentRef'),
     )
+    case 'source.related-quick-notes.from-message': return await service.relatedQuickNotesFromMessage(
+      requiredRelatedQuickNoteParam(params, 'sourceRef'),
+      requiredRelatedQuickNoteParam(params, 'messageActionRef', MAX_MESSAGE_ACTION_REF_CHARS),
+      requestSignal,
+    )
+    case 'source.related-quick-notes.from-moment': return await service.relatedQuickNotesFromMoment(
+      requiredRelatedQuickNoteParam(params, 'sourceRef'),
+      requiredRelatedQuickNoteParam(params, 'momentRef'),
+      requestSignal,
+    )
+    case 'source.related-quick-note.detail': return await service.relatedQuickNoteDetail(
+      requiredRelatedQuickNoteParam(params, 'sourceRef'),
+      requiredRelatedQuickNoteParam(params, 'relatedRef'),
+      requestSignal,
+    )
     case 'source.mark-read': return await service.markSourceRead(
       stringParam(params, 'sourceRef'),
       numberParam(params, 'readSequence', 0),
@@ -1108,6 +1225,14 @@ export async function dispatchArkmeHostOperation(
       numberParam(params, 'sequence', 0),
       requestSignal === undefined ? {} : { signal: requestSignal },
     )
+    case 'source.message-report': {
+      const report = messageReportParam(params)
+      return await service.reportMessage(report.messageRef, report.reportType, {
+        ...(report.reason === undefined ? {} : { reason: report.reason }),
+        ...(report.requestUid === undefined ? {} : { requestUid: report.requestUid }),
+        ...(requestSignal === undefined ? {} : { signal: requestSignal }),
+      })
+    }
     case 'source.message-copy-link': return await service.copySourceMessageLink(
       stringParam(params, 'sourceRef'),
       messageActionRefsParam(params),
@@ -1128,6 +1253,21 @@ export async function dispatchArkmeHostOperation(
       stringParam(params, 'detailRef'),
       requestSignal === undefined ? {} : { signal: requestSignal },
     )
+    case 'source.message-snapshot.detail': return await service.messageSnapshotDetail(
+      stringParam(params, 'sourceRef'),
+      stringParam(params, 'actionRef'),
+      requestSignal === undefined ? {} : { signal: requestSignal },
+    )
+    case 'source.message-location.set': {
+      await service.saveMessageLocation(
+        stringParam(params, 'sourceRef'),
+        stringParam(params, 'itemUid'),
+        recordLocationCaptureParam(params),
+        numberParam(params, 'recordVersion', 0) || undefined,
+        requestSignal === undefined ? {} : { signal: requestSignal },
+      )
+      return { ok: true }
+    }
     case 'source.forward-messages': return await service.forwardSourceMessages(
       stringParam(params, 'sourceRef'),
       messageActionRefsParam(params),
@@ -1143,12 +1283,15 @@ export async function dispatchArkmeHostOperation(
       const botRefs = botRefsParam(params)
       const humanMentions = humanMentionsParam(params)
       const botMentions = botMentionsParam(params)
+      const captureContext = captureContextParam(params)
       return await service.sendSourceText(
         stringParam(params, 'sourceRef'),
         stringParam(params, 'textContent'),
         {
           ...(stringParam(params, 'recordUid') === '' ? {} : { recordUid: stringParam(params, 'recordUid') }),
           ...(stringParam(params, 'relationUid') === '' ? {} : { relationUid: stringParam(params, 'relationUid') }),
+          ...(numberParam(params, 'recordDurationMillis', 0) <= 0 ? {} : { recordDurationMillis: Math.max(0, Math.trunc(numberParam(params, 'recordDurationMillis', 0))) }),
+          ...(captureContext === undefined ? {} : { captureContext }),
           ...(booleanParam(params, 'agentAuthored') ? { agentAuthored: true } : {}),
           ...(botRefs.length === 0 ? {} : { botRefs }),
           ...(humanMentions.length === 0 ? {} : { humanMentions }),
@@ -1452,6 +1595,16 @@ export async function dispatchArkmeHostOperation(
       extensionId: stringParam(params, 'extensionId'),
     })
     case 'extensions.installed-list': return requireExtensionManager(extensionManager).listInstalled()
+    case 'extensions.quarantine.status': return await requireDesktopQuarantine(desktopQuarantine).status()
+    case 'extensions.quarantine.dismiss': return await requireDesktopQuarantine(desktopQuarantine).dismiss(
+      stringParam(params, 'packageName'),
+    )
+    case 'extensions.quarantine.reenable': return await requireDesktopQuarantine(desktopQuarantine).reenable(
+      stringParam(params, 'packageName'),
+    )
+    case 'extensions.quarantine.health': return await requireDesktopQuarantine(desktopQuarantine).health(
+      stringParam(params, 'packageName'),
+    )
     case 'extensions.mine.list': return await requireOwnedExtensionInventory(ownedExtensionInventory).list({
       ...(stringParam(params, 'currentSessionId').trim() === '' ? {} : { currentSessionId: stringParam(params, 'currentSessionId').trim() }),
     })
@@ -1581,6 +1734,15 @@ function requireExtensionManager(manager: ArkmeExtensionManager | undefined): Ar
     throw new ArkmePluginError('extension-runtime-unavailable', '当前 DSH 未加载 Dynamic Cordis Runner，市集不可用', false, 503)
   }
   return manager
+}
+
+function requireDesktopQuarantine(
+  quarantine: Pick<ArkmeDesktopExtensionQuarantine, 'status' | 'dismiss' | 'reenable' | 'health'> | undefined,
+): Pick<ArkmeDesktopExtensionQuarantine, 'status' | 'dismiss' | 'reenable' | 'health'> {
+  if (quarantine === undefined) {
+    throw new ArkmePluginError('extension-runtime-unavailable', '桌面扩展恢复状态尚未就绪', false, 503)
+  }
+  return quarantine
 }
 
 function requireOwnedExtensionInventory(inventory: ArkmeOwnedExtensionInventory | undefined): ArkmeOwnedExtensionInventory {
