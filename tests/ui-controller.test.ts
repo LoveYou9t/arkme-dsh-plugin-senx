@@ -2,6 +2,22 @@ import { describe, expect, it, vi } from 'vitest'
 import { ArkmeUiController } from '../src/client/ui-controller.js'
 
 describe('ArkmeUiController', () => {
+  it('keeps the view snapshot stable across projection-only invalidations', () => {
+    const controller = new ArkmeUiController()
+    const initial = controller.getViewSnapshot()
+
+    controller.chatChanged()
+    controller.recordChanged()
+
+    expect(controller.getViewSnapshot()).toBe(initial)
+    expect(controller.getChatRevision()).toBe(1)
+    expect(controller.getRecordRevision()).toBe(1)
+
+    controller.showWorld()
+    expect(controller.getViewSnapshot()).not.toBe(initial)
+    expect(controller.getViewSnapshot().mode).toBe('world')
+  })
+
   it('publishes directory activity projection changes to the active conversation', () => {
     const controller = new ArkmeUiController()
     const listener = vi.fn()

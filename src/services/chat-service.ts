@@ -143,6 +143,7 @@ export interface ArkmeChatRealtimePort {
   emitChatClientEvent(event: Parameters<import('./chat-realtime-service.js').ChatRealtimeService['emitChatClientEvent']>[0]): void
   nextChatClientRevision(): number
   scheduleChatSessionProjection(chatSessionUid: string, latestSequence: number): void
+  invalidateRecordProjection(): Promise<void>
 }
 
 function numberValue(value: unknown): number {
@@ -2113,12 +2114,7 @@ export class ChatService {
       const publishedRecordUid = stringValue(data.record_uid).trim() || createdRecordUid
       const senderDisplayName = profile.nickname.trim() || profile.displayName.trim() || '我'
       const senderAvatarUrl = profile.avatarRef.trim()
-      this.source.invalidateSourceListCache(session.userId, 'send_to_self')
-      this.realtime.emitChatClientEvent({
-        type: 'projection-invalidated',
-        revision: this.realtime.nextChatClientRevision(),
-        projection: 'record',
-      })
+      await this.realtime.invalidateRecordProjection()
       return {
         sid: detail.sid,
         recordUid: publishedRecordUid,
@@ -2239,7 +2235,7 @@ export class ChatService {
           session,
           options.signal,
         )
-        this.source.invalidateSourceListCache(session.userId, 'send_to_self')
+        await this.realtime.invalidateRecordProjection()
         return await appendCommentWarning({ sourceRef: targetSourceRef, itemUid: stringValue(data.record_uid).trim() || recordUid, status: numberValue(data.status), localState: 'synced' })
       }
       const data = await this.runtime.authenticatedPost<Record<string, unknown>>(
@@ -2255,7 +2251,7 @@ export class ChatService {
         session,
         options.signal,
       )
-      this.source.invalidateSourceListCache(session.userId, 'send_to_self')
+      await this.realtime.invalidateRecordProjection()
       return await appendCommentWarning({ sourceRef: targetSourceRef, itemUid: stringValue(data.record_uid).trim() || recordUid, status: numberValue(data.status), localState: 'synced' })
     }
   
@@ -2286,7 +2282,7 @@ export class ChatService {
           ...(options.recordDurationMillis === undefined ? {} : { recordDurationMillis: options.recordDurationMillis }),
           ...(options.captureContext === undefined ? {} : { captureContext: options.captureContext }),
         })
-        if (result.localState !== 'failed') this.source.invalidateSourceListCache(session.userId, 'send_to_self')
+        if (result.localState !== 'failed') await this.realtime.invalidateRecordProjection()
         return {
           sourceRef,
           itemUid: result.recordUid,
@@ -2313,7 +2309,7 @@ export class ChatService {
           },
           session,
         )
-        this.source.invalidateSourceListCache(session.userId, 'send_to_self')
+        await this.realtime.invalidateRecordProjection()
         return { sourceRef, itemUid: stringValue(result.record_uid).trim() || recordUid, status: numberValue(result.status), localState: 'synced' }
       }
       const relationUid = options.relationUid?.trim() || randomUUID()
@@ -2794,14 +2790,14 @@ export class ChatService {
       }
       if (source.kind === 'send_to_self' || source.kind === 'default_category') {
         const result = await this.runtime.authenticatedPost<Record<string, unknown>>('/api/v1/records/create', commonBody, session, options.signal)
-        this.source.invalidateSourceListCache(session.userId, 'send_to_self')
+        await this.realtime.invalidateRecordProjection()
         return { sourceRef, itemUid: stringValue(result.record_uid).trim() || recordUid, status: numberValue(result.status), localState: 'synced' }
       }
       if (source.kind === 'topic') {
         const result = await this.runtime.authenticatedPost<Record<string, unknown>>(
           '/api/v1/topics/records/create', { topic_uid: source.ownerRef, ...commonBody }, session, options.signal,
         )
-        this.source.invalidateSourceListCache(session.userId, 'send_to_self')
+        await this.realtime.invalidateRecordProjection()
         return { sourceRef, itemUid: stringValue(result.record_uid).trim() || recordUid, status: numberValue(result.status), localState: 'synced' }
       }
       const result = await this.runtime.authenticatedChatPost<Record<string, unknown>>(
