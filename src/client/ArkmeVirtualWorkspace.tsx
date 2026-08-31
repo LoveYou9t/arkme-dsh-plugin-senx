@@ -9,7 +9,7 @@ import type {
 } from '../types.js'
 import type { ArkmeDirectoryEntryOwnerProps, ArkmeDirectoryRowProps } from './slots-contract.js'
 import { callArkme } from './api.js'
-import { ArkmeSourceAvatar, ArkmeUserAvatar, clearArkmeAvatarCache } from './ArkmeAvatar.js'
+import { ArkmeDirectorySourceAvatar, ArkmeUserAvatar } from './ArkmeAvatar.js'
 import { ArkmeArkoAvatar } from './ArkmeArkoAvatar.js'
 import { ArkmeMark } from './ArkmeFooterAction.js'
 import { ArkmeMuteIcon } from './ArkmeMuteIcon.js'
@@ -870,7 +870,6 @@ export function ArkmeNavigation({
   const [initialCache] = useState(readLastNavigationCache)
   const cacheRef = useRef<ArkmeNavigationCache | undefined>(initialCache)
   const authenticatedUserIdRef = useRef<number | undefined>(initialCache?.userId)
-  const avatarCacheUserIdRef = useRef<number | undefined>(initialCache?.userId)
   const directoryRequestAbortRef = useRef<AbortController>()
   const topicCreateRequestRef = useRef(false)
   const rootRowElementsRef = useRef(new Map<string, HTMLButtonElement>())
@@ -1041,19 +1040,15 @@ export function ArkmeNavigation({
   }, [])
 
   const reconcileAuth = useCallback((snapshot: ArkmeAuthSnapshot | undefined) => {
-      if (snapshot?.status !== 'authenticated' || snapshot.userId === undefined) {
-        if (avatarCacheUserIdRef.current !== undefined) clearArkmeAvatarCache()
-        avatarCacheUserIdRef.current = undefined
-        authenticatedUserIdRef.current = undefined
-        cacheRef.current = undefined
-        clearLastNavigationCache()
-        arkmeChatDirectory.activateAccount(undefined)
-        setDirectory('root'); setSources([])
-        return
-      }
+    if (snapshot?.status !== 'authenticated' || snapshot.userId === undefined) {
+      authenticatedUserIdRef.current = undefined
+      cacheRef.current = undefined
+      clearLastNavigationCache()
+      arkmeChatDirectory.activateAccount(undefined)
+      setDirectory('root'); setSources([])
+      return
+    }
     arkmeChatDirectory.activateAccount(`${snapshot.environment}:${String(snapshot.userId)}`)
-    if (avatarCacheUserIdRef.current !== snapshot.userId) clearArkmeAvatarCache()
-    avatarCacheUserIdRef.current = snapshot.userId
     authenticatedUserIdRef.current = snapshot.userId
     const cached = readNavigationCache(snapshot.userId) ?? {
       version: 1, userId: snapshot.userId, directory: 'root', sources: {}, updatedAtMillis: 0,
@@ -1169,19 +1164,6 @@ export function ArkmeNavigation({
     if (!authenticated || directory !== 'send_to_self' || recordRevision === 0) return
     void loadDirectory('send_to_self')
   }, [authenticated, directory, loadDirectory, recordRevision])
-  useEffect(() => {
-    if (!authenticated || directory !== 'root') return
-    let active = true
-    let timer: ReturnType<typeof setTimeout>
-    const schedule = (): void => {
-      timer = setTimeout(() => {
-        clearArkmeAvatarCache()
-        void loadDirectory('root').finally(() => { if (active) schedule() })
-      }, 10 * 60 * 1000 + Math.floor(Math.random() * 2 * 60 * 1000))
-    }
-    schedule()
-    return () => { active = false; clearTimeout(timer) }
-  }, [authenticated, directory, loadDirectory])
   useEffect(() => {
     const userId = authenticated ? auth?.userId : undefined
     arkmeArkoProfileStore.activateUser(userId)
@@ -1761,12 +1743,7 @@ export function ArkmeNavigation({
           >
             <span style={{ ...styles.chatRowRemoveContent, ...(removeFeedbackVisible ? styles.chatRowRemoveContentHidden : {}) }}>
               <span style={styles.sourceAvatarWrap}>
-                <ArkmeSourceAvatar
-                  size={38}
-                  {...(source.avatarRef === undefined ? {} : { avatarRef: source.avatarRef })}
-                  {...(source.avatarRefs === undefined ? {} : { avatarRefs: source.avatarRefs })}
-                  {...(source.groupAvatar === undefined ? {} : { groupAvatar: source.groupAvatar })}
-                />
+                <ArkmeDirectorySourceAvatar source={source} size={38} />
                 {unreadPlacement === 'avatar' && <span style={styles.mentionUnread}>{unreadText}</span>}
               </span>
               <span style={styles.chatContent}>
