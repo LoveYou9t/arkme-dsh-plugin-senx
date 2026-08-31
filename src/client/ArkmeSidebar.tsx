@@ -341,6 +341,12 @@ const MESSAGE_ACTION_NOTICE_MS = 1_800
 const FORWARD_TARGET_LIMIT = 80
 const MAX_FORWARD_TARGET_SELECTION = 5
 
+const ARKME_MESSAGE_AVATAR_SIZE = 34
+const ARKME_MESSAGE_SELECT_HIT_SIZE = 32
+const ARKME_MESSAGE_SELECT_GAP = 10
+const ARKME_MESSAGE_SELECT_AVATAR_OFFSET = (ARKME_MESSAGE_AVATAR_SIZE - ARKME_MESSAGE_SELECT_HIT_SIZE) / 2
+const ARKME_MESSAGE_SELECT_CARD_RAIL_SIZE = ARKME_MESSAGE_SELECT_HIT_SIZE + ARKME_MESSAGE_SELECT_GAP
+
 const styles: Record<string, CSSProperties> = {
   surface: {
     position: 'relative', overflow: 'hidden', width: '100%', height: '100%', minWidth: 0,
@@ -440,16 +446,21 @@ const styles: Record<string, CSSProperties> = {
   rowMe: { justifyContent: 'flex-end' },
   rowOther: { justifyContent: 'flex-start' },
   sharedRecordingRow: { justifyContent: 'center' },
-  rowSelectMode: {
-    display: 'grid', gridTemplateColumns: '32px minmax(0, 1fr)', alignItems: 'start', columnGap: 10,
+  rowSelectAvatarMode: {
+    display: 'grid', gridTemplateColumns: `${ARKME_MESSAGE_SELECT_HIT_SIZE}px minmax(0, 1fr)`, alignItems: 'start', columnGap: ARKME_MESSAGE_SELECT_GAP,
     marginBottom: 18, padding: '6px 0 6px 6px', boxSizing: 'border-box', cursor: 'pointer',
   },
-  sharedRecordingRowSelectMode: { marginBottom: 42 },
+  rowSelectCardCenterMode: {
+    display: 'grid', gridTemplateColumns: `${ARKME_MESSAGE_SELECT_CARD_RAIL_SIZE}px minmax(0, 1fr) ${ARKME_MESSAGE_SELECT_CARD_RAIL_SIZE}px`,
+    alignItems: 'center', marginBottom: 42, cursor: 'pointer',
+  },
   rowSelectedForAction: { background: arkmeTheme.layer2 },
   selectCheck: {
-    width: 32, height: 32, display: 'grid', placeItems: 'center', justifySelf: 'center', marginTop: 1, border: 0, padding: 0,
+    width: ARKME_MESSAGE_SELECT_HIT_SIZE, height: ARKME_MESSAGE_SELECT_HIT_SIZE, display: 'grid', placeItems: 'center', border: 0, padding: 0,
     borderRadius: 999, background: 'transparent', color: arkmeTheme.foreground, cursor: 'pointer',
   },
+  selectCheckAvatar: { justifySelf: 'center', marginTop: ARKME_MESSAGE_SELECT_AVATAR_OFFSET },
+  selectCheckCardCenter: { justifySelf: 'center' },
   selectCheckCircle: {
     width: 22, height: 22, display: 'grid', placeItems: 'center', boxSizing: 'border-box',
     border: `1.5px solid ${arkmeTheme.tertiary}`, borderRadius: 999, background: 'transparent',
@@ -457,17 +468,17 @@ const styles: Record<string, CSSProperties> = {
   },
   selectCheckActive: { borderColor: arkmeTheme.accent, background: arkmeTheme.accent },
   messageLine: { maxWidth: '100%', display: 'flex', alignItems: 'flex-start', gap: 10, marginBottom: 18 },
-  messageLineSelectMode: { minWidth: 0, marginBottom: 0 },
+  messageLineSelectAvatarMode: { minWidth: 0, marginBottom: 0 },
   messageLineMe: { flexDirection: 'row-reverse' },
   forwardMessageLine: { width: 'auto' },
   sharedRecordingMessageLine: { width: 'min(600px, 100%)', justifyContent: 'center', marginBottom: 42 },
-  sharedRecordingMessageLineSelectMode: { justifySelf: 'center', marginBottom: 0 },
+  messageLineSelectCardCenterMode: { gridColumn: '2', minWidth: 0, justifySelf: 'center', marginBottom: 0 },
   messageBody: { minWidth: 0, flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 7 },
   messageBodyMe: { alignItems: 'flex-end' },
   forwardMessageBody: { flex: 1 },
   sharedRecordingMessageBody: { width: '100%', flex: 'none', alignItems: 'stretch' },
   messageAvatar: {
-    width: 34, height: 34, flex: 'none', overflow: 'hidden', borderRadius: 999,
+    width: ARKME_MESSAGE_AVATAR_SIZE, height: ARKME_MESSAGE_AVATAR_SIZE, flex: 'none', overflow: 'hidden', borderRadius: 999,
     display: 'grid', placeItems: 'center', background: 'transparent', color: arkmeTheme.secondary, fontSize: 11, fontWeight: 600,
   },
   messageAvatarImage: { width: '100%', height: '100%', display: 'block', objectFit: 'cover' },
@@ -1314,6 +1325,15 @@ export function arkmeTimelineAvatarRef(item: ArkmeTimelineItem, profile?: ArkmeU
   return profileAvatarRef === '' ? undefined : profileAvatarRef
 }
 
+type ArkmeMessageSelectionAnchor = 'avatar' | 'card-center'
+
+/** Selection placement follows the visible business object instead of assuming every row owns an avatar. */
+function arkmeMessageSelectionAnchor(
+  item: Pick<ArkmeTimelineItem, 'sharedRecording'>,
+): ArkmeMessageSelectionAnchor {
+  return item.sharedRecording === undefined ? 'avatar' : 'card-center'
+}
+
 /** Every conversation timeline shows avatars, including the aggregate and personal topic views. */
 export function arkmeSourceShowsMessageAvatars(source: ArkmeSourceItem | undefined): boolean {
   if (source === undefined) return false
@@ -1328,10 +1348,11 @@ function MessageAvatar(props: {
   onContextMenu: (member: ArkmeConversationMemberItem, anchorRect: DOMRect) => void
 }) {
   const member = props.member
-  const avatar = <ArkmeUserAvatar {...(props.avatarRef === undefined ? {} : { avatarRef: props.avatarRef })} size={34} label="消息头像" />
-  if (member === undefined) return <span style={styles.messageAvatar} aria-hidden>{avatar}</span>
+  const avatar = <ArkmeUserAvatar {...(props.avatarRef === undefined ? {} : { avatarRef: props.avatarRef })} size={ARKME_MESSAGE_AVATAR_SIZE} label="消息头像" />
+  if (member === undefined) return <span data-arkme-message-avatar="true" style={styles.messageAvatar} aria-hidden>{avatar}</span>
   return <button
     type="button"
+    data-arkme-message-avatar="true"
     style={{ ...styles.messageAvatar, padding: 0, border: 0, cursor: props.profileEnabled ? 'pointer' : 'default' }}
     aria-label={props.profileEnabled
       ? member.isSelf ? '查看我的用户卡片' : `查看 ${member.displayName}`
@@ -1346,6 +1367,36 @@ function MessageAvatar(props: {
       props.onContextMenu(member, event.currentTarget.getBoundingClientRect())
     }}
   >{avatar}</button>
+}
+
+function ArkmeMessageSelectionControl(props: {
+  anchor: ArkmeMessageSelectionAnchor
+  checked: boolean
+  disabled: boolean
+  onToggle: () => void
+}) {
+  return <button
+    type="button"
+    role="checkbox"
+    data-arkme-select-check="true"
+    data-arkme-selection-anchor={props.anchor}
+    aria-checked={props.checked}
+    aria-label={props.checked ? '取消选择消息' : '选择消息'}
+    disabled={props.disabled}
+    style={{
+      ...styles.selectCheck,
+      ...(props.anchor === 'avatar' ? styles.selectCheckAvatar : styles.selectCheckCardCenter),
+      opacity: props.disabled ? .35 : 1,
+    }}
+    onClick={event => { event.stopPropagation(); props.onToggle() }}
+  ><span style={{
+      ...styles.selectCheckCircle,
+      ...(props.checked ? styles.selectCheckActive : {}),
+    }}>
+      {props.checked ? <svg aria-hidden width="14" height="14" viewBox="0 0 14 14" fill="none">
+        <path d="M3.08 7.08L5.9 9.82L10.92 4.18" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+      </svg> : null}
+    </span></button>
 }
 
 export function ArkmeMemberJoinNotice(props: {
@@ -4778,14 +4829,18 @@ export function ArkmeSurface({
                 const isForwardMessageCard = item.forwardRecords !== undefined
                 const isSharedRecordingCard = item.sharedRecording !== undefined
                 const isStructuredMessageCard = isForwardMessageCard || isSharedRecordingCard
+                const selectionAnchor = arkmeMessageSelectionAnchor(item)
                 return <Fragment key={row.id}>
                   {startsDay && <li style={styles.date}>{dayLabel(item.sendAtMillis)}</li>}
                   <li data-arkme-conversation-row={row.id} data-arkme-message-item-uid={item.itemUid} style={{
                     ...styles.row,
-                    ...(item.isMe ? styles.rowMe : styles.rowOther),
-                    ...(isSharedRecordingCard ? styles.sharedRecordingRow : {}),
-                    ...(activeSelectMode === undefined ? {} : styles.rowSelectMode),
-                    ...(activeSelectMode !== undefined && isSharedRecordingCard ? styles.sharedRecordingRowSelectMode : {}),
+                    ...(activeSelectMode === undefined
+                      ? isSharedRecordingCard
+                        ? styles.sharedRecordingRow
+                        : item.isMe ? styles.rowMe : styles.rowOther
+                      : selectionAnchor === 'avatar'
+                        ? styles.rowSelectAvatarMode
+                        : styles.rowSelectCardCenterMode),
                     ...(selectedForAction ? styles.rowSelectedForAction : {}),
                     ...(highlightedTargetUid === item.itemUid ? styles.rowSearchTarget : {}),
                   }}
@@ -4798,33 +4853,19 @@ export function ArkmeSurface({
                       toggleSelectedMessage(item)
                     }}
                   >
-                    {activeSelectMode !== undefined && <button
-                      type="button"
-                      role="checkbox"
-                      data-arkme-select-check="true"
-                      aria-checked={selectedForAction}
-                      aria-label={selectedForAction ? '取消选择消息' : '选择消息'}
+                    {activeSelectMode !== undefined && <ArkmeMessageSelectionControl
+                      anchor={selectionAnchor}
+                      checked={selectedForAction}
                       disabled={!canUseMessageAction}
-                      style={{
-                        ...styles.selectCheck,
-                        opacity: canUseMessageAction ? 1 : .35,
-                      }}
-                      onClick={event => { event.stopPropagation(); toggleSelectedMessage(item) }}
-                    ><span style={{
-                        ...styles.selectCheckCircle,
-                        ...(selectedForAction ? styles.selectCheckActive : {}),
-                      }}>
-                        {selectedForAction ? <svg aria-hidden width="14" height="14" viewBox="0 0 14 14" fill="none">
-                          <path d="M3.08 7.08L5.9 9.82L10.92 4.18" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
-                        </svg> : null}
-                      </span></button>}
+                      onToggle={() => { toggleSelectedMessage(item) }}
+                    />}
                     <div style={{
                       ...styles.messageLine,
-                      ...(activeSelectMode === undefined ? {} : styles.messageLineSelectMode),
+                      ...(activeSelectMode !== undefined && selectionAnchor === 'avatar' ? styles.messageLineSelectAvatarMode : {}),
                       ...(item.isMe && !isSharedRecordingCard ? styles.messageLineMe : {}),
                       ...(isForwardMessageCard ? styles.forwardMessageLine : {}),
                       ...(isSharedRecordingCard ? styles.sharedRecordingMessageLine : {}),
-                      ...(activeSelectMode !== undefined && isSharedRecordingCard ? styles.sharedRecordingMessageLineSelectMode : {}),
+                      ...(activeSelectMode !== undefined && selectionAnchor === 'card-center' ? styles.messageLineSelectCardCenterMode : {}),
                     }}>
                       {showMessageAvatars && !isSharedRecordingCard && <MessageAvatar
                         {...(avatarRef === undefined ? {} : { avatarRef })}

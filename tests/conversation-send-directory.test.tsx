@@ -307,12 +307,8 @@ describe('conversation send directory projection', () => {
     return renderer!.root.findByProps({ 'aria-labelledby': 'arkme-forward-target-title' })
   }
 
-  async function enterMessageSelectMode() {
-    timeline = [{
-      itemUid: 'select-source', messageActionRef: 'opaque-select-action',
-      senderName: '狗才', isMe: true, sendAtMillis: 1, title: '',
-      textContent: '这是一条用于验证多选圆点锚定头像而不是整条长消息中心的长文本。'.repeat(12), status: 1,
-    }]
+  async function enterMessageSelectMode(item: ArkmeTimelineItem) {
+    timeline = [item]
     await act(async () => {
       renderer = create(<ArkmeSurface productChrome={false} productNavigation={false} />, {
         createNodeMock: element => element.props.className === 'arkme-conversation-panel'
@@ -321,7 +317,8 @@ describe('conversation send directory projection', () => {
       })
       await Promise.resolve()
     })
-    const bubble = renderer!.root.findByProps({ 'aria-label': '打开快记详情' })
+    const row = renderer!.root.findByProps({ 'data-arkme-message-item-uid': item.itemUid })
+    const bubble = row.findByProps({ 'data-arkme-message-direction': item.isMe ? 'self' : 'other' })
     act(() => {
       bubble.props.onContextMenu({
         preventDefault: vi.fn(),
@@ -335,7 +332,11 @@ describe('conversation send directory projection', () => {
   }
 
   it('anchors the themed multi-select control to the avatar top and renders exit as a standard toolbar action', async () => {
-    await enterMessageSelectMode()
+    await enterMessageSelectMode({
+      itemUid: 'select-source', messageActionRef: 'opaque-select-action',
+      senderName: '狗才', isMe: true, sendAtMillis: 1, title: '',
+      textContent: '这是一条用于验证多选圆点锚定头像而不是整条长消息中心的长文本。'.repeat(12), status: 1,
+    })
 
     const row = renderer!.root.findByProps({ 'data-arkme-message-item-uid': 'select-source' })
     expect(row.props.style).toMatchObject({
@@ -344,12 +345,12 @@ describe('conversation send directory projection', () => {
       alignItems: 'start',
       marginBottom: 18,
     })
+    expect(row.props.style.justifyContent).toBeUndefined()
     const checkbox = row.findByProps({ role: 'checkbox' })
+    expect(checkbox.props['data-arkme-selection-anchor']).toBe('avatar')
     expect(checkbox.props.style.position).toBeUndefined()
     expect(checkbox.props.style).toMatchObject({ width: 32, height: 32, marginTop: 1 })
-    const avatar = row.find(node => node.type === 'span'
-      && node.props.style?.width === 34
-      && node.props.style?.height === 34)
+    const avatar = row.findByProps({ 'data-arkme-message-avatar': 'true' })
     expect(checkbox.props.style.marginTop + checkbox.props.style.height / 2).toBe(avatar.props.style.height / 2)
     const circle = checkbox.findByType('span')
     expect(circle.props.style).toMatchObject({
@@ -365,6 +366,77 @@ describe('conversation send directory projection', () => {
     expect(exitParts[0]!.props.style.background).toBe(arkmeTheme.elevated)
     expect(exitParts[1]!.children).toEqual(['退出多选'])
     expect(exit.findByType('svg').props.width).toBe(18)
+  })
+
+  it.each([
+    {
+      label: '自己的短文本',
+      item: {
+        itemUid: 'select-own-short', messageActionRef: 'opaque-own-short-action',
+        senderName: '狗才', isMe: true, sendAtMillis: 1, title: '', textContent: '短消息', status: 1,
+      } satisfies ArkmeTimelineItem,
+    },
+    {
+      label: '他人的短文本',
+      item: {
+        itemUid: 'select-other-short', messageActionRef: 'opaque-other-short-action',
+        senderName: '朋友', isMe: false, sendAtMillis: 1, title: '', textContent: '收到', status: 1,
+      } satisfies ArkmeTimelineItem,
+    },
+    {
+      label: '自己的图片',
+      item: {
+        itemUid: 'select-own-image', messageActionRef: 'opaque-own-image-action',
+        senderName: '狗才', isMe: true, sendAtMillis: 1, title: '', textContent: '', status: 1,
+        contentBlocks: [{
+          kind: 'image', mediaRef: 'opaque-image-ref', fileName: '示例图片.png', mimeType: 'image/png', size: 128, sortOrder: 0,
+        }],
+      } satisfies ArkmeTimelineItem,
+    },
+  ])('keeps $label on the avatar selection contract', async ({ item }) => {
+    await enterMessageSelectMode(item)
+
+    const row = renderer!.root.findByProps({ 'data-arkme-message-item-uid': item.itemUid })
+    expect(row.props.style).toMatchObject({
+      display: 'grid',
+      gridTemplateColumns: '32px minmax(0, 1fr)',
+      alignItems: 'start',
+    })
+    expect(row.findByProps({ role: 'checkbox' }).props['data-arkme-selection-anchor']).toBe('avatar')
+    expect(row.findByProps({ 'data-arkme-message-avatar': 'true' })).toBeDefined()
+  })
+
+  it('reserves symmetric selection rails so an avatarless shared recording stays centered without overlap', async () => {
+    const item: ArkmeTimelineItem = {
+      itemUid: 'select-shared-recording', messageActionRef: 'opaque-shared-recording-action',
+      senderName: '朋友', isMe: false, sendAtMillis: 1, title: '', textContent: '', status: 1,
+      sharedRecording: {
+        sourceDigest: 'digest-select', detailRef: 'detail-select', sharedByUserId: 12,
+        sharedAtMillis: 1, displayAtMillis: 1, endAtMillis: 60_001,
+        timeRangeText: '10:00 - 10:01', title: '项目沟通', summary: '确认了下一步安排。',
+        transcriptAvailable: true, participants: [{ refUserId: 12, displayName: '朋友', role: 1 }],
+      },
+    }
+    await enterMessageSelectMode(item)
+
+    const row = renderer!.root.findByProps({ 'data-arkme-message-item-uid': item.itemUid })
+    expect(row.props.style).toMatchObject({
+      display: 'grid',
+      gridTemplateColumns: '42px minmax(0, 1fr) 42px',
+      alignItems: 'center',
+      marginBottom: 42,
+    })
+    expect(row.props.style.position).toBeUndefined()
+    expect(row.props.style.justifyContent).toBeUndefined()
+    const checkbox = row.findByProps({ role: 'checkbox' })
+    expect(checkbox.props['data-arkme-selection-anchor']).toBe('card-center')
+    expect(checkbox.props.style).toMatchObject({ justifySelf: 'center', width: 32, height: 32 })
+    expect(checkbox.props.style.position).toBeUndefined()
+    expect(row.findAllByProps({ 'data-arkme-message-avatar': 'true' })).toHaveLength(0)
+    const messageLine = row.find(node => node.type === 'div' && node.props.style?.width === 'min(600px, 100%)')
+    expect(messageLine.props.style).toMatchObject({
+      gridColumn: '2', minWidth: 0, justifySelf: 'center', justifyContent: 'center', marginBottom: 0,
+    })
   })
 
   it('keeps the forward picker mounted while rapid comment changes are deferred', async () => {
