@@ -452,6 +452,14 @@ export interface ArkmeBotConversationMessage {
   status: string
   createdAtMillis: number
   attachments: ArkmeBotConversationAttachment[]
+  /** Account-, owner- and conversation-bound capability; absent for unstable or owner-incomplete messages. */
+  messageActionRef?: string
+  messageActionCapabilities?: ArkmeMessageActionCapabilities
+}
+
+export interface ArkmeMessageActionCapabilities {
+  copyLink: boolean
+  forward: boolean
 }
 
 /** Safe attachment metadata; source file identifiers and remote URLs remain Host-owned. */
@@ -2532,6 +2540,13 @@ export interface ArkmeArkoHistoryItem {
   errorCode?: string
   retryOfRunUid?: string
   createdRecordUids: string[]
+  /** Original user input Record identity. This is distinct from Agent-created side effects. */
+  entryRecordUid?: string
+  /** Host-signed message action capability for one stable persisted message. */
+  messageActionRef?: string
+  /** Session-bound conversation capability paired with this historical Agent message. */
+  messageActionConversationRef?: string
+  messageActionCapabilities?: ArkmeMessageActionCapabilities
 }
 
 export interface ArkmeArkoHistoryPage {
@@ -2948,6 +2963,8 @@ export type ArkmeHostOperation = ArkmePluginOperation
   | 'arko.ask'
   | 'arko.run.status'
   | 'arko.cancel'
+  | 'message-actions.copy-link'
+  | 'message-actions.forward'
   | 'plugin.update.status'
   | 'plugin.update.check'
   | 'plugin.update.acknowledge'

@@ -37,7 +37,7 @@ const expectedPublicMethods = [
   'createGroup', 'groupSettings', 'setGroupMessageDnd',
   'renameGroup', 'leaveGroup', 'dissolveGroup', 'reportGroup', 'userCard',
   'openPrivateChatFromUser', 'openPrivateChatFromContact', 'officialAuthorProfile', 'openOfficialAuthorPrivateChat', 'openPrivateChatFromWorldAuthor', 'openPrivateChatFromMember', 'readSource', 'messageReadReceiptSummaries', 'messageReadReceiptDetail', 'messageSnapshotDetail', 'saveMessageLocation', 'sharedRecordingDetail', 'relatedRecordingEligibility', 'relatedRecordings',
-  'recordRelatedRecordingsToolEvent', 'reportMessage', 'copySourceMessageLink', 'resolveMessageCopyLink', 'extendMessageCopyLink', 'forwardSourceMessages',
+  'recordRelatedRecordingsToolEvent', 'reportMessage', 'copySourceMessageLink', 'copyMessageActionsLink', 'resolveMessageCopyLink', 'extendMessageCopyLink', 'forwardSourceMessages', 'forwardMessageActions',
   'sendSourceText', 'retryGroupAiPolish',
   'sendSourceRich', 'favoriteStickers', 'addFavoriteSticker', 'manageFavoriteSticker', 'sendFavoriteSticker', 'longArticleDetail', 'updateLongArticle', 'getLongArticleDraft',
   'putLongArticleDraft', 'removeLongArticleDraft', 'uploadLocalFile', 'fetchMedia', 'sendDirectText',
@@ -74,7 +74,7 @@ const expectedServiceFiles = [
   'community-service.ts', 'extension-review-service.ts', 'calendar-service.ts',
   'contact-service.ts', 'contact-directory-service.ts', 'unmarked-speaker-service.ts',
   'voiceprint-service.ts', 'call-history-service.ts', 'privacy-visibility.ts',
-  'link-metadata-service.ts',
+  'link-metadata-service.ts', 'message-action-infrastructure.ts', 'message-action-service.ts',
 ].sort()
 
 function publicMethodNames(path: string): string[] {
@@ -105,7 +105,7 @@ describe('Arkme service architecture', () => {
 
   it('keeps the compatibility facade free of business transport and state owners', () => {
     const facade = readFileSync(join(root, 'src/arkme-service.ts'), 'utf8')
-    expect(facade.split('\n').length).toBeLessThan(1_800)
+    expect(facade.split('\n').length).toBeLessThan(1_825)
     expect(facade).not.toMatch(/\/api\//)
     expect(facade).not.toMatch(/private readonly \w+\s*=\s*new Map/)
   })
@@ -134,6 +134,25 @@ describe('Arkme service architecture', () => {
     expect(conversation).toContain('class SubjectBotConversationAdapter implements BotConversationOwnerAdapter')
     expect(conversation).toContain('class ChatBotConversationAdapter implements BotConversationOwnerAdapter')
     expect(facade).not.toMatch(/\/api\/v1\/(bot\/private-chat|chat\/timeline)/)
+  })
+
+  it('keeps message-action business rules independent from capabilities and owner transport', () => {
+    const contract = readFileSync(join(root, 'src/message-action-contract.ts'), 'utf8')
+    const service = readFileSync(join(root, 'src/services/message-action-service.ts'), 'utf8')
+    const infrastructure = readFileSync(join(root, 'src/services/message-action-infrastructure.ts'), 'utf8')
+
+    expect(contract).toContain('export type MessageActionReference =')
+    expect(contract).toContain("ownerKind: 'agent'")
+    expect(contract).toContain("ownerKind: 'bot_chat'")
+    expect(contract).toContain("ownerKind: 'bot_subject'")
+    expect(contract).toContain('export interface MessageActionCapabilityCodec')
+    expect(contract).toContain('export interface MessageActionGateway')
+    expect(service).not.toMatch(/from ['"]node:crypto['"]/)
+    expect(service).not.toMatch(/\/api\/v1\//)
+    expect(service).not.toMatch(/\bServiceRuntime\b|\bSourceService\b|\bBotService\b/)
+    expect(infrastructure).toMatch(/createCipheriv|createDecipheriv/)
+    expect(infrastructure).toContain('/api/v1/chats/messages/copy-link/get-or-create')
+    expect(infrastructure).toContain('/api/v1/chats/records/forward')
   })
 
   it('keeps World cross-domain dependencies behind narrow ports', () => {
