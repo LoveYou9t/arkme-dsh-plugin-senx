@@ -1,7 +1,7 @@
 import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto'
 import type { ArkmeSessionCredentials } from '../keychain-store.js'
 import type {
-  ArkmeGroupActionResult,
+  ArkmeGroupCommandResult,
   ArkmeGroupMemberAddItemResult,
   ArkmeGroupMemberAddResult,
   ArkmeGroupMemberCandidate,
@@ -13,6 +13,7 @@ import type {
   ArkmeGroupMemberRole,
   ArkmeGroupMemberStatus,
   ArkmeGroupNotificationResult,
+  ArkmeGroupProjectionResult,
   ArkmeGroupSettingsSnapshot,
   ArkmeSourceItem,
 } from '../types.js'
@@ -519,27 +520,17 @@ export class GroupService {
     const currentMember = objectValue(data.current_member)
     const title = stringValue(chatSession.title).trim() || source.displayName
     const messageDnd = chatMessageDnd(data.current_policy) ?? false
-    const nextSource: ArkmeSourceItem = {
+    const target: ArkmeGroupSettingsSnapshot['target'] = {
       sourceRef: await this.source.sealSourceRef(session.userId, 'group_chat', source.ownerRef, title),
       sourceKey: await this.source.chatDirectorySourceKey(session.userId, source.ownerRef),
       kind: 'group_chat',
       displayName: title,
-      activeAtMillis: numberValue(chatSession.last_active_at),
-      unreadCount: numberValue(objectValue(data.unread_snapshot).unread_count),
-      isMuted: messageDnd,
-      ...((numberValue(chatSession.last_seq)) > 0 ? { latestSequence: numberValue(chatSession.last_seq) } : {}),
     }
-    try {
-      await this.source.hydrateSourceAvatars([nextSource], new Map(), new Map([[0, source.ownerRef]]), session, signal)
-    } catch {
-      // Settings must remain readable if group-avatar decoration is temporarily unavailable.
-    }
-    this.source.setChatSourceByKey(`${String(session.userId)}:${source.ownerRef}`, nextSource)
     const selfRole = chatMemberRole(currentMember.role)
     const selfStatus = chatMemberStatus(currentMember.status)
     const active = selfStatus === 'active'
     return {
-      source: nextSource,
+      target,
       selfRole,
       selfStatus,
       canRename: active && selfRole === 'owner',
@@ -588,7 +579,7 @@ export class GroupService {
     }
   }
 
-  async renameGroup(sourceRef: string, title: string, signal?: AbortSignal): Promise<ArkmeGroupActionResult> {
+  async renameGroup(sourceRef: string, title: string, signal?: AbortSignal): Promise<ArkmeGroupProjectionResult> {
     const session = await this.runtime.requireSession()
     const source = await this.source.openSourceRef(sourceRef, session.userId)
     const normalizedTitle = title.trim()
@@ -615,7 +606,7 @@ export class GroupService {
     return { source: nextSource, status: 'ok' }
   }
 
-  async leaveGroup(sourceRef: string, signal?: AbortSignal): Promise<ArkmeGroupActionResult> {
+  async leaveGroup(sourceRef: string, signal?: AbortSignal): Promise<ArkmeGroupCommandResult> {
     const session = await this.runtime.requireSession()
     const source = await this.source.openSourceRef(sourceRef, session.userId)
     if (source.kind !== 'group_chat') {
@@ -627,12 +618,11 @@ export class GroupService {
       session,
       signal,
     )
-    const nextSource = await this.source.sourceItem(source)
-    this.source.setChatSourceByKey(`${String(session.userId)}:${source.ownerRef}`, nextSource)
-    return { source: nextSource, status: 'ok' }
+    this.source.invalidateSourceListCache(session.userId, 'root')
+    return { status: 'ok' }
   }
 
-  async dissolveGroup(sourceRef: string, signal?: AbortSignal): Promise<ArkmeGroupActionResult> {
+  async dissolveGroup(sourceRef: string, signal?: AbortSignal): Promise<ArkmeGroupCommandResult> {
     const session = await this.runtime.requireSession()
     const source = await this.source.openSourceRef(sourceRef, session.userId)
     if (source.kind !== 'group_chat') {
@@ -644,12 +634,11 @@ export class GroupService {
       session,
       signal,
     )
-    const nextSource = await this.source.sourceItem(source)
-    this.source.setChatSourceByKey(`${String(session.userId)}:${source.ownerRef}`, nextSource)
-    return { source: nextSource, status: 'ok' }
+    this.source.invalidateSourceListCache(session.userId, 'root')
+    return { status: 'ok' }
   }
 
-  async reportGroup(sourceRef: string, reason: string, signal?: AbortSignal): Promise<ArkmeGroupActionResult> {
+  async reportGroup(sourceRef: string, reason: string, signal?: AbortSignal): Promise<ArkmeGroupCommandResult> {
     const session = await this.runtime.requireSession()
     const source = await this.source.openSourceRef(sourceRef, session.userId)
     if (source.kind !== 'group_chat') {
@@ -666,6 +655,6 @@ export class GroupService {
       session,
       signal,
     )
-    return { source: await this.source.sourceItem(source), status: 'ok' }
+    return { status: 'ok' }
   }
 }

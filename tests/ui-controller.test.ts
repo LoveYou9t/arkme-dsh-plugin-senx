@@ -47,6 +47,32 @@ describe('ArkmeUiController', () => {
     expect(controller.getSnapshot().selectedSource?.displayName).toBe('已重命名的项目群')
   })
 
+  it('updates only the matching selected source projection without navigating back', () => {
+    const controller = new ArkmeUiController()
+    const first = {
+      sourceRef: 'group-ref-1', sourceKey: 'chat:group-1', kind: 'group_chat' as const,
+      displayName: '项目一群', activeAtMillis: 1, unreadCount: 0,
+    }
+    const second = {
+      sourceRef: 'group-ref-2', sourceKey: 'chat:group-2', kind: 'group_chat' as const,
+      displayName: '项目二群', activeAtMillis: 2, unreadCount: 0,
+    }
+    controller.selectSource(first)
+
+    expect(controller.updateSelectedSourceProjection({ ...first, sourceRef: 'group-ref-1-next', isMuted: true })).toBe(true)
+    expect(controller.getSnapshot().selectedSource).toMatchObject({
+      sourceKey: first.sourceKey,
+      sourceRef: 'group-ref-1-next',
+      isMuted: true,
+    })
+    expect(controller.getChatRevision()).toBe(0)
+
+    controller.selectSource(second)
+    expect(controller.updateSelectedSourceProjection({ ...first, displayName: '旧请求完成后的群名' })).toBe(false)
+    expect(controller.getSnapshot().selectedSource).toEqual(second)
+    expect(controller.getChatRevision()).toBe(0)
+  })
+
   it('clears Contacts mode on every non-Contacts route and authenticated account reset', () => {
     const controller = new ArkmeUiController()
 

@@ -146,7 +146,7 @@ import type {
   ArkmeCreateTextResult,
   ArkmeDirectTextSendResult,
   ArkmeFileAssetDisplayItem, ArkmeFavoriteStickerList, ArkmeFavoriteStickerAddInput, ArkmeFavoriteStickerManageAction,
-  ArkmeGroupActionResult,
+  ArkmeGroupCommandResult,
   ArkmeGroupAiPolishMutationResult,
   ArkmeGroupAiPolishNotice,
   ArkmeGroupAiPolishRuleCandidate,
@@ -157,6 +157,7 @@ import type {
   ArkmeGroupMemberCandidateList,
   ArkmeGroupInvitePreview,
   ArkmeGroupNotificationResult,
+  ArkmeGroupProjectionResult,
   ArkmeGroupSettingsSnapshot,
   ArkmeIdAvailabilitySnapshot,
   ArkmeIdMutationResult,
@@ -1154,7 +1155,7 @@ export class ArkmeService {
     return await this.group.setGroupMessageDnd(sourceRef, enabled, signal)
   }
 
-  async renameGroup(sourceRef: string, title: string, signal?: AbortSignal): Promise<ArkmeGroupActionResult> {
+  async renameGroup(sourceRef: string, title: string, signal?: AbortSignal): Promise<ArkmeGroupProjectionResult> {
     const result = await this.group.renameGroup(sourceRef, title, signal)
     this.realtime.emitChatClientEvent({
       type: 'sessions-delta',
@@ -1168,15 +1169,15 @@ export class ArkmeService {
     return result
   }
 
-  async leaveGroup(sourceRef: string, signal?: AbortSignal): Promise<ArkmeGroupActionResult> {
+  async leaveGroup(sourceRef: string, signal?: AbortSignal): Promise<ArkmeGroupCommandResult> {
     return await this.group.leaveGroup(sourceRef, signal)
   }
 
-  async dissolveGroup(sourceRef: string, signal?: AbortSignal): Promise<ArkmeGroupActionResult> {
+  async dissolveGroup(sourceRef: string, signal?: AbortSignal): Promise<ArkmeGroupCommandResult> {
     return await this.group.dissolveGroup(sourceRef, signal)
   }
 
-  async reportGroup(sourceRef: string, reason: string, signal?: AbortSignal): Promise<ArkmeGroupActionResult> {
+  async reportGroup(sourceRef: string, reason: string, signal?: AbortSignal): Promise<ArkmeGroupCommandResult> {
     return await this.group.reportGroup(sourceRef, reason, signal)
   }
 

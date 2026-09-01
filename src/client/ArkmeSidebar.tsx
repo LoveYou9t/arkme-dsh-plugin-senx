@@ -107,7 +107,7 @@ import {
 } from './composer-draft-store.js'
 import { arkmeConversationComposerLayout } from './conversation-composer-presentation.js'
 import { restoreArkmeComposerFocus } from './composer-focus.js'
-import { arkmeSourceIdentityKey } from './source-identity.js'
+import { arkmeSourceIdentityKey, type ArkmeSourceIdentityFacts } from './source-identity.js'
 import {
   arkmeComposerGroupMemberCount, arkmeComposerPlaceholderText,
   type ArkmeComposerPlaceholderTarget,
@@ -3580,6 +3580,26 @@ export function ArkmeSurface({
     arkmeUi.selectSource(nextSource)
     arkmeUi.chatChanged()
   }, [])
+  const updateSourceProjection = useCallback((nextSource: ArkmeTimelinePage['source']) => {
+    if (isArkmeChatDirectorySource(nextSource)) arkmeChatDirectory.upsert(nextSource)
+    arkmeUi.updateSelectedSourceProjection(nextSource)
+  }, [])
+  const applyGroupMembershipChange = useCallback((targetSource: ArkmeSourceIdentityFacts) => {
+    const selectedSource = arkmeUi.getSnapshot().selectedSource
+    if (selectedSource !== undefined
+      && arkmeSourceIdentityKey(selectedSource) === arkmeSourceIdentityKey(targetSource)) {
+      arkmeUi.chatChanged()
+    }
+    void arkmeChatDirectory.refreshRoot({ force: true }).catch(() => undefined)
+  }, [])
+  const updateSourceMessageDndProjection = useCallback((targetSource: ArkmeSourceIdentityFacts, messageDnd: boolean) => {
+    const sourceIdentity = arkmeSourceIdentityKey(targetSource)
+    const selectedSource = arkmeUi.getSnapshot().selectedSource
+    const currentSource = selectedSource !== undefined && arkmeSourceIdentityKey(selectedSource) === sourceIdentity
+      ? selectedSource
+      : arkmeChatDirectory.getSnapshot().sources.find(item => arkmeSourceIdentityKey(item) === sourceIdentity)
+    if (currentSource !== undefined) updateSourceProjection({ ...currentSource, isMuted: messageDnd })
+  }, [updateSourceProjection])
   const conversationMemberByRef = useMemo(
     () => new Map(conversationMembers.map(member => [member.memberRef, member])),
     [conversationMembers],
@@ -4646,7 +4666,9 @@ export function ArkmeSurface({
             overlayHostRef={panelRef}
             aiPolishSettings={aiPolishSettings}
             onAiPolishSettingsChanged={setAiPolishSettings}
-            onSourceActivated={activateSource}
+            onSourceProjectionUpdated={updateSourceProjection}
+            onMembershipChanged={applyGroupMembershipChange}
+            onMessageDndUpdated={updateSourceMessageDndProjection}
             membersOpen={groupMembersOpen}
             onMembersOpenChange={open => { if (open) activateContextPanel('members'); else setGroupMembersOpen(false) }}
             onMemberOpen={openMemberProfile}

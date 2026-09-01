@@ -2117,8 +2117,15 @@ export interface ArkmeOpenPrivateChatResult {
   source: ArkmeSourceItem
 }
 
+export interface ArkmeGroupActionTarget {
+  sourceRef: string
+  sourceKey?: string
+  kind: 'group_chat'
+  displayName: string
+}
+
 export interface ArkmeGroupSettingsSnapshot {
-  source: ArkmeSourceItem
+  target: ArkmeGroupActionTarget
   selfRole: ArkmeGroupMemberRole
   selfStatus: ArkmeGroupMemberStatus
   canRename: boolean
@@ -2131,8 +2138,12 @@ export interface ArkmeGroupNotificationResult {
   messageDnd: boolean
 }
 
-export interface ArkmeGroupActionResult {
+export interface ArkmeGroupProjectionResult {
   source: ArkmeSourceItem
+  status: 'ok'
+}
+
+export interface ArkmeGroupCommandResult {
   status: 'ok'
 }
 
