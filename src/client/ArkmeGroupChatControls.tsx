@@ -1127,6 +1127,8 @@ function GroupSettingsMenu(props: {
     if (!props.open) return
     const controller = new AbortController()
     let active = true
+    setSnapshot(undefined)
+    setMessageDnd(props.source.isMuted === true)
     void callArkme<ArkmeGroupSettingsSnapshot>('group.settings', {
       sourceRef: props.source.sourceRef,
     }, controller.signal)
