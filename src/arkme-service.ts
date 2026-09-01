@@ -45,6 +45,8 @@ import { CalendarService } from './services/calendar-service.js'
 import { CallHistoryService } from './services/call-history-service.js'
 import { ChatRealtimeService } from './services/chat-realtime-service.js'
 import { ChatService } from './services/chat-service.js'
+import { ConversationDirectoryVisibilityService } from './services/conversation-directory-visibility-service.js'
+import { ConversationListPreferenceService } from './services/conversation-list-preference-service.js'
 import { ContactService } from './services/contact-service.js'
 import { ContactDirectoryService } from './services/contact-directory-service.js'
 import { CommunityService } from './services/community-service.js'
@@ -151,6 +153,7 @@ import type {
   ArkmeDirectoryContactProfile,
   ArkmeDirectoryPage,
   ArkmeDirectorySectionKind,
+  ArkmeConversationDirectoryVisibility,
   ArkmeConversationWriteResult,
   ArkmeConversationMemberList,
   ArkmeConversationMemberRecordMode,
@@ -209,7 +212,7 @@ import type {
   ArkmeSelfRecordList,
   ArkmeSelfSummary,
   ArkmeSourceDirectory,
-  ArkmeSourceDirectoryPolicyResult,
+  ArkmeSourceDirectoryPinResult,
   ArkmeSourceItem,
   ArkmeSourceList,
   ArkmeSourceReadResult,
@@ -287,6 +290,7 @@ export class ArkmeService {
   private readonly media: MediaService
   private readonly privacy: ArkmePrivacyVisibilityService
   private readonly source: SourceService
+  private readonly conversationDirectoryVisibility: ConversationDirectoryVisibilityService
   private readonly record: RecordService
   private readonly search: SearchService
   private readonly bot: BotService
@@ -394,6 +398,7 @@ export class ArkmeService {
     this.realtime = new ChatRealtimeService(this.runtime, this.source, {
       chatTimelineItems: async (data, session, chatSessionUid, sourceKind) => await this.chat.chatTimelineItems(data, session, chatSessionUid, sourceKind),
     })
+    this.conversationDirectoryVisibility = new ConversationDirectoryVisibilityService(new ConversationListPreferenceService(this.runtime), this.source, this.bot, this.realtime)
     this.chat = new ChatService(
       this.runtime,
       this.source,
@@ -580,9 +585,15 @@ export class ArkmeService {
   async updateBotNotificationPreference(botRef: string, muted: boolean, options: { signal?: AbortSignal } = {}): Promise<ArkmeBotNotificationPreference> { return await this.botConversation.updateNotificationPreference(botRef, muted, options) }
 
   async openBotChat(botRef: string, options: { signal?: AbortSignal } = {}): Promise<ArkmeSourceItem> {
-    return await this.bot.openBotChat(botRef, options)
+    const prior = await this.bot.botConversationListPreferenceEntry(botRef).catch(() => undefined)
+    const source = await this.bot.openBotChat(botRef, options)
+    void this.conversationDirectoryVisibility.restoreSource(
+      source,
+      undefined,
+      prior === undefined ? [] : [prior.ref],
+    ).catch(() => undefined)
+    return source
   }
-
   async listBotPrivateChatDirectory(options: { signal?: AbortSignal } = {}) { return await this.botConversation.directory(options) }
 
   async openBotPrivateChat(botRef: string, options: { signal?: AbortSignal } = {}) { return await this.botConversation.open(botRef, options) }
@@ -832,8 +843,8 @@ export class ArkmeService {
   }
   async directoryContactProfile(contactRef: string, signal?: AbortSignal): Promise<ArkmeDirectoryContactProfile> { return await this.contactDirectory.contactProfile(contactRef, signal) }
   async directoryContactWorld(contactRef: string, options: { limit?: number; offset?: number; signal?: AbortSignal } = {}): Promise<ArkmeWorldFeedPage> { return await this.contactDirectory.contactWorld(contactRef, options) }
-  async openDirectoryContactChat(contactRef: string, signal?: AbortSignal): Promise<ArkmeOpenPrivateChatResult> { return await this.contactDirectory.openContactChat(contactRef, signal) }
-  async openDirectoryGroupChat(sourceRef: string, signal?: AbortSignal): Promise<ArkmeSourceItem> { return await this.contactDirectory.openGroupChat(sourceRef, signal) }
+  async openDirectoryContactChat(contactRef: string, signal?: AbortSignal): Promise<ArkmeOpenPrivateChatResult> { const result = await this.contactDirectory.openContactChat(contactRef, signal); void this.conversationDirectoryVisibility.restoreSource(result.source).catch(() => undefined); return result }
+  async openDirectoryGroupChat(sourceRef: string, signal?: AbortSignal): Promise<ArkmeSourceItem> { const source = await this.contactDirectory.openGroupChat(sourceRef, signal); void this.conversationDirectoryVisibility.restoreSource(source).catch(() => undefined); return source }
   async unmarkedSpeakerOptions(candidateRef: string, signal?: AbortSignal): Promise<ArkmeUnmarkedSpeakerOptions> { return await this.unmarkedSpeaker.markOptions(candidateRef, signal) }
   async retryUnmarkedSpeakerInference(candidateRef: string, signal?: AbortSignal): Promise<ArkmeUnmarkedSpeakerInferenceRetry> { return await this.unmarkedSpeaker.retryInference(candidateRef, signal) }
   async unmarkedSpeakerSegments(candidateRef: string, options: { cursor?: string; limit?: number; signal?: AbortSignal } = {}): Promise<ArkmeUnmarkedSpeakerSegmentPage> { return await this.unmarkedSpeaker.segments(candidateRef, options) }
@@ -1029,12 +1040,9 @@ export class ArkmeService {
     return await this.source.listSources(directory, options)
   }
 
-  async setChatDirectoryPolicy(
-    sourceRef: string,
-    options: { pinned?: boolean; hidden?: boolean; signal?: AbortSignal } = {},
-  ): Promise<ArkmeSourceDirectoryPolicyResult> {
-    return await this.source.setChatDirectoryPolicy(sourceRef, options)
-  }
+  async setChatDirectoryPin(sourceRef: string, pinned: boolean, signal?: AbortSignal): Promise<ArkmeSourceDirectoryPinResult> { return await this.source.setChatDirectoryPin(sourceRef, pinned, signal) }
+  async conversationDirectoryVisibilitySnapshot(sourceRefs: readonly string[], botRefs: readonly string[], signal?: AbortSignal): Promise<ArkmeConversationDirectoryVisibility> { return await this.conversationDirectoryVisibility.query(sourceRefs, botRefs, signal) }
+  async setConversationDirectoryVisibility(entryKind: 'source' | 'bot', entryRef: string, hidden: boolean, signal?: AbortSignal): Promise<void> { await this.conversationDirectoryVisibility.setVisibility(entryKind, entryRef, hidden, signal) }
 
   async dshBetaCommunityEntryState(signal?: AbortSignal): Promise<ArkmeDSHBetaCommunityEntryState> {
     return await this.community.dshBetaCommunityEntryState(signal)
@@ -1249,7 +1257,9 @@ export class ArkmeService {
   ): Promise<ArkmeOpenPrivateChatResult> {
     const session = await this.runtime.requireSession()
     const peerUserId = await this.contact.resolveRegisteredContactUserId(contactRef, session, options.signal)
-    return await this.chat.openPrivateChatFromUser(peerUserId, options)
+    const result = await this.chat.openPrivateChatFromUser(peerUserId, options)
+    void this.conversationDirectoryVisibility.restoreSource(result.source).catch(() => undefined)
+    return result
   }
 
   async officialAuthorProfile(signal?: AbortSignal): Promise<ArkmeOfficialAuthorProfile> {

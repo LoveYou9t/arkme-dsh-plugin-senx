@@ -10,6 +10,7 @@ export const ARKME_CHAT_RECEIVE_BIZ_TYPE = 17
 export const ARKME_CHAT_READ_CURSOR_ADVANCED_BIZ_TYPE = 18
 export const ARKME_CHAT_TIMELINE_CHANGED_BIZ_TYPE = 20
 export const ARKME_PROJECTION_INVALIDATED_BIZ_TYPE = 25
+export const ARKME_CONVERSATION_LIST_PREFERENCE_UPDATED_BIZ_TYPE = 26
 
 const DEFAULT_CONNECT_TIMEOUT_MS = 15_000
 const DEFAULT_INACTIVITY_TIMEOUT_MS = 75_000
@@ -37,6 +38,14 @@ export interface ArkmeProjectionInvalidatedHint {
   eventAtMillis: number
 }
 
+export interface ArkmeConversationListPreferenceUpdatedHint {
+  eventUid: string
+  userId: number
+  items: Array<{ entityKind: 1 | 2; entityUid: string; revision: number }>
+  acceptedAtMillis: number
+  sourceClientId: number
+}
+
 export interface ArkmeChatReadCursorAdvancedHint {
   eventUid: string
   chatSessionUid: string
@@ -60,11 +69,12 @@ export interface ArkmeChatTimelineChangedHint {
 
 export interface ArkmeChatRealtimeNotice {
   state: ArkmeChatRealtimeState
-  cause: 'reconcile' | 'chat-hint' | 'projection-invalidation' | 'local'
+  cause: 'reconcile' | 'chat-hint' | 'projection-invalidation' | 'conversation-list-preference-invalidation' | 'local'
   hint?: ArkmeChatReceiveHint
   readCursorAdvanced?: ArkmeChatReadCursorAdvancedHint
   timelineChanged?: ArkmeChatTimelineChangedHint
   projectionInvalidation?: ArkmeProjectionInvalidatedHint
+  conversationListPreferenceUpdated?: ArkmeConversationListPreferenceUpdatedHint
 }
 
 export interface ArkmeChatRealtimeRuntimeOptions {
@@ -225,6 +235,50 @@ export function decodeArkmeProjectionInvalidatedDataLine(line: string): ArkmePro
   if (eventUid === undefined || projection === undefined || eventAtMillis === undefined
     || !PROJECTION_NAME_PATTERN.test(projection)) return undefined
   return { eventUid, projection, eventAtMillis }
+}
+
+const CONVERSATION_LIST_PREFERENCE_ALLOWED_ITEM_FIELDS = new Set(['entity_kind', 'entity_uid', 'revision'])
+const CONVERSATION_LIST_PREFERENCE_FORBIDDEN_FIELDS = [
+  'visibility_state', 'dismissed_through_seq', 'dismissed_through_activity_at',
+  'chat_session_uid', 'pin_state', 'unread_count', 'payload', 'receiver_user_ids',
+] as const
+
+/** Decode a metadata-only invalidation. The Browser must query the Chat owner for current state. */
+export function decodeArkmeConversationListPreferenceUpdatedDataLine(
+  line: string,
+): ArkmeConversationListPreferenceUpdatedHint | undefined {
+  const source = decodeDataLine(line)
+  if (source === undefined
+    || positiveInteger(source.t) !== ARKME_CONVERSATION_LIST_PREFERENCE_UPDATED_BIZ_TYPE
+    || CONVERSATION_LIST_PREFERENCE_FORBIDDEN_FIELDS.some(field => Object.hasOwn(source, field))) return undefined
+  const eventUid = nonEmptyString(source.event_uid)
+  const userId = positiveInteger(source.user_id)
+  const acceptedAtMillis = positiveInteger(source.accepted_at)
+  const sourceClientId = source.source_client_id === undefined ? 0 : nonNegativeInteger(source.source_client_id)
+  const rawItems = Array.isArray(source.items) ? source.items : []
+  if (eventUid === undefined || userId === undefined || acceptedAtMillis === undefined
+    || sourceClientId === undefined || rawItems.length === 0 || rawItems.length > 200) return undefined
+  const seen = new Set<string>()
+  const items: ArkmeConversationListPreferenceUpdatedHint['items'] = []
+  for (const value of rawItems) {
+    if (value === null || typeof value !== 'object' || Array.isArray(value)) return undefined
+    const item = value as Record<string, unknown>
+    if (Object.keys(item).some(field => !CONVERSATION_LIST_PREFERENCE_ALLOWED_ITEM_FIELDS.has(field))) return undefined
+    const entityKind = positiveInteger(item.entity_kind)
+    const entityUid = typeof item.entity_uid === 'string'
+      && item.entity_uid !== ''
+      && item.entity_uid.trim() === item.entity_uid
+      ? item.entity_uid
+      : undefined
+    const revision = positiveInteger(item.revision)
+    if ((entityKind !== 1 && entityKind !== 2) || entityUid === undefined || revision === undefined
+      || Buffer.byteLength(entityUid, 'utf8') > 128) return undefined
+    const identity = `${String(entityKind)}:${String(Buffer.byteLength(entityUid, 'utf8'))}:${entityUid}`
+    if (seen.has(identity)) return undefined
+    seen.add(identity)
+    items.push({ entityKind, entityUid, revision })
+  }
+  return { eventUid, userId, items, acceptedAtMillis, sourceClientId }
 }
 
 function waitFor(milliseconds: number, signal: AbortSignal): Promise<void> {
@@ -530,17 +584,23 @@ export class ArkmeChatRealtimeRuntime {
   }
 
   private acceptLine(line: string): void {
-    const projectionInvalidation = decodeArkmeProjectionInvalidatedDataLine(line)
-    const readCursorAdvanced = projectionInvalidation === undefined
+    const conversationListPreferenceUpdated = decodeArkmeConversationListPreferenceUpdatedDataLine(line)
+    const projectionInvalidation = conversationListPreferenceUpdated === undefined
+      ? decodeArkmeProjectionInvalidatedDataLine(line)
+      : undefined
+    const readCursorAdvanced = conversationListPreferenceUpdated === undefined && projectionInvalidation === undefined
       ? decodeArkmeChatReadCursorAdvancedDataLine(line)
       : undefined
-    const timelineChanged = projectionInvalidation === undefined && readCursorAdvanced === undefined
+    const timelineChanged = conversationListPreferenceUpdated === undefined
+      && projectionInvalidation === undefined && readCursorAdvanced === undefined
       ? decodeArkmeChatTimelineChangedDataLine(line)
       : undefined
-    const hint = projectionInvalidation === undefined && readCursorAdvanced === undefined && timelineChanged === undefined
+    const hint = conversationListPreferenceUpdated === undefined
+      && projectionInvalidation === undefined && readCursorAdvanced === undefined && timelineChanged === undefined
       ? decodeArkmeChatReceiveDataLine(line)
       : undefined
-    const eventUid = projectionInvalidation?.eventUid ?? readCursorAdvanced?.eventUid
+    const eventUid = conversationListPreferenceUpdated?.eventUid
+      ?? projectionInvalidation?.eventUid ?? readCursorAdvanced?.eventUid
       ?? timelineChanged?.eventUid ?? hint?.eventUid
     if (eventUid === undefined || this.seenEventUids.has(eventUid)) return
     this.seenEventUids.add(eventUid)
@@ -548,24 +608,40 @@ export class ArkmeChatRealtimeRuntime {
       const oldest = this.seenEventUids.values().next().value as string | undefined
       if (oldest !== undefined) this.seenEventUids.delete(oldest)
     }
-    this.lastEventAtMillis = projectionInvalidation?.eventAtMillis
+    this.lastEventAtMillis = conversationListPreferenceUpdated?.acceptedAtMillis
+      ?? projectionInvalidation?.eventAtMillis
       ?? readCursorAdvanced?.eventAtMillis
       ?? timelineChanged?.eventAtMillis
       ?? hint?.eventAtMillis
-    if (projectionInvalidation !== undefined) {
-      this.advanceRevision('projection-invalidation', undefined, undefined, projectionInvalidation)
+    if (conversationListPreferenceUpdated !== undefined) {
+      this.advanceRevision(
+        'conversation-list-preference-invalidation',
+        { conversationListPreferenceUpdated },
+      )
+    } else if (projectionInvalidation !== undefined) {
+      this.advanceRevision('projection-invalidation', { projectionInvalidation })
     } else {
-      this.advanceRevision('chat-hint', hint, readCursorAdvanced, undefined, timelineChanged)
+      this.advanceRevision('chat-hint', { hint, readCursorAdvanced, timelineChanged })
     }
   }
 
   private advanceRevision(
     cause: ArkmeChatRealtimeNotice['cause'],
-    hint?: ArkmeChatReceiveHint,
-    readCursorAdvanced?: ArkmeChatReadCursorAdvancedHint,
-    projectionInvalidation?: ArkmeProjectionInvalidatedHint,
-    timelineChanged?: ArkmeChatTimelineChangedHint,
+    evidence: {
+      hint?: ArkmeChatReceiveHint
+      readCursorAdvanced?: ArkmeChatReadCursorAdvancedHint
+      projectionInvalidation?: ArkmeProjectionInvalidatedHint
+      timelineChanged?: ArkmeChatTimelineChangedHint
+      conversationListPreferenceUpdated?: ArkmeConversationListPreferenceUpdatedHint
+    } = {},
   ): void {
+    const {
+      hint,
+      readCursorAdvanced,
+      projectionInvalidation,
+      timelineChanged,
+      conversationListPreferenceUpdated,
+    } = evidence
     this.revision += 1
     const state = this.state()
     const notice: ArkmeChatRealtimeNotice = {
@@ -575,6 +651,7 @@ export class ArkmeChatRealtimeRuntime {
       ...(hint === undefined ? {} : { hint }),
       ...(readCursorAdvanced === undefined ? {} : { readCursorAdvanced }),
       ...(projectionInvalidation === undefined ? {} : { projectionInvalidation }),
+      ...(conversationListPreferenceUpdated === undefined ? {} : { conversationListPreferenceUpdated }),
     }
     for (const listener of [...this.listeners]) listener(notice)
   }

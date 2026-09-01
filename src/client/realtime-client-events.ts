@@ -167,6 +167,10 @@ export function useArkmeRealtimeClientEvents(
           arkmeCalendarInvalidations.publishAll()
           return
         }
+        if (update.type === 'conversation-list-preference-invalidated') {
+          arkmeUi.chatChanged()
+          return
+        }
         if (update.type !== 'sessions-delta') return
         arkmeChatDirectory.upsertMany(update.updates.map(item => ({
           source: item.source,
