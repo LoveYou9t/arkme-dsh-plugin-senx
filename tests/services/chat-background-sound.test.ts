@@ -93,6 +93,7 @@ describe('ChatService background-sound payload owner', () => {
       }),
       expect.anything(),
       undefined,
+      { trackWriteOutcome: true },
     )
     const body = authenticatedChatPost.mock.calls[0]![1] as Record<string, unknown>
     expect(JSON.stringify(body.content_payload)).not.toMatch(/file_type|file_kind|mime_type|"size"/u)
