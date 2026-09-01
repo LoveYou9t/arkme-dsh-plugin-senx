@@ -2995,7 +2995,9 @@ export class ChatService {
         send_at: sendAtMillis,
       }
       if (source.kind === 'send_to_self' || source.kind === 'default_category') {
-        const result = await this.runtime.authenticatedPost<Record<string, unknown>>('/api/v1/records/create', commonBody, session, options.signal)
+        const result = await this.runtime.authenticatedPost<Record<string, unknown>>(
+          '/api/v1/records/create', commonBody, session, options.signal, { trackWriteOutcome: true },
+        )
         await this.realtime.invalidateRecordProjection()
         return await this.withSentMessageActionRef({
           sourceRef,
@@ -3017,6 +3019,7 @@ export class ChatService {
       if (source.kind === 'topic') {
         const result = await this.runtime.authenticatedPost<Record<string, unknown>>(
           '/api/v1/topics/records/create', { topic_uid: source.ownerRef, ...commonBody }, session, options.signal,
+          { trackWriteOutcome: true },
         )
         await this.realtime.invalidateRecordProjection()
         return await this.withSentMessageActionRef({
@@ -3041,6 +3044,7 @@ export class ChatService {
         { chat_session_uid: source.ownerRef, rel_uid: relationUid, ...commonBody },
         session,
         options.signal,
+        { trackWriteOutcome: true },
       )
       const sequence = numberValue(result.seq)
       this.realtime.scheduleChatSessionProjection(source.ownerRef, sequence)
