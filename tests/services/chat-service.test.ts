@@ -1723,13 +1723,13 @@ describe('ChatService', () => {
       const runtime = {
         stateStore: {
           uniqueCode: vi.fn(async () => 'member-signing-key'),
-          cachedProfile: vi.fn(async () => ({ profile: { displayName: 'Owner' } })),
         },
         requireSession: vi.fn(async () => session),
         authenticatedChatPost,
       }
       const source = {
         openSourceRef: vi.fn(async () => ({ kind: 'group_chat', ownerRef: 'group-1' })),
+        cachedChatSource: vi.fn(() => undefined),
         sealSourceRef: vi.fn(async () => 'private-source-ref'),
         chatDirectorySourceKey: vi.fn(async () => 'chat:private-1'),
         setChatSourceByKey: vi.fn(),
@@ -1749,12 +1749,14 @@ describe('ChatService', () => {
         '/api/v1/chats/create-private',
         expect.objectContaining({
           peer_user_id: 7,
-          title: '公开昵称',
-          peer_display_name_snapshot: '公开昵称',
         }),
         session,
         undefined,
       )
+      const createBody = authenticatedChatPost.mock.calls[1]?.[1] as Record<string, unknown>
+      expect(createBody).not.toHaveProperty('title')
+      expect(createBody).not.toHaveProperty('owner_display_name_snapshot')
+      expect(createBody).not.toHaveProperty('peer_display_name_snapshot')
     },
   )
 
@@ -1765,11 +1767,12 @@ describe('ChatService', () => {
       unread_snapshot: { unread_count: 0, session_last_seq: 0 },
     }))
     const runtime = {
-      stateStore: { cachedProfile: vi.fn(async () => ({ profile: { displayName: 'Owner' } })) },
+      stateStore: {},
       requireSession: vi.fn(async () => session),
       authenticatedChatPost,
     }
     const source = {
+      cachedChatSource: vi.fn(() => undefined),
       sealSourceRef: vi.fn(async () => 'private-source-ref'),
       chatDirectorySourceKey: vi.fn(async () => 'chat:private-2'),
       setChatSourceByKey: vi.fn(),
@@ -1787,7 +1790,117 @@ describe('ChatService', () => {
     })
     const createBody = authenticatedChatPost.mock.calls[0]?.[1] as Record<string, unknown>
     expect(createBody).not.toHaveProperty('title')
+    expect(createBody).not.toHaveProperty('owner_display_name_snapshot')
     expect(createBody).not.toHaveProperty('peer_display_name_snapshot')
+  })
+
+  it('keeps the existing viewer-bound private-chat projection when create-private reuses a session', async () => {
+    const session = { userId: 42, accessToken: 'access', refreshToken: 'refresh' }
+    const existingSource = {
+      sourceRef: 'existing-private-source-ref',
+      sourceKey: 'chat:private-existing',
+      peerUserId: 7,
+      kind: 'private_chat',
+      displayName: '我的备注',
+      activeAtMillis: 1_700_000_000_000,
+      unreadCount: 3,
+      latestSequence: 9,
+    }
+    const authenticatedChatPost = vi.fn(async (path: string) => path === '/api/v1/chats/members/list'
+      ? { items: [{ user_id: 7, status: 1, remark: '我的备注', display_name_snapshot: '群内昵称' }] }
+      : {
+          session: { chat_session_uid: 'private-existing', last_active_at: 1_700_000_000_500, last_seq: 9 },
+          unread_snapshot: { unread_count: 3, session_last_seq: 9 },
+        })
+    const runtime = {
+      stateStore: {
+        uniqueCode: vi.fn(async () => 'member-signing-key'),
+      },
+      requireSession: vi.fn(async () => session),
+      authenticatedChatPost,
+    }
+    const source = {
+      openSourceRef: vi.fn(async () => ({ kind: 'group_chat', ownerRef: 'group-1' })),
+      cachedChatSource: vi.fn(() => existingSource),
+      sealSourceRef: vi.fn(async () => 'new-private-source-ref'),
+      chatDirectorySourceKey: vi.fn(async () => 'chat:private-existing'),
+      setChatSourceByKey: vi.fn(),
+    }
+    const profile = {
+      publicProfileSummariesByUserIds: vi.fn(async () => new Map([[7, { displayName: '公开昵称' }]])),
+    }
+    const chat = new ChatService(
+      runtime as never, source as never, profile as never, {} as never, {} as never,
+      {} as never, {} as never, {} as never, {} as never,
+    )
+
+    const opened = await chat.openPrivateChatFromMember(
+      'group-source-ref', chatMemberRef(42, 'group-1', 7),
+    )
+    expect(opened.source).toMatchObject({
+      sourceRef: existingSource.sourceRef,
+      sourceKey: existingSource.sourceKey,
+      displayName: '我的备注',
+      activeAtMillis: 1_700_000_000_500,
+      unreadCount: 3,
+      latestSequence: 9,
+    })
+    expect(source.setChatSourceByKey).toHaveBeenCalledWith('42:private-existing', opened.source)
+    const createBody = authenticatedChatPost.mock.calls[1]?.[1] as Record<string, unknown>
+    expect(createBody).not.toHaveProperty('title')
+    expect(createBody).not.toHaveProperty('owner_display_name_snapshot')
+    expect(createBody).not.toHaveProperty('peer_display_name_snapshot')
+  })
+
+  it.each([
+    { name: 'self member', targetUserId: 42, memberChatSessionUid: 'group-1', members: [{ user_id: 42 }], code: 'private-chat-self-invalid' },
+    { name: 'stale member', targetUserId: 7, memberChatSessionUid: 'group-1', members: [], code: 'chat-member-ref-stale' },
+    { name: 'member from another chat', targetUserId: 7, memberChatSessionUid: 'group-2', members: [{ user_id: 7 }], code: 'chat-member-ref-invalid' },
+  ])('rejects $name before creating a private chat', async ({ targetUserId, memberChatSessionUid, members, code }) => {
+    const session = { userId: 42, accessToken: 'access', refreshToken: 'refresh' }
+    const authenticatedChatPost = vi.fn(async () => ({ items: members }))
+    const runtime = {
+      stateStore: { uniqueCode: vi.fn(async () => 'member-signing-key') },
+      requireSession: vi.fn(async () => session),
+      authenticatedChatPost,
+    }
+    const source = { openSourceRef: vi.fn(async () => ({ kind: 'group_chat', ownerRef: 'group-1' })) }
+    const profile = { publicProfileSummariesByUserIds: vi.fn() }
+    const chat = new ChatService(
+      runtime as never, source as never, profile as never, {} as never, {} as never,
+      {} as never, {} as never, {} as never, {} as never,
+    )
+
+    await expect(chat.openPrivateChatFromMember(
+      'group-source-ref', chatMemberRef(42, memberChatSessionUid, targetUserId),
+    )).rejects.toMatchObject({ code })
+    expect(authenticatedChatPost.mock.calls.some(call => call[0] === '/api/v1/chats/create-private')).toBe(false)
+    expect(profile.publicProfileSummariesByUserIds).not.toHaveBeenCalled()
+  })
+
+  it('does not cache or activate an incomplete create-private response', async () => {
+    const session = { userId: 42, accessToken: 'access', refreshToken: 'refresh' }
+    const runtime = {
+      stateStore: {},
+      requireSession: vi.fn(async () => session),
+      authenticatedChatPost: vi.fn(async () => ({ session: {}, unread_snapshot: {} })),
+    }
+    const source = {
+      cachedChatSource: vi.fn(),
+      sealSourceRef: vi.fn(),
+      chatDirectorySourceKey: vi.fn(),
+      setChatSourceByKey: vi.fn(),
+    }
+    const profile = { publicProfileSummariesByUserIds: vi.fn(async () => new Map()) }
+    const chat = new ChatService(
+      runtime as never, source as never, profile as never, {} as never, {} as never,
+      {} as never, {} as never, {} as never, {} as never,
+    )
+
+    await expect(chat.openPrivateChatFromUser(7)).rejects.toMatchObject({ code: 'private-chat-contract-invalid' })
+    expect(source.cachedChatSource).not.toHaveBeenCalled()
+    expect(source.sealSourceRef).not.toHaveBeenCalled()
+    expect(source.setChatSourceByKey).not.toHaveBeenCalled()
   })
 
   it('schedules the authoritative chat projection after sending text', async () => {
