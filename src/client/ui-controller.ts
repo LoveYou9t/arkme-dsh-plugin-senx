@@ -1,4 +1,5 @@
 import type { ArkmeBotSummary, ArkmeSourceItem } from '../types.js'
+import { arkmeSourceIdentityKey } from './source-identity.js'
 import { arkmeContactsTab } from './redesign/contacts/contacts-tab-store.js'
 import type { ArkmeExtensionShareAction } from './extension-share-deeplink.js'
 
@@ -326,6 +327,15 @@ export class ArkmeUiController {
     this.lastConversationDestination = { kind: 'source', source }
     const { selectedBot: _selectedBot, calendarOpen: _calendarOpen, conversationTarget: _conversationTarget, productMode: _productMode, ...rest } = this.state
     this.publish({ ...rest, mode: 'source', selectedSource: source })
+  }
+
+  updateSelectedSourceProjection(source: ArkmeSourceItem): boolean {
+    const selectedSource = this.state.selectedSource
+    if (selectedSource === undefined
+      || arkmeSourceIdentityKey(selectedSource) !== arkmeSourceIdentityKey(source)) return false
+    this.lastConversationDestination = { kind: 'source', source }
+    this.publish({ ...this.state, selectedSource: source })
+    return true
   }
 
   openBotConversation(bot: ArkmeBotSummary): void {

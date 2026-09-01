@@ -996,6 +996,231 @@ describe('conversation send directory projection', () => {
     expect(JSON.stringify(renderer!.toJSON())).toContain('当前会话')
   })
 
+  it('opens group settings without reselecting the conversation or reloading its timeline', async () => {
+    const visibleItem: ArkmeTimelineItem = {
+      itemUid: 'group-settings-visible-message', sequence: 784, senderName: '我', isMe: true,
+      sendAtMillis: 40, title: '', textContent: '打开设置时继续可见', status: 1,
+    }
+    const settingsSource = { ...group, sourceRef: 'source-group-from-settings' }
+    timeline = [visibleItem]
+    activeSource = group
+    arkmeChatDirectory.publish([group, other])
+    arkmeUi.selectSource(group)
+    const baseCall = mocks.callArkme.getMockImplementation()!
+    mocks.callArkme.mockImplementation(async (operation: string, params?: Record<string, unknown>, signal?: AbortSignal) => {
+      if (operation === 'group.settings') return {
+        target: settingsSource, selfRole: 'member', selfStatus: 'active', canRename: false,
+        canDissolve: false, canLeave: true, messageDnd: false,
+      }
+      if (operation === 'source.ai-polish.settings') return {
+        sourceRef: settingsSource.sourceRef, groupName: group.displayName, enabled: false,
+        canManage: false, viewerRole: 1, activeRuleName: '', updatedAtMillis: 1, rules: [],
+      }
+      return await baseCall(operation, params, signal)
+    })
+    await act(async () => {
+      renderer = create(<ArkmeSurface productChrome={false} productNavigation={false} />, {
+        createNodeMock: element => element.props.className === 'arkme-conversation-panel'
+          ? { getBoundingClientRect: () => ({ left: 0, top: 0, width: 960, height: 720 }) }
+          : null,
+      })
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    const timelineCallsBeforeOpen = mocks.callArkme.mock.calls
+      .filter(([operation]) => operation === 'source.timeline').length
+    const messageBeforeOpen = renderer!.root.findByProps({ 'data-arkme-message-content-line': visibleItem.itemUid })
+
+    await act(async () => {
+      renderer!.root.findByProps({ 'aria-label': '群聊设置' }).props.onClick()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(renderer!.root.findByProps({ role: 'menu', 'aria-label': '群聊设置' })).toBeDefined()
+    expect(renderer!.root.findByProps({ 'data-arkme-message-content-line': visibleItem.itemUid })).toBe(messageBeforeOpen)
+    expect(arkmeUi.getSnapshot().selectedSource?.sourceRef).toBe(group.sourceRef)
+    expect(mocks.callArkme.mock.calls.filter(([operation]) => operation === 'source.timeline'))
+      .toHaveLength(timelineCallsBeforeOpen)
+  })
+
+  it('does not navigate back when an earlier group settings mutation finishes after switching conversations', async () => {
+    activeSource = group
+    arkmeChatDirectory.publish([group, other])
+    arkmeUi.selectSource(group)
+    let resolveNotification: ((value: { messageDnd: boolean }) => void) | undefined
+    const notificationResult = new Promise<{ messageDnd: boolean }>(resolve => { resolveNotification = resolve })
+    const baseCall = mocks.callArkme.getMockImplementation()!
+    mocks.callArkme.mockImplementation(async (operation: string, params?: Record<string, unknown>, signal?: AbortSignal) => {
+      if (operation === 'group.settings') return {
+        target: group, selfRole: 'member', selfStatus: 'active', canRename: false,
+        canDissolve: false, canLeave: true, messageDnd: false,
+      }
+      if (operation === 'source.ai-polish.settings') return {
+        sourceRef: group.sourceRef, groupName: group.displayName, enabled: false,
+        canManage: false, viewerRole: 1, activeRuleName: '', updatedAtMillis: 1, rules: [],
+      }
+      if (operation === 'group.notification.set') return await notificationResult
+      return await baseCall(operation, params, signal)
+    })
+    await act(async () => {
+      renderer = create(<ArkmeSurface productChrome={false} productNavigation={false} />, {
+        createNodeMock: element => element.props.className === 'arkme-conversation-panel'
+          ? { getBoundingClientRect: () => ({ left: 0, top: 0, width: 960, height: 720 }) }
+          : null,
+      })
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    await act(async () => {
+      renderer!.root.findByProps({ 'aria-label': '群聊设置' }).props.onClick()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    await act(async () => {
+      renderer!.root.findByProps({ 'aria-label': '消息免打扰' }).props.onClick({ stopPropagation: vi.fn() })
+      await Promise.resolve()
+    })
+
+    activeSource = other
+    await act(async () => {
+      arkmeUi.selectSource(other)
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    const timelineCallsAfterSwitch = mocks.callArkme.mock.calls
+      .filter(([operation]) => operation === 'source.timeline').length
+    await act(async () => {
+      resolveNotification?.({ messageDnd: true })
+      await notificationResult
+      await Promise.resolve()
+    })
+
+    expect(arkmeUi.getSnapshot().selectedSource).toEqual(other)
+    expect(mocks.callArkme.mock.calls.filter(([operation]) => operation === 'source.timeline'))
+      .toHaveLength(timelineCallsAfterSwitch)
+  })
+
+  it('does not navigate back when a group membership change finishes after switching conversations', async () => {
+    window.confirm = vi.fn(() => true)
+    activeSource = group
+    arkmeChatDirectory.publish([group, other])
+    arkmeUi.selectSource(group)
+    let resolveLeave: ((value: { status: 'ok' }) => void) | undefined
+    const leaveResult = new Promise<{ status: 'ok' }>(resolve => { resolveLeave = resolve })
+    const baseCall = mocks.callArkme.getMockImplementation()!
+    mocks.callArkme.mockImplementation(async (operation: string, params?: Record<string, unknown>, signal?: AbortSignal) => {
+      if (operation === 'group.settings') return {
+        target: group, selfRole: 'member', selfStatus: 'active', canRename: false,
+        canDissolve: false, canLeave: true, messageDnd: false,
+      }
+      if (operation === 'source.ai-polish.settings') return {
+        sourceRef: group.sourceRef, groupName: group.displayName, enabled: false,
+        canManage: false, viewerRole: 1, activeRuleName: '', updatedAtMillis: 1, rules: [],
+      }
+      if (operation === 'group.leave') return await leaveResult
+      return await baseCall(operation, params, signal)
+    })
+    await act(async () => {
+      renderer = create(<ArkmeSurface productChrome={false} productNavigation={false} />, {
+        createNodeMock: element => element.props.className === 'arkme-conversation-panel'
+          ? { getBoundingClientRect: () => ({ left: 0, top: 0, width: 960, height: 720 }) }
+          : null,
+      })
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    await act(async () => {
+      renderer!.root.findByProps({ 'aria-label': '群聊设置' }).props.onClick()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    const leaveButton = renderer!.root.findAllByProps({ role: 'menuitem' }).find(node =>
+      node.findAll(child => child.children.includes('退出群聊')).length > 0)
+    expect(leaveButton).toBeDefined()
+    await act(async () => {
+      leaveButton!.props.onClick()
+      await Promise.resolve()
+    })
+
+    activeSource = other
+    await act(async () => {
+      arkmeUi.selectSource(other)
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    const timelineCallsAfterSwitch = mocks.callArkme.mock.calls
+      .filter(([operation]) => operation === 'source.timeline').length
+    await act(async () => {
+      resolveLeave?.({ status: 'ok' })
+      await leaveResult
+      await Promise.resolve()
+    })
+
+    expect(arkmeUi.getSnapshot().selectedSource).toEqual(other)
+    expect(mocks.callArkme.mock.calls.filter(([operation]) => operation === 'source.timeline'))
+      .toHaveLength(timelineCallsAfterSwitch)
+  })
+
+  it('applies a group notification projection without replacing the timeline', async () => {
+    const visibleItem: ArkmeTimelineItem = {
+      itemUid: 'group-notification-visible-message', sequence: 784, senderName: '我', isMe: true,
+      sendAtMillis: 40, title: '', textContent: '切换免打扰时继续可见', status: 1,
+    }
+    timeline = [visibleItem]
+    activeSource = group
+    arkmeChatDirectory.publish([group, other])
+    arkmeUi.selectSource(group)
+    const baseCall = mocks.callArkme.getMockImplementation()!
+    mocks.callArkme.mockImplementation(async (operation: string, params?: Record<string, unknown>, signal?: AbortSignal) => {
+      if (operation === 'group.settings') return {
+        target: { ...group, sourceRef: 'source-group-settings-capability' },
+        selfRole: 'member', selfStatus: 'active', canRename: false,
+        canDissolve: false, canLeave: true, messageDnd: false,
+      }
+      if (operation === 'source.ai-polish.settings') return {
+        sourceRef: group.sourceRef, groupName: group.displayName, enabled: false,
+        canManage: false, viewerRole: 1, activeRuleName: '', updatedAtMillis: 1, rules: [],
+      }
+      if (operation === 'group.notification.set') return { messageDnd: true }
+      return await baseCall(operation, params, signal)
+    })
+    await act(async () => {
+      renderer = create(<ArkmeSurface productChrome={false} productNavigation={false} />, {
+        createNodeMock: element => element.props.className === 'arkme-conversation-panel'
+          ? { getBoundingClientRect: () => ({ left: 0, top: 0, width: 960, height: 720 }) }
+          : null,
+      })
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    const timelineCallsBeforeMutation = mocks.callArkme.mock.calls
+      .filter(([operation]) => operation === 'source.timeline').length
+    const messageBeforeMutation = renderer!.root.findByProps({ 'data-arkme-message-content-line': visibleItem.itemUid })
+    await act(async () => {
+      renderer!.root.findByProps({ 'aria-label': '群聊设置' }).props.onClick()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    await act(async () => {
+      renderer!.root.findByProps({ 'aria-label': '消息免打扰' }).props.onClick({ stopPropagation: vi.fn() })
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(arkmeUi.getSnapshot().selectedSource).toMatchObject({
+      sourceKey: group.sourceKey,
+      sourceRef: group.sourceRef,
+      displayName: group.displayName,
+      latestPreview: group.latestPreview,
+      latestSequence: group.latestSequence,
+      isMuted: true,
+    })
+    expect(renderer!.root.findByProps({ 'data-arkme-message-content-line': visibleItem.itemUid })).toBe(messageBeforeMutation)
+    expect(mocks.callArkme.mock.calls.filter(([operation]) => operation === 'source.timeline'))
+      .toHaveLength(timelineCallsBeforeMutation)
+  })
+
   it('keeps the current group mounted and applies a complete realtime delta without a duplicate timeline read', async () => {
     const stableGroup: ArkmeSourceItem = {
       ...target,
