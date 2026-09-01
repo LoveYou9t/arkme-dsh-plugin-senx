@@ -2447,6 +2447,12 @@ export function ArkmeSurface({
       privateChatAbortRef.current = undefined
     }
   }, [activeConversation, authenticatedUserId, conversationKey])
+  const closeMemberProfile = useCallback(() => {
+    privateChatAbortRef.current?.abort()
+    privateChatAbortRef.current = undefined
+    setPrivateChatBusy(false)
+    setMemberProfile(undefined)
+  }, [])
 
   useEffect(() => {
     if (!activeConversation) return
@@ -6096,7 +6102,7 @@ export function ArkmeSurface({
           member={memberProfile}
           showTopicNickname={source?.kind === 'group_chat'}
           busy={privateChatBusy}
-          onClose={() => { if (!privateChatBusy) setMemberProfile(undefined) }}
+          onClose={closeMemberProfile}
           onSend={() => { openPrivateChatForMember(memberProfile) }}
         />}
         {activeConversation && source !== undefined && memberRecords !== undefined && <ArkmeMemberRecordsPanel

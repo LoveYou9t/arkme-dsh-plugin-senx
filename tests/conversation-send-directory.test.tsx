@@ -23,6 +23,7 @@ import {
 } from '../src/client/ArkmeSidebar.js'
 import { ArkmeClientError } from '../src/client/api.js'
 import { ArkmeRichComposerInput } from '../src/client/ArkmeRichComposerInput.js'
+import { ArkmeMemberProfileCard } from '../src/client/ArkmeChatMemberActions.js'
 import { arkmeAuthStore } from '../src/client/auth-store.js'
 import { arkmeChatDirectory, arkmeChatTimelineDelta } from '../src/client/chat-directory-store.js'
 import { arkmeComposerDraftStore, arkmeSourceComposerDraftKey } from '../src/client/composer-draft-store.js'
@@ -1835,7 +1836,7 @@ describe('conversation send directory projection', () => {
     expect(rendered).not.toContain('A 成员')
   })
 
-  it('cancels a pending member private-chat open when the selected conversation changes', async () => {
+  it('cancels a pending member private-chat open when the selected conversation changes or the card closes', async () => {
     const groupA: ArkmeSourceItem = {
       ...group, sourceRef: 'source-private-open-a', sourceKey: 'chat:private-open-a', displayName: 'A 群', latestSequence: 1,
     }
@@ -1852,8 +1853,8 @@ describe('conversation send directory projection', () => {
       isMe: false, sendAtMillis: 1, title: '', textContent: '你好', status: 1, sequence: 1,
     }
     let resolvePrivateOpen: ((value: unknown) => void) | undefined
-    const pendingPrivateOpen = new Promise(resolve => { resolvePrivateOpen = resolve })
-    let privateOpenSignal: AbortSignal | undefined
+    let pendingPrivateOpen: Promise<unknown> = new Promise(resolve => { resolvePrivateOpen = resolve })
+    const privateOpenSignals: AbortSignal[] = []
     arkmeChatDirectory.clear()
     arkmeChatDirectory.activateAccount(42)
     arkmeChatDirectory.publish([groupA, groupB])
@@ -1884,7 +1885,7 @@ describe('conversation send directory projection', () => {
       }
       if (operation === 'source.interwoven-moments') return { state: 'disabled', moments: [], preparedAtMillis: 48 }
       if (operation === 'chat.member.private.open') {
-        privateOpenSignal = signal
+        if (signal !== undefined) privateOpenSignals.push(signal)
         return await pendingPrivateOpen
       }
       throw new Error(`unexpected operation ${operation}`)
@@ -1912,21 +1913,21 @@ describe('conversation send directory projection', () => {
       await Promise.resolve()
     })
     expect(mocks.callArkme.mock.calls.filter(call => call[0] === 'chat.member.private.open')).toHaveLength(1)
-    expect(privateOpenSignal).toBeDefined()
+    expect(privateOpenSignals).toHaveLength(1)
 
     await act(async () => {
       arkmeUi.selectSource(groupARotatedRef)
       await Promise.resolve()
       await Promise.resolve()
     })
-    expect(privateOpenSignal?.aborted).toBe(false)
+    expect(privateOpenSignals[0]?.aborted).toBe(false)
 
     await act(async () => {
       arkmeUi.selectSource(groupB)
       await Promise.resolve()
       await Promise.resolve()
     })
-    expect(privateOpenSignal?.aborted).toBe(true)
+    expect(privateOpenSignals[0]?.aborted).toBe(true)
 
     await act(async () => {
       resolvePrivateOpen?.({
@@ -1939,6 +1940,38 @@ describe('conversation send directory projection', () => {
       await Promise.resolve()
     })
     expect(arkmeUi.getSnapshot().selectedSource?.sourceKey).toBe(groupB.sourceKey)
+
+    pendingPrivateOpen = new Promise(resolve => { resolvePrivateOpen = resolve })
+    await act(async () => {
+      arkmeUi.selectSource(groupA)
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    await act(async () => {
+      renderer!.root.findByProps({ 'aria-label': '查看 A 成员' }).props.onClick({ stopPropagation: vi.fn() })
+      await Promise.resolve()
+      renderer!.root.findByType(ArkmeMemberProfileCard).props.onSend()
+      await Promise.resolve()
+    })
+    expect(privateOpenSignals).toHaveLength(2)
+    await act(async () => {
+      renderer!.root.findByType(ArkmeMemberProfileCard).props.onClose()
+      await Promise.resolve()
+    })
+    expect(privateOpenSignals[1]?.aborted).toBe(true)
+    expect(renderer!.root.findAllByType(ArkmeMemberProfileCard)).toHaveLength(0)
+
+    await act(async () => {
+      resolvePrivateOpen?.({
+        source: {
+          sourceRef: 'closed-card-private-source', sourceKey: 'chat:closed-card-private', kind: 'private_chat',
+          displayName: 'A 成员', activeAtMillis: 3, unreadCount: 0,
+        },
+      })
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(arkmeUi.getSnapshot().selectedSource?.sourceKey).toBe(groupA.sourceKey)
   })
 
   it('does not expose Bot candidates returned by a previously selected group', async () => {

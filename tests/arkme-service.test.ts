@@ -4694,12 +4694,11 @@ describe('ArkmeService', () => {
     expect(result.source.sourceRef).toMatch(/^arkme-source-v1\./)
     expect(requests[1]?.body).toMatchObject({
       peer_user_id: 2001,
-      extra: { client: 'deepseek_harness' },
     })
     expect(requests[1]?.body).not.toHaveProperty('title')
     expect(requests[1]?.body).not.toHaveProperty('owner_display_name_snapshot')
     expect(requests[1]?.body).not.toHaveProperty('peer_display_name_snapshot')
-    expect(requests[1]?.body.extra).not.toHaveProperty('source')
+    expect(requests[1]?.body).not.toHaveProperty('extra')
   })
 
   it('opens a private chat from a searched registered contact without adding the contact', async () => {

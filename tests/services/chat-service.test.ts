@@ -1757,6 +1757,7 @@ describe('ChatService', () => {
       expect(createBody).not.toHaveProperty('title')
       expect(createBody).not.toHaveProperty('owner_display_name_snapshot')
       expect(createBody).not.toHaveProperty('peer_display_name_snapshot')
+      expect(createBody).not.toHaveProperty('extra')
     },
   )
 
@@ -1792,6 +1793,7 @@ describe('ChatService', () => {
     expect(createBody).not.toHaveProperty('title')
     expect(createBody).not.toHaveProperty('owner_display_name_snapshot')
     expect(createBody).not.toHaveProperty('peer_display_name_snapshot')
+    expect(createBody).not.toHaveProperty('extra')
   })
 
   it('keeps the existing viewer-bound private-chat projection when create-private reuses a session', async () => {

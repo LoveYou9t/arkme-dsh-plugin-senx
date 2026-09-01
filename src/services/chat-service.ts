@@ -1567,7 +1567,6 @@ export class ChatService {
         chat_session_uid: `chat_session_${randomUUID()}`,
         peer_user_id: peerUserId,
         create_at: Date.now(),
-        extra: { client: 'deepseek_harness' },
       },
       session,
       options.signal,
