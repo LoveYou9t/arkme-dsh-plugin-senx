@@ -18,10 +18,12 @@ vi.mock('react-dom', () => ({
 }))
 
 import {
-  ArkmeSurface, arkmeGroupMentionCandidates, arkmeRealtimeDeltaCoversTimelineGap,
+  ArkmeConfirmedSendRetentionOwner, ArkmeSurface, arkmeBackgroundSoundCaptureFailureFeedback,
+  arkmeGroupMentionCandidates, arkmeRealtimeDeltaCoversTimelineGap,
 } from '../src/client/ArkmeSidebar.js'
 import { ArkmeClientError } from '../src/client/api.js'
 import { ArkmeRichComposerInput } from '../src/client/ArkmeRichComposerInput.js'
+import { ArkmeMemberProfileCard } from '../src/client/ArkmeChatMemberActions.js'
 import { arkmeAuthStore } from '../src/client/auth-store.js'
 import { arkmeChatDirectory, arkmeChatTimelineDelta } from '../src/client/chat-directory-store.js'
 import { arkmeComposerDraftStore, arkmeSourceComposerDraftKey } from '../src/client/composer-draft-store.js'
@@ -40,6 +42,10 @@ const other: ArkmeSourceItem = {
 const group: ArkmeSourceItem = {
   sourceRef: 'source-group', sourceKey: 'chat:group', kind: 'group_chat', displayName: '群聊',
   latestPreview: 'message-784', activeAtMillis: 48, unreadCount: 0, latestSequence: 784,
+}
+const sendToSelf: ArkmeSourceItem = {
+  sourceRef: 'source-self', sourceKey: 'record:self', kind: 'send_to_self', displayName: '发给自己',
+  latestPreview: '', activeAtMillis: 48, unreadCount: 0,
 }
 
 function activeMembers(count: number): ArkmeConversationMemberItem[] {
@@ -62,17 +68,59 @@ describe('conversation send directory projection', () => {
   let copiedQuickLinkExtensionText = ''
   let activeSource = target
 
+  it.each([
+    ['permission-denied', '未获得麦克风权限'],
+    ['start-failed', '录音启动失败'],
+    ['stop-failed', '录音结束失败'],
+    ['retention-evicted', '切换会话较多，较早草稿的背景音已释放'],
+    ['limit-reached', '录音达到上限且未生成可用片段'],
+  ] as const)('maps %s background capture failure to visible send feedback', (failure, feedback) => {
+    expect(arkmeBackgroundSoundCaptureFailureFeedback(failure)).toBe(feedback)
+  })
+
+  it('bounds confirmed-send retention and preserves its action ref through a sparse authoritative row', () => {
+    const owner = new ArkmeConfirmedSendRetentionOwner(2)
+    const retained = (itemUid: string): ArkmeTimelineItem => ({
+      itemUid, messageActionRef: `action-${itemUid}`, senderName: '我', isMe: true,
+      sendAtMillis: 1, title: '', textContent: itemUid, status: 1,
+    })
+    owner.retain('self', retained('one'), 0)
+    owner.retain('self', retained('two'), 0)
+    owner.retain('self', retained('three'), 0)
+    expect(owner.merge('self', [], 1).map(item => item.itemUid)).toEqual(['three', 'two'])
+
+    const { messageActionRef: _actionRef, ...sparseAuthoritative } = retained('three')
+    const merged = owner.merge('self', [sparseAuthoritative], 2)
+    expect(merged.find(item => item.itemUid === 'three')?.messageActionRef).toBe('action-three')
+    owner.merge('self', [retained('three')], 3)
+    expect(owner.merge('self', [], 4).map(item => item.itemUid)).toEqual(['two'])
+    expect(owner.merge('self', [], 60_001)).toEqual([])
+  })
+
   beforeEach(() => {
     timeline = []
     copiedQuickLinkExtensionText = ''
     activeSource = target
     vi.spyOn(Date, 'now').mockReturnValue(48)
+    const localStorage = new Map<string, string>()
+    const sessionStorage = new Map<string, string>()
     vi.stubGlobal('window', {
       addEventListener: vi.fn(),
       removeEventListener: vi.fn(),
       setTimeout: globalThis.setTimeout,
       clearTimeout: globalThis.clearTimeout,
       open: vi.fn(),
+      confirm: vi.fn(() => true),
+      localStorage: {
+        getItem: (key: string) => localStorage.get(key) ?? null,
+        setItem: (key: string, value: string) => { localStorage.set(key, value) },
+        removeItem: (key: string) => { localStorage.delete(key) },
+      },
+      sessionStorage: {
+        getItem: (key: string) => sessionStorage.get(key) ?? null,
+        setItem: (key: string, value: string) => { sessionStorage.set(key, value) },
+        removeItem: (key: string) => { sessionStorage.delete(key) },
+      },
     })
     vi.stubGlobal('requestAnimationFrame', vi.fn(() => 1))
     vi.stubGlobal('cancelAnimationFrame', vi.fn())
@@ -235,6 +283,94 @@ describe('conversation send directory projection', () => {
 
     expect(arkmeGroupMentionCandidates('', [], [member]).map(candidate => candidate.kind))
       .toEqual(['all'])
+  })
+
+  it('lets the user remove terminal local file tasks without hiding an unknown remote outcome', async () => {
+    const baseCall = mocks.callArkme.getMockImplementation()!
+    const failedTask = {
+      taskRef: 'task-failed-file', sourceRef: target.sourceRef,
+      recordUid: 'record-failed-file', relationUid: 'relation-failed-file',
+      fileRefs: ['arkme-file-v1.00000000-0000-4000-8000-000000000001'],
+      content: { textContent: '@小林 请看' },
+      files: [{
+        fileRef: 'arkme-file-v1.00000000-0000-4000-8000-000000000001',
+        fileName: '图片.png', mimeType: 'image/png', size: 3, fileKind: 1,
+        progress: { phase: 'ready', sentBytes: 3, totalBytes: 3 },
+      }],
+      state: 'failed', createdAtMillis: 48, error: '媒体载荷不合法',
+    }
+    let tasks = [failedTask]
+    mocks.callArkme.mockImplementation(async (operation: string, params?: Record<string, unknown>, signal?: AbortSignal) => {
+      if (operation === 'files.send.tasks') return tasks
+      if (operation === 'files.send.discard') {
+        tasks = []
+        return undefined
+      }
+      return await baseCall(operation, params, signal)
+    })
+
+    await act(async () => {
+      renderer = create(<ArkmeSurface productChrome={false} productNavigation={false} />, {
+        createNodeMock: element => element.props.className === 'arkme-conversation-panel'
+          ? { getBoundingClientRect: () => ({ left: 0, top: 0, width: 960, height: 720 }) }
+          : null,
+      })
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    const remove = renderer!.root.findAllByType('button').find(button => button.children.includes('清除'))
+    expect(remove).toBeDefined()
+
+    await act(async () => {
+      remove!.props.onClick({ stopPropagation: vi.fn() })
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(mocks.callArkme).toHaveBeenCalledWith('files.send.discard', { taskRef: 'task-failed-file' })
+
+    await act(async () => {
+      renderer!.unmount()
+    })
+    renderer = undefined
+    tasks = [{
+      ...failedTask,
+      taskRef: 'task-uncertain-file',
+      recordUid: 'record-uncertain-file',
+      relationUid: 'relation-uncertain-file',
+      state: 'uncertain',
+      error: '发送结果待确认',
+    }]
+    const confirm = vi.mocked(window.confirm)
+    confirm.mockReset()
+    confirm.mockReturnValueOnce(false).mockReturnValueOnce(true)
+
+    await act(async () => {
+      renderer = create(<ArkmeSurface productChrome={false} productNavigation={false} />, {
+        createNodeMock: element => element.props.className === 'arkme-conversation-panel'
+          ? { getBoundingClientRect: () => ({ left: 0, top: 0, width: 960, height: 720 }) }
+          : null,
+      })
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    const uncertainRemove = renderer!.root.findAllByType('button').find(button => button.children.includes('清除'))
+    expect(uncertainRemove).toBeDefined()
+
+    await act(async () => {
+      uncertainRemove!.props.onClick({ stopPropagation: vi.fn() })
+      await Promise.resolve()
+    })
+    expect(confirm).toHaveBeenCalledTimes(1)
+    expect(mocks.callArkme).not.toHaveBeenCalledWith('files.send.discard', { taskRef: 'task-uncertain-file' })
+
+    await act(async () => {
+      uncertainRemove!.props.onClick({ stopPropagation: vi.fn() })
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(confirm).toHaveBeenCalledTimes(2)
+    expect(mocks.callArkme).toHaveBeenCalledWith('files.send.discard', { taskRef: 'task-uncertain-file' })
   })
 
   it('opens the report dialog from a peer group-message action menu', async () => {
@@ -510,6 +646,63 @@ describe('conversation send directory projection', () => {
     expect(renderer!.root.findAllByProps({ role: 'status' })).toHaveLength(0)
   })
 
+  it('requests microphone permission from the first text input instead of focus or settings load', async () => {
+    const stopTrack = vi.fn()
+    const getUserMedia = vi.fn(async () => ({
+      getTracks: () => [{ stop: stopTrack }],
+    } as unknown as MediaStream))
+    vi.stubGlobal('navigator', {
+      userAgent: 'Mozilla/5.0 Chrome/152 Safari/537.36',
+      mediaDevices: { getUserMedia },
+      permissions: { query: vi.fn(async () => ({ state: 'prompt' as PermissionState })) },
+    })
+    const fallback = mocks.callArkme.getMockImplementation()!
+    mocks.callArkme.mockImplementation(async (operation: string, params?: Record<string, unknown>, signal?: AbortSignal) => {
+      if (operation === 'provider.capabilities') return {
+        contractVersion: 1,
+        provider: '@senguoyun/dsh-arkme',
+        sdk: '@senguoyun/dsh-arkme/sdk',
+        environment: 'test',
+        features: { backgroundSound: true },
+        limits: {},
+      }
+      if (operation === 'settings.background-sound.get') return {
+        userId: 42,
+        found: true,
+        enabled: true,
+        eligible: true,
+        memberType: 2,
+        eligibilityReason: 'eligible',
+      }
+      return await fallback(operation, params, signal)
+    })
+
+    await act(async () => {
+      renderer = create(<ArkmeSurface productChrome={false} productNavigation={false} />)
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    const composer = renderer!.root.findByType(ArkmeRichComposerInput)
+    await act(async () => {
+      composer.props.onFocus()
+      await Promise.resolve()
+    })
+    expect(getUserMedia).not.toHaveBeenCalled()
+
+    await act(async () => {
+      composer.props.onTextChange('首')
+      await new Promise(resolve => { setTimeout(resolve, 5) })
+    })
+    expect(getUserMedia).toHaveBeenCalledOnce()
+    expect(stopTrack).toHaveBeenCalledOnce()
+
+    await act(async () => {
+      composer.props.onTextChange('首次输入')
+      await Promise.resolve()
+    })
+    expect(getUserMedia).toHaveBeenCalledOnce()
+  })
+
   it('keeps the owner directory unchanged after send until the authoritative session projection arrives', async () => {
     await act(async () => {
       renderer = create(<ArkmeSurface productChrome={false} productNavigation={false} />)
@@ -534,6 +727,243 @@ describe('conversation send directory projection', () => {
     expect(sendCall?.[1]).not.toHaveProperty('humanMentions')
     expect(sendCall?.[1]).not.toHaveProperty('botMentions')
     expect(renderer!.root.findByProps({ 'data-arkme-read-receipt-indicator': 'unread' })).toBeDefined()
+  })
+
+  it('requests location permission on the first supported send and records that message', async () => {
+    const permissionQuery = vi.fn(async () => ({ state: 'prompt' as PermissionState }))
+    const getCurrentPosition = vi.fn((success: PositionCallback) => { success({
+      coords: {
+        latitude: 30.52, longitude: 114.31, accuracy: 18, altitude: null,
+        altitudeAccuracy: null, heading: null, speed: null,
+      },
+      timestamp: 100,
+    } as GeolocationPosition) })
+    vi.stubGlobal('navigator', {
+      permissions: { query: permissionQuery },
+      geolocation: { getCurrentPosition },
+    })
+    const baseImplementation = mocks.callArkme.getMockImplementation()!
+    mocks.callArkme.mockImplementation(async (operation: string, params?: Record<string, unknown>, signal?: AbortSignal) => {
+      if (operation === 'source.send-text') return {
+        sourceRef: target.sourceRef,
+        itemUid: params?.recordUid ?? 'record-new',
+        status: 1,
+        sequence: 9,
+        localState: 'synced',
+      }
+      if (operation === 'source.message-location.set') return {}
+      return await baseImplementation(operation, params, signal)
+    })
+
+    await act(async () => {
+      renderer = create(<ArkmeSurface productChrome={false} productNavigation={false} />)
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    const composer = renderer!.root.findByType(ArkmeRichComposerInput)
+    await act(async () => {
+      composer.props.onTextChange('首条消息')
+      renderer!.root.findByProps({ 'aria-label': '发送消息' }).props.onClick()
+      await Promise.resolve()
+      await Promise.resolve()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(permissionQuery).toHaveBeenCalledTimes(2)
+    expect(getCurrentPosition).toHaveBeenCalledOnce()
+    expect(mocks.callArkme).toHaveBeenCalledWith('source.message-location.set', {
+      sourceRef: target.sourceRef,
+      itemUid: 'record-new',
+      location: { latitude: 30.52, longitude: 114.31, accuracyMeters: 18, capturedAtMillis: 100 },
+    })
+  })
+
+  it.each([
+    ['私聊', target],
+    ['发给自己', sendToSelf],
+  ])('automatically records an already-authorized location after a %s send without prompting during input', async (_label, selectedSource) => {
+    const getCurrentPosition = vi.fn((success: PositionCallback) => { success({
+      coords: {
+        latitude: 30.52, longitude: 114.31, accuracy: 18, altitude: null,
+        altitudeAccuracy: null, heading: null, speed: null,
+      },
+      timestamp: 100,
+    } as GeolocationPosition) })
+    vi.stubGlobal('navigator', {
+      permissions: { query: vi.fn(async () => ({ state: 'granted' })) },
+      geolocation: { getCurrentPosition },
+    })
+    activeSource = selectedSource
+    arkmeUi.selectSource(selectedSource)
+    const baseImplementation = mocks.callArkme.getMockImplementation()!
+    mocks.callArkme.mockImplementation(async (operation: string, params?: Record<string, unknown>, signal?: AbortSignal) => {
+      if (operation === 'sources.list') return {
+        directory: params?.directory ?? 'root',
+        items: params?.directory === 'send_to_self' ? [sendToSelf] : [other, target],
+        hasMore: false,
+      }
+      if (operation === 'source.timeline') return { source: selectedSource, items: [], hasMore: false }
+      if (operation === 'source.send-text') return {
+        sourceRef: selectedSource.sourceRef,
+        itemUid: params?.recordUid ?? 'record-new',
+        status: 1,
+        sequence: selectedSource.kind === 'private_chat' ? 9 : undefined,
+        localState: 'synced',
+      }
+      if (operation === 'source.message-location.set') return {}
+      return await baseImplementation(operation, params, signal)
+    })
+
+    await act(async () => {
+      renderer = create(<ArkmeSurface productChrome={false} productNavigation={false} />)
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    const composer = renderer!.root.findByType(ArkmeRichComposerInput)
+    await act(async () => {
+      composer.props.onTextChange('自动位置')
+      await Promise.resolve()
+    })
+    expect(getCurrentPosition).not.toHaveBeenCalled()
+
+    await act(async () => {
+      renderer!.root.findByProps({ 'aria-label': '发送消息' }).props.onClick()
+      await Promise.resolve()
+      await Promise.resolve()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(getCurrentPosition).toHaveBeenCalledOnce()
+    expect(mocks.callArkme).toHaveBeenCalledWith('source.message-location.set', {
+      sourceRef: selectedSource.sourceRef,
+      itemUid: 'record-new',
+      location: { latitude: 30.52, longitude: 114.31, accuracyMeters: 18, capturedAtMillis: 100 },
+    })
+  })
+
+  it('keeps the immediate snapshot action while the send-to-self owner projection converges', async () => {
+    activeSource = sendToSelf
+    arkmeUi.selectSource(sendToSelf)
+    vi.stubGlobal('HTMLElement', class { focus() {} })
+    vi.stubGlobal('document', {
+      activeElement: null,
+      body: {},
+      visibilityState: 'visible',
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    })
+    const baseImplementation = mocks.callArkme.getMockImplementation()!
+    const openSettings = vi.spyOn(arkmeUi, 'openDshSettings')
+    let timelineCalls = 0
+    let resolveRefresh!: (value: unknown) => void
+    const pendingRefresh = new Promise(resolve => { resolveRefresh = resolve })
+    const authoritativeItem: ArkmeTimelineItem = {
+      itemUid: 'record-new', messageActionRef: 'opaque-send-to-self-message-action',
+      senderName: '狗才', isMe: true, sendAtMillis: 48, title: '', textContent: '立即查看快照', status: 1,
+    }
+    mocks.callArkme.mockImplementation(async (operation: string, params?: Record<string, unknown>, signal?: AbortSignal) => {
+      if (operation === 'provider.capabilities') return {
+        contractVersion: 1, provider: '@senguoyun/dsh-arkme', sdk: '@senguoyun/dsh-arkme/sdk',
+        environment: 'test', features: { backgroundSound: true }, limits: {},
+      }
+      if (operation === 'settings.background-sound.get') return {
+        userId: 42, found: true, enabled: false, eligible: true, memberType: 2,
+        eligibilityReason: 'eligible',
+      }
+      if (operation === 'sources.list') return {
+        directory: params?.directory ?? 'root',
+        items: params?.directory === 'send_to_self' ? [sendToSelf] : [other, target],
+        hasMore: false,
+      }
+      if (operation === 'source.timeline') {
+        timelineCalls += 1
+        if (timelineCalls === 1) return { source: sendToSelf, items: [], hasMore: false }
+        if (timelineCalls === 2) return await pendingRefresh
+        return { source: sendToSelf, items: [authoritativeItem], hasMore: false }
+      }
+      if (operation === 'source.send-text') return {
+        sourceRef: sendToSelf.sourceRef,
+        itemUid: params?.recordUid ?? 'record-new',
+        status: 1,
+        localState: 'synced',
+        messageActionRef: 'opaque-send-to-self-message-action',
+      }
+      if (operation === 'source.message-snapshot.detail') return {
+        itemUid: 'record-new', textContent: '立即查看快照', recordDurationMillis: 1,
+        backgroundSound: 'not-recorded', syncState: 'synced',
+      }
+      return await baseImplementation(operation, params, signal)
+    })
+
+    await act(async () => {
+      renderer = create(<ArkmeSurface productChrome={false} productNavigation={false} />, {
+        createNodeMock: element => element.props.className === 'arkme-conversation-panel'
+          ? { getBoundingClientRect: () => ({ left: 0, top: 0, width: 960, height: 720 }) }
+          : null,
+      })
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    const revisionBeforeSend = arkmeUi.getSnapshot()
+    const composer = renderer!.root.findByType(ArkmeRichComposerInput)
+    await act(async () => {
+      composer.props.onTextChange('立即查看快照')
+      await Promise.resolve()
+      renderer!.root.findByProps({ 'aria-label': '发送消息' }).props.onClick()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(arkmeUi.getSnapshot().recordRevision).toBe(revisionBeforeSend.recordRevision + 1)
+    expect(arkmeUi.getSnapshot().chatRevision).toBe(revisionBeforeSend.chatRevision)
+    const openMenu = async () => {
+      const line = renderer!.root.findByProps({ 'data-arkme-message-content-line': 'record-new' })
+      await act(async () => {
+        line.findByProps({ 'aria-label': '打开快记详情' }).props.onContextMenu({
+          preventDefault: vi.fn(), stopPropagation: vi.fn(), clientX: 120, clientY: 180,
+        })
+        await Promise.resolve()
+      })
+      const menu = renderer!.root.findByProps({ 'aria-label': '消息操作' })
+      return menu.findAllByProps({ role: 'menuitem' }).find(button => button.findAllByType('span')
+        .some(span => span.children.includes('详情')))
+    }
+    const detailAction = await openMenu()
+    expect(detailAction).toBeDefined()
+    expect(mocks.callArkme.mock.calls.some(([operation]) => operation === 'source.message-snapshot.detail')).toBe(false)
+    await act(async () => {
+      detailAction!.props.onClick()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(mocks.callArkme).toHaveBeenCalledWith('source.message-snapshot.detail', {
+      sourceRef: sendToSelf.sourceRef,
+      actionRef: 'opaque-send-to-self-message-action',
+    }, expect.any(AbortSignal))
+    expect(renderer!.root.findByProps({ 'aria-label': '快记详情' })).toBeDefined()
+    const enableBackgroundSound = renderer!.root.findAll(node => node.type === 'button'
+      && node.children.includes('去开启›'))[0]
+    expect(enableBackgroundSound).toBeDefined()
+    await act(async () => { enableBackgroundSound!.props.onClick() })
+    expect(openSettings).toHaveBeenCalledOnce()
+    expect(renderer!.root.findAllByProps({ 'aria-label': '快记详情' })).toHaveLength(0)
+    expect(mocks.callArkme.mock.calls.some(([operation]) => operation === 'settings.background-sound.update')).toBe(false)
+
+    await act(async () => {
+      resolveRefresh({ source: sendToSelf, items: [], hasMore: false })
+      await pendingRefresh
+      await Promise.resolve()
+    })
+    expect(await openMenu()).toBeDefined()
+    await act(async () => {
+      arkmeUi.recordChanged()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(timelineCalls).toBe(3)
+    expect(renderer!.root.findByProps({ 'data-arkme-message-content-line': 'record-new' })).toBeDefined()
   })
 
   it('replaces the native editor when the selected draft identity changes', async () => {
@@ -731,7 +1161,9 @@ describe('conversation send directory projection', () => {
         items: [{
           memberRef: 'arkme-chat-member-v1.stable.signature',
           mentionRef: 'arkme-chat-human-mention-v1.mention.signature',
-          displayName: 'Tison',
+          mentionDisplayName: 'Tison',
+          displayName: '我的私有备注',
+          secondaryName: 'Tison',
           role: 'member', status: 'active', isSelf: false, isOwner: false,
           joinedAtMillis: 1, recordCount: 0, mentionCount: 0,
         }],
@@ -763,7 +1195,7 @@ describe('conversation send directory projection', () => {
       await Promise.resolve()
     })
     const tisonOption = renderer!.root.findAllByProps({ role: 'option' }).find(option =>
-      option.findAll(node => node.type === 'span' && node.children.join('') === 'Tison').length > 0)
+      option.findAll(node => node.type === 'span' && node.children.join('') === '我的私有备注（Tison）').length > 0)
     expect(tisonOption).toBeDefined()
     await act(async () => {
       tisonOption!.props.onMouseDown({ preventDefault: vi.fn() })
@@ -808,7 +1240,7 @@ describe('conversation send directory projection', () => {
       await Promise.resolve()
     })
     const fileMentionOption = renderer!.root.findAllByProps({ role: 'option' }).find(option =>
-      option.findAll(node => node.type === 'span' && node.children.join('') === 'Tison').length > 0)
+      option.findAll(node => node.type === 'span' && node.children.join('') === '我的私有备注（Tison）').length > 0)
     expect(fileMentionOption).toBeDefined()
     await act(async () => {
       fileMentionOption!.props.onMouseDown({ preventDefault: vi.fn() })
@@ -859,7 +1291,7 @@ describe('conversation send directory projection', () => {
       await Promise.resolve()
     })
     const retryOption = renderer!.root.findAllByProps({ role: 'option' }).find(option =>
-      option.findAll(node => node.type === 'span' && node.children.join('') === 'Tison').length > 0)
+      option.findAll(node => node.type === 'span' && node.children.join('') === '我的私有备注（Tison）').length > 0)
     expect(retryOption).toBeDefined()
     await act(async () => {
       retryOption!.props.onMouseDown({ preventDefault: vi.fn() })
@@ -996,6 +1428,231 @@ describe('conversation send directory projection', () => {
     expect(JSON.stringify(renderer!.toJSON())).toContain('当前会话')
   })
 
+  it('opens group settings without reselecting the conversation or reloading its timeline', async () => {
+    const visibleItem: ArkmeTimelineItem = {
+      itemUid: 'group-settings-visible-message', sequence: 784, senderName: '我', isMe: true,
+      sendAtMillis: 40, title: '', textContent: '打开设置时继续可见', status: 1,
+    }
+    const settingsSource = { ...group, sourceRef: 'source-group-from-settings' }
+    timeline = [visibleItem]
+    activeSource = group
+    arkmeChatDirectory.publish([group, other])
+    arkmeUi.selectSource(group)
+    const baseCall = mocks.callArkme.getMockImplementation()!
+    mocks.callArkme.mockImplementation(async (operation: string, params?: Record<string, unknown>, signal?: AbortSignal) => {
+      if (operation === 'group.settings') return {
+        target: settingsSource, selfRole: 'member', selfStatus: 'active', canRename: false,
+        canDissolve: false, canLeave: true, messageDnd: false,
+      }
+      if (operation === 'source.ai-polish.settings') return {
+        sourceRef: settingsSource.sourceRef, groupName: group.displayName, enabled: false,
+        canManage: false, viewerRole: 1, activeRuleName: '', updatedAtMillis: 1, rules: [],
+      }
+      return await baseCall(operation, params, signal)
+    })
+    await act(async () => {
+      renderer = create(<ArkmeSurface productChrome={false} productNavigation={false} />, {
+        createNodeMock: element => element.props.className === 'arkme-conversation-panel'
+          ? { getBoundingClientRect: () => ({ left: 0, top: 0, width: 960, height: 720 }) }
+          : null,
+      })
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    const timelineCallsBeforeOpen = mocks.callArkme.mock.calls
+      .filter(([operation]) => operation === 'source.timeline').length
+    const messageBeforeOpen = renderer!.root.findByProps({ 'data-arkme-message-content-line': visibleItem.itemUid })
+
+    await act(async () => {
+      renderer!.root.findByProps({ 'aria-label': '群聊设置' }).props.onClick()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(renderer!.root.findByProps({ role: 'menu', 'aria-label': '群聊设置' })).toBeDefined()
+    expect(renderer!.root.findByProps({ 'data-arkme-message-content-line': visibleItem.itemUid })).toBe(messageBeforeOpen)
+    expect(arkmeUi.getSnapshot().selectedSource?.sourceRef).toBe(group.sourceRef)
+    expect(mocks.callArkme.mock.calls.filter(([operation]) => operation === 'source.timeline'))
+      .toHaveLength(timelineCallsBeforeOpen)
+  })
+
+  it('does not navigate back when an earlier group settings mutation finishes after switching conversations', async () => {
+    activeSource = group
+    arkmeChatDirectory.publish([group, other])
+    arkmeUi.selectSource(group)
+    let resolveNotification: ((value: { messageDnd: boolean }) => void) | undefined
+    const notificationResult = new Promise<{ messageDnd: boolean }>(resolve => { resolveNotification = resolve })
+    const baseCall = mocks.callArkme.getMockImplementation()!
+    mocks.callArkme.mockImplementation(async (operation: string, params?: Record<string, unknown>, signal?: AbortSignal) => {
+      if (operation === 'group.settings') return {
+        target: group, selfRole: 'member', selfStatus: 'active', canRename: false,
+        canDissolve: false, canLeave: true, messageDnd: false,
+      }
+      if (operation === 'source.ai-polish.settings') return {
+        sourceRef: group.sourceRef, groupName: group.displayName, enabled: false,
+        canManage: false, viewerRole: 1, activeRuleName: '', updatedAtMillis: 1, rules: [],
+      }
+      if (operation === 'group.notification.set') return await notificationResult
+      return await baseCall(operation, params, signal)
+    })
+    await act(async () => {
+      renderer = create(<ArkmeSurface productChrome={false} productNavigation={false} />, {
+        createNodeMock: element => element.props.className === 'arkme-conversation-panel'
+          ? { getBoundingClientRect: () => ({ left: 0, top: 0, width: 960, height: 720 }) }
+          : null,
+      })
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    await act(async () => {
+      renderer!.root.findByProps({ 'aria-label': '群聊设置' }).props.onClick()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    await act(async () => {
+      renderer!.root.findByProps({ 'aria-label': '消息免打扰' }).props.onClick({ stopPropagation: vi.fn() })
+      await Promise.resolve()
+    })
+
+    activeSource = other
+    await act(async () => {
+      arkmeUi.selectSource(other)
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    const timelineCallsAfterSwitch = mocks.callArkme.mock.calls
+      .filter(([operation]) => operation === 'source.timeline').length
+    await act(async () => {
+      resolveNotification?.({ messageDnd: true })
+      await notificationResult
+      await Promise.resolve()
+    })
+
+    expect(arkmeUi.getSnapshot().selectedSource).toEqual(other)
+    expect(mocks.callArkme.mock.calls.filter(([operation]) => operation === 'source.timeline'))
+      .toHaveLength(timelineCallsAfterSwitch)
+  })
+
+  it('does not navigate back when a group membership change finishes after switching conversations', async () => {
+    window.confirm = vi.fn(() => true)
+    activeSource = group
+    arkmeChatDirectory.publish([group, other])
+    arkmeUi.selectSource(group)
+    let resolveLeave: ((value: { status: 'ok' }) => void) | undefined
+    const leaveResult = new Promise<{ status: 'ok' }>(resolve => { resolveLeave = resolve })
+    const baseCall = mocks.callArkme.getMockImplementation()!
+    mocks.callArkme.mockImplementation(async (operation: string, params?: Record<string, unknown>, signal?: AbortSignal) => {
+      if (operation === 'group.settings') return {
+        target: group, selfRole: 'member', selfStatus: 'active', canRename: false,
+        canDissolve: false, canLeave: true, messageDnd: false,
+      }
+      if (operation === 'source.ai-polish.settings') return {
+        sourceRef: group.sourceRef, groupName: group.displayName, enabled: false,
+        canManage: false, viewerRole: 1, activeRuleName: '', updatedAtMillis: 1, rules: [],
+      }
+      if (operation === 'group.leave') return await leaveResult
+      return await baseCall(operation, params, signal)
+    })
+    await act(async () => {
+      renderer = create(<ArkmeSurface productChrome={false} productNavigation={false} />, {
+        createNodeMock: element => element.props.className === 'arkme-conversation-panel'
+          ? { getBoundingClientRect: () => ({ left: 0, top: 0, width: 960, height: 720 }) }
+          : null,
+      })
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    await act(async () => {
+      renderer!.root.findByProps({ 'aria-label': '群聊设置' }).props.onClick()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    const leaveButton = renderer!.root.findAllByProps({ role: 'menuitem' }).find(node =>
+      node.findAll(child => child.children.includes('退出群聊')).length > 0)
+    expect(leaveButton).toBeDefined()
+    await act(async () => {
+      leaveButton!.props.onClick()
+      await Promise.resolve()
+    })
+
+    activeSource = other
+    await act(async () => {
+      arkmeUi.selectSource(other)
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    const timelineCallsAfterSwitch = mocks.callArkme.mock.calls
+      .filter(([operation]) => operation === 'source.timeline').length
+    await act(async () => {
+      resolveLeave?.({ status: 'ok' })
+      await leaveResult
+      await Promise.resolve()
+    })
+
+    expect(arkmeUi.getSnapshot().selectedSource).toEqual(other)
+    expect(mocks.callArkme.mock.calls.filter(([operation]) => operation === 'source.timeline'))
+      .toHaveLength(timelineCallsAfterSwitch)
+  })
+
+  it('applies a group notification projection without replacing the timeline', async () => {
+    const visibleItem: ArkmeTimelineItem = {
+      itemUid: 'group-notification-visible-message', sequence: 784, senderName: '我', isMe: true,
+      sendAtMillis: 40, title: '', textContent: '切换免打扰时继续可见', status: 1,
+    }
+    timeline = [visibleItem]
+    activeSource = group
+    arkmeChatDirectory.publish([group, other])
+    arkmeUi.selectSource(group)
+    const baseCall = mocks.callArkme.getMockImplementation()!
+    mocks.callArkme.mockImplementation(async (operation: string, params?: Record<string, unknown>, signal?: AbortSignal) => {
+      if (operation === 'group.settings') return {
+        target: { ...group, sourceRef: 'source-group-settings-capability' },
+        selfRole: 'member', selfStatus: 'active', canRename: false,
+        canDissolve: false, canLeave: true, messageDnd: false,
+      }
+      if (operation === 'source.ai-polish.settings') return {
+        sourceRef: group.sourceRef, groupName: group.displayName, enabled: false,
+        canManage: false, viewerRole: 1, activeRuleName: '', updatedAtMillis: 1, rules: [],
+      }
+      if (operation === 'group.notification.set') return { messageDnd: true }
+      return await baseCall(operation, params, signal)
+    })
+    await act(async () => {
+      renderer = create(<ArkmeSurface productChrome={false} productNavigation={false} />, {
+        createNodeMock: element => element.props.className === 'arkme-conversation-panel'
+          ? { getBoundingClientRect: () => ({ left: 0, top: 0, width: 960, height: 720 }) }
+          : null,
+      })
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    const timelineCallsBeforeMutation = mocks.callArkme.mock.calls
+      .filter(([operation]) => operation === 'source.timeline').length
+    const messageBeforeMutation = renderer!.root.findByProps({ 'data-arkme-message-content-line': visibleItem.itemUid })
+    await act(async () => {
+      renderer!.root.findByProps({ 'aria-label': '群聊设置' }).props.onClick()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    await act(async () => {
+      renderer!.root.findByProps({ 'aria-label': '消息免打扰' }).props.onClick({ stopPropagation: vi.fn() })
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(arkmeUi.getSnapshot().selectedSource).toMatchObject({
+      sourceKey: group.sourceKey,
+      sourceRef: group.sourceRef,
+      displayName: group.displayName,
+      latestPreview: group.latestPreview,
+      latestSequence: group.latestSequence,
+      isMuted: true,
+    })
+    expect(renderer!.root.findByProps({ 'data-arkme-message-content-line': visibleItem.itemUid })).toBe(messageBeforeMutation)
+    expect(mocks.callArkme.mock.calls.filter(([operation]) => operation === 'source.timeline'))
+      .toHaveLength(timelineCallsBeforeMutation)
+  })
+
   it('keeps the current group mounted and applies a complete realtime delta without a duplicate timeline read', async () => {
     const stableGroup: ArkmeSourceItem = {
       ...target,
@@ -1129,7 +1786,7 @@ describe('conversation send directory projection', () => {
       if (operation === 'source.members' && params?.sourceRef === groupB.sourceRef) return {
         source: groupB,
         items: [{
-          memberRef: 'member-b', mentionRef: 'mention-b', displayName: 'B 成员',
+          memberRef: 'member-b', mentionRef: 'mention-b', mentionDisplayName: 'B 成员', displayName: 'B 成员',
           role: 'member', status: 'active', isSelf: false, isOwner: false,
           joinedAtMillis: 1, recordCount: 0, mentionCount: 0,
         }],
@@ -1157,7 +1814,7 @@ describe('conversation send directory projection', () => {
       resolveGroupA?.({
         source: groupA,
         items: [{
-          memberRef: 'member-a', mentionRef: 'mention-a', displayName: 'A 成员',
+          memberRef: 'member-a', mentionRef: 'mention-a', mentionDisplayName: 'A 成员', displayName: 'A 成员',
           role: 'member', status: 'active', isSelf: false, isOwner: false,
           joinedAtMillis: 1, recordCount: 0, mentionCount: 0,
         }],
@@ -1177,6 +1834,144 @@ describe('conversation send directory projection', () => {
     const rendered = JSON.stringify(renderer!.toJSON())
     expect(rendered).toContain('B 成员')
     expect(rendered).not.toContain('A 成员')
+  })
+
+  it('cancels a pending member private-chat open when the selected conversation changes or the card closes', async () => {
+    const groupA: ArkmeSourceItem = {
+      ...group, sourceRef: 'source-private-open-a', sourceKey: 'chat:private-open-a', displayName: 'A 群', latestSequence: 1,
+    }
+    const groupB: ArkmeSourceItem = {
+      ...group, sourceRef: 'source-private-open-b', sourceKey: 'chat:private-open-b', displayName: 'B 群', latestSequence: 1,
+    }
+    const groupARotatedRef: ArkmeSourceItem = { ...groupA, sourceRef: 'source-private-open-a-rotated' }
+    const member: ArkmeConversationMemberItem = {
+      memberRef: 'member-private-open-a', displayName: 'A 成员', role: 'member', status: 'active',
+      isSelf: false, isOwner: false, joinedAtMillis: 1, recordCount: 0, mentionCount: 0,
+    }
+    const message: ArkmeTimelineItem = {
+      itemUid: 'message-private-open-a', memberRef: member.memberRef, senderName: member.displayName,
+      isMe: false, sendAtMillis: 1, title: '', textContent: '你好', status: 1, sequence: 1,
+    }
+    let resolvePrivateOpen: ((value: unknown) => void) | undefined
+    let pendingPrivateOpen: Promise<unknown> = new Promise(resolve => { resolvePrivateOpen = resolve })
+    const privateOpenSignals: AbortSignal[] = []
+    arkmeChatDirectory.clear()
+    arkmeChatDirectory.activateAccount(42)
+    arkmeChatDirectory.publish([groupA, groupB])
+    arkmeUi.selectSource(groupA)
+    mocks.callArkme.mockImplementation(async (
+      operation: string,
+      params?: Record<string, unknown>,
+      signal?: AbortSignal,
+    ) => {
+      if (operation === 'user.profile') return {
+        profile: {
+          userId: 42, displayName: '狗才', nickname: '狗才', avatarRef: '', arkmeId: 'doge', accountType: 1,
+          createdAt: 1, bindings: { apple: false, wechat: true, google: false }, contact: {},
+        },
+        cachedAtMillis: 1,
+        revision: 1,
+      }
+      if (operation === 'source.members') return {
+        source: params?.sourceRef === groupB.sourceRef ? groupB : groupARotatedRef,
+        items: params?.sourceRef === groupB.sourceRef ? [] : [member],
+        total: params?.sourceRef === groupB.sourceRef ? 0 : 1,
+        activeCount: params?.sourceRef === groupB.sourceRef ? 0 : 1,
+      }
+      if (operation === 'source.timeline') return {
+        source: params?.sourceRef === groupB.sourceRef ? groupB : groupARotatedRef,
+        items: params?.sourceRef === groupB.sourceRef ? [] : [message],
+        hasMore: false,
+      }
+      if (operation === 'source.interwoven-moments') return { state: 'disabled', moments: [], preparedAtMillis: 48 }
+      if (operation === 'chat.member.private.open') {
+        if (signal !== undefined) privateOpenSignals.push(signal)
+        return await pendingPrivateOpen
+      }
+      throw new Error(`unexpected operation ${operation}`)
+    })
+
+    await act(async () => {
+      renderer = create(<ArkmeSurface productChrome={false} productNavigation={false} />)
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    await act(async () => {
+      renderer!.root.findByProps({ 'aria-label': '查看 A 成员' }).props.onClick({ stopPropagation: vi.fn() })
+      await Promise.resolve()
+    })
+    const idleButton = renderer!.root.findByProps({ 'data-arkme-profile-send-state': 'idle' })
+    await act(async () => {
+      idleButton.props.onClick()
+      idleButton.props.onClick()
+      await Promise.resolve()
+    })
+    const busyButton = renderer!.root.findByProps({ 'data-arkme-profile-send-state': 'loading' })
+    expect(busyButton.props.disabled).toBe(true)
+    await act(async () => {
+      busyButton.props.onClick()
+      await Promise.resolve()
+    })
+    expect(mocks.callArkme.mock.calls.filter(call => call[0] === 'chat.member.private.open')).toHaveLength(1)
+    expect(privateOpenSignals).toHaveLength(1)
+
+    await act(async () => {
+      arkmeUi.selectSource(groupARotatedRef)
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(privateOpenSignals[0]?.aborted).toBe(false)
+
+    await act(async () => {
+      arkmeUi.selectSource(groupB)
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(privateOpenSignals[0]?.aborted).toBe(true)
+
+    await act(async () => {
+      resolvePrivateOpen?.({
+        source: {
+          sourceRef: 'late-private-source', sourceKey: 'chat:late-private', kind: 'private_chat',
+          displayName: 'A 成员', activeAtMillis: 2, unreadCount: 0,
+        },
+      })
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(arkmeUi.getSnapshot().selectedSource?.sourceKey).toBe(groupB.sourceKey)
+
+    pendingPrivateOpen = new Promise(resolve => { resolvePrivateOpen = resolve })
+    await act(async () => {
+      arkmeUi.selectSource(groupA)
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    await act(async () => {
+      renderer!.root.findByProps({ 'aria-label': '查看 A 成员' }).props.onClick({ stopPropagation: vi.fn() })
+      await Promise.resolve()
+      renderer!.root.findByType(ArkmeMemberProfileCard).props.onSend()
+      await Promise.resolve()
+    })
+    expect(privateOpenSignals).toHaveLength(2)
+    await act(async () => {
+      renderer!.root.findByType(ArkmeMemberProfileCard).props.onClose()
+      await Promise.resolve()
+    })
+    expect(privateOpenSignals[1]?.aborted).toBe(true)
+    expect(renderer!.root.findAllByType(ArkmeMemberProfileCard)).toHaveLength(0)
+
+    await act(async () => {
+      resolvePrivateOpen?.({
+        source: {
+          sourceRef: 'closed-card-private-source', sourceKey: 'chat:closed-card-private', kind: 'private_chat',
+          displayName: 'A 成员', activeAtMillis: 3, unreadCount: 0,
+        },
+      })
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(arkmeUi.getSnapshot().selectedSource?.sourceKey).toBe(groupA.sourceKey)
   })
 
   it('does not expose Bot candidates returned by a previously selected group', async () => {
@@ -1282,7 +2077,8 @@ describe('conversation send directory projection', () => {
         return {
           source: accountGroup,
           items: [{
-            memberRef: 'member-account-b', mentionRef: 'mention-account-b', displayName: '账号 B 成员',
+            memberRef: 'member-account-b', mentionRef: 'mention-account-b',
+            mentionDisplayName: '账号 B 成员', displayName: '账号 B 成员',
             role: 'member', status: 'active', isSelf: false, isOwner: false,
             joinedAtMillis: 1, recordCount: 0, mentionCount: 0,
           }],
@@ -1309,7 +2105,8 @@ describe('conversation send directory projection', () => {
       resolveAccountA?.({
         source: accountGroup,
         items: [{
-          memberRef: 'member-account-a', mentionRef: 'mention-account-a', displayName: '账号 A 成员',
+          memberRef: 'member-account-a', mentionRef: 'mention-account-a',
+          mentionDisplayName: '账号 A 成员', displayName: '账号 A 成员',
           role: 'member', status: 'active', isSelf: false, isOwner: false,
           joinedAtMillis: 1, recordCount: 0, mentionCount: 0,
         }],
