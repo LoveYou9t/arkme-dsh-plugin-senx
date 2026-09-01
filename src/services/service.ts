@@ -19,7 +19,7 @@ import type {
   ArkmeUserProfileSnapshot,
 } from '../types.js'
 import type { ArkmeExtensionReviewOperation } from '../extensions/types.js'
-import type { RecordingImportJob } from '../recording-import-contract.js'
+import type { RecordingImportAdmission, RecordingImportJob } from '../recording-import-contract.js'
 
 export interface StateStore {
   uniqueCode(): Promise<string>
@@ -53,7 +53,11 @@ export interface StateStore {
   listAllRecordingImportJobs(): Promise<RecordingImportJob[]>
   getRecordingImportJob(userId: number, jobId: string): Promise<RecordingImportJob | undefined>
   putRecordingImportJob(userId: number, job: RecordingImportJob): Promise<void>
-  putRecordingImportJobIfAbsent(userId: number, job: RecordingImportJob): Promise<RecordingImportJob>
+  admitRecordingImportJob(
+    userId: number,
+    job: RecordingImportJob,
+    unresolvedLimit: number,
+  ): Promise<RecordingImportAdmission>
   replaceRecordingImportJob(userId: number, job: RecordingImportJob, expectedRevision: number): Promise<boolean>
 }
 
@@ -78,7 +82,7 @@ export interface ArkmeServiceConfig {
   geetestCaptchaId: string
   relatedRecordingsEnabled?: boolean
   interwovenMomentsEnabled: boolean
-  recordingWorkbenchV2Enabled?: boolean
+  recordingWorkbenchEnabled?: boolean
   chatMemberJoinEventsEnabled?: boolean
   shareWebsite?: string
   richMediaRenderEnabled?: boolean
