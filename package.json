@@ -39,7 +39,8 @@
   "files": [
     "lib",
     "assets/desktop_call",
-    "assets/windows",
+    "assets/windows/arkme-credential-helper.exe",
+    "assets/windows/manifest.json",
     "cordis.patch.yml",
     "README.md",
     "docs/*.md"
