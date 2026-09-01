@@ -316,7 +316,11 @@ function stringListParam(params: Record<string, unknown>, key: string): string[]
 }
 
 function messageActionRefsParam(params: Record<string, unknown>): string[] {
-  return stringListParam(params, 'actionRefs').map(value => value.trim()).filter(value => value !== '')
+  const values = stringListParam(params, 'actionRefs')
+  if (values.some(value => value.length > MAX_MESSAGE_ACTION_REF_CHARS)) {
+    throw new ArkmePluginError('message-action-ref-invalid', '消息操作引用无效', false, 400)
+  }
+  return values.map(value => value.trim()).filter(value => value !== '')
 }
 
 function messageReportParam(params: Record<string, unknown>): {

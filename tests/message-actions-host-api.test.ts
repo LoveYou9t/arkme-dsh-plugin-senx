@@ -76,13 +76,54 @@ describe('owner-neutral message action Host operations', () => {
     const address = server.address()
     if (address === null || typeof address === 'string') throw new Error('test server address missing')
     try {
-      const actionRef = `arkme-owner-message-action-v1.${'a'.repeat(150 * 1024)}`
+      const prefix = 'arkme-owner-message-action-v1.'
+      const actionRef = `${prefix}${'a'.repeat((1024 * 1024) - prefix.length)}`
       const response = await fetch(`http://127.0.0.1:${String(address.port)}/arkme-self/api`, {
         method: 'POST', headers: { Origin: 'http://127.0.0.1:3080', 'Content-Type': 'application/json' },
         body: JSON.stringify({ operation: 'message-actions.copy-link', params: { conversationRef: 'conversation', actionRefs: [actionRef] } }),
       })
       expect(response.status).toBe(200)
       expect(service.copyMessageActionsLink).toHaveBeenCalledWith('conversation', [actionRef], { signal: expect.any(AbortSignal) })
+    } finally {
+      server.close()
+      await once(server, 'close')
+    }
+  })
+
+  it('rejects an oversized owner capability ref before copy or forward reaches the owner service', async () => {
+    const service = {
+      copyMessageActionsLink: vi.fn(async () => ({ sid: 'sid-1', url: 'https://jotmo.example/s/sid-1' })),
+      forwardMessageActions: vi.fn(async () => ({ sourceRef: 'target-ref', itemUid: 'record-1', status: 1, localState: 'synced' })),
+    } as unknown as ArkmeService
+    const server = createServer(createArkmeHostApi(service, { expectedPort: 3080, allowNonLoopback: false }))
+    server.listen(0, '127.0.0.1')
+    await once(server, 'listening')
+    const address = server.address()
+    if (address === null || typeof address === 'string') throw new Error('test server address missing')
+    const oversizedRef = 'a'.repeat((1024 * 1024) + 1)
+    try {
+      const copyResponse = await fetch(`http://127.0.0.1:${String(address.port)}/arkme-self/api`, {
+        method: 'POST', headers: { Origin: 'http://127.0.0.1:3080', 'Content-Type': 'application/json' },
+        body: JSON.stringify({ operation: 'message-actions.copy-link', params: { conversationRef: 'conversation', actionRefs: [oversizedRef] } }),
+      })
+      const forwardResponse = await fetch(`http://127.0.0.1:${String(address.port)}/arkme-self/api`, {
+        method: 'POST', headers: { Origin: 'http://127.0.0.1:3080', 'Content-Type': 'application/json' },
+        body: JSON.stringify({ operation: 'message-actions.forward', params: {
+          conversationRef: 'conversation', actionRefs: [oversizedRef], targetSourceRef: 'target',
+          requestId: 'request', recordUid: 'record', sendAtMillis: 1_786_000_123_000,
+        } }),
+      })
+
+      expect(copyResponse.status).toBe(400)
+      await expect(copyResponse.json()).resolves.toMatchObject({
+        ok: false, error: { code: 'message-action-ref-invalid', retryable: false },
+      })
+      expect(forwardResponse.status).toBe(400)
+      await expect(forwardResponse.json()).resolves.toMatchObject({
+        ok: false, error: { code: 'message-action-ref-invalid', retryable: false },
+      })
+      expect(service.copyMessageActionsLink).not.toHaveBeenCalled()
+      expect(service.forwardMessageActions).not.toHaveBeenCalled()
     } finally {
       server.close()
       await once(server, 'close')
