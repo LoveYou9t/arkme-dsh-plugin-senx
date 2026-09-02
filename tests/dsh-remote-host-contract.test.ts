@@ -47,6 +47,8 @@ function inertHost(apiProxy: DshApiProxyAdapter, input: {
   now?: () => number
   realtime?: DshRemoteRealtimeTransport
   sessionOwnership?: DshRemoteSessionOwnership
+  yieldToEventLoop?: () => Promise<void>
+  eagerHistoryBackfill?: boolean
 } = {}): ArkmeRemoteRealtimeHost {
   return new ArkmeRemoteRealtimeHost({
     featureEnabled: true, profileRef: 'web', hostClientRef: 'host-client-01',
@@ -59,6 +61,8 @@ function inertHost(apiProxy: DshApiProxyAdapter, input: {
     apiProxy,
     ledgerForAccount: () => input.ledger ?? (() => { throw new Error('unused') })(),
     now: input.now ?? (() => 1_500),
+    ...(input.yieldToEventLoop === undefined ? {} : { yieldToEventLoop: input.yieldToEventLoop }),
+    ...(input.eagerHistoryBackfill === undefined ? {} : { eagerHistoryBackfill: input.eagerHistoryBackfill }),
   })
 }
 
@@ -149,6 +153,96 @@ describe('Arkme remote Host account contract', () => {
       runtime_ref: 'runtime-01', host_generation: 7,
       session_ref: 'session-01', through_seq: 8,
     })
+  })
+
+  it('yields between retained history pages and bounded Session batches', async () => {
+    const apiProxy = new DshApiProxyAdapter({})
+    const sessions = Array.from({ length: 5 }, (_, index) => ({
+      sessionId: `session-0${String(index + 1)}`,
+      workspaceId: 'workspace-01', updatedAt: 5 - index,
+      running: false, blank: false, projectionAsOfSeq: 1,
+    }))
+    vi.spyOn(apiProxy, 'sessions').mockResolvedValue({ items: sessions })
+    const steps: string[] = []
+    vi.spyOn(apiProxy, 'history').mockImplementation(async input => {
+      steps.push(`history:${input.sessionId}:${String(input.beforeSeq ?? 'head')}`)
+      return input.beforeSeq === undefined
+        ? {
+            entries: [{ event: { type: 'event', seq: 1, time: 1, data: {} } }],
+            hasMore: true, nextCursor: 1, projectionAsOfSeq: 1,
+          }
+        : {
+            entries: [{ event: { type: 'event', seq: 0, time: 0, data: {} } }],
+            hasMore: false, projectionAsOfSeq: 1,
+          }
+    })
+    const yieldToEventLoop = vi.fn(async () => { steps.push('yield') })
+    const host = inertHost(apiProxy, {
+      yieldToEventLoop,
+      controlPlane: {
+        sessionEventSyncStatuses: async () => ({
+          items: sessions.map(session => ({
+            session_ref: session.sessionId, projection_as_of_seq: 1,
+            last_event_seq: -1, history_complete_through_seq: -2,
+          })),
+        }),
+        appendSessionEvents: async () => ({}),
+        completeSessionEventHistory: async () => ({}),
+      } as unknown as DshRemoteControlPlane,
+    })
+    Object.assign(host, {
+      started: true, accountId: '1',
+      runtime: {
+        runtimeRef: 'runtime-01', desktopRef: 'desktop-01', profileRef: 'web', accountId: '1',
+        hostGeneration: 7, capabilities: ['session.list', 'session.history'], updatedAtMillis: 1,
+      },
+    })
+
+    await (host as unknown as { reconcileAllHistory(): Promise<void> }).reconcileAllHistory()
+
+    expect(yieldToEventLoop).toHaveBeenCalledTimes(6)
+    const fourthTail = steps.indexOf('history:session-04:1')
+    const fifthHead = steps.indexOf('history:session-05:head')
+    expect(steps.slice(fourthTail + 1, fifthHead)).toContain('yield')
+  })
+
+  it('defers and coalesces background history reconciliation after startup', async () => {
+    vi.useFakeTimers()
+    const host = inertHost(new DshApiProxyAdapter({}), { eagerHistoryBackfill: true })
+    const reconcileAllHistorySafely = vi.fn(async () => undefined)
+    Object.assign(host, {
+      started: true, accountId: '1', reconcileAllHistorySafely,
+      runtime: {
+        runtimeRef: 'runtime-01', desktopRef: 'desktop-01', profileRef: 'web', accountId: '1',
+        hostGeneration: 7, capabilities: ['session.list', 'session.history'], updatedAtMillis: 1,
+      },
+    })
+
+    const schedule = (host as unknown as { scheduleHistoryReconcile(): void }).scheduleHistoryReconcile.bind(host)
+    schedule()
+    schedule()
+    await vi.advanceTimersByTimeAsync(29_999)
+    expect(reconcileAllHistorySafely).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(1)
+    expect(reconcileAllHistorySafely).toHaveBeenCalledOnce()
+  })
+
+  it('keeps global cold-history backfill disabled unless the runtime explicitly opts in', async () => {
+    vi.useFakeTimers()
+    const host = inertHost(new DshApiProxyAdapter({}))
+    const reconcileAllHistorySafely = vi.fn(async () => undefined)
+    Object.assign(host, {
+      started: true, accountId: '1', reconcileAllHistorySafely,
+      runtime: {
+        runtimeRef: 'runtime-01', desktopRef: 'desktop-01', profileRef: 'web', accountId: '1',
+        hostGeneration: 7, capabilities: ['session.list', 'session.history'], updatedAtMillis: 1,
+      },
+    })
+
+    ;(host as unknown as { scheduleHistoryReconcile(): void }).scheduleHistoryReconcile()
+    await vi.advanceTimersByTimeAsync(30_000)
+
+    expect(reconcileAllHistorySafely).not.toHaveBeenCalled()
   })
 
   it('continues backfilling later sessions after one retained history is corrupt', async () => {
