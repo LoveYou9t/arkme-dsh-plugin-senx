@@ -227,6 +227,12 @@ function recordingSpeakerScopeParam(params: Record<string, unknown>): 'item' | '
   throw new ArkmePluginError('recording-speaker-scope-invalid', '说话人修改范围无效', false, 400)
 }
 
+function recordingImportOwnershipParam(params: Record<string, unknown>): 'self' | 'other' {
+  const ownership = stringParam(params, 'ownership')
+  if (ownership === 'self' || ownership === 'other') return ownership
+  throw new ArkmePluginError('recording-import-owner-invalid', '录音数据归属无效', false, 400)
+}
+
 function unmarkedSpeakerMarkInputParam(params: Record<string, unknown>): {
   candidateRef: string
   candidateVersion: string
@@ -801,7 +807,7 @@ export function createArkmeHostApi(service: ArkmeService, options: ArkmeHostApiO
       if (['user-ban.ban', 'user-ban.unban'].includes(request.operation) && origin === undefined) {
         throw new ArkmePluginError('origin-required', '封禁操作必须从当前 DSH 页面发起', false, 403)
       }
-      if (['user.arkme-id.set', 'extensions.delete', 'extensions.reviews.create', 'extensions.audit.check', 'extensions.install.start', 'extensions.install.pause', 'extensions.install.resume', 'extensions.enabled.set', 'extensions.metadata.update', 'extensions.share.rotate', 'extensions.preview.delete', 'extensions.preview.reorder', 'extensions.uninstall', 'extensions.restart', 'extensions.client.failure', 'extensions.persistent.invoke', 'extensions.bundle.invoke', 'extensions.mine.publish', 'extensions.quarantine.dismiss', 'extensions.quarantine.reenable', 'remote.renameDesktop', 'message-actions.copy-link', 'message-actions.forward', 'recordings.import.retry', 'recordings.import.cancel', 'recordings.speaker.assign-item', 'openapi.mcp.retry']
+      if (['user.arkme-id.set', 'extensions.delete', 'extensions.reviews.create', 'extensions.audit.check', 'extensions.install.start', 'extensions.install.pause', 'extensions.install.resume', 'extensions.enabled.set', 'extensions.metadata.update', 'extensions.share.rotate', 'extensions.preview.delete', 'extensions.preview.reorder', 'extensions.uninstall', 'extensions.restart', 'extensions.client.failure', 'extensions.persistent.invoke', 'extensions.bundle.invoke', 'extensions.mine.publish', 'extensions.quarantine.dismiss', 'extensions.quarantine.reenable', 'remote.renameDesktop', 'message-actions.copy-link', 'message-actions.forward', 'recordings.import.retry', 'recordings.import.cancel', 'recordings.import.session.update-start', 'recordings.import.session.update-ownership', 'recordings.import.session.delete', 'recordings.speaker.assign-item', 'openapi.mcp.retry']
         .includes(request.operation) && origin === undefined) {
         throw new ArkmePluginError('origin-required', '该敏感变更必须从当前 DSH 页面发起', false, 403)
       }
@@ -1059,13 +1065,27 @@ export async function dispatchArkmeHostOperation(
     case 'recordings.import.preflight': return await service.recordingImportPreflight(
       stringListParam(params, 'fileNames'), requestSignal,
     )
-    case 'recordings.import.list': return await service.recordingImportList()
+    case 'recordings.import.list': return await service.recordingImportList(requestSignal)
+    case 'recordings.import.history': return await service.recordingImportHistory({
+      toMillis: numberParam(params, 'toMillis', Number.NaN),
+      limit: Math.trunc(numberParam(params, 'limit', 50)),
+      offset: Math.trunc(numberParam(params, 'offset', 0)),
+    }, requestSignal)
     case 'recordings.import.status': return await service.recordingImportStatus(stringParam(params, 'importRef').trim())
     case 'recordings.import.retry': return await service.retryRecordingImport(
       stringParam(params, 'importRef').trim(), Math.trunc(numberParam(params, 'expectedRevision', 0)),
     )
     case 'recordings.import.cancel': return await service.cancelRecordingImport(
       stringParam(params, 'importRef').trim(), Math.trunc(numberParam(params, 'expectedRevision', 0)),
+    )
+    case 'recordings.import.session.update-start': return await service.updateRecordingImportSessionStart(
+      stringParam(params, 'sessionRef').trim(), Math.trunc(numberParam(params, 'startAtMillis', Number.NaN)), requestSignal,
+    )
+    case 'recordings.import.session.update-ownership': return await service.updateRecordingImportSessionOwnership(
+      stringParam(params, 'sessionRef').trim(), recordingImportOwnershipParam(params), requestSignal,
+    )
+    case 'recordings.import.session.delete': return await service.deleteRecordingImportSession(
+      stringParam(params, 'sessionRef').trim(), requestSignal,
     )
     case 'recordings.playback.open': return await service.recordingPlayback(
       stringParam(params, 'itemRef').trim(), requestSignal,

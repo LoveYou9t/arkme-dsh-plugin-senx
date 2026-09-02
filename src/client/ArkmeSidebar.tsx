@@ -61,6 +61,7 @@ import { ArkmePrivateCallMenu } from './ArkmePrivateCallMenu.js'
 import { shouldShowUserBanAction } from './user-ban.js'
 import { ArkmeLongArticleDialog } from './ArkmeLongArticleDialog.js'
 import { ArkmeRecordingSurface } from './ArkmeRecordingSurface.js'
+import { ArkmeRecordingImportDialog, type ArkmeRecordingImportDialogHandle } from './recordings/ArkmeRecordingImportDialog.js'
 import { ArkmeCallSurface } from './ArkmeCallSurface.js'
 import { ArkmeWorldSurface } from './ArkmeWorldSurface.js'
 import {
@@ -2168,6 +2169,21 @@ export function ArkmeSurface({
   const auth = authStoreSnapshot.auth ?? initialAuth
   const authenticatedUserId = auth?.status === 'authenticated' ? auth.userId : undefined
   const authenticatedAccountKey = arkmeAuthenticatedAccountKey(auth)
+  const recordingImportDialogRef = useRef<ArkmeRecordingImportDialogHandle>(null)
+  const [recordingImportDefaultStartAtMillis, setRecordingImportDefaultStartAtMillis] = useState(() => {
+    const today = new Date()
+    today.setHours(0, 0, 0, 0)
+    return today.getTime()
+  })
+  const [recordingRefreshRevision, setRecordingRefreshRevision] = useState(0)
+  const openRecordingImport = useCallback((defaultStartAtMillis: number) => {
+    setRecordingImportDefaultStartAtMillis(defaultStartAtMillis)
+    recordingImportDialogRef.current?.open()
+  }, [])
+  const recordingImportForeground = active && ui.mode === 'recordings'
+  useEffect(() => {
+    if (!recordingImportForeground) recordingImportDialogRef.current?.close()
+  }, [recordingImportForeground])
   const botConversationVisible = ui.mode === 'bot' && ui.selectedBot !== undefined
   const conversationBackdropVisible = ui.mode === 'source' || ui.mode === 'contact-add' || botConversationVisible
   const selectedSource = conversationBackdropVisible ? ui.selectedSource : undefined
@@ -5816,20 +5832,37 @@ export function ArkmeSurface({
     notificationActivation.source, notificationActivation.surfaceCommitted,
   ])
 
-  if (!active) return <div
-    className="arkme-conversation-surface"
-    ref={surfaceRef}
-    data-arkme-owned="product-surface"
-    data-arkme-surface-suspended="true"
-    style={{
-      ...styles.surface,
-      ...(floating ? styles.floatingSurface : {}),
-      ...(productChrome && compactNavigation ? styles.compactSurface : {}),
-    }}
-    aria-hidden
-  />
+  const recordingImportOwner = authView === 'content' && authenticatedUserId !== undefined
+    && authStoreSnapshot.config?.recordingWorkbenchEnabled !== false
+    ? <ArkmeRecordingImportDialog
+      key={`recording-import:${authenticatedAccountKey ?? 'unknown'}`}
+      ref={recordingImportDialogRef}
+      importPath={authStoreSnapshot.config?.recordingImportPath ?? '/arkme-self/api/recording/import'}
+      defaultStartAtMillis={recordingImportDefaultStartAtMillis}
+      currentUserId={authenticatedUserId}
+      foreground={recordingImportForeground}
+      onAccepted={() => { setRecordingRefreshRevision(value => value + 1) }}
+    />
+    : null
+
+  if (!active) return <>
+    <div
+      className="arkme-conversation-surface"
+      ref={surfaceRef}
+      data-arkme-owned="product-surface"
+      data-arkme-surface-suspended="true"
+      style={{
+        ...styles.surface,
+        ...(floating ? styles.floatingSurface : {}),
+        ...(productChrome && compactNavigation ? styles.compactSurface : {}),
+      }}
+      aria-hidden
+    />
+    {recordingImportOwner}
+  </>
 
   return (
+    <>
     <div
       className="arkme-conversation-surface"
       ref={surfaceRef}
@@ -6083,7 +6116,11 @@ export function ArkmeSurface({
           onJiwoLogin={() => { void beginJiwo() }}
           onCancelBinding={() => { void cancelBinding() }}
         /></div> : ui.mode === 'calls' ? <ArkmeCallSurface />
-          : ui.mode === 'recordings' ? <ArkmeRecordingSurface key={`recordings:${auth?.status ?? 'unknown'}:${auth?.environment ?? 'unknown'}:${String(auth?.userId ?? 0)}`} />
+          : ui.mode === 'recordings' ? <ArkmeRecordingSurface
+            key={`recordings:${auth?.status ?? 'unknown'}:${auth?.environment ?? 'unknown'}:${String(auth?.userId ?? 0)}`}
+            onOpenRecordingImport={openRecordingImport}
+            recordingRefreshRevision={recordingRefreshRevision}
+          />
           : ui.mode === 'world' ? <ArkmeWorldSurface
             {...(ui.worldTarget === undefined ? {} : { target: ui.worldTarget })}
             {...(currentSessionId === undefined ? {} : { currentSessionId })}
@@ -7017,5 +7054,7 @@ export function ArkmeSurface({
         document.body,
       )}
     </div>
+    {recordingImportOwner}
+    </>
   )
 }
