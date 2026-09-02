@@ -26,8 +26,8 @@ const expectedPublicMethods = [
   'createExtensionReview', 'recordingCalendar', 'recordingTranscript', 'recordingProjection',
   'sealRecordingCursor', 'openRecordingCursor', 'recordingDay', 'recordingPlayback',
   'recordingSpeakerOptions', 'assignRecordingSpeaker',
-  'acceptRecordingImport', 'recordingImportUserId', 'recordingImportPreflight', 'recordingImportStatus', 'recordingImportList', 'retryRecordingImport',
-  'cancelRecordingImport', 'resumeRecordingImports', 'refreshProfile', 'arkoProfile',
+  'acceptRecordingImport', 'recordingImportUserId', 'recordingImportPreflight', 'recordingImportStatus', 'recordingImportList', 'recordingImportHistory', 'retryRecordingImport',
+  'cancelRecordingImport', 'updateRecordingImportSessionStart', 'updateRecordingImportSessionOwnership', 'deleteRecordingImportSession', 'resumeRecordingImports', 'refreshProfile', 'arkoProfile',
   'arkoEnsureSession', 'arkoCreateSession', 'arkoModelCatalog', 'arkoActivateModel', 'arkoHistoryPage',
   'arkoAsk', 'arkoRunStatus', 'arkoCancel', 'aiVideoPreflight', 'aiVideoCreate', 'aiVideoStatus',
   'aiVideoList', 'queryFileAssets', 'textAiVideoPreflight', 'textAiVideoCreate',
@@ -142,15 +142,25 @@ describe('Arkme service architecture', () => {
     expect(recordingService).not.toContain('AudioRecordingImportGateway')
     expect(recordingService).not.toContain('probeRecordingImportFile')
     expect(recordingService).not.toMatch(/from ['"]node:fs/)
+    expect(recordingService).not.toContain('RecordingImportGateway & RecordingImportOwnerGateway')
+    expect(recordingService).toContain('recordingImportOwnerGateway: RecordingImportOwnerGateway')
+    expect(recordingService).not.toContain('/api/v1/audio/check-exist-same-orig')
     expect(coordinator).not.toMatch(/from ['"]node:fs/)
     expect(coordinator).not.toContain('pc_upload/')
     expect(coordinator).not.toContain('arkme_')
 
     const gateway = readFileSync(join(root, 'src/services/recording-import-gateway.ts'), 'utf8')
     const source = readFileSync(join(root, 'src/recording-import-probe.ts'), 'utf8')
+    const waveProbe = readFileSync(join(root, 'src/recording-wave-probe.ts'), 'utf8')
+    const clientSelection = readFileSync(join(root, 'src/client/recordings/recording-import-selection.ts'), 'utf8')
     expect(gateway).toContain('pc_upload/')
     expect(gateway).toContain('arkme_')
+    expect(gateway).toContain('/api/v1/audio/check-exist-same-orig')
     expect(source).toMatch(/from ['"]node:fs/)
+    expect(source).toContain("from './recording-wave-probe.js'")
+    expect(clientSelection).toContain("from '../../recording-wave-probe.js'")
+    expect(waveProbe).not.toMatch(/from ['"]node:/)
+    expect(waveProbe).not.toContain('mediabunny')
   })
 
   it('keeps direct-conversation and group Bot projections behind separate mappers', () => {

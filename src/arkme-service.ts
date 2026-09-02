@@ -26,7 +26,7 @@ import type {
   ArkmeOutgoingCallToolResult,
 } from './outgoing-call-contract.js'
 import type { ArkmeRequestStats } from './request-coordinator.js'
-import type { PublicRecordingImportJob } from './recording-import-contract.js'
+import type { PublicRecordingImportCurrentSnapshot, PublicRecordingImportHistoryPage, PublicRecordingImportJob } from './recording-import-contract.js'
 import { LocalRecordingImportSource } from './recording-import-probe.js'
 import { SecretValue } from './secret-value.js'
 import {
@@ -415,8 +415,10 @@ export class ArkmeService {
     this.contactDirectory = new ContactDirectoryService(
       this.runtime, this.source, this.bot, this.profile, this.world, this.chat,
     )
+    const recordingImportGateway = new AudioRecordingImportGateway(this.runtime)
     this.recording = new RecordingService(this.runtime, {
-      recordingImportGateway: new AudioRecordingImportGateway(this.runtime),
+      recordingImportGateway,
+      recordingImportOwnerGateway: recordingImportGateway,
       recordingImportSource: new LocalRecordingImportSource(),
       profile: this.profile, media: this.media, userCandidates: this.contactDirectory,
     })
@@ -850,9 +852,13 @@ export class ArkmeService {
   /** @internal Built-in loopback UI only. */ async recordingImportPreflight(fileNames: string[], signal?: AbortSignal): Promise<{ duplicateFileNames: string[] }> { return await this.recording.recordingImportPreflight(fileNames, signal) }
   /** @internal Built-in loopback UI only. */ async acceptRecordingImport(sourceHandle: string, metadata: { fileName: string; mimeType: string; fileSize: number; sha256: string; startAtMillis: number; belongUserId: number }, expectedUserId: number): Promise<PublicRecordingImportJob> { return await this.recording.acceptRecordingImport(sourceHandle, metadata, expectedUserId) }
   /** @internal Built-in loopback UI only. */ async recordingImportStatus(importRef: string): Promise<PublicRecordingImportJob> { return await this.recording.recordingImportStatus(importRef) }
-  /** @internal Built-in loopback UI only. */ async recordingImportList(): Promise<PublicRecordingImportJob[]> { return await this.recording.recordingImportList() }
+  /** @internal Built-in loopback UI only. */ async recordingImportList(signal?: AbortSignal): Promise<PublicRecordingImportCurrentSnapshot> { return await this.recording.recordingImportList(signal) }
+  /** @internal Built-in loopback UI only. */ async recordingImportHistory(input: { toMillis: number; limit: number; offset: number }, signal?: AbortSignal): Promise<PublicRecordingImportHistoryPage> { return await this.recording.recordingImportHistory(input, signal) }
   /** @internal Built-in loopback UI only. */ async retryRecordingImport(importRef: string, expectedRevision: number): Promise<PublicRecordingImportJob> { return await this.recording.retryRecordingImport(importRef, expectedRevision) }
   /** @internal Built-in loopback UI only. */ async cancelRecordingImport(importRef: string, expectedRevision: number): Promise<PublicRecordingImportJob> { return await this.recording.cancelRecordingImport(importRef, expectedRevision) }
+  /** @internal Built-in loopback UI only. */ async updateRecordingImportSessionStart(sessionRef: string, startAtMillis: number, signal?: AbortSignal): Promise<void> { await this.recording.updateRecordingImportSessionStart(sessionRef, startAtMillis, signal) }
+  /** @internal Built-in loopback UI only. */ async updateRecordingImportSessionOwnership(sessionRef: string, ownership: 'self' | 'other', signal?: AbortSignal): Promise<void> { await this.recording.updateRecordingImportSessionOwnership(sessionRef, ownership, signal) }
+  /** @internal Built-in loopback UI only. */ async deleteRecordingImportSession(sessionRef: string, signal?: AbortSignal): Promise<void> { await this.recording.deleteRecordingImportSession(sessionRef, signal) }
   async resumeRecordingImports(): Promise<void> { await this.recording.resumeRecordingImports() }
 
   async refreshProfile(): Promise<ArkmeUserProfileSnapshot> {
