@@ -620,8 +620,12 @@ export class ArkmeChatRealtimeRuntime {
       )
     } else if (projectionInvalidation !== undefined) {
       this.advanceRevision('projection-invalidation', { projectionInvalidation })
-    } else {
-      this.advanceRevision('chat-hint', { hint, readCursorAdvanced, timelineChanged })
+    } else if (timelineChanged !== undefined) {
+      this.advanceRevision('chat-hint', { timelineChanged })
+    } else if (readCursorAdvanced !== undefined) {
+      this.advanceRevision('chat-hint', { readCursorAdvanced })
+    } else if (hint !== undefined) {
+      this.advanceRevision('chat-hint', { hint })
     }
   }
 

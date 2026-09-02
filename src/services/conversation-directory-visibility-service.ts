@@ -2,6 +2,7 @@ import type { ArkmeConversationDirectoryVisibility, ArkmeSourceItem } from '../t
 import {
   BOT_DIRECT_CONVERSATION_LIST_ENTITY,
   CHAT_SESSION_CONVERSATION_LIST_ENTITY,
+  CONVERSATION_LIST_DISMISSED,
   conversationListPreferenceRefKey,
   conversationListPreferenceIsDismissed,
   type ConversationListPreferenceEntry,
@@ -21,6 +22,7 @@ export interface ConversationDirectoryChatEntryPort {
 
 export interface ConversationDirectoryBotEntryPort {
   botConversationListPreferenceEntry(botRef: string): Promise<ConversationListPreferenceEntry>
+  openBotChat(botRef: string, options?: { signal?: AbortSignal }): Promise<ArkmeSourceItem>
 }
 
 export interface ConversationDirectoryVisibilityInvalidationPort {
@@ -78,6 +80,18 @@ export class ConversationDirectoryVisibilityService {
         activityAtMillis: Math.max(current?.activityAtMillis ?? 0, entry.evidence.activityAtMillis),
       })
     }
+    const staleSnapshots = [...evidenceByOwnerRef.entries()].flatMap(([key, evidence]) => {
+      const snapshot = snapshots.get(key)
+      const evidenceAvailable = evidence.sequence > 0 || evidence.activityAtMillis > 0
+      return snapshot?.visibilityState === CONVERSATION_LIST_DISMISSED
+        && evidenceAvailable
+        && !conversationListPreferenceIsDismissed(snapshot, evidence)
+        ? [snapshot]
+        : []
+    })
+    if (staleSnapshots.length > 0) {
+      void this.preference.restoreIfUnchanged(staleSnapshots, { ownerUserId }).catch(() => undefined)
+    }
     const items = resolved.map((result, index) => {
       if (result.status === 'rejected') return { ...handles[index]!, hidden: false }
       const entry = result.value
@@ -111,6 +125,19 @@ export class ConversationDirectoryVisibilityService {
   ): Promise<void> {
     const entry = await this.source.chatConversationListPreferenceEntry(source.sourceRef, signal)
     await this.restoreEntries([entry], signal)
+  }
+
+  async openBotContactConversation(
+    botRef: string,
+    options: { signal?: AbortSignal } = {},
+  ): Promise<ArkmeSourceItem> {
+    const previous = await this.bot.botConversationListPreferenceEntry(botRef).catch(() => undefined)
+    const source = await this.bot.openBotChat(botRef, options)
+    const restore = previous === undefined
+      ? this.restoreSource(source)
+      : this.restoreBotConversation(previous, source)
+    void restore.catch(() => undefined)
+    return source
   }
 
   /** Restores the exact owner identities when a Bot directory entry resolves from direct Bot to Chat. */

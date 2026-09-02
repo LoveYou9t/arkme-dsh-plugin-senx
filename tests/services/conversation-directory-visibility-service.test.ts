@@ -42,12 +42,35 @@ describe('ConversationDirectoryVisibilityService', () => {
     expect(result.items.map(item => item.hidden)).toEqual(expected)
   })
 
+  it('shows newer activity immediately and clears only the stale owner revision', async () => {
+    const preference = preferencePort([snapshot(chatRef, 2, 4, 100)])
+    const service = createService(
+      preference,
+      entry(chatRef, 5, 101),
+      entry(botRef, 0, 0),
+    )
+
+    await expect(service.query(['source-ref'], ['bot-ref'])).resolves.toEqual({ items: [
+      { entryKind: 'source', entryRef: 'source-ref', hidden: false },
+      { entryKind: 'bot', entryRef: 'bot-ref', hidden: false },
+    ] })
+    await vi.waitFor(() => {
+      expect(preference.restoreIfUnchanged).toHaveBeenCalledWith(
+        [snapshot(chatRef, 2, 4, 100)],
+        { ownerUserId: 42 },
+      )
+    })
+  })
+
   it('isolates one unmappable row while retaining valid owner results', async () => {
     const preference = preferencePort([snapshot(chatRef, 2, 4, 100)])
     const service = new ConversationDirectoryVisibilityService(
       preference,
       { chatConversationListPreferenceEntry: vi.fn(async () => entry(chatRef, 4, 100)) },
-      { botConversationListPreferenceEntry: vi.fn(async () => { throw new Error('ambiguous') }) },
+      {
+        botConversationListPreferenceEntry: vi.fn(async () => { throw new Error('ambiguous') }),
+        openBotChat: vi.fn(async () => { throw new Error('not used') }),
+      },
       invalidationPort(),
     )
 
@@ -66,7 +89,10 @@ describe('ConversationDirectoryVisibilityService', () => {
     const service = new ConversationDirectoryVisibilityService(
       preference,
       { chatConversationListPreferenceEntry: vi.fn(async () => { throw fatal }) },
-      { botConversationListPreferenceEntry: vi.fn(async () => entry(botRef, 0, 100)) },
+      {
+        botConversationListPreferenceEntry: vi.fn(async () => entry(botRef, 0, 100)),
+        openBotChat: vi.fn(async () => { throw new Error('not used') }),
+      },
       invalidationPort(),
     )
 
@@ -173,7 +199,10 @@ function createService(
   return new ConversationDirectoryVisibilityService(
     preference,
     { chatConversationListPreferenceEntry: vi.fn(async () => sourceEntry) },
-    { botConversationListPreferenceEntry: vi.fn(async () => botEntry) },
+    {
+      botConversationListPreferenceEntry: vi.fn(async () => botEntry),
+      openBotChat: vi.fn(async () => { throw new Error('not used') }),
+    },
     invalidation,
   )
 }
@@ -189,6 +218,7 @@ function preferencePort(snapshots: ConversationListPreferenceSnapshot[]) {
     query: vi.fn(async () => snapshots),
     dismiss: vi.fn(async () => snapshots[0]!),
     restore: vi.fn(async () => undefined),
+    restoreIfUnchanged: vi.fn(async () => undefined),
   } satisfies ConversationListPreferencePort
 }
 

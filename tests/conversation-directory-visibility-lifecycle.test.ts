@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { ArkmeService } from '../src/arkme-service.js'
+import { ConversationDirectoryVisibilityService } from '../src/services/conversation-directory-visibility-service.js'
+import type { ConversationListPreferencePort } from '../src/services/conversation-list-preference-service.js'
 import type { ArkmeSourceItem } from '../src/types.js'
 
 const source: ArkmeSourceItem = {
@@ -15,11 +17,22 @@ describe('conversation directory visibility lifecycle', () => {
     const events: string[] = []
     let currentRef = { entityKind: 2 as const, entityUid: 'bot-1' }
     let finishRestore: (() => void) | undefined
-    const restoreBotConversation = vi.fn(async () => {
-      await new Promise<void>(resolve => { finishRestore = resolve })
-    })
-    const facade = {
-      bot: {
+    const preference = {
+      query: vi.fn(async () => []),
+      dismiss: vi.fn(async () => { throw new Error('not used') }),
+      restore: vi.fn(async () => { await new Promise<void>(resolve => { finishRestore = resolve }) }),
+      restoreIfUnchanged: vi.fn(async () => undefined),
+    } satisfies ConversationListPreferencePort
+    const visibility = new ConversationDirectoryVisibilityService(
+      preference,
+      {
+        chatConversationListPreferenceEntry: vi.fn(async () => ({
+          ownerUserId: 42,
+          ref: { entityKind: 1, entityUid: 'chat-1' },
+          evidence: { sequence: 1, activityAtMillis: 101 },
+        })),
+      },
+      {
         botConversationListPreferenceEntry: vi.fn(async () => {
           events.push('identity')
           return {
@@ -34,20 +47,19 @@ describe('conversation directory visibility lifecycle', () => {
           return source
         }),
       },
-      conversationDirectoryVisibility: { restoreBotConversation },
-    } as unknown as ArkmeService
+      { invalidateConversationListPreferenceForCurrentSession: vi.fn(async () => undefined) },
+    )
 
-    await expect(ArkmeService.prototype.openBotChat.call(facade, 'bot-ref')).resolves.toBe(source)
-    await vi.waitFor(() => { expect(restoreBotConversation).toHaveBeenCalledOnce() })
+    await expect(visibility.openBotContactConversation('bot-ref')).resolves.toBe(source)
+    await vi.waitFor(() => { expect(preference.restore).toHaveBeenCalledOnce() })
 
     expect(events).toEqual(['identity', 'open'])
-    expect(restoreBotConversation).toHaveBeenCalledWith(
-      {
-        ownerUserId: 42,
-        ref: { entityKind: 2, entityUid: 'bot-1' },
-        evidence: { sequence: 0, activityAtMillis: 100 },
-      },
-      source,
+    expect(preference.restore).toHaveBeenCalledWith(
+      [
+        { entityKind: 2, entityUid: 'bot-1' },
+        { entityKind: 1, entityUid: 'chat-1' },
+      ],
+      { ownerUserId: 42 },
     )
     finishRestore?.()
   })

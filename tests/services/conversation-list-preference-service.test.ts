@@ -67,6 +67,21 @@ describe('ConversationListPreferenceService', () => {
       .toEqual(['1:same', '2:same'])
   })
 
+  it.each([
+    snapshot(2, 'bot-1', 2, 3, 100, 1),
+    snapshot(1, 'chat-1', 2, 0, 100, 7),
+    { ...snapshot(1, 'chat-1', 1, 3, 0, 0), updated_at: 0 },
+  ])('rejects an owner snapshot with mixed or incomplete state %#', async invalidSnapshot => {
+    const invalidRef = invalidSnapshot.entity_kind === 2
+      ? { entityKind: BOT_DIRECT_CONVERSATION_LIST_ENTITY, entityUid: 'bot-1' }
+      : ref
+    const service = createService(async () => ({ items: [invalidSnapshot] }))
+
+    await expect(service.query([invalidRef], { ownerUserId: 42 })).rejects.toMatchObject({
+      code: expect.stringContaining('conversation-list-preference-'),
+    })
+  })
+
   it('dismisses with owner CAS and treats only accepted outcomes as success', async () => {
     const requests: Array<{ path: string; body: Record<string, unknown> }> = []
     const service = createService(async (path, body) => {
@@ -145,6 +160,36 @@ describe('ConversationListPreferenceService', () => {
     expect(requests).toEqual(['/api/v1/conversation-list/preferences/query'])
   })
 
+  it('clears stale activity with the exact observed revision and no second query', async () => {
+    const requests: Array<{ path: string; body: Record<string, unknown> }> = []
+    const service = createService(async (path, body) => {
+      requests.push({ path, body })
+      return { items: [{ outcome: 3, ...snapshot(1, 'chat-1', 2, 5, 101, 8) }] }
+    })
+
+    await expect(service.restoreIfUnchanged([
+      {
+        ref,
+        visibilityState: 2,
+        dismissedThroughSequence: 7,
+        dismissedThroughActivityAtMillis: 100,
+        revision: 4,
+        updatedAtMillis: 110,
+      },
+    ], { ownerUserId: 42 })).resolves.toBeUndefined()
+    expect(requests).toEqual([{
+      path: '/api/v1/conversation-list/preferences/set',
+      body: { items: [{
+        entity_kind: 1,
+        entity_uid: 'chat-1',
+        target_visibility_state: 1,
+        expected_revision: 4,
+        observed_seq: 0,
+        observed_activity_at: 0,
+      }] },
+    }])
+  })
+
   it('rejects a typed ref resolved for another account before owner I/O', async () => {
     const owner = vi.fn(async () => ({}))
     const service = createService(owner)
@@ -153,10 +198,55 @@ describe('ConversationListPreferenceService', () => {
       .rejects.toMatchObject({ code: 'login-context-changed' })
     expect(owner).not.toHaveBeenCalled()
   })
+
+  it('does not let a late response from the previous account replace current revision hints', async () => {
+    let currentUserId = 42
+    let releaseFirstQuery!: () => void
+    let markFirstQueryStarted!: () => void
+    const firstQueryStarted = new Promise<void>(resolve => { markFirstQueryStarted = resolve })
+    const firstQueryRelease = new Promise<void>(resolve => { releaseFirstQuery = resolve })
+    const writes: Record<string, unknown>[] = []
+    let queryCount = 0
+    const service = createService(async (path, body) => {
+      if (path.endsWith('/query')) {
+        queryCount += 1
+        if (queryCount === 1) {
+          markFirstQueryStarted()
+          await firstQueryRelease
+          return { items: [snapshot(1, 'chat-1', 1, 100, 0, 0)] }
+        }
+        return { items: [snapshot(1, 'chat-1', 1, 5, 0, 0)] }
+      }
+      writes.push(body)
+      return { items: [{ outcome: 1, ...snapshot(1, 'chat-1', 2, 6, 100, 7) }] }
+    }, {
+      async read() {
+        return { userId: currentUserId, accessToken: 'access', refreshToken: 'refresh' }
+      },
+      async write() {},
+      async delete() {},
+    })
+
+    const previousAccountQuery = service.query([ref], { ownerUserId: 42 })
+    await firstQueryStarted
+    currentUserId = 99
+    await service.query([ref], { ownerUserId: 99 })
+    releaseFirstQuery()
+    await previousAccountQuery
+
+    await service.dismiss(ref, {
+      sequence: 7,
+      activityAtMillis: 100,
+    }, { ownerUserId: 99 })
+    expect(writes).toEqual([{
+      items: [expect.objectContaining({ expected_revision: 5 })],
+    }])
+  })
 })
 
 function createService(
   response: (path: string, body: Record<string, unknown>) => Promise<Record<string, unknown>>,
+  store: ArkmeSessionStore = sessionStore,
 ): ConversationListPreferenceService {
   const fetchImpl = vi.fn(async (input, init) => {
     const path = new URL(String(input)).pathname
@@ -165,7 +255,7 @@ function createService(
   }) as typeof fetch
   return new ConversationListPreferenceService(new ServiceRuntime(
     config,
-    sessionStore,
+    store,
     { async uniqueCode() { return 'device-secret' } } as StateStore,
     fetchImpl,
   ))

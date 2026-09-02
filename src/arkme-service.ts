@@ -584,16 +584,7 @@ export class ArkmeService {
 
   async updateBotNotificationPreference(botRef: string, muted: boolean, options: { signal?: AbortSignal } = {}): Promise<ArkmeBotNotificationPreference> { return await this.botConversation.updateNotificationPreference(botRef, muted, options) }
 
-  async openBotChat(botRef: string, options: { signal?: AbortSignal } = {}): Promise<ArkmeSourceItem> {
-    const prior = await this.bot.botConversationListPreferenceEntry(botRef).catch(() => undefined)
-    const source = await this.bot.openBotChat(botRef, options)
-    if (prior !== undefined) {
-      void this.conversationDirectoryVisibility.restoreBotConversation(prior, source).catch(() => undefined)
-    } else {
-      void this.conversationDirectoryVisibility.restoreSource(source).catch(() => undefined)
-    }
-    return source
-  }
+  async openBotChat(botRef: string, options: { signal?: AbortSignal } = {}): Promise<ArkmeSourceItem> { return await this.conversationDirectoryVisibility.openBotContactConversation(botRef, options) }
   async listBotPrivateChatDirectory(options: { signal?: AbortSignal } = {}) { return await this.botConversation.directory(options) }
 
   async openBotPrivateChat(botRef: string, options: { signal?: AbortSignal } = {}) { return await this.botConversation.open(botRef, options) }

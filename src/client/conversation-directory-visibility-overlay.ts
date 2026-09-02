@@ -5,6 +5,7 @@ import type {
 } from '../types.js'
 
 export type ConversationVisibilityOverlay = ReadonlySet<string>
+export type ConversationVisibilityHydration = ReadonlySet<string>
 
 export interface ConversationVisibilityActivityEvidence {
   sequence: number
@@ -67,6 +68,17 @@ export function emptyConversationVisibilityOverlay(): ConversationVisibilityOver
   return new Set()
 }
 
+export function emptyConversationVisibilityHydration(): ConversationVisibilityHydration {
+  return new Set()
+}
+
+export function markConversationVisibilityScopeHydrated(
+  current: ConversationVisibilityHydration,
+  scope: ConversationVisibilityScope,
+): ConversationVisibilityHydration {
+  return new Set([...current, ...scope.keys])
+}
+
 export function conversationVisibilityScope(
   sources: readonly ArkmeSourceItem[],
   bots: readonly ArkmeBotSummary[],
@@ -104,8 +116,10 @@ export function applyConversationVisibilityQuerySuccess(
 export function applyConversationVisibilityQueryFailure(
   current: ConversationVisibilityOverlay,
   scope: ConversationVisibilityScope,
+  protectedKeys: ConversationVisibilityOverlay = emptyConversationVisibilityOverlay(),
 ): ConversationVisibilityOverlay {
-  return withoutKeys(current, scope.keys)
+  const refreshableKeys = new Set([...scope.keys].filter(key => !protectedKeys.has(key)))
+  return withoutKeys(current, refreshableKeys)
 }
 
 export function dismissConversationVisibilityEntry(

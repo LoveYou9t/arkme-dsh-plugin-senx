@@ -64,7 +64,10 @@ import {
   conversationVisibilityKey,
   conversationVisibilityScope,
   dismissConversationVisibilityEntry,
+  emptyConversationVisibilityHydration,
   emptyConversationVisibilityOverlay,
+  markConversationVisibilityScopeHydrated,
+  type ConversationVisibilityHydration,
   type ConversationVisibilityOverlay,
 } from './conversation-directory-visibility-overlay.js'
 import {
@@ -932,6 +935,9 @@ export function ArkmeNavigation({
   const [conversationVisibility, setConversationVisibility] = useState<ConversationVisibilityOverlay>(
     emptyConversationVisibilityOverlay,
   )
+  const [conversationVisibilityHydrated, setConversationVisibilityHydrated] = useState<ConversationVisibilityHydration>(
+    emptyConversationVisibilityHydration,
+  )
   const conversationVisibilityEpochRef = useRef(0)
   const conversationVisibilityFeedbackRef = useRef<ConversationVisibilityOverlay>(
     emptyConversationVisibilityOverlay(),
@@ -1008,17 +1014,19 @@ export function ArkmeNavigation({
   )
   const rootConversationRows = useMemo(() => [
     ...botChatDirectory.sources
-      .filter(source => !conversationVisibility.has(conversationVisibilityKey(
-        'source', conversationSourceVisibilityKey(source),
-      )))
+      .filter(source => {
+        const sourceKey = conversationVisibilityKey('source', conversationSourceVisibilityKey(source))
+        return conversationVisibilityHydrated.has(sourceKey) && !conversationVisibility.has(sourceKey)
+      })
       .map(source => ({ kind: 'source' as const, source, activeAtMillis: source.activeAtMillis, pinned: source.isPinned === true })),
     ...botChatDirectory.bots
-      .filter(bot => !conversationVisibility.has(conversationVisibilityKey(
-        'bot', conversationBotVisibilityKey(bot),
-      )))
+      .filter(bot => {
+        const botKey = conversationVisibilityKey('bot', conversationBotVisibilityKey(bot))
+        return conversationVisibilityHydrated.has(botKey) && !conversationVisibility.has(botKey)
+      })
       .map(bot => ({ kind: 'bot' as const, bot, activeAtMillis: botActivityAtMillis(bot), pinned: botDirectoryIsPinned(botDirectoryPreferences, bot) })),
   ].sort((left, right) => Number(right.pinned) - Number(left.pinned) || right.activeAtMillis - left.activeAtMillis), [
-    botChatDirectory, botDirectoryPreferences, conversationVisibility,
+    botChatDirectory, botDirectoryPreferences, conversationVisibility, conversationVisibilityHydrated,
   ])
   const showArkoInSearch = true
   const sendToSelfPresentation = arkmeSendToSelfDirectoryPresentation(sendToSelfSource)
@@ -1171,6 +1179,7 @@ export function ArkmeNavigation({
     conversationVisibilityEpochRef.current += 1
     conversationVisibilityFeedbackRef.current = emptyConversationVisibilityOverlay()
     setConversationVisibility(emptyConversationVisibilityOverlay())
+    setConversationVisibilityHydrated(emptyConversationVisibilityHydration())
     setDirectoryMutationSourceRef(undefined)
     setDirectoryMutationBotRef(undefined)
     setDirectoryActionFeedback(undefined)
@@ -1227,11 +1236,23 @@ export function ArkmeNavigation({
         result,
         protectedKeysAtRequest,
       ))
+      setConversationVisibilityHydrated(current => markConversationVisibilityScopeHydrated(
+        current,
+        scope,
+      ))
     }).catch(() => {
       if (controller.signal.aborted
         || authenticatedUserIdRef.current !== visibilityUserId
         || conversationVisibilityEpochRef.current !== visibilityEpoch) return
-      setConversationVisibility(current => applyConversationVisibilityQueryFailure(current, scope))
+      setConversationVisibility(current => applyConversationVisibilityQueryFailure(
+        current,
+        scope,
+        protectedKeysAtRequest,
+      ))
+      setConversationVisibilityHydrated(current => markConversationVisibilityScopeHydrated(
+        current,
+        scope,
+      ))
     })
     return () => { controller.abort() }
   }, [authenticated, auth?.userId, bots, chatRevision, directory, rootSources])

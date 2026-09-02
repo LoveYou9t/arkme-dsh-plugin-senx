@@ -9,6 +9,7 @@ import {
   conversationVisibilityScope,
   dismissConversationVisibilityEntry,
   emptyConversationVisibilityOverlay,
+  markConversationVisibilityScopeHydrated,
 } from '../src/client/conversation-directory-visibility-overlay.js'
 import type { ArkmeBotSummary, ArkmeSourceItem } from '../src/types.js'
 
@@ -32,6 +33,19 @@ const bot = (botRef: string, directoryKey = 'stable-bot') => ({
 }) satisfies ArkmeBotSummary
 
 describe('conversation directory visibility overlay', () => {
+  it('withholds newly loaded rows until their owner visibility query settles', () => {
+    const first = conversationVisibilityScope([source('source-ref-a', 'source-a')], [])
+    const second = conversationVisibilityScope([], [bot('bot-ref-b', 'bot-b')])
+    let hydrated = markConversationVisibilityScopeHydrated(new Set(), first)
+
+    expect(hydrated.has(conversationVisibilityKey('source', 'source-a'))).toBe(true)
+    expect(hydrated.has(conversationVisibilityKey('bot', 'bot-b'))).toBe(false)
+
+    hydrated = markConversationVisibilityScopeHydrated(hydrated, second)
+    expect(hydrated.has(conversationVisibilityKey('source', 'source-a'))).toBe(true)
+    expect(hydrated.has(conversationVisibilityKey('bot', 'bot-b'))).toBe(true)
+  })
+
   it('retains confirmed hidden rows while a refresh is pending and across rotating refs', () => {
     const first = conversationVisibilityScope([source('source-ref-v1')], [bot('bot-ref-v1')])
     let overlay = applyConversationVisibilityQuerySuccess(emptyConversationVisibilityOverlay(), first, {
@@ -75,6 +89,19 @@ describe('conversation directory visibility overlay', () => {
       conversationVisibilityKey('bot', 'bot-b'),
     ])
     expect(second.sourceRefs).toEqual(['source-ref-b'])
+  })
+
+  it('does not let a failed query started during dismissal clear the later accepted overlay', () => {
+    const scope = conversationVisibilityScope([source('source-ref')], [bot('bot-ref')])
+    const protectedSource = conversationVisibilityKey('source', 'stable-source')
+    const hiddenBot = conversationVisibilityKey('bot', 'stable-bot')
+    const overlay = applyConversationVisibilityQueryFailure(
+      new Set([protectedSource, hiddenBot]),
+      scope,
+      new Set([protectedSource]),
+    )
+
+    expect([...overlay]).toEqual([protectedSource])
   })
 
   it('adds the stable presentation identity only after an accepted local dismissal', () => {

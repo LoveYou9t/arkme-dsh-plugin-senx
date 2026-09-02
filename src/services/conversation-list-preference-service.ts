@@ -61,6 +61,10 @@ export interface ConversationListPreferencePort {
     refs: readonly ConversationListPreferenceRef[],
     operation: ConversationListPreferenceOperation,
   ): Promise<void>
+  restoreIfUnchanged(
+    snapshots: readonly ConversationListPreferenceSnapshot[],
+    operation: ConversationListPreferenceOperation,
+  ): Promise<void>
 }
 
 /** HTTP/CAS adapter. Only revision hints are cached; owner snapshots stay server-owned. */
@@ -147,6 +151,29 @@ export class ConversationListPreferenceService implements ConversationListPrefer
     }
   }
 
+  async restoreIfUnchanged(
+    snapshots: readonly ConversationListPreferenceSnapshot[],
+    operation: ConversationListPreferenceOperation,
+  ): Promise<void> {
+    if (snapshots.length === 0) return
+    const session = await this.requireOwnerSession(operation.ownerUserId)
+    const writes = snapshots.map(snapshot => {
+      if (snapshot.visibilityState !== CONVERSATION_LIST_DISMISSED
+        || !Number.isSafeInteger(snapshot.revision) || snapshot.revision <= 0) {
+        throw contractError('restore-snapshot')
+      }
+      return {
+        ref: normalizeRef(snapshot.ref),
+        expectedRevision: snapshot.revision,
+        targetVisibilityState: CONVERSATION_LIST_VISIBLE,
+        evidence: { sequence: 0, activityAtMillis: 0 },
+      } as const
+    })
+    for (let offset = 0; offset < writes.length; offset += MAX_BATCH_SIZE) {
+      await this.set(writes.slice(offset, offset + MAX_BATCH_SIZE), session, operation.signal)
+    }
+  }
+
   private async queryWithSession(
     refs: readonly ConversationListPreferenceRef[],
     session: ArkmeSessionCredentials,
@@ -169,7 +196,7 @@ export class ConversationListPreferenceService implements ConversationListPrefer
         snapshots.push(snapshot)
       })
     }
-    this.rememberRevisions(snapshots)
+    this.rememberRevisions(snapshots, session.userId)
     return snapshots
   }
 
@@ -201,7 +228,7 @@ export class ConversationListPreferenceService implements ConversationListPrefer
       if (!sameRef(snapshot.ref, writes[index]!.ref)) throw contractError('set-identity')
       return { outcome, snapshot }
     })
-    this.rememberRevisions(results.map(result => result.snapshot))
+    this.rememberRevisions(results.map(result => result.snapshot), session.userId)
     return results
   }
 
@@ -217,7 +244,11 @@ export class ConversationListPreferenceService implements ConversationListPrefer
     return session
   }
 
-  private rememberRevisions(snapshots: readonly ConversationListPreferenceSnapshot[]): void {
+  private rememberRevisions(
+    snapshots: readonly ConversationListPreferenceSnapshot[],
+    ownerUserId: number,
+  ): void {
+    if (this.revisionOwnerUserId !== ownerUserId) return
     for (const snapshot of snapshots) {
       const key = conversationListPreferenceRefKey(snapshot.ref)
       this.revisionHints.set(key, Math.max(this.revisionHints.get(key) ?? 0, snapshot.revision))
@@ -274,6 +305,14 @@ function parseSnapshot(raw: Record<string, unknown>): ConversationListPreference
   if (snapshot.visibilityState === CONVERSATION_LIST_DISMISSED
     && snapshot.dismissedThroughSequence === 0 && snapshot.dismissedThroughActivityAtMillis === 0) {
     throw contractError('dismissed-anchor')
+  }
+  if (snapshot.ref.entityKind === BOT_DIRECT_CONVERSATION_LIST_ENTITY
+    && snapshot.dismissedThroughSequence !== 0) {
+    throw contractError('bot-sequence')
+  }
+  if ((snapshot.revision === 0) !== (snapshot.updatedAtMillis === 0)
+    || (snapshot.visibilityState === CONVERSATION_LIST_DISMISSED && snapshot.revision === 0)) {
+    throw contractError('revision')
   }
   return snapshot
 }
