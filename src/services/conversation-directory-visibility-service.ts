@@ -1,5 +1,7 @@
 import type { ArkmeConversationDirectoryVisibility, ArkmeSourceItem } from '../types.js'
 import {
+  BOT_DIRECT_CONVERSATION_LIST_ENTITY,
+  CHAT_SESSION_CONVERSATION_LIST_ENTITY,
   conversationListPreferenceRefKey,
   conversationListPreferenceIsDismissed,
   type ConversationListPreferenceEntry,
@@ -106,13 +108,47 @@ export class ConversationDirectoryVisibilityService {
   async restoreSource(
     source: ArkmeSourceItem,
     signal?: AbortSignal,
-    additionalRefs: readonly ConversationListPreferenceRef[] = [],
   ): Promise<void> {
     const entry = await this.source.chatConversationListPreferenceEntry(source.sourceRef, signal)
-    await this.preference.restore(
-      [...additionalRefs, entry.ref],
-      { ownerUserId: entry.ownerUserId, ...(signal === undefined ? {} : { signal }) },
-    )
+    await this.restoreEntries([entry], signal)
+  }
+
+  /** Restores the exact owner identities when a Bot directory entry resolves from direct Bot to Chat. */
+  async restoreBotConversation(
+    previous: ConversationListPreferenceEntry,
+    source: ArkmeSourceItem,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    const current = await this.source.chatConversationListPreferenceEntry(source.sourceRef, signal)
+    if (previous.ownerUserId !== current.ownerUserId) {
+      throw new ArkmePluginError('login-context-changed', '登录账号已切换，请重试当前操作', false, 409)
+    }
+    const previousIsCurrentChat = previous.ref.entityKind === CHAT_SESSION_CONVERSATION_LIST_ENTITY
+      && previous.ref.entityUid === current.ref.entityUid
+    if (current.ref.entityKind !== CHAT_SESSION_CONVERSATION_LIST_ENTITY
+      || previous.ref.entityKind !== BOT_DIRECT_CONVERSATION_LIST_ENTITY && !previousIsCurrentChat) {
+      throw new ArkmePluginError(
+        'bot-conversation-preference-identity-changed',
+        'Bot 会话归属已变化，请刷新后重试',
+        false,
+        409,
+      )
+    }
+    await this.restoreEntries([previous, current], signal)
+  }
+
+  private async restoreEntries(
+    entries: readonly ConversationListPreferenceEntry[],
+    signal?: AbortSignal,
+  ): Promise<void> {
+    const ownerUserId = entries[0]?.ownerUserId
+    if (ownerUserId === undefined || entries.some(entry => entry.ownerUserId !== ownerUserId)) {
+      throw new ArkmePluginError('login-context-changed', '登录账号已切换，请重试当前操作', false, 409)
+    }
+    await this.preference.restore(entries.map(entry => entry.ref), {
+      ownerUserId,
+      ...(signal === undefined ? {} : { signal }),
+    })
     await this.invalidateBestEffort()
   }
 

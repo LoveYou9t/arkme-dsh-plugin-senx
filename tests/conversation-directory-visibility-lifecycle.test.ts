@@ -11,11 +11,11 @@ const source: ArkmeSourceItem = {
 }
 
 describe('conversation directory visibility lifecycle', () => {
-  it('captures the direct Bot identity before opening can replace it with a Chat session', async () => {
+  it('captures the direct Bot identity before opening can resolve it to a Chat session', async () => {
     const events: string[] = []
     let currentRef = { entityKind: 2 as const, entityUid: 'bot-1' }
     let finishRestore: (() => void) | undefined
-    const restoreSource = vi.fn(async () => {
+    const restoreBotConversation = vi.fn(async () => {
       await new Promise<void>(resolve => { finishRestore = resolve })
     })
     const facade = {
@@ -34,17 +34,20 @@ describe('conversation directory visibility lifecycle', () => {
           return source
         }),
       },
-      conversationDirectoryVisibility: { restoreSource },
+      conversationDirectoryVisibility: { restoreBotConversation },
     } as unknown as ArkmeService
 
     await expect(ArkmeService.prototype.openBotChat.call(facade, 'bot-ref')).resolves.toBe(source)
-    await vi.waitFor(() => { expect(restoreSource).toHaveBeenCalledOnce() })
+    await vi.waitFor(() => { expect(restoreBotConversation).toHaveBeenCalledOnce() })
 
     expect(events).toEqual(['identity', 'open'])
-    expect(restoreSource).toHaveBeenCalledWith(
+    expect(restoreBotConversation).toHaveBeenCalledWith(
+      {
+        ownerUserId: 42,
+        ref: { entityKind: 2, entityUid: 'bot-1' },
+        evidence: { sequence: 0, activityAtMillis: 100 },
+      },
       source,
-      undefined,
-      [{ entityKind: 2, entityUid: 'bot-1' }],
     )
     finishRestore?.()
   })

@@ -587,11 +587,11 @@ export class ArkmeService {
   async openBotChat(botRef: string, options: { signal?: AbortSignal } = {}): Promise<ArkmeSourceItem> {
     const prior = await this.bot.botConversationListPreferenceEntry(botRef).catch(() => undefined)
     const source = await this.bot.openBotChat(botRef, options)
-    void this.conversationDirectoryVisibility.restoreSource(
-      source,
-      undefined,
-      prior === undefined ? [] : [prior.ref],
-    ).catch(() => undefined)
+    if (prior !== undefined) {
+      void this.conversationDirectoryVisibility.restoreBotConversation(prior, source).catch(() => undefined)
+    } else {
+      void this.conversationDirectoryVisibility.restoreSource(source).catch(() => undefined)
+    }
     return source
   }
   async listBotPrivateChatDirectory(options: { signal?: AbortSignal } = {}) { return await this.botConversation.directory(options) }

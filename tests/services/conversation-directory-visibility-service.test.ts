@@ -74,7 +74,7 @@ describe('ConversationDirectoryVisibilityService', () => {
     expect(preference.query).not.toHaveBeenCalled()
   })
 
-  it('maps mutations and contact restoration to typed owner identities', async () => {
+  it('maps mutations, contact restore, and Bot owner handoff to exact typed identities', async () => {
     const preference = preferencePort([])
     const invalidation = invalidationPort()
     const service = createService(
@@ -86,10 +86,10 @@ describe('ConversationDirectoryVisibilityService', () => {
 
     await service.setVisibility('source', 'source-ref', true)
     await service.setVisibility('bot', 'bot-ref', false)
-    await service.restoreSource(
+    await service.restoreSource({ sourceRef: 'source-ref' } as never)
+    await service.restoreBotConversation(
+      entry({ entityKind: 2, entityUid: 'bot-1' }, 0, 100),
       { sourceRef: 'source-ref' } as never,
-      undefined,
-      [{ entityKind: 2, entityUid: 'bot-1' }],
     )
 
     expect(preference.dismiss).toHaveBeenCalledWith(
@@ -104,13 +104,48 @@ describe('ConversationDirectoryVisibilityService', () => {
     )
     expect(preference.restore).toHaveBeenNthCalledWith(
       2,
+      [{ entityKind: 1, entityUid: 'chat-1' }],
+      { ownerUserId: 42 },
+    )
+    expect(preference.restore).toHaveBeenNthCalledWith(
+      3,
       [
         { entityKind: 2, entityUid: 'bot-1' },
         { entityKind: 1, entityUid: 'chat-1' },
       ],
       { ownerUserId: 42 },
     )
-    expect(invalidation.invalidateConversationListPreferenceForCurrentSession).toHaveBeenCalledTimes(3)
+    expect(invalidation.invalidateConversationListPreferenceForCurrentSession).toHaveBeenCalledTimes(4)
+  })
+
+  it('rejects a Bot owner handoff across login owners before mutating preferences', async () => {
+    const preference = preferencePort([])
+    const service = createService(
+      preference,
+      entry({ entityKind: 1, entityUid: 'chat-1' }, 7, 101),
+      entry({ entityKind: 2, entityUid: 'bot-1' }, 0, 100),
+    )
+
+    await expect(service.restoreBotConversation(
+      { ...entry({ entityKind: 2, entityUid: 'bot-1' }, 0, 100), ownerUserId: 99 },
+      { sourceRef: 'source-ref' } as never,
+    )).rejects.toMatchObject({ code: 'login-context-changed' })
+    expect(preference.restore).not.toHaveBeenCalled()
+  })
+
+  it('rejects a Bot handoff between unrelated Chat identities', async () => {
+    const preference = preferencePort([])
+    const service = createService(
+      preference,
+      entry({ entityKind: 1, entityUid: 'chat-current' }, 7, 101),
+      entry({ entityKind: 2, entityUid: 'bot-1' }, 0, 100),
+    )
+
+    await expect(service.restoreBotConversation(
+      entry({ entityKind: 1, entityUid: 'chat-previous' }, 6, 100),
+      { sourceRef: 'source-ref' } as never,
+    )).rejects.toMatchObject({ code: 'bot-conversation-preference-identity-changed' })
+    expect(preference.restore).not.toHaveBeenCalled()
   })
 
   it('does not turn accepted owner state into failure when local invalidation fails', async () => {
