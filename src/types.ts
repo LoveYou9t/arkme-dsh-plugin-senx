@@ -2920,6 +2920,8 @@ export type ArkmePluginOperation =
   | 'user-ban.status'
   | 'user-ban.ban'
   | 'user-ban.unban'
+  | 'openapi.mcp.status'
+  | 'openapi.mcp.retry'
   | 'remote.getStatus'
   | 'remote.renameDesktop'
   | 'billing.quota'
