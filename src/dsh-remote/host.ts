@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { hostname } from 'node:os'
+import { scheduler } from 'node:timers/promises'
 import {
   DshApiProxyAdapter,
   stableDshRemoteSessionId,
@@ -34,6 +35,7 @@ import {
 } from './types.js'
 
 const HISTORY_RECONCILE_INTERVAL_MILLIS = 30_000
+const HISTORY_RECONCILE_SESSION_BATCH_ITEMS = 4
 const PROJECTION_SYNC_INTERVAL_MILLIS = 30_000
 const BACKEND_HISTORY_BATCH_ITEMS = 100
 const BACKEND_TURN_BATCH_ITEMS = 100
@@ -107,6 +109,9 @@ export interface ArkmeRemoteRealtimeHostOptions {
   apiProxy: DshApiProxyAdapter
   ledgerForAccount: (accountId: string, key: Buffer) => Promise<DshRemoteCommandLedger> | DshRemoteCommandLedger
   now?: () => number
+  yieldToEventLoop?: () => Promise<void>
+  /** Current DSH cold-history reads are atomic; keep global backfill opt-in until they become preemptible. */
+  eagerHistoryBackfill?: boolean
 }
 
 function stringBody(body: Record<string, unknown>, key: string, max = 256): string {
@@ -911,19 +916,17 @@ export class ArkmeRemoteRealtimeHost implements DshRemoteHostFacade {
     }
   }
 
-  private scheduleHistoryReconcile(delayMillis = 0): void {
+  private scheduleHistoryReconcile(delayMillis = HISTORY_RECONCILE_INTERVAL_MILLIS): void {
+    if (this.options.eagerHistoryBackfill !== true) return
     const runtime = this.runtime
     if (!this.started || this.accountId === undefined || runtime?.desktopRef === undefined) return
     const capabilities = new Set(runtime.capabilities)
     if (!capabilities.has('session.list') || !capabilities.has('session.history')) return
-    if (delayMillis === 0 && this.historyReconcileFlight !== undefined) {
+    if (this.historyReconcileFlight !== undefined) {
       this.historyReconcileRequested = true
       return
     }
-    if (this.historyReconcileTimer !== undefined) {
-      if (delayMillis > 0) return
-      clearTimeout(this.historyReconcileTimer)
-    }
+    if (this.historyReconcileTimer !== undefined) return
     this.historyReconcileTimer = setTimeout(() => {
       this.historyReconcileTimer = undefined
       void this.reconcileAllHistorySafely()
@@ -967,6 +970,10 @@ export class ArkmeRemoteRealtimeHost implements DshRemoteHostFacade {
       && this.runtime.hostGeneration === runtime.hostGeneration
   }
 
+  private async yieldHistoryReconciliation(): Promise<void> {
+    await (this.options.yieldToEventLoop?.() ?? scheduler.yield())
+  }
+
   private async reconcileAllHistory(): Promise<void> {
     const accountId = this.accountId
     const runtime = this.runtime
@@ -990,6 +997,7 @@ export class ArkmeRemoteRealtimeHost implements DshRemoteHostFacade {
           throw new DshRemoteError('REMOTE_INVALID_RESPONSE', 'DSH 会话游标发生循环', true)
         }
         seenSessionCursors.add(cursor)
+        await this.yieldHistoryReconciliation()
       }
     } while (cursor !== undefined)
 
@@ -1009,21 +1017,31 @@ export class ArkmeRemoteRealtimeHost implements DshRemoteHostFacade {
         }
         statuses.set(ref, status)
       }
+      if (offset + DSH_REMOTE_MAX_PAGE_ITEMS < sessions.length) {
+        await this.yieldHistoryReconciliation()
+      }
     }
 
-    let firstFailure: unknown
-    for (const session of sessions) {
-      if (!this.historyOwnerMatches(accountId, runtime)) return
+    const pendingSessions = sessions.filter(session => {
       const status = statuses.get(session.sessionId)
-      if (status === undefined) continue
-      if (session.projectionAsOfSeq !== undefined
-        && status.historyCompleteThroughSeq >= session.projectionAsOfSeq
-        && (this.options.controlPlane.syncSessionTurns === undefined
-          || status.turnProjectionCompleteThroughSeq >= session.projectionAsOfSeq)) continue
-      try {
-        await this.reconcileSessionHistory(accountId, runtime, session.sessionId, session.projectionAsOfSeq)
-      } catch (error) {
-        firstFailure ??= error
+      if (status === undefined) return false
+      return session.projectionAsOfSeq === undefined
+        || status.historyCompleteThroughSeq < session.projectionAsOfSeq
+        || (this.options.controlPlane.syncSessionTurns !== undefined
+          && status.turnProjectionCompleteThroughSeq < session.projectionAsOfSeq)
+    })
+    let firstFailure: unknown
+    for (let offset = 0; offset < pendingSessions.length; offset += HISTORY_RECONCILE_SESSION_BATCH_ITEMS) {
+      for (const session of pendingSessions.slice(offset, offset + HISTORY_RECONCILE_SESSION_BATCH_ITEMS)) {
+        if (!this.historyOwnerMatches(accountId, runtime)) return
+        try {
+          await this.reconcileSessionHistory(accountId, runtime, session.sessionId, session.projectionAsOfSeq)
+        } catch (error) {
+          firstFailure ??= error
+        }
+      }
+      if (offset + HISTORY_RECONCILE_SESSION_BATCH_ITEMS < pendingSessions.length) {
+        await this.yieldHistoryReconciliation()
       }
     }
     if (firstFailure !== undefined) throw firstFailure
@@ -1079,6 +1097,7 @@ export class ArkmeRemoteRealtimeHost implements DshRemoteHostFacade {
         throw new DshRemoteError('REMOTE_INVALID_RESPONSE', 'DSH 历史游标无效或发生循环', true)
       }
       seenCursors.add(next)
+      await this.yieldHistoryReconciliation()
       beforeSeq = next
     }
     const throughSeq = completeThroughSeq ?? maximumEntrySeq
@@ -1177,7 +1196,6 @@ export class ArkmeRemoteRealtimeHost implements DshRemoteHostFacade {
       desktopRef,
     }
     await this.syncProjectionSnapshot(true)
-    this.scheduleHistoryReconcile()
     const controller = new AbortController()
     await this.options.realtime.connect({
       profileRef: this.options.profileRef,
