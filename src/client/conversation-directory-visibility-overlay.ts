@@ -92,7 +92,8 @@ export function applyConversationVisibilityQuerySuccess(
   result: ArkmeConversationDirectoryVisibility,
   protectedKeys: ConversationVisibilityOverlay = emptyConversationVisibilityOverlay(),
 ): ConversationVisibilityOverlay {
-  const next = withoutKeys(current, scope.keys)
+  const refreshableKeys = new Set([...scope.keys].filter(key => !protectedKeys.has(key)))
+  const next = withoutKeys(current, refreshableKeys)
   for (const item of result.items) {
     const key = scope.keyByHandle.get(`${item.entryKind}:${item.entryRef}`)
     if (item.hidden && key !== undefined && !protectedKeys.has(key)) next.add(key)

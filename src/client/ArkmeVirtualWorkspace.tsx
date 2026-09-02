@@ -1210,6 +1210,7 @@ export function ArkmeNavigation({
       bots,
     )
     if (scope.sourceRefs.length === 0 && scope.botRefs.length === 0) return
+    const protectedKeysAtRequest = conversationVisibilityFeedbackRef.current
     const controller = new AbortController()
     void callArkme<ArkmeConversationDirectoryVisibility>(
       'conversation.directory.visibility.query',
@@ -1224,7 +1225,7 @@ export function ArkmeNavigation({
         current,
         scope,
         result,
-        conversationVisibilityFeedbackRef.current,
+        protectedKeysAtRequest,
       ))
     }).catch(() => {
       if (controller.signal.aborted

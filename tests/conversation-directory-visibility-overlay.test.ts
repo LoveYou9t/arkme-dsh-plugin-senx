@@ -107,6 +107,25 @@ describe('conversation directory visibility overlay', () => {
     expect([...overlay]).toEqual([])
   })
 
+  it('does not let a query started during dismissal overwrite the later accepted overlay', () => {
+    const scope = conversationVisibilityScope([source('source-ref')], [bot('bot-ref')])
+    const protectedSource = conversationVisibilityKey('source', 'stable-source')
+    const overlay = applyConversationVisibilityQuerySuccess(
+      new Set([protectedSource]),
+      scope,
+      { items: [
+        { entryKind: 'source', entryRef: 'source-ref', hidden: false },
+        { entryKind: 'bot', entryRef: 'bot-ref', hidden: true },
+      ] },
+      new Set([protectedSource]),
+    )
+
+    expect([...overlay]).toEqual([
+      protectedSource,
+      conversationVisibilityKey('bot', 'stable-bot'),
+    ])
+  })
+
   it('detects owner activity that advances while accepted-removal feedback is still visible', () => {
     const beforeSource = conversationSourceActivityEvidence(source('source-ref'))
     const afterSource = conversationSourceActivityEvidence({

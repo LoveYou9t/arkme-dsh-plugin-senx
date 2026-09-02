@@ -157,6 +157,8 @@ describe('Arkme conversation directory load state', () => {
     expect(workspaceSource).not.toContain('chatRowRemoveOverlayVisible')
     expect(workspaceSource).toContain('setConversationVisibility(current => dismissConversationVisibilityEntry(')
     expect(workspaceSource).toContain("setDirectoryActionFeedback('已移除对话，可在联系人中找回')")
+    expect(workspaceSource).toContain('const protectedKeysAtRequest = conversationVisibilityFeedbackRef.current')
+    expect(workspaceSource).toContain('result,\n        protectedKeysAtRequest,')
   })
 
   it('retains the confirmed owner overlay while the conversation directory is unmounted', () => {
