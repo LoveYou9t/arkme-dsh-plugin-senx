@@ -74,6 +74,7 @@ import { ArkmeRemoteRealtimeHost } from './dsh-remote/host.js'
 import { ArkmeRemoteRealtimeTransport, type DshRemoteSocketLike } from './dsh-remote/realtime-transport.js'
 import { DshRemoteRuntimeStore } from './dsh-remote/runtime-store.js'
 import { DshRemoteRuntimeSecretBroker } from './dsh-remote/runtime-secret-broker.js'
+import { DshRemoteSessionOwnershipStore } from './dsh-remote/session-ownership-store.js'
 import type { DshRemoteHostFacade } from './dsh-remote/types.js'
 
 export interface Config {
@@ -248,6 +249,13 @@ function dshRemoteClientId(accessToken: string): number | undefined {
   } catch { return undefined }
 }
 
+export function resolveDshRemoteProfileRef(
+  env: Readonly<Record<string, string | undefined>> = process.env,
+): string {
+  const value = env.ARKME_DSH_RUNTIME_SCOPE_REF?.trim() || env.DSH_PROFILE?.trim() || 'web'
+  return /^[A-Za-z0-9._:-]{1,128}$/.test(value) ? value : 'web'
+}
+
 export function apply(ctx: Context, config: Config): void {
   config = resolveArkmeConfig(ctx, config)
   const dshHome = process.env.DSH_HOME?.trim() || join(homedir(), '.dsh')
@@ -387,6 +395,10 @@ export function apply(ctx: Context, config: Config): void {
   let extensionInstallTasks: ArkmeExtensionInstallTasks | undefined
   let ownedExtensionInventory: ArkmeOwnedExtensionInventory | undefined
   ctx.provide('arkmeData', service)
+  ctx.effect(async () => {
+    await service.accountScope.start()
+    return () => undefined
+  }, 'dsh-arkme: desktop account scope attestation')
   ctx.inject(['llm'], modelCtx => {
     registerManagedAiProvider(modelCtx, {
       intelligentBaseUrl: config.intelligentBaseUrl,
@@ -463,6 +475,29 @@ export function apply(ctx: Context, config: Config): void {
     }, 'dsh-arkme: marketplace dynamic runner bridge')
   })
   ctx.inject(['apiProxy'], apiCtx => {
+    const agentDefaultModel = apiCtx.get('agentDefaultModel') as {
+      currentSelection?: () => unknown
+    } | undefined
+    const apiProxy = new DshApiProxyAdapter(
+      apiCtx.apiProxy as unknown as DshPublicApiProxyLike,
+      {
+        ...(typeof agentDefaultModel?.currentSelection !== 'function'
+          ? {}
+          : { defaultModelSelection: () => agentDefaultModel.currentSelection!() }),
+      },
+    )
+    service.accountScope.attachGuestConversationProbe(async () => {
+      try {
+        let cursor: string | undefined
+        for (let page = 0; page < 200; page += 1) {
+          const sessions = await apiProxy.sessions({ limit: 50, ...(cursor === undefined ? {} : { cursor }) })
+          if (sessions.items.some(session => !session.blank)) return true
+          if (sessions.nextCursor === undefined) return false
+          cursor = sessions.nextCursor
+        }
+      } catch { /* An unreadable guest profile is claimed whole rather than silently discarded. */ }
+      return true
+    })
     // The default-off feature must not construct platform credential stores,
     // open DSH muxes or otherwise affect the existing Arkme plugin lifecycle.
     if (!config.dshRemoteFeatureEnabled) return
@@ -473,15 +508,13 @@ export function apply(ctx: Context, config: Config): void {
         accessToken: input.accessToken,
         signal: input.signal,
       }))
-    const profileRefValue = process.env.DSH_PROFILE?.trim() || 'web'
-    const profileRef = /^[A-Za-z0-9._:-]{1,128}$/.test(profileRefValue) ? profileRefValue : 'web'
+    const profileRef = resolveDshRemoteProfileRef()
     const hostClientRef = `host_${createHash('sha256').update(`dsh-remote-host-client-v1\n${stateDirectory}\n${profileRef}`).digest('base64url')}`
     const realtime = new ArkmeRemoteRealtimeTransport(async input => {
-      const session = await sessionStore.read()
+      const session = await service.accountScope.scopedSession()
       if (session === undefined) throw new Error('Arkme session is unavailable')
       return await authenticatedSocketFactory({ ...input, accessToken: session.accessToken })
     })
-    const apiProxy = new DshApiProxyAdapter(apiCtx.apiProxy as unknown as DshPublicApiProxyLike)
     const secretBroker = new DshRemoteRuntimeSecretBroker(createArkmeSecureValueStore(
       `${config.keychainServicePrefix}.${config.environment}.dsh-remote-desktop`,
     ))
@@ -490,12 +523,13 @@ export function apply(ctx: Context, config: Config): void {
       transportAvailable: true,
       profileRef, hostClientRef, secretBroker,
       runtimeStore: new DshRemoteRuntimeStore(stateDirectory),
+      sessionOwnership: new DshRemoteSessionOwnershipStore(stateDirectory, profileRef),
       controlPlane: new DshRemoteHttpControlPlane({
         post: async (path, body, signal) => await service.dshRemotePost<Record<string, unknown>>(path, body, signal),
       }),
       realtime, apiProxy,
       readSession: async () => {
-        const session = await sessionStore.read()
+        const session = await service.accountScope.scopedSession()
         if (session === undefined) return undefined
         const clientId = dshRemoteClientId(session.accessToken)
         return clientId === undefined ? undefined : { userId: session.userId, clientId }
@@ -507,8 +541,19 @@ export function apply(ctx: Context, config: Config): void {
     })
     remoteHost = host
     apiCtx.effect(async () => {
-      await host.start()
+      let lifecycleTail: Promise<void> = Promise.resolve()
+      const reconcile = () => {
+        lifecycleTail = lifecycleTail.then(
+          async () => { if (service.accountScope.ready()) await host.start(); else await host.suspend() },
+          async () => { if (service.accountScope.ready()) await host.start(); else await host.suspend() },
+        )
+      }
+      const unsubscribe = service.accountScope.subscribe(reconcile)
+      service.accountScope.attachScopeCloseBarrier(async () => { await lifecycleTail })
+      await lifecycleTail
       return async () => {
+        unsubscribe()
+        await lifecycleTail
         if (remoteHost === host) remoteHost = undefined
         await host.stop()
       }
