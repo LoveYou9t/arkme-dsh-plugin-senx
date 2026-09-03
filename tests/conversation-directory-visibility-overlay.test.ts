@@ -73,7 +73,7 @@ describe('conversation directory visibility overlay', () => {
     expect(overlay.has(conversationVisibilityKey('bot', 'stable-bot'))).toBe(true)
   })
 
-  it('fails open only for entries covered by the failed owner query', () => {
+  it('fails open for the affected scope when a refresh fails outside a local dismissal', () => {
     const first = conversationVisibilityScope([source('source-ref-a', 'source-a')], [bot('bot-ref-a', 'bot-a')])
     const second = conversationVisibilityScope([source('source-ref-b', 'source-b')], [bot('bot-ref-b', 'bot-b')])
     let overlay = emptyConversationVisibilityOverlay()
@@ -101,7 +101,32 @@ describe('conversation directory visibility overlay', () => {
       new Set([protectedSource]),
     )
 
-    expect([...overlay]).toEqual([protectedSource])
+    expect([...overlay]).toEqual([protectedSource, hiddenBot])
+  })
+
+  it('keeps earlier confirmed hidden rows when the refresh after another dismissal fails', () => {
+    const scope = conversationVisibilityScope([
+      source('source-ref-a', 'source-a'),
+      source('source-ref-b', 'source-b'),
+      source('source-ref-c', 'source-c'),
+    ], [])
+    const protectedSource = conversationVisibilityKey('source', 'source-c')
+    let overlay = applyConversationVisibilityQueryFailure(
+      new Set([
+        conversationVisibilityKey('source', 'source-a'),
+        conversationVisibilityKey('source', 'source-b'),
+      ]),
+      scope,
+      new Set([protectedSource]),
+    )
+
+    overlay = dismissConversationVisibilityEntry(overlay, 'source', 'source-c')
+
+    expect([...overlay]).toEqual([
+      conversationVisibilityKey('source', 'source-a'),
+      conversationVisibilityKey('source', 'source-b'),
+      protectedSource,
+    ])
   })
 
   it('adds the stable presentation identity only after an accepted local dismissal', () => {

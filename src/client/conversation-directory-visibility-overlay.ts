@@ -118,8 +118,7 @@ export function applyConversationVisibilityQueryFailure(
   scope: ConversationVisibilityScope,
   protectedKeys: ConversationVisibilityOverlay = emptyConversationVisibilityOverlay(),
 ): ConversationVisibilityOverlay {
-  const refreshableKeys = new Set([...scope.keys].filter(key => !protectedKeys.has(key)))
-  return withoutKeys(current, refreshableKeys)
+  return protectedKeys.size > 0 ? current : withoutKeys(current, scope.keys)
 }
 
 export function dismissConversationVisibilityEntry(
