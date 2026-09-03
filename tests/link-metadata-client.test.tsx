@@ -12,7 +12,7 @@ function expectLinkLabel(renderer: ReturnType<typeof create>, label: string): vo
 }
 
 describe('Arkme link metadata presentation', () => {
-  it('keeps the raw clickable URL first, then replaces only its label with the resolved title', async () => {
+  it('keeps the original href clickable while showing a title-style label', async () => {
     const pending = Promise.withResolvers<{ url: string; title: string } | null>()
     const resolver: ArkmeLinkMetadataResolver = { resolve: vi.fn(async () => await pending.promise) }
     let renderer: ReturnType<typeof create>
@@ -20,7 +20,9 @@ describe('Arkme link metadata presentation', () => {
     await act(async () => { renderer = create(<ArkmeLinkText text="查看 https://jotmo.ai/path" metadataResolver={resolver} />) })
     let anchor = renderer!.root.findByProps({ 'data-arkme-text-link': 'true' })
     expect(anchor.props.href).toBe('https://jotmo.ai/path')
-    expectLinkLabel(renderer!, 'https://jotmo.ai/path')
+    expect(anchor.props.title).toBe('https://jotmo.ai/path')
+    expect(anchor.props['data-arkme-link-title']).toBe('fallback')
+    expectLinkLabel(renderer!, '分享链接')
 
     await act(async () => {
       pending.resolve({ url: 'https://jotmo.ai/path', title: '即我 Jotmo' })
@@ -59,7 +61,7 @@ describe('Arkme link metadata presentation', () => {
     expect(renderer!.root.findAll(node => node.type === 'svg' && node.props['data-arkme-link-icon'] === 'true')).toHaveLength(1)
   })
 
-  it('retains the raw URL when metadata is missing or resolution fails', async () => {
+  it('uses the shared fallback label when metadata is missing or resolution fails', async () => {
     const missing: ArkmeLinkMetadataResolver = { resolve: vi.fn(async () => null) }
     const failed: ArkmeLinkMetadataResolver = { resolve: vi.fn(async () => { throw new Error('offline') }) }
     let missingRenderer: ReturnType<typeof create>
@@ -71,8 +73,28 @@ describe('Arkme link metadata presentation', () => {
       await Promise.resolve()
     })
 
-    expectLinkLabel(missingRenderer!, 'https://missing.example.com')
-    expectLinkLabel(failedRenderer!, 'https://failed.example.com')
+    expectLinkLabel(missingRenderer!, '分享链接')
+    expectLinkLabel(failedRenderer!, '分享链接')
+    expect(missingRenderer!.root.findByProps({ 'data-arkme-text-link': 'true' }).props['data-arkme-link-title']).toBe('fallback')
+    expect(failedRenderer!.root.findByProps({ 'data-arkme-text-link': 'true' }).props['data-arkme-link-title']).toBe('fallback')
+  })
+
+  it('uses the fallback label when Host returns a generic page title', async () => {
+    const generic: ArkmeLinkMetadataResolver = {
+      resolve: vi.fn(async () => ({ url: 'https://jiwo.cc/app/share/extension/extshare_0123456789abcdef0123456789abcdef', title: '即我' })),
+    }
+    let renderer: ReturnType<typeof create>
+
+    await act(async () => {
+      renderer = create(<ArkmeLinkText
+        text="https://jiwo.cc/app/share/extension/extshare_0123456789abcdef0123456789abcdef"
+        metadataResolver={generic}
+      />)
+      await Promise.resolve()
+    })
+
+    expectLinkLabel(renderer!, '分享链接')
+    expect(renderer!.root.findByProps({ 'data-arkme-text-link': 'true' }).props['data-arkme-link-title']).toBe('fallback')
   })
 
   it('keeps IP links clickable without fetching metadata, matching Jotmo link-title eligibility', async () => {
@@ -239,6 +261,23 @@ describe('Arkme link metadata presentation', () => {
       title: 'repo · Change #42',
     })
     expect(callHost).not.toHaveBeenCalled()
+  })
+
+  it('resolves extension share link labels from Host metadata instead of a deterministic generic label', async () => {
+    const url = 'https://jiwo.cc/app/share/extension/extshare_0123456789abcdef0123456789abcdef'
+    const callHost = vi.fn(async (_operation: 'link.metadata', params?: Record<string, unknown>) => ({
+      url: String(params?.url),
+      title: '指尖烟花 - 即我扩展',
+      siteName: 'jiwo.cc',
+    }))
+    const resolver = new ArkmeHostLinkMetadataResolver(callHost)
+
+    await expect(resolver.resolve(url)).resolves.toEqual({
+      url,
+      title: '指尖烟花 - 即我扩展',
+      siteName: 'jiwo.cc',
+    })
+    expect(callHost).toHaveBeenCalledWith('link.metadata', { url })
   })
 
   it('deduplicates fragments because they identify the same metadata document', async () => {
