@@ -59,6 +59,11 @@ interface ArkmeChatDirectoryMetadata {
   latestSequence: number
 }
 
+export interface ArkmePrivateChatViewerLabel {
+  displayName: string
+  remark: string
+}
+
 interface CacheEntry<T> { value: T; expiresAtMillis: number }
 
 export interface ArkmeSourceRecordReader {
@@ -455,20 +460,32 @@ export class SourceService {
     userIds: readonly number[],
     options: { signal?: AbortSignal } = {},
   ): Promise<Map<number, string>> {
+    const labels = await this.privateChatViewerLabelsByUserIds(userIds, options)
+    return new Map([...labels].map(([userId, label]) => [userId, label.displayName]))
+  }
+
+  /**
+   * Resolve the current viewer's private-chat display label and its exact
+   * remark source without compressing fallback snapshots into remark facts.
+   */
+  async privateChatViewerLabelsByUserIds(
+    userIds: readonly number[],
+    options: { signal?: AbortSignal } = {},
+  ): Promise<Map<number, ArkmePrivateChatViewerLabel>> {
     const session = await this.runtime.requireSession()
     const remaining = new Set(userIds.filter(userId => Number.isSafeInteger(userId) && userId > 0 && userId !== session.userId))
-    const displayNames = new Map<number, string>()
+    const labels = new Map<number, ArkmePrivateChatViewerLabel>()
     let pageCursor: Record<string, unknown> | undefined
 
     // The chat directory is paged newest-first. Bound the scan so an unusually
-    // large history cannot make rendering a World page unbounded.
+    // large history cannot make a viewer-label projection unbounded.
     for (let page = 0; page < 20 && remaining.size > 0; page += 1) {
       const data = await this.runtime.authenticatedChatPost<Record<string, unknown>>(
         '/api/v1/chats/list',
         { limit: 50, ...(pageCursor === undefined ? {} : { page_cursor: pageCursor }) },
         session,
         options.signal,
-        { lane: 'background-read', key: `world-author-labels:${pageCursor === undefined ? 'first' : String(page)}` },
+        { lane: 'background-read', key: `private-chat-viewer-labels:${pageCursor === undefined ? 'first' : String(page)}` },
       )
       for (const raw of listValue(data.items)) {
         const bundle = objectValue(raw)
@@ -479,12 +496,13 @@ export class SourceService {
         if (!remaining.has(targetUserId)) continue
         const supplement = objectValue(bundle.private_supplement)
         const counterpart = objectValue(bundle.private_counterpart)
-        const displayName = stringValue(supplement.remark).trim()
+        const remark = stringValue(supplement.remark).trim()
+        const displayName = remark
           || stringValue(supplement.counterpart_name_snapshot).trim()
           || stringValue(counterpart.display_name_snapshot).trim()
           || stringValue(supplement.pending_name).trim()
           || stringValue(counterpart.visible_phone).trim()
-        if (displayName !== '') displayNames.set(targetUserId, displayName)
+        if (displayName !== '') labels.set(targetUserId, { displayName, remark })
         remaining.delete(targetUserId)
       }
       if (data.has_more !== true) break
@@ -492,7 +510,7 @@ export class SourceService {
       if (Object.keys(next).length === 0) break
       pageCursor = next
     }
-    return displayNames
+    return labels
   }
 
   /**
