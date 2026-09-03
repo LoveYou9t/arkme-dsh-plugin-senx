@@ -14,7 +14,7 @@ import { ArkmeFileViewer, ArkmeFileActions, arkmeLocalFileUrl, arkmeFileSize, us
 import { arkmeCanInlineLocalFile, arkmeVisibleUploadFraction } from '../file-transfer-contract.js'
 import { createArkmeSdk } from '../sdk/index.js'
 import { ArkmeMentionText, ArkmeRichText } from './ArkmeRichText.js'
-import type { ArkmeLinkRenderer } from './ArkmeLinkText.js'
+import type { ArkmeLinkLabelMode, ArkmeLinkRenderer } from './ArkmeLinkText.js'
 
 const mediaRoute = '/arkme-self/api/media'
 const textCollapseCharacterThreshold = 300
@@ -112,10 +112,12 @@ function ArkmeLinkIcon({ size = 16 }: { size?: number }) {
 function ArkmeMessageCopyLink({
   href,
   sid,
+  linkLabelMode,
   onMessageCopyLinkOpen,
 }: {
   href: string
   sid: string
+  linkLabelMode: ArkmeLinkLabelMode
   onMessageCopyLinkOpen?: (sid: string) => void
 }) {
   const open = () => {
@@ -130,6 +132,7 @@ function ArkmeMessageCopyLink({
     tabIndex={0}
     style={styles.inlineLink}
     data-arkme-inline-link="message-copy-link"
+    data-arkme-link-mode={linkLabelMode}
     title={href}
     onClick={event => {
       event.stopPropagation()
@@ -144,18 +147,20 @@ function ArkmeMessageCopyLink({
     }}
   >
     <ArkmeLinkIcon />
-    <span style={styles.inlineLinkTitle}>快记分享链接</span>
+    <span style={styles.inlineLinkTitle} data-arkme-link-label="true">{linkLabelMode === 'raw' ? href : '快记分享链接'}</span>
   </span>
 }
 
 function ArkmeMessageRichText({
   text,
   highlightMentions,
+  linkLabelMode,
   shareWebsite,
   onMessageCopyLinkOpen,
 }: {
   text: string
   highlightMentions: boolean
+  linkLabelMode: ArkmeLinkLabelMode
   shareWebsite?: string
   onMessageCopyLinkOpen?: (sid: string) => void
 }) {
@@ -165,10 +170,11 @@ function ArkmeMessageRichText({
     return <ArkmeMessageCopyLink
       href={link.href}
       sid={sid}
+      linkLabelMode={linkLabelMode}
       {...(onMessageCopyLinkOpen === undefined ? {} : { onMessageCopyLinkOpen })}
     />
   }
-  return <ArkmeRichText text={text} highlightMentions={highlightMentions} renderLink={renderLink} />
+  return <ArkmeRichText text={text} highlightMentions={highlightMentions} linkLabelMode={linkLabelMode} renderLink={renderLink} />
 }
 
 function mediaUrl(block: ArkmeContentBlock): string {
@@ -215,6 +221,7 @@ function LongText({
   highlightMentions = false,
   collapseText = true,
   expanded = false,
+  linkLabelMode,
   shareWebsite,
   onMessageCopyLinkOpen,
 }: {
@@ -222,6 +229,7 @@ function LongText({
   highlightMentions?: boolean
   collapseText?: boolean
   expanded?: boolean
+  linkLabelMode: ArkmeLinkLabelMode
   shareWebsite?: string
   onMessageCopyLinkOpen?: (sid: string) => void
 }) {
@@ -230,6 +238,7 @@ function LongText({
   const content = <ArkmeMessageRichText
     text={text}
     highlightMentions={highlightMentions}
+    linkLabelMode={linkLabelMode}
     {...(shareWebsite === undefined ? {} : { shareWebsite })}
     {...(onMessageCopyLinkOpen === undefined ? {} : { onMessageCopyLinkOpen })}
   />
@@ -742,6 +751,7 @@ export function ArkmeMessageContent({ item, sourceRef, onLongArticleUpdated, hig
   const openAsFile = (block: ArkmeContentBlock) => { setPreview({ block, forceDownload: true }) }
   const isArticle = item.templateKind === 8 || item.displayKind === 1
   const text = item.textContent || (!isArticle && blocks.length === 0 ? item.title : '')
+  const linkLabelMode: ArkmeLinkLabelMode = presentation === 'detail' ? 'raw' : 'resolved'
   // Only a voice note's single audio owns its transcript. Generic/mixed
   // attachments must keep their original ordering and separate body text.
   const isVoiceNote = item.templateKind === 3 || item.templateKind === 4
@@ -757,6 +767,7 @@ export function ArkmeMessageContent({ item, sourceRef, onLongArticleUpdated, hig
   >{withTranscript && text !== '' ? <ArkmeMessageRichText
       text={text}
       highlightMentions={highlightMentions}
+      linkLabelMode={linkLabelMode}
       {...(shareWebsite === undefined ? {} : { shareWebsite })}
       {...(onMessageCopyLinkOpen === undefined ? {} : { onMessageCopyLinkOpen })}
     /> : undefined}</ArkmeVoiceContent>
@@ -793,6 +804,7 @@ export function ArkmeMessageContent({ item, sourceRef, onLongArticleUpdated, hig
             highlightMentions={highlightMentions}
             collapseText={collapseText}
             expanded={presentation === 'detail'}
+            linkLabelMode={linkLabelMode}
             {...(shareWebsite === undefined ? {} : { shareWebsite })}
             {...(onMessageCopyLinkOpen === undefined ? {} : { onMessageCopyLinkOpen })}
           />}
@@ -831,9 +843,9 @@ export function ArkmeRecordDetailContent({ item, sourceRef, showOriginal = false
     : item.aiPolish?.state === 'polished' && item.aiPolish.polishedText !== undefined
       ? item.aiPolish.polishedText : item.textContent
   if (item.contentBlocks?.some(block => block.kind === 'audio') === true) {
-    return <ArkmeMessageContent item={{ ...item, textContent: text }} {...(sourceRef === undefined ? {} : { sourceRef })} collapseText={false} highlightMentions />
+    return <ArkmeMessageContent item={{ ...item, textContent: text }} {...(sourceRef === undefined ? {} : { sourceRef })} collapseText={false} presentation="detail" highlightMentions />
   }
-  return <p style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontSize: 16, lineHeight: '26px' }}><ArkmeRichText text={text || item.title || '非文本内容'} highlightMentions /></p>
+  return <p style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontSize: 16, lineHeight: '26px' }}><ArkmeRichText text={text || item.title || '非文本内容'} highlightMentions linkLabelMode="raw" /></p>
 }
 
 export function ArkmeAttachmentDraftTile({ asset, previewUrl, onRemove, onOpen, disabled = false }: {
