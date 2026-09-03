@@ -542,7 +542,7 @@ export function apply(ctx: Context, config: Config): void {
         stateDirectory, 'dsh-remote', 'ledger',
         createHash('sha256').update(`dsh-remote-ledger-account-v1\n${accountId}`).digest('base64url'),
       ), key),
-      turnUploadForAccount: (accountId, key, maxObjectBytes) => new DshRemoteTurnUploadOutbox({
+      turnUploadForAccount: (accountId, key, maxObjectBytes, callbacks) => new DshRemoteTurnUploadOutbox({
         directory: join(
           stateDirectory, 'dsh-remote', 'history',
           createHmac('sha256', key)
@@ -553,9 +553,11 @@ export function apply(ctx: Context, config: Config): void {
         key,
         maxObjectBytes,
         controlPlane,
-        onError: error => {
+        onError: (error, sessionRef) => {
+          callbacks.onError(error, sessionRef)
           ctx.logger.warn('dsh-arkme: Turn OSS upload deferred: %s', error instanceof Error ? error.message : String(error))
         },
+        onFinalized: callbacks.onFinalized,
       }),
     })
     remoteHost = host

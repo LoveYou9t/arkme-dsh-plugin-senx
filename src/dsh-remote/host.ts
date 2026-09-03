@@ -127,7 +127,12 @@ export interface ArkmeRemoteRealtimeHostOptions {
   realtime: DshRemoteRealtimeTransport
   apiProxy: DshApiProxyAdapter
   ledgerForAccount: (accountId: string, key: Buffer) => Promise<DshRemoteCommandLedger> | DshRemoteCommandLedger
-  turnUploadForAccount?: (accountId: string, key: Buffer, maxObjectBytes: number) => DshRemoteTurnUploadOutbox
+  turnUploadForAccount?: (
+    accountId: string,
+    key: Buffer,
+    maxObjectBytes: number,
+    callbacks: { onError: (error: unknown, sessionRef?: string) => void; onFinalized: (sessionRef: string) => void },
+  ) => DshRemoteTurnUploadOutbox
   sessionPersistence?: DshRemoteSessionPersistenceLike
   now?: () => number
   yieldToEventLoop?: () => Promise<void>
@@ -240,6 +245,7 @@ export class ArkmeRemoteRealtimeHost implements DshRemoteHostFacade {
   private sessionTimer: ReturnType<typeof setTimeout> | undefined
   private connectionError: DshRemoteError | undefined
   private historySyncError: DshRemoteError | undefined
+  private historySyncErrorSessionRef: string | undefined
   private projectionError: DshRemoteError | undefined
   private lastProjectionSyncAttemptMillis = 0
   private projectionVersion = 0
@@ -489,12 +495,32 @@ export class ArkmeRemoteRealtimeHost implements DshRemoteHostFacade {
       this.turnUpload !== undefined) return
     let outbox: DshRemoteTurnUploadOutbox | undefined
     try {
-      outbox = this.options.turnUploadForAccount?.(accountId, accountKey, capability.maxObjectBytes)
+      outbox = this.options.turnUploadForAccount?.(
+        accountId,
+        accountKey,
+        capability.maxObjectBytes,
+        {
+          onError: (error, sessionRef) => {
+            if (!this.historyOwnerMatches(accountId, runtime)) return
+            this.historySyncError = asDshRemoteError(error)
+            this.historySyncErrorSessionRef = sessionRef
+            this.bump()
+          },
+          onFinalized: sessionRef => {
+            if (!this.historyOwnerMatches(accountId, runtime) || this.historySyncError === undefined ||
+              this.historySyncErrorSessionRef !== sessionRef) return
+            this.historySyncError = undefined
+            this.historySyncErrorSessionRef = undefined
+            this.bump()
+          },
+        },
+      )
       await outbox?.activate(runtime)
       if (this.historyOwnerMatches(accountId, runtime)) {
         this.turnUpload = outbox
         if (outbox !== undefined && this.historySyncError !== undefined) {
           this.historySyncError = undefined
+          this.historySyncErrorSessionRef = undefined
           this.bump()
         }
         if (capability.backfillMode === 'local_persistence_v1') {
@@ -621,7 +647,7 @@ export class ArkmeRemoteRealtimeHost implements DshRemoteHostFacade {
       const ref = snapshot.header.id
       const revision = typeof snapshot.revision === 'string' ? snapshot.revision : ''
       return knownRefs.has(ref) && revision !== '' && revision.length <= 1024
-        && outbox.historyRevision(ref) !== revision
+        && outbox.needsHistoryRevision(ref, revision)
     })
     if (target === undefined) return false
 
@@ -654,11 +680,10 @@ export class ArkmeRemoteRealtimeHost implements DshRemoteHostFacade {
     signal.throwIfAborted()
     this.requireActiveAccount(accountId, runtime.runtimeRef)
     if (current === undefined || current.revision !== revision) return true
-    outbox.markHistoryRevision(sessionRef, revision)
-    if (this.historySyncError !== undefined) {
-      this.historySyncError = undefined
-      this.bump()
-    }
+    const throughSeq = source.events.reduce(
+      (latest, event) => Math.max(latest, event.seq), -1,
+    )
+    outbox.queueHistoryFinalization(sessionRef, revision, throughSeq)
     return true
   }
 
@@ -750,6 +775,7 @@ export class ArkmeRemoteRealtimeHost implements DshRemoteHostFacade {
     this.clientId = 0
     this.connectionError = undefined
     this.historySyncError = undefined
+    this.historySyncErrorSessionRef = undefined
     this.projectionError = undefined
     this.lastProjectionSyncAttemptMillis = 0
     this.projectionVersion = 0
@@ -1004,6 +1030,7 @@ export class ArkmeRemoteRealtimeHost implements DshRemoteHostFacade {
       catch (error) {
         if (!this.historyOwnerMatches(accountId, runtime)) return
         this.historySyncError = asDshRemoteError(error)
+        this.historySyncErrorSessionRef = sessionRef
         this.bump()
       }
     }

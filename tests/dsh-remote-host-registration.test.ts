@@ -69,7 +69,12 @@ async function fixture(input: {
   featureEnabled?: boolean
   session?: () => { userId: number; clientId: number } | undefined
   now?: () => number
-  turnUploadForAccount?: (accountId: string, key: Buffer, maxObjectBytes: number) => DshRemoteTurnUploadOutbox
+  turnUploadForAccount?: (
+    accountId: string,
+    key: Buffer,
+    maxObjectBytes: number,
+    callbacks: { onError: (error: unknown, sessionRef?: string) => void; onFinalized: (sessionRef: string) => void },
+  ) => DshRemoteTurnUploadOutbox
   turnObjectCapabilities?: () => Promise<Record<string, unknown>>
   knownHistorySessions?: (input: Record<string, unknown>, signal?: AbortSignal) => Promise<Record<string, unknown>>
   sessionPersistence?: DshRemoteSessionPersistenceLike
@@ -130,8 +135,8 @@ function historyOutbox() {
     activate: vi.fn(async () => undefined),
     close: vi.fn(async () => undefined),
     capture: vi.fn(async () => undefined),
-    historyRevision: vi.fn((sessionRef: string) => revisions.get(sessionRef)),
-    markHistoryRevision: vi.fn((sessionRef: string, revision: string) => { revisions.set(sessionRef, revision) }),
+    needsHistoryRevision: vi.fn((sessionRef: string, revision: string) => revisions.get(sessionRef) !== revision),
+    queueHistoryFinalization: vi.fn((sessionRef: string, revision: string) => { revisions.set(sessionRef, revision) }),
   }
 }
 
@@ -252,7 +257,11 @@ describe('Host login-only registration lifecycle', () => {
       available: true, storage_version: 'oss_turn_v1',
       coverage: 'live_completed_turns', content_encoding: 'gzip', max_object_bytes: 2048,
     })
-    await vi.waitFor(() => { expect(factory).toHaveBeenCalledWith('42', expect.any(Buffer), 2048) })
+    await vi.waitFor(() => {
+      expect(factory).toHaveBeenCalledWith('42', expect.any(Buffer), 2048, expect.objectContaining({
+        onError: expect.any(Function), onFinalized: expect.any(Function),
+      }))
+    })
     await host.stop()
   })
 
@@ -472,6 +481,30 @@ describe('Host login-only registration lifecycle', () => {
     await host.stop()
   })
 
+  it('projects background finalization failure and recovery without changing Host connection health', async () => {
+    const outbox = historyOutbox()
+    let callbacks: { onError: (error: unknown, sessionRef?: string) => void; onFinalized: (sessionRef: string) => void } | undefined
+    const { host } = await fixture({
+      turnUploadForAccount: (_accountId, _key, _maxObjectBytes, value) => {
+        callbacks = value
+        return outbox as unknown as DshRemoteTurnUploadOutbox
+      },
+    })
+    await host.start()
+    await vi.waitFor(() => { expect(callbacks).toBeDefined() })
+
+    callbacks!.onError(new DshRemoteError('REMOTE_NETWORK_UNAVAILABLE', 'finalization unavailable', true), 'session-01')
+    expect(host.getStatus()).toMatchObject({ connected: true, historySyncWarning: 'finalization unavailable' })
+    expect(host.getStatus().unavailableReason).toBeUndefined()
+
+    callbacks!.onFinalized('session-02')
+    expect(host.getStatus().historySyncWarning).toBe('finalization unavailable')
+    callbacks!.onFinalized('session-01')
+    expect(host.getStatus().historySyncWarning).toBeUndefined()
+    expect(host.getStatus().connected).toBe(true)
+    await host.stop()
+  })
+
   it('requeues only Backend-known cold sessions and checkpoints the stable DSH revision', async () => {
     const outbox = historyOutbox()
     const readFrom = vi.fn(async (sessionRef: string) => ({
@@ -516,7 +549,7 @@ describe('Host login-only registration lifecycle', () => {
     expect(outbox.capture.mock.calls.map(call => call[1].map(entry => entry.event.seq))).toEqual([
       [1, 2, 3], [4, 5],
     ])
-    expect(outbox.markHistoryRevision).toHaveBeenCalledWith('session-01', 'revision-1')
+    expect(outbox.queueHistoryFinalization).toHaveBeenCalledWith('session-01', 'revision-1', 5)
 
     await expect(internal.backfillOneHistorySession('42', internal.runtime, new AbortController().signal))
       .resolves.toBe(false)
@@ -556,7 +589,7 @@ describe('Host login-only registration lifecycle', () => {
 
     await expect(internal.backfillOneHistorySession('42', internal.runtime, new AbortController().signal))
       .resolves.toBe(true)
-    expect(outbox.markHistoryRevision).not.toHaveBeenCalled()
+    expect(outbox.queueHistoryFinalization).not.toHaveBeenCalled()
     await host.stop()
   })
 
@@ -595,7 +628,7 @@ describe('Host login-only registration lifecycle', () => {
       { event: historyEvent('assistant/message', 2) },
       { event: historyEvent('turn/end', 3) },
     ])
-    expect(outbox.markHistoryRevision).toHaveBeenCalledWith('session-01', 'revision-1')
+    expect(outbox.queueHistoryFinalization).toHaveBeenCalledWith('session-01', 'revision-1', 3)
     await host.stop()
   })
 
@@ -674,7 +707,7 @@ describe('Host login-only registration lifecycle', () => {
       .resolves.toBe(true)
     expect(outbox.capture).toHaveBeenCalledTimes(Math.ceil(events.length / 50))
     expect(outbox.capture.mock.calls.every(call => call[1].length <= 50)).toBe(true)
-    expect(outbox.markHistoryRevision).toHaveBeenCalledWith('session-01', 'revision-large')
+    expect(outbox.queueHistoryFinalization).toHaveBeenCalledWith('session-01', 'revision-large', 100_002)
     await host.stop()
   })
 })

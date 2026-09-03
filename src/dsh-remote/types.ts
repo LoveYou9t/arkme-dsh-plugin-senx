@@ -148,6 +148,8 @@ export interface DshRemoteControlPlane {
   prepareSessionTurnUpload?(input: Record<string, unknown>, signal?: AbortSignal): Promise<Record<string, unknown>>
   /** Commits an exact object only after Backend integrity verification. */
   commitSessionTurnUpload?(input: Record<string, unknown>, signal?: AbortSignal): Promise<Record<string, unknown>>
+  /** Finalizes one stable local history cut after every OSS Turn is committed. */
+  completeSessionTurnObjectHistory?(input: Record<string, unknown>, signal?: AbortSignal): Promise<Record<string, unknown>>
 }
 
 export type DshRemoteTimelineNodeKind =
