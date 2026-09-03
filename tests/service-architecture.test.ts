@@ -278,14 +278,16 @@ describe('Arkme service architecture', () => {
     expect(types).toContain("export type { ArkmeLinkMetadata } from './link-metadata.js'")
     expect(sdk).toContain("export type { ArkmeLinkMetadata } from '../link-metadata.js'")
     expect(metadata).toContain('export interface ArkmeLinkMetadata')
+    expect(metadata).toContain('export function arkmeExtensionShareRefFromLink')
     expect(metadata).toContain('export function arkmeKnownLinkMetadataFallback')
     expect(metadata).toContain('export function arkmeRequiredLinkMetadataFallback')
     expect(client).toContain('arkmeKnownLinkMetadataFallback')
     expect(service).not.toContain('arkmeRequiredLinkMetadataFallback')
     expect(host).toContain('arkmeRequiredLinkMetadataFallback')
+    expect(host).toContain('extensionManager.readSharedDetail')
     expect(client).not.toMatch(/Pull Request #|Change #/u)
     expect(service).not.toMatch(/Pull Request #|Change #/u)
-    expect(host.match(/service\.resolveLinkMetadata\(/gu) ?? []).toHaveLength(2)
+    expect(host.match(/service\.resolveLinkMetadata\(/gu) ?? []).toHaveLength(1)
   })
 
   it('does not invent recording speaker mutation contracts that the Audio owner does not expose', () => {

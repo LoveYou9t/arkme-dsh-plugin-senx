@@ -6123,9 +6123,7 @@ export function ArkmeSurface({
           />
           : ui.mode === 'world' ? <ArkmeWorldSurface
             {...(ui.worldTarget === undefined ? {} : { target: ui.worldTarget })}
-            {...(currentSessionId === undefined ? {} : { currentSessionId })}
             {...(auth?.status !== 'authenticated' ? {} : { currentUserId: auth.userId })}
-            {...(selfProfile?.avatarRef.trim() ? { currentUserAvatarRef: selfProfile.avatarRef.trim() } : {})}
             onBackToWorld={() => { arkmeUi.showWorld() }}
             onSourceActivated={activateSource}
           />

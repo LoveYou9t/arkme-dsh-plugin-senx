@@ -27,7 +27,12 @@ import { invokeArkmeBundle } from './extensions/bundle-runtime.js'
 import { DshRemoteError } from './dsh-remote/errors.js'
 import type { DshRemoteHostFacade } from './dsh-remote/types.js'
 import { ARKME_RUNTIME_INSTANCE_ID } from './runtime-instance.js'
-import { arkmeRequiredLinkMetadataFallback } from './link-metadata.js'
+import {
+  arkmeExtensionShareRefFromLink,
+  arkmeIsGenericLinkMetadataTitle,
+  arkmeRequiredLinkMetadataFallback,
+  type ArkmeLinkMetadata,
+} from './link-metadata.js'
 import type { ArkmeFileBackgroundSoundInput } from './file-transfer-contract.js'
 import { arkmeFileBackgroundSound, arkmeRichBackgroundSound } from './record-background-sound.js'
 import type { ManagedOpenApiMcpController } from './openapi-mcp/controller.js'
@@ -121,6 +126,43 @@ function browserUserBanSnapshot(snapshot: ArkmeUserBanOwnerSnapshot): ArkmeUserB
     banned: snapshot.banned,
     ...(snapshot.record === undefined ? {} : { record: browserUserBanRecord(snapshot.record) }),
   }
+}
+
+async function resolveExtensionShareLinkMetadata(
+  rawUrl: string,
+  pageMetadata: ArkmeLinkMetadata | null,
+  extensionManager: ArkmeExtensionManager | undefined,
+  signal?: AbortSignal,
+): Promise<ArkmeLinkMetadata | null> {
+  const shareRef = arkmeExtensionShareRefFromLink(rawUrl)
+  if (shareRef === undefined) return pageMetadata
+  const pageTitle = pageMetadata?.title.trim() ?? ''
+  if (pageMetadata !== null && !arkmeIsGenericLinkMetadataTitle(pageTitle) && pageTitle !== rawUrl) return pageMetadata
+  if (extensionManager === undefined) return pageMetadata
+  try {
+    const detail = await extensionManager.readSharedDetail(shareRef, signal)
+    const url = new URL(rawUrl)
+    const siteName = url.hostname.replace(/^www\./iu, '')
+    return {
+      url: url.href,
+      title: detail.name,
+      ...(detail.description.trim() === '' ? {} : { description: detail.description }),
+      ...(siteName === '' ? {} : { siteName }),
+    }
+  } catch (error) {
+    if (error instanceof Error && error.name === 'AbortError') throw error
+    return null
+  }
+}
+
+async function resolveArkmeLinkMetadata(
+  service: ArkmeService,
+  url: string,
+  options: { signal?: AbortSignal },
+  extensionManager?: ArkmeExtensionManager,
+): Promise<ArkmeLinkMetadata | null> {
+  const pageMetadata = await service.resolveLinkMetadata(url, options)
+  return await resolveExtensionShareLinkMetadata(url, pageMetadata, extensionManager, options.signal)
 }
 
 function billingIdentifierParam(
@@ -867,13 +909,13 @@ export async function dispatchArkmeHostOperation(
     case 'provider.instance': return { instanceId: ARKME_RUNTIME_INSTANCE_ID }
     case 'provider.state': return await service.providerState()
     case 'chat.realtime.state': return service.chatRealtimeState()
-    case 'link.metadata': return await service.resolveLinkMetadata(
-      stringParam(params, 'url'), requestSignal === undefined ? {} : { signal: requestSignal },
+    case 'link.metadata': return await resolveArkmeLinkMetadata(
+      service, stringParam(params, 'url'), requestSignal === undefined ? {} : { signal: requestSignal }, extensionManager,
     )
     case 'source.link-metadata.resolve': {
       const url = stringParam(params, 'url')
-      return await service.resolveLinkMetadata(
-        url, requestSignal === undefined ? {} : { signal: requestSignal },
+      return await resolveArkmeLinkMetadata(
+        service, url, requestSignal === undefined ? {} : { signal: requestSignal }, extensionManager,
       ) ?? arkmeRequiredLinkMetadataFallback(url)
     }
     case 'plugin.update.status': return await requireUpdateManager(updateManager).status()

@@ -276,6 +276,90 @@ describe('link metadata Host API dispatch', () => {
     expect(service.resolveLinkMetadata).toHaveBeenCalledWith('https://jotmo.ai/path', { signal: request.signal })
   })
 
+  it('uses the extension share page title for Arkme extension share links', async () => {
+    const service = fakeService()
+    const url = 'https://jiwo.cc/app/share/extension/extshare_0123456789abcdef0123456789abcdef'
+    const pageMetadata = {
+      url,
+      title: '指尖烟花 - 即我扩展',
+      siteName: 'jiwo.cc',
+    }
+    service.resolveLinkMetadata.mockResolvedValueOnce(pageMetadata)
+    const request = new AbortController()
+    const extensionManager = {
+      readSharedDetail: vi.fn(async () => ({
+        name: '指尖烟花',
+        description: '点击夜空燃放烟花。',
+        visibility: 'public',
+        share_scope: 'link_readonly',
+        latest_stable_version: '1.0.0',
+        preview_images: [],
+        rating_summary: { average: 0, count: 0, histogram: [0, 0, 0, 0, 0] },
+      })),
+    }
+
+    await expect(dispatchArkmeHostOperation(
+      service as never,
+      'link.metadata',
+      { url },
+      undefined,
+      extensionManager as never,
+      undefined,
+      undefined,
+      request.signal,
+    )).resolves.toEqual({
+      url,
+      title: '指尖烟花 - 即我扩展',
+      siteName: 'jiwo.cc',
+    })
+    expect(service.resolveLinkMetadata).toHaveBeenCalledWith(url, { signal: request.signal })
+    expect(extensionManager.readSharedDetail).not.toHaveBeenCalled()
+  })
+
+  it('falls back to extension share detail when the page title is unavailable', async () => {
+    const service = fakeService()
+    const url = 'https://jiwo.cc/app/share/extension/extshare_0123456789abcdef0123456789abcdef'
+    const genericPageMetadata = {
+      url,
+      title: '即我',
+      siteName: 'jiwo.cc',
+    }
+    service.resolveLinkMetadata.mockResolvedValueOnce(genericPageMetadata)
+    const request = new AbortController()
+    const extensionManager = {
+      readSharedDetail: vi.fn(async () => ({
+        name: '指尖烟花',
+        description: '点击夜空燃放烟花。',
+        visibility: 'public',
+        share_scope: 'link_readonly',
+        latest_stable_version: '1.0.0',
+        preview_images: [],
+        rating_summary: { average: 0, count: 0, histogram: [0, 0, 0, 0, 0] },
+      })),
+    }
+
+    await expect(dispatchArkmeHostOperation(
+      service as never,
+      'link.metadata',
+      { url },
+      undefined,
+      extensionManager as never,
+      undefined,
+      undefined,
+      request.signal,
+    )).resolves.toEqual({
+      url,
+      title: '指尖烟花',
+      description: '点击夜空燃放烟花。',
+      siteName: 'jiwo.cc',
+    })
+    expect(service.resolveLinkMetadata).toHaveBeenCalledWith(url, { signal: request.signal })
+    expect(extensionManager.readSharedDetail).toHaveBeenCalledWith(
+      'extshare_0123456789abcdef0123456789abcdef',
+      request.signal,
+    )
+  })
+
   it('owns the public SDK non-null fallback without forwarding that policy into infrastructure', async () => {
     const service = fakeService()
     service.resolveLinkMetadata.mockResolvedValueOnce(null)
