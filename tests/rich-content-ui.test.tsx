@@ -116,7 +116,6 @@ describe('Arkme rich content presentation', () => {
       onMessageCopyLinkOpen={() => undefined}
     />)
     expect(copyLinkHtml).toContain('data-arkme-inline-link="message-copy-link"')
-    expect(copyLinkHtml).toContain('data-arkme-link-mode="resolved"')
     expect(copyLinkHtml).toContain('data-arkme-link-label="true">快记分享链接</span>')
     expect(copyLinkHtml).toContain('快记分享链接')
     expect(copyLinkHtml).not.toContain(`https://jiwo.cc/s/${sid}</p>`)
@@ -337,7 +336,6 @@ describe('Arkme rich content presentation', () => {
       title: '', textContent: '详情 https://example.com/detail',
     }} />)
     expect(detailHtml).toContain('href="https://example.com/detail"')
-    expect(detailHtml).toContain('data-arkme-link-mode="raw"')
     expect(detailHtml).toContain('data-arkme-link-label="true">https://example.com/detail</span>')
     expect(detailHtml).not.toContain('data-arkme-text-collapsible')
 
@@ -348,7 +346,6 @@ describe('Arkme rich content presentation', () => {
     }} />)
     expect(voiceHtml).toContain('data-arkme-voice-transcript')
     expect(voiceHtml).toContain('href="https://example.com/voice"')
-    expect(voiceHtml).toContain('data-arkme-link-mode="raw"')
     expect(voiceHtml).toContain('data-arkme-link-label="true">https://example.com/voice</span>')
 
     const collapsedHtml = renderToStaticMarkup(<ArkmeMessageContent item={{
@@ -357,7 +354,6 @@ describe('Arkme rich content presentation', () => {
     }} />)
     expect(collapsedHtml).toContain('data-arkme-text-collapsible="true"')
     expect(collapsedHtml).toContain('href="https://example.com/long"')
-    expect(collapsedHtml).toContain('data-arkme-link-mode="resolved"')
   })
 
   it('shows the original copied quick-link label in detail while retaining its business action', () => {
@@ -374,10 +370,13 @@ describe('Arkme rich content presentation', () => {
     />)
 
     const link = renderer.root.findByProps({ 'data-arkme-inline-link': 'message-copy-link' })
-    expect(link.props['data-arkme-link-mode']).toBe('raw')
-    expect(link.findByProps({ 'data-arkme-link-label': 'true' }).children).toEqual([
+    const label = link.findByProps({ 'data-arkme-link-label': 'true' })
+    expect(label.children).toEqual([
       `jiwo.cc/s/${sid}`,
     ])
+    expect(label.props.style).toMatchObject({ overflowWrap: 'anywhere', whiteSpace: 'normal' })
+    expect(label.props.style.overflow).toBeUndefined()
+    expect(label.props.style.textOverflow).toBeUndefined()
 
     link.props.onClick({ stopPropagation: vi.fn() })
     expect(onOpen).toHaveBeenCalledWith(sid)
@@ -413,14 +412,12 @@ describe('Arkme rich content presentation', () => {
     }
     const polishedHtml = renderToStaticMarkup(<ArkmeTimelineDetailDrawer item={item} showOriginal={false} onClose={() => undefined} onToggleOriginal={() => undefined} />)
     expect(polishedHtml).toContain('href="https://polished.example.com"')
-    expect(polishedHtml).toContain('data-arkme-link-mode="raw"')
     expect(polishedHtml).toContain('data-arkme-link-label="true">https://polished.example.com</span>')
     expect(polishedHtml).not.toContain('original.example.com')
     expect(polishedHtml).not.toContain('current.example.com')
 
     const originalHtml = renderToStaticMarkup(<ArkmeTimelineDetailDrawer item={item} showOriginal onClose={() => undefined} onToggleOriginal={() => undefined} />)
     expect(originalHtml).toContain('href="https://original.example.com"')
-    expect(originalHtml).toContain('data-arkme-link-mode="raw"')
     expect(originalHtml).toContain('data-arkme-link-label="true">https://original.example.com</span>')
     expect(originalHtml).not.toContain('polished.example.com')
     expect(originalHtml).not.toContain('current.example.com')
@@ -436,7 +433,6 @@ describe('Arkme rich content presentation', () => {
     expect(articlePreviewHtml).not.toContain('data-arkme-text-link')
     const articleDetailHtml = renderToStaticMarkup(<ArkmeMessageContent item={article} presentation="detail" />)
     expect(articleDetailHtml).toContain('href="https://example.com/article"')
-    expect(articleDetailHtml).toContain('data-arkme-link-mode="raw"')
     expect(articleDetailHtml).toContain('data-arkme-link-label="true">https://example.com/article</span>')
 
     const forward = {
@@ -450,7 +446,6 @@ describe('Arkme rich content presentation', () => {
     expect(forwardPreviewHtml).not.toContain('data-arkme-text-link')
     const forwardDetailHtml = renderToStaticMarkup(<ForwardRecordsDetail item={forward} onClose={() => {}} />)
     expect(forwardDetailHtml).toContain('href="https://example.com/forward"')
-    expect(forwardDetailHtml).toContain('data-arkme-link-mode="raw"')
     expect(forwardDetailHtml).toContain('data-arkme-link-label="true">https://example.com/forward</span>')
   })
 
@@ -459,7 +454,6 @@ describe('Arkme rich content presentation', () => {
       itemUid: 'direct-detail-link', senderName: '我', isMe: true, sendAtMillis: 1, status: 1,
       title: '', textContent: '直接详情 https://example.com/direct',
     }} />)
-    expect(textHtml).toContain('data-arkme-link-mode="raw"')
     expect(textHtml).toContain('data-arkme-link-label="true">https://example.com/direct</span>')
 
     const voiceHtml = renderToStaticMarkup(<ArkmeRecordDetailContent item={{
@@ -470,7 +464,6 @@ describe('Arkme rich content presentation', () => {
         mimeType: 'audio/mp4', size: 3, sortOrder: 0,
       }],
     }} />)
-    expect(voiceHtml).toContain('data-arkme-link-mode="raw"')
     expect(voiceHtml).toContain('data-arkme-link-label="true">https://example.com/direct-voice</span>')
   })
 

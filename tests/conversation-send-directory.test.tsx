@@ -3682,7 +3682,6 @@ describe('conversation send directory projection', () => {
 
     const detail = renderer!.root.findByProps({ 'data-arkme-copy-link-detail': 'true' })
     const link = detail.find(node => node.type === 'a' && node.props.href === 'https://example.com/single')
-    expect(link.props['data-arkme-link-mode']).toBe('raw')
     expect(link.findByProps({ 'data-arkme-link-label': 'true' }).children).toEqual([
       'https://example.com/single',
     ])
@@ -3722,7 +3721,6 @@ describe('conversation send directory projection', () => {
       'https://example.com/extension',
     ]) {
       const link = detail.find(node => node.type === 'a' && node.props.href === href)
-      expect(link.props['data-arkme-link-mode']).toBe('raw')
       expect(link.findByProps({ 'data-arkme-link-label': 'true' }).children).toEqual([href])
     }
   })

@@ -21,7 +21,12 @@ const linkPresentationStyle: CSSProperties = {
   verticalAlign: 'text-bottom',
 }
 const linkIconStyle: CSSProperties = { width: 16, height: 16, flex: 'none' }
-const rawLinkLabelStyle: CSSProperties = { minWidth: 0 }
+const rawLinkLabelStyle: CSSProperties = {
+  minWidth: 0,
+  overflowWrap: 'anywhere',
+  wordBreak: 'break-word',
+  whiteSpace: 'normal',
+}
 const resolvedLinkLabelStyle: CSSProperties = {
   ...rawLinkLabelStyle,
   overflow: 'hidden',
@@ -59,7 +64,7 @@ export function ArkmeTextLink({ href, text, linkLabelMode = 'resolved', fallback
     return () => { active = false }
   }, [href, metadataResolver, shouldResolve])
 
-  const resolved = title !== ''
+  const resolved = linkLabelMode === 'resolved' && title !== ''
   const fallback = shouldResolve && !resolved
   const label = resolved ? title : fallback ? fallbackLabel : text
   return <a
@@ -69,7 +74,6 @@ export function ArkmeTextLink({ href, text, linkLabelMode = 'resolved', fallback
     title={resolved || fallback ? href : undefined}
     style={linkPresentationStyle}
     data-arkme-text-link="true"
-    data-arkme-link-mode={linkLabelMode}
     data-arkme-link-title={resolved ? 'resolved' : fallback ? 'fallback' : 'raw'}
   >
     <LinkIcon aria-hidden style={linkIconStyle} data-arkme-link-icon="true" />

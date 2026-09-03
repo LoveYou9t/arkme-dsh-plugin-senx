@@ -59,6 +59,7 @@ const styles: Record<string, CSSProperties> = {
   sharedRecordingParticipants: { margin: '7px 0 0', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: arkmeTheme.tertiary, fontSize: 12, lineHeight: 1.3 },
   inlineLink: { display: 'inline-flex', alignItems: 'baseline', gap: 4, maxWidth: '100%', color: 'var(--dsw-alias-state-business-primary, #007aff)', textDecoration: 'none', cursor: 'pointer', verticalAlign: 'baseline' },
   inlineLinkTitle: { minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+  inlineRawLinkTitle: { minWidth: 0, overflowWrap: 'anywhere', wordBreak: 'break-word', whiteSpace: 'normal' },
   previewOverlay: { position: 'fixed', inset: 0, zIndex: 1000, display: 'grid', placeItems: 'center', padding: 48, boxSizing: 'border-box', background: 'rgba(0,0,0,.78)' },
   previewBody: { position: 'relative', width: 'min(960px, 90vw)', height: 'min(720px, 82vh)' },
   previewViewport: { width: '100%', height: '100%', overflowX: 'hidden', overscrollBehavior: 'contain', scrollbarGutter: 'stable', touchAction: 'none' },
@@ -134,7 +135,6 @@ function ArkmeMessageCopyLink({
     tabIndex={0}
     style={styles.inlineLink}
     data-arkme-inline-link="message-copy-link"
-    data-arkme-link-mode={linkLabelMode}
     title={href}
     onClick={event => {
       event.stopPropagation()
@@ -149,7 +149,7 @@ function ArkmeMessageCopyLink({
     }}
   >
     <ArkmeLinkIcon />
-    <span style={styles.inlineLinkTitle} data-arkme-link-label="true">{linkLabelMode === 'raw' ? text : '快记分享链接'}</span>
+    <span style={linkLabelMode === 'raw' ? styles.inlineRawLinkTitle : styles.inlineLinkTitle} data-arkme-link-label="true">{linkLabelMode === 'raw' ? text : '快记分享链接'}</span>
   </span>
 }
 
