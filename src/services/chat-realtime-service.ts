@@ -20,7 +20,12 @@ import {
 } from './desktop-attention-bridge.js'
 
 export interface ArkmeChatProjectionReader {
-  chatTimelineItems(data: Record<string, unknown>, session: ArkmeSessionCredentials, chatSessionUid: string): Promise<ArkmeTimelineItem[]>
+  chatTimelineItems(
+    data: Record<string, unknown>,
+    session: ArkmeSessionCredentials,
+    chatSessionUid: string,
+    sourceKind?: 'private_chat' | 'group_chat',
+  ): Promise<ArkmeTimelineItem[]>
 }
 
 export interface ArkmeNativeAttentionDispatcher {
@@ -188,12 +193,45 @@ export class ChatRealtimeService {
       void this.handleReadCursorAdvanced(notice.readCursorAdvanced)
       return
     }
+    if (notice.cause === 'chat-hint' && notice.timelineChanged !== undefined) {
+      void this.handleTimelineChanged(notice.timelineChanged)
+      return
+    }
     if (notice.cause === 'chat-hint' && notice.hint !== undefined) {
       this.scheduleChatSessionProjection(
         notice.hint.chatSessionUid,
         notice.hint.latestSequence,
         { hint: notice.hint, connectionGeneration: notice.state.connectionGeneration, attempts: 0 },
       )
+    }
+  }
+
+  private async handleTimelineChanged(
+    hint: NonNullable<ArkmeChatRealtimeNotice['timelineChanged']>,
+  ): Promise<void> {
+    try {
+      const session = await this.runtime.sessionStore.read()
+      if (session === undefined) return
+      const [sourceKey, timelineItemKey] = await Promise.all([
+        this.source.chatDirectorySourceKey(session.userId, hint.chatSessionUid),
+        this.source.chatTimelineItemKey(session.userId, hint.chatSessionUid, hint.relationUid),
+      ])
+      const activeSession = await this.runtime.sessionStore.read()
+      if (activeSession?.userId !== session.userId) return
+      this.emitChatClientEvent({
+        type: 'timeline-changed',
+        revision: this.nextChatClientRevision(),
+        sourceKey,
+        timelineItemKey,
+        changeKind: hint.changeKind,
+        changeVersion: hint.changeVersion,
+        relationTerminal: hint.relationTerminal,
+        throughSequence: hint.latestSequence,
+      })
+      this.scheduleChatSessionProjection(hint.chatSessionUid, hint.latestSequence)
+      void this.refreshAttentionSummary()
+    } catch (error) {
+      console.warn('dsh-arkme: Chat timeline invalidation failed:', safeFailureMessage(error))
     }
   }
 
@@ -565,7 +603,14 @@ export class ChatRealtimeService {
             key: `projection:tail:${uid}:${String(afterSequence)}:${String(notificationAttempt)}`,
           },
         )
-        return [uid, await this.projectionReader.chatTimelineItems(data, session, uid)] as const
+        const sessionKind = numberValue(objectValue(bundles.get(uid)).session_kind
+          ?? objectValue(objectValue(bundles.get(uid)).session).session_kind)
+        return [uid, await this.projectionReader.chatTimelineItems(
+          data,
+          session,
+          uid,
+          sessionKind === 2 ? 'group_chat' : sessionKind === 1 || sessionKind === 3 ? 'private_chat' : undefined,
+        )] as const
       }))
       results.forEach((result, index) => {
         const uid = chunk[index]?.[0]
