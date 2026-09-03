@@ -127,13 +127,24 @@ export interface DshRemoteControlPlane {
   syncWorkspaces(input: Record<string, unknown>, signal?: AbortSignal): Promise<Record<string, unknown>>
   syncSessions(input: Record<string, unknown>, signal?: AbortSignal): Promise<Record<string, unknown>>
   completeProjectionSnapshot(input: Record<string, unknown>, signal?: AbortSignal): Promise<Record<string, unknown>>
+  /** Legacy write contract retained for already shipped clients; the current Host does not invoke it. */
   appendSessionEvents(input: Record<string, unknown>, signal?: AbortSignal): Promise<Record<string, unknown>>
+  /** Legacy write contract retained for already shipped clients; the current Host does not invoke it. */
   sessionEventSyncStatuses(input: Record<string, unknown>, signal?: AbortSignal): Promise<Record<string, unknown>>
+  /** Legacy write contract retained for already shipped clients; the current Host does not invoke it. */
   completeSessionEventHistory(input: Record<string, unknown>, signal?: AbortSignal): Promise<Record<string, unknown>>
-  /** Optional during rolling upgrades; raw HistoryEntry remains the fallback. */
+  /** Legacy write contract retained for already shipped clients; the current Host does not invoke it. */
   syncSessionTurns?(input: Record<string, unknown>, signal?: AbortSignal): Promise<Record<string, unknown>>
-  /** Optional during rolling upgrades; raw HistoryEntry remains the fallback. */
+  /** Legacy write contract retained for already shipped clients; the current Host does not invoke it. */
   completeSessionTurnHistory?(input: Record<string, unknown>, signal?: AbortSignal): Promise<Record<string, unknown>>
+  /** Detects the Backend-owned Turn object storage contract without a version hard gate. */
+  turnObjectUploadCapabilities?(signal?: AbortSignal): Promise<Record<string, unknown>>
+  /** Intersects local opaque Session refs with the signed-in Backend account. */
+  knownHistorySessions?(input: Record<string, unknown>, signal?: AbortSignal): Promise<Record<string, unknown>>
+  /** Host-internal Turn object upload contract. Signed URLs never cross into Browser/SDK/Tools. */
+  prepareSessionTurnUpload?(input: Record<string, unknown>, signal?: AbortSignal): Promise<Record<string, unknown>>
+  /** Commits an exact object only after Backend integrity verification. */
+  commitSessionTurnUpload?(input: Record<string, unknown>, signal?: AbortSignal): Promise<Record<string, unknown>>
 }
 
 export type DshRemoteTimelineNodeKind =
