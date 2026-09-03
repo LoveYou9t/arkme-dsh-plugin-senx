@@ -353,4 +353,46 @@ describe('ChatRealtimeService', () => {
         .map(index => `event-${String(index)}`))
     service.dispose()
   })
+
+  it('relays a same-account preference hint as Browser invalidation without owner payload', async () => {
+    const sessions: ArkmeSessionStore = {
+      async read() { return { userId: 10001, accessToken: 'access', refreshToken: 'refresh' } },
+      async write() {}, async delete() {},
+    }
+    const runtime = new ServiceRuntime(config, sessions, {} as StateStore)
+    const source = new SourceService(runtime, new ProfileService(runtime), {
+      async summary() { return { recordCount: 0, wordsCount: 0, totalSec: 0 } }, recordItem() { return undefined },
+    })
+    const service = new ChatRealtimeService(runtime, source, { async chatTimelineItems() { return [] } })
+    const events: unknown[] = []
+    service.subscribeChatRealtime(event => { events.push(event) })
+
+    service.handleChatRealtimeNotice({
+      cause: 'conversation-list-preference-invalidation',
+      state: { revision: 2, connected: true, connectionGeneration: 1 },
+      conversationListPreferenceUpdated: {
+        eventUid: 'preference-event-1', userId: 10001,
+        items: [{ entityKind: 1, entityUid: 'chat-secret', revision: 3 }],
+        acceptedAtMillis: 123459, sourceClientId: 501,
+      },
+    })
+
+    await vi.waitFor(() => { expect(events).toHaveLength(1) })
+    expect(events[0]).toEqual({ type: 'conversation-list-preference-invalidated', revision: 1 })
+    expect(JSON.stringify(events[0])).not.toContain('chat-secret')
+
+    service.handleChatRealtimeNotice({
+      cause: 'conversation-list-preference-invalidation',
+      state: { revision: 2, connected: true, connectionGeneration: 1 },
+      conversationListPreferenceUpdated: {
+        eventUid: 'preference-event-other-account', userId: 20002,
+        items: [{ entityKind: 1, entityUid: 'chat-secret', revision: 3 }],
+        acceptedAtMillis: 123459, sourceClientId: 501,
+      },
+    })
+
+    await new Promise(resolve => setTimeout(resolve, 10))
+    expect(events).toHaveLength(1)
+    service.dispose()
+  })
 })

@@ -189,6 +189,13 @@ export class ChatRealtimeService {
       void this.invalidateRecordProjection()
       return
     }
+    if (notice.cause === 'conversation-list-preference-invalidation'
+      && notice.conversationListPreferenceUpdated !== undefined) {
+      void this.invalidateConversationListPreferenceForCurrentSession(
+        notice.conversationListPreferenceUpdated.userId,
+      )
+      return
+    }
     if (notice.cause === 'chat-hint' && notice.readCursorAdvanced !== undefined) {
       void this.handleReadCursorAdvanced(notice.readCursorAdvanced)
       return
@@ -417,6 +424,21 @@ export class ChatRealtimeService {
     this.attentionSummaryVersion = 0
     this.attentionSummaryFingerprint = ''
     this.latestAttentionSummary = undefined
+  }
+
+  /** Browser invalidation only; raw source/Bot caches belong to different projections. */
+  async invalidateConversationListPreferenceForCurrentSession(expectedUserId?: number): Promise<void> {
+    try {
+      const session = await this.runtime.sessionStore.read()
+      if (session === undefined
+        || expectedUserId !== undefined && session.userId !== expectedUserId) return
+      this.emitChatClientEvent({
+        type: 'conversation-list-preference-invalidated',
+        revision: this.nextChatClientRevision(),
+      })
+    } catch (error) {
+      console.warn('dsh-arkme: Conversation-list preference invalidation failed:', safeFailureMessage(error))
+    }
   }
 
   private async reconcileChatNotificationBaseline(connectionGeneration: number): Promise<void> {

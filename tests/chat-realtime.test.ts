@@ -2,10 +2,12 @@ import { describe, expect, it, vi } from 'vitest'
 import {
   ARKME_CHAT_READ_CURSOR_ADVANCED_BIZ_TYPE, ARKME_CHAT_SSE_PATH,
   ARKME_CHAT_TIMELINE_CHANGED_BIZ_TYPE,
+  ARKME_CONVERSATION_LIST_PREFERENCE_UPDATED_BIZ_TYPE,
   ARKME_PROJECTION_INVALIDATED_BIZ_TYPE, ARKME_RUNTIME_INSTANCE_ID_HEADER,
   ARKME_SSE_IDENTITY_VERSION, ARKME_SSE_IDENTITY_VERSION_HEADER, ArkmeChatRealtimeRuntime,
   decodeArkmeChatReadCursorAdvancedDataLine, decodeArkmeChatReceiveDataLine,
   decodeArkmeChatTimelineChangedDataLine,
+  decodeArkmeConversationListPreferenceUpdatedDataLine,
   decodeArkmeProjectionInvalidatedDataLine,
 } from '../src/chat-realtime.js'
 import { ARKME_RUNTIME_INSTANCE_ID } from '../src/runtime-instance.js'
@@ -122,6 +124,42 @@ describe('Arkme Chat realtime', () => {
     })}`)).toBeUndefined()
   })
 
+  it('decodes only metadata-only typed conversation preference invalidations', () => {
+    const hint = {
+      t: ARKME_CONVERSATION_LIST_PREFERENCE_UPDATED_BIZ_TYPE,
+      event_uid: 'conversation-preference-event-1',
+      user_id: 10001,
+      items: [
+        { entity_kind: 1, entity_uid: 'chat-1', revision: 3 },
+        { entity_kind: 2, entity_uid: 'bot-1', revision: 4 },
+      ],
+      accepted_at: 123459,
+      source_client_id: 501,
+    }
+    expect(decodeArkmeConversationListPreferenceUpdatedDataLine(
+      `data: ${JSON.stringify(hint)}`,
+    )).toEqual({
+      eventUid: 'conversation-preference-event-1',
+      userId: 10001,
+      items: [
+        { entityKind: 1, entityUid: 'chat-1', revision: 3 },
+        { entityKind: 2, entityUid: 'bot-1', revision: 4 },
+      ],
+      acceptedAtMillis: 123459,
+      sourceClientId: 501,
+    })
+    for (const extra of [
+      { visibility_state: 2 },
+      { dismissed_through_seq: 9 },
+      { unread_count: 1 },
+      { receiver_user_ids: [10001] },
+    ]) {
+      expect(decodeArkmeConversationListPreferenceUpdatedDataLine(
+        `data: ${JSON.stringify({ ...hint, ...extra })}`,
+      )).toBeUndefined()
+    }
+  })
+
   it('connects with Host credentials and advances one revision per unique hint', async () => {
     let stream!: ReadableStreamDefaultController<Uint8Array>
     const fetchImpl = vi.fn<typeof fetch>(async () => new Response(new ReadableStream<Uint8Array>({
@@ -157,8 +195,20 @@ describe('Arkme Chat realtime', () => {
     await vi.waitFor(() => { expect(runtime.state()).toMatchObject({ revision: 3, lastEventAtMillis: 123458 }) })
     stream.enqueue(encoder.encode(`data: ${JSON.stringify(recordProjectionHint)}\n\n`))
     await vi.waitFor(() => { expect(runtime.state()).toMatchObject({ revision: 4, lastEventAtMillis: 123457 }) })
-    expect(observed).toEqual([1, 2, 3, 4])
-    expect(causes).toEqual(['reconcile', 'chat-hint', 'chat-hint', 'projection-invalidation'])
+    stream.enqueue(encoder.encode(`data: ${JSON.stringify({
+      t: ARKME_CONVERSATION_LIST_PREFERENCE_UPDATED_BIZ_TYPE,
+      event_uid: 'conversation-preference-event-runtime',
+      user_id: 10001,
+      items: [{ entity_kind: 1, entity_uid: 'chat-1', revision: 3 }],
+      accepted_at: 123459,
+      source_client_id: 501,
+    })}\n\n`))
+    await vi.waitFor(() => { expect(runtime.state()).toMatchObject({ revision: 5, lastEventAtMillis: 123459 }) })
+    expect(observed).toEqual([1, 2, 3, 4, 5])
+    expect(causes).toEqual([
+      'reconcile', 'chat-hint', 'chat-hint', 'projection-invalidation',
+      'conversation-list-preference-invalidation',
+    ])
     expect(cursorSequences).toEqual([9])
 
     const [input, init] = fetchImpl.mock.calls[0]!

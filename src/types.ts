@@ -430,6 +430,8 @@ export interface ArkmeBotSummary {
   createdAtMillis?: number
   /** Latest private-chat message time, when the conversation directory has been hydrated. */
   latestMessageAtMillis?: number
+  /** Latest Bot-owner activity used for ordering and direct-Bot visibility restoration. */
+  conversationListActivityAtMillis?: number
   /** Safe preview of the latest private-chat message. */
   latestMessagePreview?: string
   /** Unread count projected from the canonical Chat conversation, when Chat owns the Bot conversation. */
@@ -1301,11 +1303,21 @@ export interface ArkmeSourceItem {
   recordCount?: number
 }
 
-/** Result of a server-backed conversation-directory policy mutation. */
-export interface ArkmeSourceDirectoryPolicyResult {
+/** Result of the existing Chat pin mutation; sidebar visibility is a separate capability. */
+export interface ArkmeSourceDirectoryPinResult {
   sourceRef: string
   pinned: boolean
+}
+
+export interface ArkmeConversationDirectoryVisibilityItem {
+  entryKind: 'source' | 'bot'
+  entryRef: string
   hidden: boolean
+}
+
+/** Browser-safe view of the Chat-owned sidebar visibility facts. */
+export interface ArkmeConversationDirectoryVisibility {
+  items: ArkmeConversationDirectoryVisibilityItem[]
 }
 
 export interface ArkmeSourceList {
@@ -2955,6 +2967,9 @@ export type ArkmeChatClientEvent = {
   /** Account-bound conversation identity; raw Chat session and reader identities stay in Host memory. */
   sourceKey: string
   throughSequence: number
+} | {
+  type: 'conversation-list-preference-invalidated'
+  revision: number
 }
 
 export type ArkmePluginOperation =
@@ -3047,6 +3062,8 @@ export type ArkmePluginOperation =
   | 'extensions.reviews.create'
   | 'extensions.audit.check'
   | 'sources.list'
+  | 'conversation.directory.visibility.query'
+  | 'conversation.directory.visibility.set'
   | 'source.directory.policy.set'
   | 'source.timeline'
   | 'source.timeline-around'

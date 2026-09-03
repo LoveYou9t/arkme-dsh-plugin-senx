@@ -305,6 +305,12 @@ function conversationMemberRecordModeParam(params: Record<string, unknown>): Ark
   throw new ArkmePluginError('chat-member-record-mode-invalid', '成员快记模式无效', false, 400)
 }
 
+function conversationDirectoryEntryKindParam(params: Record<string, unknown>): 'source' | 'bot' {
+  const entryKind = stringParam(params, 'entryKind')
+  if (entryKind === 'source' || entryKind === 'bot') return entryKind
+  throw new ArkmePluginError('conversation-directory-entry-kind-invalid', '会话列表条目类型无效', false, 400)
+}
+
 function extensionCatalogSortParam(params: Record<string, unknown>): ArkmeExtensionCatalogSort | undefined {
   const value = stringParam(params, 'sort')
   if (value === '') return undefined
@@ -1394,14 +1400,32 @@ export async function dispatchArkmeHostOperation(
         refresh: booleanParam(params, 'refresh'),
       },
     )
-    case 'source.directory.policy.set': return await service.setChatDirectoryPolicy(
-      stringParam(params, 'sourceRef'),
-      {
-        ...(typeof params.pinned === 'boolean' ? { pinned: params.pinned } : {}),
-        ...(typeof params.hidden === 'boolean' ? { hidden: params.hidden } : {}),
-        ...(requestSignal === undefined ? {} : { signal: requestSignal }),
-      },
+    case 'conversation.directory.visibility.query': return await service.conversationDirectoryVisibilitySnapshot(
+      stringListParam(params, 'sourceRefs').map(value => value.trim()).filter(value => value !== ''),
+      stringListParam(params, 'botRefs').map(value => value.trim()).filter(value => value !== ''),
+      requestSignal,
     )
+    case 'conversation.directory.visibility.set': return await service.setConversationDirectoryVisibility(
+      conversationDirectoryEntryKindParam(params),
+      stringParam(params, 'entryRef').trim(),
+      requiredBooleanParam(params, 'hidden'),
+      requestSignal,
+    )
+    case 'source.directory.policy.set': {
+      if (Object.hasOwn(params, 'hidden')) {
+        throw new ArkmePluginError(
+          'conversation-directory-command-ambiguous',
+          '置顶与移除必须分别提交',
+          false,
+          400,
+        )
+      }
+      return await service.setChatDirectoryPin(
+        stringParam(params, 'sourceRef'),
+        requiredBooleanParam(params, 'pinned'),
+        requestSignal,
+      )
+    }
     case 'source.timeline': {
       const cursor = timelineCursorParam(params)
       return await service.readSource(
