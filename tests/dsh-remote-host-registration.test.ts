@@ -6,6 +6,7 @@ import type { ArkmeSecureValueStore } from '../src/keychain-store.js'
 import { DshApiProxyAdapter, type DshPublicApiProxyLike } from '../src/dsh-remote/api-proxy-adapter.js'
 import { DshRemoteCommandLedger } from '../src/dsh-remote/command-ledger.js'
 import type { DshRemoteHistoryEntry } from '../src/dsh-remote/dsh-event-contract.js'
+import { DshRemoteError } from '../src/dsh-remote/errors.js'
 import {
   ArkmeRemoteRealtimeHost,
   type DshRemoteSessionPersistenceLike,
@@ -30,13 +31,14 @@ class MemorySecrets implements ArkmeSecureValueStore {
 
 class FakeRealtime implements DshRemoteRealtimeTransport {
   readonly calls: string[] = []
+  connectWaiter: Promise<void> | undefined
   onEvent: ((payload: DshRemoteRealtimePayload, metadata: DshRemoteTrustedEventMetadata) => void) | undefined
   private disconnectListener: ((error: Error) => void) | undefined
   subscribeDisconnect(listener: (error: Error) => void): () => void {
     this.disconnectListener = listener
     return () => { this.disconnectListener = undefined }
   }
-  async connect(): Promise<void> { this.calls.push('connect') }
+  async connect(): Promise<void> { this.calls.push('connect'); await this.connectWaiter }
   async disconnect(): Promise<void> { this.calls.push('disconnect') }
   async registerHost(): Promise<{ serviceLeaseGeneration: number }> { this.calls.push('register'); return { serviceLeaseGeneration: 9 } }
   async unregisterHost(): Promise<void> { this.calls.push('unregister') }
@@ -46,6 +48,7 @@ class FakeRealtime implements DshRemoteRealtimeTransport {
     return () => { this.calls.push('unsubscribe'); this.onEvent = undefined }
   }
   async publish(): Promise<{ sequence: number }> { this.calls.push('publish'); return { sequence: 1 } }
+  emitDisconnect(error: Error): void { this.disconnectListener?.(error) }
 }
 
 function apiProxy(): DshApiProxyAdapter {
@@ -66,7 +69,12 @@ async function fixture(input: {
   featureEnabled?: boolean
   session?: () => { userId: number; clientId: number } | undefined
   now?: () => number
-  turnUploadForAccount?: (accountId: string, key: Buffer, maxObjectBytes: number) => DshRemoteTurnUploadOutbox
+  turnUploadForAccount?: (
+    accountId: string,
+    key: Buffer,
+    maxObjectBytes: number,
+    callbacks: { onError: (error: unknown, sessionRef?: string) => void; onFinalized: (sessionRef: string) => void },
+  ) => DshRemoteTurnUploadOutbox
   turnObjectCapabilities?: () => Promise<Record<string, unknown>>
   knownHistorySessions?: (input: Record<string, unknown>, signal?: AbortSignal) => Promise<Record<string, unknown>>
   sessionPersistence?: DshRemoteSessionPersistenceLike
@@ -127,8 +135,8 @@ function historyOutbox() {
     activate: vi.fn(async () => undefined),
     close: vi.fn(async () => undefined),
     capture: vi.fn(async () => undefined),
-    historyRevision: vi.fn((sessionRef: string) => revisions.get(sessionRef)),
-    markHistoryRevision: vi.fn((sessionRef: string, revision: string) => { revisions.set(sessionRef, revision) }),
+    needsHistoryRevision: vi.fn((sessionRef: string, revision: string) => revisions.get(sessionRef) !== revision),
+    queueHistoryFinalization: vi.fn((sessionRef: string, revision: string) => { revisions.set(sessionRef, revision) }),
   }
 }
 
@@ -249,7 +257,11 @@ describe('Host login-only registration lifecycle', () => {
       available: true, storage_version: 'oss_turn_v1',
       coverage: 'live_completed_turns', content_encoding: 'gzip', max_object_bytes: 2048,
     })
-    await vi.waitFor(() => { expect(factory).toHaveBeenCalledWith('42', expect.any(Buffer), 2048) })
+    await vi.waitFor(() => {
+      expect(factory).toHaveBeenCalledWith('42', expect.any(Buffer), 2048, expect.objectContaining({
+        onError: expect.any(Function), onFinalized: expect.any(Function),
+      }))
+    })
     await host.stop()
   })
 
@@ -383,6 +395,116 @@ describe('Host login-only registration lifecycle', () => {
     await host.stop()
   })
 
+  it('keeps session polling behind one reconnect flight', async () => {
+    vi.useFakeTimers()
+    const { host, realtime } = await fixture()
+    await host.start()
+    const reconnect = Promise.withResolvers<void>()
+    realtime.connectWaiter = reconnect.promise
+
+    realtime.emitDisconnect(new DshRemoteError('REMOTE_TRANSPORT_FAILED', 'offline', true))
+    await (host as unknown as { syncSession(): Promise<void> }).syncSession()
+    expect(realtime.calls.filter(call => call === 'connect')).toHaveLength(1)
+
+    await vi.advanceTimersByTimeAsync(30_000)
+    vi.useRealTimers()
+    await vi.waitFor(() => {
+      expect(realtime.calls.filter(call => call === 'connect')).toHaveLength(2)
+    })
+
+    const firstPoll = (host as unknown as { syncSession(): Promise<void> }).syncSession()
+    const secondPoll = (host as unknown as { syncSession(): Promise<void> }).syncSession()
+    await Promise.resolve()
+    expect(realtime.calls.filter(call => call === 'connect')).toHaveLength(2)
+    reconnect.resolve()
+    await Promise.all([firstPoll, secondPoll])
+    expect(host.getStatus().connected).toBe(true)
+    await host.stop()
+  })
+
+  it('does not reconnect a non-retryable transport failure', async () => {
+    vi.useFakeTimers()
+    const { host, realtime } = await fixture()
+    await host.start()
+    realtime.emitDisconnect(new DshRemoteError('REMOTE_PROTOCOL_UNSUPPORTED', 'upgrade required', false))
+    await (host as unknown as { syncSession(): Promise<void> }).syncSession()
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(realtime.calls.filter(call => call === 'connect')).toHaveLength(1)
+    await host.stop()
+  })
+
+  it('does not register a stale Host lease when stopped during reconnect', async () => {
+    vi.useFakeTimers()
+    const { host, realtime } = await fixture()
+    await host.start()
+    const reconnect = Promise.withResolvers<void>()
+    realtime.connectWaiter = reconnect.promise
+    realtime.emitDisconnect(new DshRemoteError('REMOTE_TRANSPORT_FAILED', 'offline', true))
+
+    await vi.advanceTimersByTimeAsync(30_000)
+    vi.useRealTimers()
+    await vi.waitFor(() => {
+      expect(realtime.calls.filter(call => call === 'connect')).toHaveLength(2)
+    })
+
+    const connectionFlight = (host as unknown as { connectionFlight?: Promise<void> }).connectionFlight
+    await host.stop()
+    reconnect.resolve()
+    await connectionFlight?.catch(() => undefined)
+    expect(host.getStatus().connected).toBe(false)
+    expect(realtime.calls.filter(call => call === 'register')).toHaveLength(1)
+  })
+
+  it('reports history synchronization separately from connection availability', async () => {
+    const { host } = await fixture()
+    await host.start()
+    const internal = host as unknown as {
+      connectionError?: DshRemoteError
+      historySyncError?: DshRemoteError
+      projectionError?: DshRemoteError
+    }
+    internal.historySyncError = new DshRemoteError('REMOTE_TRANSPORT_FAILED', 'history unavailable', true)
+    internal.projectionError = new DshRemoteError('CAPABILITY_UNSUPPORTED', 'projection unavailable', false)
+    expect(host.getStatus()).toMatchObject({
+      connected: true,
+      historySyncWarning: 'history unavailable',
+      projectionWarning: 'projection unavailable',
+    })
+    expect(host.getStatus().unavailableReason).toBeUndefined()
+
+    internal.connectionError = new DshRemoteError('REMOTE_TRANSPORT_FAILED', 'connection unavailable', true)
+    expect(host.getStatus()).toMatchObject({
+      unavailableReason: 'connection unavailable',
+      historySyncWarning: 'history unavailable',
+      projectionWarning: 'projection unavailable',
+    })
+    await host.stop()
+  })
+
+  it('projects background finalization failure and recovery without changing Host connection health', async () => {
+    const outbox = historyOutbox()
+    let callbacks: { onError: (error: unknown, sessionRef?: string) => void; onFinalized: (sessionRef: string) => void } | undefined
+    const { host } = await fixture({
+      turnUploadForAccount: (_accountId, _key, _maxObjectBytes, value) => {
+        callbacks = value
+        return outbox as unknown as DshRemoteTurnUploadOutbox
+      },
+    })
+    await host.start()
+    await vi.waitFor(() => { expect(callbacks).toBeDefined() })
+
+    callbacks!.onError(new DshRemoteError('REMOTE_NETWORK_UNAVAILABLE', 'finalization unavailable', true), 'session-01')
+    expect(host.getStatus()).toMatchObject({ connected: true, historySyncWarning: 'finalization unavailable' })
+    expect(host.getStatus().unavailableReason).toBeUndefined()
+
+    callbacks!.onFinalized('session-02')
+    expect(host.getStatus().historySyncWarning).toBe('finalization unavailable')
+    callbacks!.onFinalized('session-01')
+    expect(host.getStatus().historySyncWarning).toBeUndefined()
+    expect(host.getStatus().connected).toBe(true)
+    await host.stop()
+  })
+
   it('requeues only Backend-known cold sessions and checkpoints the stable DSH revision', async () => {
     const outbox = historyOutbox()
     const readFrom = vi.fn(async (sessionRef: string) => ({
@@ -427,7 +549,7 @@ describe('Host login-only registration lifecycle', () => {
     expect(outbox.capture.mock.calls.map(call => call[1].map(entry => entry.event.seq))).toEqual([
       [1, 2, 3], [4, 5],
     ])
-    expect(outbox.markHistoryRevision).toHaveBeenCalledWith('session-01', 'revision-1')
+    expect(outbox.queueHistoryFinalization).toHaveBeenCalledWith('session-01', 'revision-1', 5)
 
     await expect(internal.backfillOneHistorySession('42', internal.runtime, new AbortController().signal))
       .resolves.toBe(false)
@@ -467,7 +589,7 @@ describe('Host login-only registration lifecycle', () => {
 
     await expect(internal.backfillOneHistorySession('42', internal.runtime, new AbortController().signal))
       .resolves.toBe(true)
-    expect(outbox.markHistoryRevision).not.toHaveBeenCalled()
+    expect(outbox.queueHistoryFinalization).not.toHaveBeenCalled()
     await host.stop()
   })
 
@@ -506,7 +628,7 @@ describe('Host login-only registration lifecycle', () => {
       { event: historyEvent('assistant/message', 2) },
       { event: historyEvent('turn/end', 3) },
     ])
-    expect(outbox.markHistoryRevision).toHaveBeenCalledWith('session-01', 'revision-1')
+    expect(outbox.queueHistoryFinalization).toHaveBeenCalledWith('session-01', 'revision-1', 3)
     await host.stop()
   })
 
@@ -585,7 +707,7 @@ describe('Host login-only registration lifecycle', () => {
       .resolves.toBe(true)
     expect(outbox.capture).toHaveBeenCalledTimes(Math.ceil(events.length / 50))
     expect(outbox.capture.mock.calls.every(call => call[1].length <= 50)).toBe(true)
-    expect(outbox.markHistoryRevision).toHaveBeenCalledWith('session-01', 'revision-large')
+    expect(outbox.queueHistoryFinalization).toHaveBeenCalledWith('session-01', 'revision-large', 100_002)
     await host.stop()
   })
 })

@@ -77,6 +77,10 @@ export class DshRemoteHttpControlPlane implements DshRemoteControlPlane {
     return await this.post(`${BASE}/session-turns/commit-upload`, input, signal)
   }
 
+  async completeSessionTurnObjectHistory(input: Record<string, unknown>, signal?: AbortSignal): Promise<Record<string, unknown>> {
+    return await this.post(`${BASE}/session-turn-objects/complete`, input, signal)
+  }
+
 }
 
 export function mapDshRemoteControlPlaneError(error: unknown): DshRemoteError {
