@@ -7,6 +7,7 @@ export const DSH_REMOTE_MAX_PAGE_ITEMS = 50
 // stop at the conservative inner-result budget below before this ceiling can be
 // reached.
 export const DSH_REMOTE_MAX_SNAPSHOT_BYTES = 512 * 1024
+export const DSH_REMOTE_MAX_FRAGMENTED_PAYLOAD_BYTES = 64 * 1024 * 1024
 export const DSH_REMOTE_MAX_PAGE_RESULT_BYTES = 40 * 1024
 export const DSH_REMOTE_MAX_TEXT_CODE_POINTS = 20_000
 export const DSH_REMOTE_MAX_MODEL_OPTIONS = 100
@@ -100,6 +101,8 @@ export interface DshRemoteStatus {
   hostGeneration: number
   capabilities: DshRemoteCapability[]
   unavailableReason?: string
+  historySyncWarning?: string
+  projectionWarning?: string
   revision: number
 }
 

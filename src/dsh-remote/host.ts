@@ -41,6 +41,9 @@ const HISTORY_OBJECT_BACKFILL_INITIAL_DELAY_MILLIS = 5_000
 const HISTORY_OBJECT_BACKFILL_NEXT_DELAY_MILLIS = 250
 const HISTORY_OBJECT_BACKFILL_RETRY_DELAY_MILLIS = 30_000
 const HISTORY_OBJECT_KNOWN_BATCH_ITEMS = 500
+const RECONNECT_BASE_DELAY_MILLIS = 1_000
+const RECONNECT_MAX_DELAY_MILLIS = 30_000
+const RECONNECT_STABLE_MILLIS = 60_000
 const REMOTE_DIAGNOSTICS_ENABLED = process.env.ARKME_DSH_REMOTE_DIAGNOSTICS === '1'
 
 function remoteDiagnostic(event: string, details: Record<string, unknown>): void {
@@ -230,10 +233,14 @@ export class ArkmeRemoteRealtimeHost implements DshRemoteHostFacade {
   private channelManager: DshRemoteHostChannelManager | undefined
   private stopTransportDisconnect: (() => void) | undefined
   private reconnectTimer: ReturnType<typeof setTimeout> | undefined
-  private reconnecting = false
+  private stableConnectionTimer: ReturnType<typeof setTimeout> | undefined
+  private connectionFlight: Promise<void> | undefined
+  private connectionController: AbortController | undefined
+  private reconnectAttempt = 0
   private sessionTimer: ReturnType<typeof setTimeout> | undefined
   private connectionError: DshRemoteError | undefined
   private historySyncError: DshRemoteError | undefined
+  private projectionError: DshRemoteError | undefined
   private lastProjectionSyncAttemptMillis = 0
   private projectionVersion = 0
   private historyObjectBackfillTimer: ReturnType<typeof setTimeout> | undefined
@@ -270,12 +277,17 @@ export class ArkmeRemoteRealtimeHost implements DshRemoteHostFacade {
     if (flushPending) await this.flushPendingSessionEventBatches()
     else this.clearPendingSessionEventBatches()
     this.started = false
+    this.connectionController?.abort()
+    this.connectionController = undefined
     this.stopTransportDisconnect?.()
     this.stopTransportDisconnect = undefined
     if (this.sessionTimer !== undefined) clearTimeout(this.sessionTimer)
     this.sessionTimer = undefined
     if (this.reconnectTimer !== undefined) clearTimeout(this.reconnectTimer)
     this.reconnectTimer = undefined
+    if (this.stableConnectionTimer !== undefined) clearTimeout(this.stableConnectionTimer)
+    this.stableConnectionTimer = undefined
+    this.reconnectAttempt = 0
     this.liveProjectionTails.clear()
     await this.deactivateAccount()
     this.bump()
@@ -295,8 +307,8 @@ export class ArkmeRemoteRealtimeHost implements DshRemoteHostFacade {
       ...(this.accountId === undefined ? {} : { accountId: this.accountId }),
       ...(this.runtime?.desktopRef === undefined ? {} : { desktopRef: this.runtime.desktopRef }),
       ...(this.runtime === undefined ? {} : { runtimeRef: this.runtime.runtimeRef }),
-      ...((this.connectionError ?? this.historySyncError) !== undefined
-        ? { unavailableReason: (this.connectionError ?? this.historySyncError)!.message }
+      ...(this.connectionError !== undefined
+        ? { unavailableReason: this.connectionError.message }
         : available ? {} : { unavailableReason: !this.options.featureEnabled
           ? '远控能力尚未在此版本启用'
           : this.accountId === undefined
@@ -306,6 +318,12 @@ export class ArkmeRemoteRealtimeHost implements DshRemoteHostFacade {
               : this.options.apiProxy.capabilities().length === 0
                 ? '当前 DSH 缺少公共 ApiProxy 能力'
                 : '远控运行依赖尚未就绪' }),
+      ...(this.historySyncError === undefined
+        ? {}
+        : { historySyncWarning: this.historySyncError.message }),
+      ...(this.projectionError === undefined
+        ? {}
+        : { projectionWarning: this.projectionError.message }),
     }
   }
 
@@ -655,12 +673,23 @@ export class ArkmeRemoteRealtimeHost implements DshRemoteHostFacade {
       this.bump()
       return
     }
+    if (this.connectionError?.retryable === false) return
+    if (this.reconnectTimer !== undefined) return
+    if (this.connectionFlight !== undefined) return await this.connectionFlight
     this.startApiProxyEvents()
-    try { await this.connectHost() }
-    catch (error) {
-      this.handleTransportDisconnect(error)
-      throw error
-    }
+    const controller = new AbortController()
+    const flight = this.connectHost(controller.signal)
+      .catch(error => {
+        if (!controller.signal.aborted) this.handleTransportDisconnect(error)
+        throw error
+      })
+      .finally(() => {
+        if (this.connectionFlight === flight) this.connectionFlight = undefined
+        if (this.connectionController === controller) this.connectionController = undefined
+      })
+    this.connectionController = controller
+    this.connectionFlight = flight
+    await flight
   }
 
   private scheduleSessionSync(): void {
@@ -674,6 +703,14 @@ export class ArkmeRemoteRealtimeHost implements DshRemoteHostFacade {
 
   private async deactivateAccount(): Promise<void> {
     this.stopApiProxyEvents()
+    this.connectionController?.abort()
+    this.connectionController = undefined
+    this.connectionFlight = undefined
+    if (this.reconnectTimer !== undefined) clearTimeout(this.reconnectTimer)
+    this.reconnectTimer = undefined
+    if (this.stableConnectionTimer !== undefined) clearTimeout(this.stableConnectionTimer)
+    this.stableConnectionTimer = undefined
+    this.reconnectAttempt = 0
     this.turnUploadActivationController?.abort()
     await this.turnUploadActivationFlight?.catch(() => undefined)
     this.turnUploadActivationFlight = undefined
@@ -713,6 +750,7 @@ export class ArkmeRemoteRealtimeHost implements DshRemoteHostFacade {
     this.clientId = 0
     this.connectionError = undefined
     this.historySyncError = undefined
+    this.projectionError = undefined
     this.lastProjectionSyncAttemptMillis = 0
     this.projectionVersion = 0
     this.clearPendingSessionEventBatches()
@@ -723,7 +761,7 @@ export class ArkmeRemoteRealtimeHost implements DshRemoteHostFacade {
     if (this.stopProjectionEvents === undefined) {
       this.stopProjectionEvents = this.options.apiProxy.subscribeProjectionEvents(event => {
         void this.publishProjectionEvent(event).catch(error => {
-          this.connectionError = asDshRemoteError(error)
+          this.projectionError = asDshRemoteError(error)
           this.bump()
         })
       })
@@ -926,7 +964,7 @@ export class ArkmeRemoteRealtimeHost implements DshRemoteHostFacade {
       batch.timer = setTimeout(() => {
         void this.flushSessionEventBatch(key).catch(error => {
           if (!this.historyOwnerMatches(accountId, runtime)) return
-          this.connectionError = asDshRemoteError(error)
+          this.projectionError = asDshRemoteError(error)
           this.bump()
         })
       }, LIVE_EVENT_BATCH_DELAY_MILLIS)
@@ -1008,6 +1046,10 @@ export class ArkmeRemoteRealtimeHost implements DshRemoteHostFacade {
         sessionRef: diagnosticRef(sessionRef), firstSeq, lastSeq,
         itemCount: entries.length, requestRef: diagnosticRef(requestRef),
       })
+      if (this.projectionError !== undefined) {
+        this.projectionError = undefined
+        this.bump()
+      }
     } catch (error) {
       const remote = asDshRemoteError(error)
       remoteDiagnostic('remote_session_event_batch_publish_failed', {
@@ -1058,12 +1100,14 @@ export class ArkmeRemoteRealtimeHost implements DshRemoteHostFacade {
     await (this.options.yieldToEventLoop?.() ?? scheduler.yield())
   }
 
-  private handleTransportDisconnect(error?: unknown): void {
+  private handleTransportDisconnect(error: unknown): void {
     if (!this.started || this.runtime === undefined) return
-    const remote = error === undefined ? undefined : asDshRemoteError(error)
-    if (remote !== undefined) this.connectionError = remote
+    const remote = asDshRemoteError(error)
+    this.connectionError = remote
     this.connected = false
     this.serviceLeaseGeneration = 0
+    if (this.stableConnectionTimer !== undefined) clearTimeout(this.stableConnectionTimer)
+    this.stableConnectionTimer = undefined
     const manager = this.channelManager
     this.channelManager = undefined
     // A fatal channel error can arrive while the socket is still open. Close
@@ -1074,29 +1118,38 @@ export class ArkmeRemoteRealtimeHost implements DshRemoteHostFacade {
       .finally(async () => { await manager?.close() })
       .catch(() => undefined)
     this.bump()
-    if (this.reconnectTimer !== undefined || this.options.transportAvailable === false || remote?.retryable === false) return
+    if (this.reconnectTimer !== undefined || this.options.transportAvailable === false || !remote.retryable) return
+    const ceiling = Math.min(
+      RECONNECT_MAX_DELAY_MILLIS,
+      RECONNECT_BASE_DELAY_MILLIS * (2 ** Math.min(this.reconnectAttempt, 5)),
+    )
+    const delayMillis = Math.max(
+      RECONNECT_BASE_DELAY_MILLIS,
+      Math.floor((ceiling / 2) + (Math.random() * ceiling / 2)),
+    )
+    this.reconnectAttempt = Math.min(this.reconnectAttempt + 1, 6)
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = undefined
-      if (!this.started || this.runtime === undefined || this.reconnecting) return
-      this.reconnecting = true
-      void this.connectHost()
-        .catch(caught => { this.handleTransportDisconnect(caught) })
-        .finally(() => { this.reconnecting = false })
-    }, 1_000)
+      if (!this.started || this.runtime === undefined) return
+      void this.ensureAutomaticConnection().catch(() => undefined)
+    }, delayMillis)
     this.reconnectTimer.unref()
   }
 
-  private async connectHost(): Promise<void> {
+  private async connectHost(signal: AbortSignal): Promise<void> {
     const localRuntime = this.runtime!
     const accountId = this.accountId!
     const platform = this.options.platform ?? process.platform
     const displayName = (await this.options.runtimeStore.account(accountId)).displayName
       ?? this.options.displayName ?? hostname()
+    signal.throwIfAborted()
     const desktop = await this.options.controlPlane.registerDesktop({ display_name: displayName, platform })
+    signal.throwIfAborted()
     const desktopRef = typeof desktop.desktop_ref === 'string' ? desktop.desktop_ref
       : typeof desktop.desktopRef === 'string' ? desktop.desktopRef : ''
     if (desktopRef === '') throw new DshRemoteError('REMOTE_TRANSPORT_FAILED', 'Backend 未返回桌面设备引用', true)
     await this.options.runtimeStore.bindDesktop(accountId, { desktopRef })
+    signal.throwIfAborted()
     this.runtime = { ...localRuntime, desktopRef }
     const registeredRuntime = await this.options.controlPlane.registerRuntime(desktopRef, {
       profile_ref: this.options.profileRef,
@@ -1108,6 +1161,7 @@ export class ArkmeRemoteRealtimeHost implements DshRemoteHostFacade {
       host_generation: localRuntime.hostGeneration,
       capabilities: localRuntime.capabilities,
     })
+    signal.throwIfAborted()
     const backendRuntimeRef = typeof registeredRuntime.runtime_ref === 'string' ? registeredRuntime.runtime_ref : ''
     const backendHostGeneration = typeof registeredRuntime.host_generation === 'number'
       && Number.isSafeInteger(registeredRuntime.host_generation) && registeredRuntime.host_generation > 0
@@ -1124,12 +1178,13 @@ export class ArkmeRemoteRealtimeHost implements DshRemoteHostFacade {
       )),
       desktopRef,
     }
-    await this.syncProjectionSnapshot(true)
-    const controller = new AbortController()
+    signal.throwIfAborted()
+    await this.syncProjectionSnapshotSafely(true)
+    signal.throwIfAborted()
     await this.options.realtime.connect({
       profileRef: this.options.profileRef,
       clientRef: this.options.hostClientRef,
-      signal: controller.signal,
+      signal,
     })
     const manager = new DshRemoteHostChannelManager({
       accountId,
@@ -1139,20 +1194,33 @@ export class ArkmeRemoteRealtimeHost implements DshRemoteHostFacade {
       realtime: this.options.realtime,
       secretBroker: this.options.secretBroker,
       dispatch: async (request, context) => await this.dispatchAuthorizedRequest(request, context),
+      onProjectionError: error => {
+        this.projectionError = asDshRemoteError(error)
+        this.bump()
+      },
       onFatal: error => { this.handleTransportDisconnect(error) },
     })
     try {
       await manager.prepare()
+      signal.throwIfAborted()
       const registered = await this.options.realtime.registerHost({
         runtimeRef: backendRuntimeRef,
         capabilities: this.runtime.capabilities,
-        signal: controller.signal,
+        signal,
       })
       await manager.activate(registered.serviceLeaseGeneration)
+      signal.throwIfAborted()
       this.channelManager = manager
       this.serviceLeaseGeneration = registered.serviceLeaseGeneration
       this.connected = true
       this.connectionError = undefined
+      if (this.reconnectAttempt > 0) {
+        const stableManager = manager
+        this.stableConnectionTimer = setTimeout(() => {
+          if (this.connected && this.channelManager === stableManager) this.reconnectAttempt = 0
+        }, RECONNECT_STABLE_MILLIS)
+        this.stableConnectionTimer.unref()
+      }
       this.bump()
     } catch (error) {
       await this.options.realtime.disconnect()
@@ -1167,9 +1235,12 @@ export class ArkmeRemoteRealtimeHost implements DshRemoteHostFacade {
     this.lastProjectionSyncAttemptMillis = now
     try {
       await this.syncProjectionSnapshot(force)
-      this.connectionError = undefined
+      if (this.projectionError !== undefined) {
+        this.projectionError = undefined
+        this.bump()
+      }
     } catch (error) {
-      this.connectionError = asDshRemoteError(error)
+      this.projectionError = asDshRemoteError(error)
       this.bump()
     }
   }

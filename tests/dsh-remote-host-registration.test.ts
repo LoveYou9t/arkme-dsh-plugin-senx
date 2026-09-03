@@ -6,6 +6,7 @@ import type { ArkmeSecureValueStore } from '../src/keychain-store.js'
 import { DshApiProxyAdapter, type DshPublicApiProxyLike } from '../src/dsh-remote/api-proxy-adapter.js'
 import { DshRemoteCommandLedger } from '../src/dsh-remote/command-ledger.js'
 import type { DshRemoteHistoryEntry } from '../src/dsh-remote/dsh-event-contract.js'
+import { DshRemoteError } from '../src/dsh-remote/errors.js'
 import {
   ArkmeRemoteRealtimeHost,
   type DshRemoteSessionPersistenceLike,
@@ -30,13 +31,14 @@ class MemorySecrets implements ArkmeSecureValueStore {
 
 class FakeRealtime implements DshRemoteRealtimeTransport {
   readonly calls: string[] = []
+  connectWaiter: Promise<void> | undefined
   onEvent: ((payload: DshRemoteRealtimePayload, metadata: DshRemoteTrustedEventMetadata) => void) | undefined
   private disconnectListener: ((error: Error) => void) | undefined
   subscribeDisconnect(listener: (error: Error) => void): () => void {
     this.disconnectListener = listener
     return () => { this.disconnectListener = undefined }
   }
-  async connect(): Promise<void> { this.calls.push('connect') }
+  async connect(): Promise<void> { this.calls.push('connect'); await this.connectWaiter }
   async disconnect(): Promise<void> { this.calls.push('disconnect') }
   async registerHost(): Promise<{ serviceLeaseGeneration: number }> { this.calls.push('register'); return { serviceLeaseGeneration: 9 } }
   async unregisterHost(): Promise<void> { this.calls.push('unregister') }
@@ -46,6 +48,7 @@ class FakeRealtime implements DshRemoteRealtimeTransport {
     return () => { this.calls.push('unsubscribe'); this.onEvent = undefined }
   }
   async publish(): Promise<{ sequence: number }> { this.calls.push('publish'); return { sequence: 1 } }
+  emitDisconnect(error: Error): void { this.disconnectListener?.(error) }
 }
 
 function apiProxy(): DshApiProxyAdapter {
@@ -380,6 +383,92 @@ describe('Host login-only registration lifecycle', () => {
     await (host as unknown as { syncSession(): Promise<void> }).syncSession()
     expect(host.getStatus()).toMatchObject({ enabled: false, connected: false })
     expect(realtime.calls).toContain('unregister')
+    await host.stop()
+  })
+
+  it('keeps session polling behind one reconnect flight', async () => {
+    vi.useFakeTimers()
+    const { host, realtime } = await fixture()
+    await host.start()
+    const reconnect = Promise.withResolvers<void>()
+    realtime.connectWaiter = reconnect.promise
+
+    realtime.emitDisconnect(new DshRemoteError('REMOTE_TRANSPORT_FAILED', 'offline', true))
+    await (host as unknown as { syncSession(): Promise<void> }).syncSession()
+    expect(realtime.calls.filter(call => call === 'connect')).toHaveLength(1)
+
+    await vi.advanceTimersByTimeAsync(30_000)
+    vi.useRealTimers()
+    await vi.waitFor(() => {
+      expect(realtime.calls.filter(call => call === 'connect')).toHaveLength(2)
+    })
+
+    const firstPoll = (host as unknown as { syncSession(): Promise<void> }).syncSession()
+    const secondPoll = (host as unknown as { syncSession(): Promise<void> }).syncSession()
+    await Promise.resolve()
+    expect(realtime.calls.filter(call => call === 'connect')).toHaveLength(2)
+    reconnect.resolve()
+    await Promise.all([firstPoll, secondPoll])
+    expect(host.getStatus().connected).toBe(true)
+    await host.stop()
+  })
+
+  it('does not reconnect a non-retryable transport failure', async () => {
+    vi.useFakeTimers()
+    const { host, realtime } = await fixture()
+    await host.start()
+    realtime.emitDisconnect(new DshRemoteError('REMOTE_PROTOCOL_UNSUPPORTED', 'upgrade required', false))
+    await (host as unknown as { syncSession(): Promise<void> }).syncSession()
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(realtime.calls.filter(call => call === 'connect')).toHaveLength(1)
+    await host.stop()
+  })
+
+  it('does not register a stale Host lease when stopped during reconnect', async () => {
+    vi.useFakeTimers()
+    const { host, realtime } = await fixture()
+    await host.start()
+    const reconnect = Promise.withResolvers<void>()
+    realtime.connectWaiter = reconnect.promise
+    realtime.emitDisconnect(new DshRemoteError('REMOTE_TRANSPORT_FAILED', 'offline', true))
+
+    await vi.advanceTimersByTimeAsync(30_000)
+    vi.useRealTimers()
+    await vi.waitFor(() => {
+      expect(realtime.calls.filter(call => call === 'connect')).toHaveLength(2)
+    })
+
+    const connectionFlight = (host as unknown as { connectionFlight?: Promise<void> }).connectionFlight
+    await host.stop()
+    reconnect.resolve()
+    await connectionFlight?.catch(() => undefined)
+    expect(host.getStatus().connected).toBe(false)
+    expect(realtime.calls.filter(call => call === 'register')).toHaveLength(1)
+  })
+
+  it('reports history synchronization separately from connection availability', async () => {
+    const { host } = await fixture()
+    await host.start()
+    const internal = host as unknown as {
+      connectionError?: DshRemoteError
+      historySyncError?: DshRemoteError
+      projectionError?: DshRemoteError
+    }
+    internal.historySyncError = new DshRemoteError('REMOTE_TRANSPORT_FAILED', 'history unavailable', true)
+    internal.projectionError = new DshRemoteError('CAPABILITY_UNSUPPORTED', 'projection unavailable', false)
+    expect(host.getStatus()).toMatchObject({
+      connected: true,
+      historySyncWarning: 'history unavailable',
+      projectionWarning: 'projection unavailable',
+    })
+    expect(host.getStatus().unavailableReason).toBeUndefined()
+
+    internal.connectionError = new DshRemoteError('REMOTE_TRANSPORT_FAILED', 'connection unavailable', true)
+    expect(host.getStatus()).toMatchObject({
+      unavailableReason: 'connection unavailable',
+      historySyncWarning: 'history unavailable',
+      projectionWarning: 'projection unavailable',
+    })
     await host.stop()
   })
 
