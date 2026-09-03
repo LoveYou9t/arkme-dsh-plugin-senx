@@ -235,14 +235,15 @@ describe('Arkme rich content presentation', () => {
   it('highlights visible member mentions only when the conversation enables mention rendering', () => {
     const item = {
       itemUid: 'mention-visible', senderName: '我', isMe: true, sendAtMillis: 1, status: 1,
-      title: '', textContent: '@小林 处理一下',
+      title: '', textContent: '@小林 @🚀助手 处理一下',
     }
     const plainHtml = renderToStaticMarkup(<ArkmeMessageContent item={item} />)
-    expect(plainHtml).toContain('@小林 处理一下')
+    expect(plainHtml).toContain('@小林 @🚀助手 处理一下')
     expect(plainHtml).not.toContain('--dsw-alias-state-business-primary')
 
     const highlightedHtml = renderToStaticMarkup(<ArkmeMessageContent item={item} highlightMentions />)
     expect(highlightedHtml).toContain('<span style="color:var(--dsw-alias-state-business-primary, #3964fe)">@小林</span>')
+    expect(highlightedHtml).toContain('<span style="color:var(--dsw-alias-state-business-primary, #3964fe)">@🚀助手</span>')
     expect(highlightedHtml).toContain(' 处理一下')
   })
 
@@ -302,6 +303,22 @@ describe('Arkme rich content presentation', () => {
     expect(html).toContain('data-arkme-link-label="true">分享链接</span></a>')
     expect(html).toContain('data-arkme-rich-emoji="angry_face"')
     expect(html.match(/>@bot<\/span>/gu) ?? []).toHaveLength(0)
+  })
+
+  it('highlights mentions in quick-note side detail content', () => {
+    const item = {
+      itemUid: 'detail-mention', senderName: '小林', isMe: false, sendAtMillis: 1, status: 1,
+      title: '', textContent: '@狗才 看详情',
+    }
+    const drawerHtml = renderToStaticMarkup(<ArkmeTimelineDetailDrawer
+      item={item}
+      showOriginal={false}
+      onClose={() => {}}
+      onToggleOriginal={() => {}}
+    />)
+    const recordDetailHtml = renderToStaticMarkup(<ArkmeRecordDetailContent item={item} />)
+    expect(drawerHtml).toContain('<span style="color:var(--dsw-alias-state-business-primary, #3964fe)">@狗才</span>')
+    expect(recordDetailHtml).toContain('<span style="color:var(--dsw-alias-state-business-primary, #3964fe)">@狗才</span>')
   })
 
   it('leaves surrounding message interaction ownership outside the rich-text renderer', () => {

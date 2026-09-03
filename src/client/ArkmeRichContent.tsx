@@ -13,7 +13,7 @@ import { ArkmeVoiceContent, arkmeVoiceMediaUrl } from './ArkmeVoiceContent.js'
 import { ArkmeFileViewer, ArkmeFileActions, arkmeLocalFileUrl, arkmeFileSize, useArkmeOriginal } from './ArkmeFileViewer.js'
 import { arkmeCanInlineLocalFile, arkmeVisibleUploadFraction } from '../file-transfer-contract.js'
 import { createArkmeSdk } from '../sdk/index.js'
-import { ArkmeRichText } from './ArkmeRichText.js'
+import { ArkmeMentionText, ArkmeRichText } from './ArkmeRichText.js'
 import type { ArkmeLinkRenderer } from './ArkmeLinkText.js'
 
 const mediaRoute = '/arkme-self/api/media'
@@ -707,7 +707,7 @@ export function ArkmeMessageContent({ item, sourceRef, onLongArticleUpdated, hig
         {(previewLines.length > 0 ? previewLines : ['原快记暂不可查看']).map((line, index) => <p
           key={`${String(index)}:${line}`}
           style={styles.forwardLine}
-        >{line}</p>)}
+        >{highlightMentions ? <ArkmeMentionText text={line} /> : line}</p>)}
       </div>
     </div>
   }
@@ -719,7 +719,7 @@ export function ArkmeMessageContent({ item, sourceRef, onLongArticleUpdated, hig
         <p style={styles.sharedRecordingTitle} title={item.sharedRecording.title}>{item.sharedRecording.title}</p>
         {timeText !== '' && <span style={styles.sharedRecordingTime}>{timeText}</span>}
       </div>
-      <p style={styles.sharedRecordingSummary}>{item.sharedRecording.summary}</p>
+      <p style={styles.sharedRecordingSummary}>{highlightMentions ? <ArkmeMentionText text={item.sharedRecording.summary} /> : item.sharedRecording.summary}</p>
       {participantsText !== '' && <p style={styles.sharedRecordingParticipants}>{participantsText}</p>}
     </div>
   }
@@ -831,9 +831,9 @@ export function ArkmeRecordDetailContent({ item, sourceRef, showOriginal = false
     : item.aiPolish?.state === 'polished' && item.aiPolish.polishedText !== undefined
       ? item.aiPolish.polishedText : item.textContent
   if (item.contentBlocks?.some(block => block.kind === 'audio') === true) {
-    return <ArkmeMessageContent item={{ ...item, textContent: text }} {...(sourceRef === undefined ? {} : { sourceRef })} collapseText={false} />
+    return <ArkmeMessageContent item={{ ...item, textContent: text }} {...(sourceRef === undefined ? {} : { sourceRef })} collapseText={false} highlightMentions />
   }
-  return <p style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontSize: 16, lineHeight: '26px' }}><ArkmeRichText text={text || item.title || '非文本内容'} /></p>
+  return <p style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontSize: 16, lineHeight: '26px' }}><ArkmeRichText text={text || item.title || '非文本内容'} highlightMentions /></p>
 }
 
 export function ArkmeAttachmentDraftTile({ asset, previewUrl, onRemove, onOpen, disabled = false }: {
