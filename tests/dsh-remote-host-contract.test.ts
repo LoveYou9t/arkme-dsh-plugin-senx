@@ -95,6 +95,32 @@ describe('Arkme remote Host account contract', () => {
     }))
   })
 
+  it('routes live events to the Turn Outbox only when the rollout owner is installed', async () => {
+    const appendSessionEvents = vi.fn(async () => ({}))
+    const capture = vi.fn(async () => undefined)
+    const host = inertHost(new DshApiProxyAdapter({}), {
+      controlPlane: { appendSessionEvents } as unknown as DshRemoteControlPlane,
+    })
+    Object.assign(host, {
+      started: true, connected: false, accountId: '1',
+      turnUpload: { capture },
+      runtime: {
+        runtimeRef: 'runtime-01', desktopRef: 'desktop-01', profileRef: 'web', accountId: '1',
+        hostGeneration: 7, capabilities: ['session.events'], updatedAtMillis: 1,
+      },
+    })
+
+    await (host as unknown as {
+      publishProjectionEvent(value: DshRemoteApiProjectionEvent): Promise<void>
+    }).publishProjectionEvent({
+      kind: 'session-event', sessionId: 'session-01',
+      entry: { event: { type: 'turn/start', seq: 8, time: 1_400, data: {} } },
+    })
+
+    expect(capture).toHaveBeenCalledOnce()
+    expect(appendSessionEvents).not.toHaveBeenCalled()
+  })
+
   it('backfills every retained DSH history page before advancing completeness', async () => {
     const apiProxy = new DshApiProxyAdapter({})
     vi.spyOn(apiProxy, 'sessions').mockResolvedValue({
@@ -227,7 +253,7 @@ describe('Arkme remote Host account contract', () => {
     expect(reconcileAllHistorySafely).toHaveBeenCalledOnce()
   })
 
-  it('keeps global cold-history backfill disabled unless the runtime explicitly opts in', async () => {
+  it('keeps legacy ApiProxy history reconciliation disabled unless explicitly opted in', async () => {
     vi.useFakeTimers()
     const host = inertHost(new DshApiProxyAdapter({}))
     const reconcileAllHistorySafely = vi.fn(async () => undefined)
@@ -243,6 +269,26 @@ describe('Arkme remote Host account contract', () => {
     await vi.advanceTimersByTimeAsync(30_000)
 
     expect(reconcileAllHistorySafely).not.toHaveBeenCalled()
+  })
+
+  it('does not let legacy ApiProxy history reconciliation run after the OSS owner is active', async () => {
+    vi.useFakeTimers()
+    const apiProxy = new DshApiProxyAdapter({})
+    const history = vi.spyOn(apiProxy, 'history')
+    const host = inertHost(apiProxy, { eagerHistoryBackfill: true })
+    Object.assign(host, {
+      started: true, accountId: '1',
+      runtime: {
+        runtimeRef: 'runtime-01', desktopRef: 'desktop-01', profileRef: 'web', accountId: '1',
+        hostGeneration: 7, capabilities: ['session.list', 'session.history'], updatedAtMillis: 1,
+      },
+    })
+
+    ;(host as unknown as { scheduleHistoryReconcile(): void }).scheduleHistoryReconcile()
+    Object.assign(host, { turnUpload: { capture: vi.fn(), close: vi.fn() } })
+    await vi.advanceTimersByTimeAsync(60_000)
+
+    expect(history).not.toHaveBeenCalled()
   })
 
   it('continues backfilling later sessions after one retained history is corrupt', async () => {
