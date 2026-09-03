@@ -11,7 +11,7 @@ export interface ArkmeVisibleTextRun {
 
 export function arkmeVisibleMentionRuns(text: string): ArkmeVisibleTextRun[] {
   const runs: ArkmeVisibleTextRun[] = []
-  const pattern = /(^|[\s([{（【])(@[\p{L}\p{N}_\-·]+)/gmu
+  const pattern = /(^|[\s([{（【])(@[^\s@,，.。;；:：!！?？、)\]}）】]+)/gmu
   let cursor = 0
   for (const match of text.matchAll(pattern)) {
     const prefix = match[1] ?? ''
@@ -25,10 +25,12 @@ export function arkmeVisibleMentionRuns(text: string): ArkmeVisibleTextRun[] {
   return runs.length === 0 && text !== '' ? [{ kind: 'text', text }] : runs
 }
 
-function HighlightedText({ text }: { text: string }) {
+const mentionStyle: CSSProperties = { color: 'var(--dsw-alias-state-business-primary, #3964fe)' }
+
+export function ArkmeMentionText({ text }: { text: string }) {
   return <>{arkmeVisibleMentionRuns(text).map((run, index) => <span
     key={`${String(index)}:${run.kind}:${run.text}`}
-    style={run.kind === 'mention' ? { color: 'var(--dsw-alias-state-business-primary, #3964fe)' } : undefined}
+    style={run.kind === 'mention' ? mentionStyle : undefined}
   >{run.text}</span>)}</>
 }
 
@@ -38,7 +40,7 @@ export function ArkmeRichText({ text, highlightMentions = false, renderLink, emo
   renderLink?: ArkmeLinkRenderer
   emojiSize?: number
 }) {
-  const renderText = highlightMentions ? (value: string) => <HighlightedText text={value} /> : undefined
+  const renderText = highlightMentions ? (value: string) => <ArkmeMentionText text={value} /> : undefined
   return <>{arkmeEmojiTextRuns(text).map((run, index) => run.kind === 'emoji' && run.emoji !== undefined
     ? <img
       key={`${String(index)}:emoji:${run.emoji.id}`}

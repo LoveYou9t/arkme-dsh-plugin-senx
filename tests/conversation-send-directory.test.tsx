@@ -72,6 +72,15 @@ function deferred<Value>() {
   return { promise, resolve, reject }
 }
 
+function renderedText(value: unknown): string {
+  if (typeof value === 'string' || typeof value === 'number') return String(value)
+  if (Array.isArray(value)) return value.map(renderedText).join('')
+  if (value !== null && typeof value === 'object' && 'children' in value) {
+    return renderedText((value as { children?: unknown }).children)
+  }
+  return ''
+}
+
 describe('conversation send directory projection', () => {
   let renderer: ReactTestRenderer | undefined
   let timeline: ArkmeTimelineItem[]
@@ -350,6 +359,26 @@ describe('conversation send directory projection', () => {
 
     expect(arkmeGroupMentionCandidates('', [], [member]).map(candidate => candidate.kind))
       .toEqual(['all'])
+  })
+
+  it('highlights visible @ mentions in private conversation bubbles for self and peer messages', async () => {
+    timeline = [{
+      itemUid: 'received-mention', sequence: 1, senderName: '朋友', isMe: false,
+      sendAtMillis: 1, title: '', textContent: '收到 @狗才', status: 1,
+    }, {
+      itemUid: 'self-mention', sequence: 2, senderName: '狗才', isMe: true,
+      sendAtMillis: 2, title: '', textContent: '@🚀助手 我来处理', status: 1,
+    }]
+
+    await act(async () => {
+      renderer = create(<ArkmeSurface productChrome={false} productNavigation={false} />)
+      await Promise.resolve(); await Promise.resolve()
+    })
+
+    const highlighted = renderer.root.findAll(node =>
+      node.type === 'span' && node.props.style?.color === 'var(--dsw-alias-state-business-primary, #3964fe)',
+    ).map(node => renderedText(node.children))
+    expect(highlighted).toEqual(expect.arrayContaining(['@狗才', '@🚀助手']))
   })
 
   it('lets the user remove terminal local file tasks without hiding an unknown remote outcome', async () => {

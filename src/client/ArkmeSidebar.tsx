@@ -6379,7 +6379,7 @@ export function ArkmeSurface({
                               key={`message-content:${conversationOverlayKey}`}
                               item={item}
                               sourceRef={source.sourceRef}
-                              highlightMentions={source.kind === 'group_chat'}
+                              highlightMentions
                               shareWebsite={shareWebsite}
                               onMessageCopyLinkOpen={openMessageCopyLinkDetail}
                               onLongArticleUpdated={detail => {
