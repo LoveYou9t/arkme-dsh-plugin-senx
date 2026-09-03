@@ -1248,6 +1248,7 @@ describe('conversation send directory projection', () => {
           memberRef: 'arkme-chat-member-v1.stable.signature',
           mentionRef: 'arkme-chat-human-mention-v1.mention.signature',
           mentionDisplayName: 'Tison',
+          mentionSecondaryName: '我的私有备注',
           displayName: '我的私有备注',
           secondaryName: 'Tison',
           role: 'member', status: 'active', isSelf: false, isOwner: false,
@@ -1281,7 +1282,7 @@ describe('conversation send directory projection', () => {
       await Promise.resolve()
     })
     const tisonOption = renderer!.root.findAllByProps({ role: 'option' }).find(option =>
-      option.findAll(node => node.type === 'span' && node.children.join('') === '我的私有备注（Tison）').length > 0)
+      option.findAll(node => node.type === 'span' && node.children.join('') === 'Tison（我的私有备注）').length > 0)
     expect(tisonOption).toBeDefined()
     await act(async () => {
       tisonOption!.props.onMouseDown({ preventDefault: vi.fn() })
@@ -1326,7 +1327,7 @@ describe('conversation send directory projection', () => {
       await Promise.resolve()
     })
     const fileMentionOption = renderer!.root.findAllByProps({ role: 'option' }).find(option =>
-      option.findAll(node => node.type === 'span' && node.children.join('') === '我的私有备注（Tison）').length > 0)
+      option.findAll(node => node.type === 'span' && node.children.join('') === 'Tison（我的私有备注）').length > 0)
     expect(fileMentionOption).toBeDefined()
     await act(async () => {
       fileMentionOption!.props.onMouseDown({ preventDefault: vi.fn() })
@@ -1377,7 +1378,7 @@ describe('conversation send directory projection', () => {
       await Promise.resolve()
     })
     const retryOption = renderer!.root.findAllByProps({ role: 'option' }).find(option =>
-      option.findAll(node => node.type === 'span' && node.children.join('') === '我的私有备注（Tison）').length > 0)
+      option.findAll(node => node.type === 'span' && node.children.join('') === 'Tison（我的私有备注）').length > 0)
     expect(retryOption).toBeDefined()
     await act(async () => {
       retryOption!.props.onMouseDown({ preventDefault: vi.fn() })

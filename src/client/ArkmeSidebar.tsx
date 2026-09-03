@@ -1196,6 +1196,7 @@ export function arkmeComposerMentionTrigger(
 export function arkmeMentionCandidateMatches(
   member: Pick<ArkmeConversationMemberItem, 'displayName'> & {
     mentionDisplayName?: string
+    mentionSecondaryName?: string
     memberName?: string
     secondaryName?: string
   },
@@ -1203,7 +1204,9 @@ export function arkmeMentionCandidateMatches(
 ): boolean {
   const normalizedQuery = query.trim().toLowerCase()
   if (normalizedQuery === '') return true
-  return [member.displayName, member.mentionDisplayName, member.memberName, member.secondaryName]
+  return [
+    member.displayName, member.mentionDisplayName, member.mentionSecondaryName, member.memberName, member.secondaryName,
+  ]
     .some(value => (value ?? '').toLowerCase().includes(normalizedQuery))
 }
 
@@ -1213,11 +1216,17 @@ type ArkmeMentionCandidate =
   | ({ kind: 'member'; mentionRef: string } & ArkmeConversationMemberItem)
 
 export function arkmeMentionCandidatePrimaryText(
-  member: { kind: 'all' | 'bot' | 'member'; displayName: string; memberName?: string; secondaryName?: string },
+  member: {
+    kind: 'all' | 'bot' | 'member'
+    displayName: string
+    mentionDisplayName?: string
+    mentionSecondaryName?: string
+    secondaryName?: string
+  },
 ): string {
-  const displayName = member.displayName.trim() || '成员'
+  const displayName = (member.kind === 'member' ? member.mentionDisplayName : member.displayName)?.trim() || '成员'
   if (member.kind !== 'member') return displayName
-  const secondaryName = (member.secondaryName ?? member.memberName ?? '').trim()
+  const secondaryName = (member.mentionSecondaryName ?? '').trim()
   if (secondaryName !== '' && secondaryName !== displayName) return `${displayName}（${secondaryName}）`
   return displayName
 }

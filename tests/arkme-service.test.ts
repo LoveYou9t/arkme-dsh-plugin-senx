@@ -2774,6 +2774,9 @@ describe('ArkmeService', () => {
     let includeSameNameMember = false
     let rawMemberDisplayName = 'Tison'
     let rawMemberSnapshot = ''
+    let rawMemberRemark = ''
+    let privateRemark = '我的私有备注'
+    let privateCounterpartSnapshot = 'Tison'
     const service = new ArkmeService(config, sessions, new MemoryStateStore(), async (input, init) => {
       const url = String(input)
       const body = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>
@@ -2785,7 +2788,7 @@ describe('ArkmeService', () => {
             user_id: 2001, role: 3, status: 1, join_at: 20,
             display_name: rawMemberDisplayName,
             display_name_snapshot: rawMemberSnapshot,
-            remark: '',
+            remark: rawMemberRemark,
             extra: {
               record_count: 7, mention_count: 2, join_batch_at: 1_700_000_000_000,
               inviter_user_id: 10001, inviter_display_name: '我', invitee_display_name: '小林',
@@ -2799,8 +2802,8 @@ describe('ArkmeService', () => {
       if (url.endsWith('/api/v1/chats/list')) return json({ code: 200, data: {
         items: [{
           session: { session_kind: 1 },
-          private_counterpart: { user_id: 2001, display_name_snapshot: 'Tison' },
-          private_supplement: { remark: '我的私有备注' },
+          private_counterpart: { user_id: 2001, display_name_snapshot: privateCounterpartSnapshot },
+          private_supplement: { remark: privateRemark },
         }],
         has_more: false,
       } })
@@ -2828,6 +2831,7 @@ describe('ArkmeService', () => {
     expect(members.items[0]).toMatchObject({
       displayName: '我的私有备注',
       mentionDisplayName: 'Tison',
+      mentionSecondaryName: '我的私有备注',
       recordCount: 7, mentionCount: 2,
       memberRef: expect.stringMatching(/^arkme-chat-member-v1\./),
       mentionRef: expect.stringMatching(/^arkme-chat-human-mention-v1\./),
@@ -2847,10 +2851,59 @@ describe('ArkmeService', () => {
       .toMatchObject({ active_only: false })
     const memberRef = members.items[0]!.memberRef
     const mentionRef = members.items[0]!.mentionRef!
-    expect(JSON.parse(Buffer.from(mentionRef.split('.')[1]!, 'base64url').toString('utf8'))).toMatchObject({
+    expect(JSON.parse(Buffer.from(mentionRef.split('.')[1]!, 'base64url').toString('utf8'))).toEqual({
+      version: 1,
+      viewerUserId: 10001,
+      chatSessionUid: 'group-mention',
       targetUserId: 2001,
       displayNameSnapshot: 'Tison',
     })
+    rawMemberSnapshot = '群内 Tison'
+    const groupNamedMembers = await service.listSourceMembers(sourceRef)
+    expect(groupNamedMembers.items[0]).toMatchObject({
+      displayName: '我的私有备注',
+      mentionDisplayName: '群内 Tison',
+      mentionSecondaryName: '我的私有备注',
+    })
+    expect(JSON.parse(Buffer.from(groupNamedMembers.items[0]!.mentionRef!.split('.')[1]!, 'base64url').toString('utf8')))
+      .toEqual({
+        version: 1,
+        viewerUserId: 10001,
+        chatSessionUid: 'group-mention',
+        targetUserId: 2001,
+        displayNameSnapshot: '群内 Tison',
+      })
+    rawMemberSnapshot = ''
+
+    privateRemark = ''
+    privateCounterpartSnapshot = '私聊旧快照'
+    const noRemarkMembers = await service.listSourceMembers(sourceRef)
+    expect(noRemarkMembers.items[0]).toMatchObject({
+      displayName: '私聊旧快照',
+      mentionDisplayName: 'Tison',
+    })
+    expect(noRemarkMembers.items[0]).not.toHaveProperty('mentionSecondaryName')
+    expect(JSON.parse(Buffer.from(noRemarkMembers.items[0]!.mentionRef!.split('.')[1]!, 'base64url').toString('utf8')))
+      .toEqual({
+        version: 1,
+        viewerUserId: 10001,
+        chatSessionUid: 'group-mention',
+        targetUserId: 2001,
+        displayNameSnapshot: 'Tison',
+      })
+
+    rawMemberDisplayName = ''
+    privateCounterpartSnapshot = ''
+    const publicFallbackMembers = await service.listSourceMembers(sourceRef)
+    expect(publicFallbackMembers.items[0]).toMatchObject({
+      displayName: 'Lin',
+      mentionDisplayName: 'Lin',
+    })
+    expect(publicFallbackMembers.items[0]).not.toHaveProperty('mentionSecondaryName')
+    rawMemberDisplayName = 'Tison'
+    rawMemberRemark = '我的私有备注'
+    privateRemark = '我的私有备注'
+    privateCounterpartSnapshot = 'Tison'
     await expect(service.sourceMemberRecords(sourceRef, `${memberRef}x`, 'owner'))
       .rejects.toMatchObject({ code: 'chat-member-ref-invalid' })
     await expect(service.sourceMemberRecords(sourceRefFor('group_chat', 'another-group', '另一个群'), memberRef, 'owner'))

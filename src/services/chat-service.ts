@@ -73,6 +73,7 @@ import { arkmeMentionMetadataMentionsViewer } from '../mention-metadata.js'
 import { arkmeRichBackgroundSound } from '../record-background-sound.js'
 import {
   SourceService,
+  type ArkmePrivateChatViewerLabel,
   type ArkmeSourceRefPayload,
 } from './source-service.js'
 
@@ -1022,7 +1023,13 @@ function firstJoinDisplayName(source: Record<string, unknown>, keys: readonly st
 interface ChatMemberDisplayNames {
   displayName: string
   memberName: string
+  userName: string
   secondaryName: string
+}
+
+interface ChatMemberMentionDisplayNames {
+  mentionDisplayName: string
+  mentionSecondaryName: string
 }
 
 interface ChatMemberProjectionOptions {
@@ -1031,26 +1038,33 @@ interface ChatMemberProjectionOptions {
   signal?: AbortSignal
 }
 
+function isUsableChatMemberName(value: string, userId: number): boolean {
+  return value !== ''
+    && value !== '成员'
+    && value !== '群成员'
+    && value !== `用户 ${String(userId)}`
+}
+
+function firstUsableChatMemberName(values: readonly unknown[], userId: number): string {
+  return values
+    .map(normalizedJoinDisplayName)
+    .find(value => isUsableChatMemberName(value, userId)) ?? ''
+}
+
 function resolveChatMemberDisplayNames(input: {
   userId: number
   remarkCandidates?: readonly unknown[]
   memberNameCandidates?: readonly unknown[]
   userNameCandidates?: readonly unknown[]
 }): ChatMemberDisplayNames {
-  const isUsable = (value: string): boolean => value !== ''
-    && value !== '成员'
-    && value !== '群成员'
-    && value !== `用户 ${String(input.userId)}`
-  const firstUsable = (values: readonly unknown[]): string => values
-    .map(normalizedJoinDisplayName)
-    .find(isUsable) ?? ''
-  const remarkName = firstUsable(input.remarkCandidates ?? [])
-  const memberName = firstUsable(input.memberNameCandidates ?? [])
-  const userName = firstUsable(input.userNameCandidates ?? [])
-  const displayName = [remarkName, memberName, userName].find(isUsable) ?? '群成员'
+  const remarkName = firstUsableChatMemberName(input.remarkCandidates ?? [], input.userId)
+  const memberName = firstUsableChatMemberName(input.memberNameCandidates ?? [], input.userId)
+  const userName = firstUsableChatMemberName(input.userNameCandidates ?? [], input.userId)
+  const displayName = [remarkName, memberName, userName]
+    .find(value => isUsableChatMemberName(value, input.userId)) ?? '群成员'
   const secondaryName = [memberName, userName, remarkName]
-    .find(value => isUsable(value) && value !== displayName) ?? ''
-  return { displayName, memberName, secondaryName }
+    .find(value => isUsableChatMemberName(value, input.userId) && value !== displayName) ?? ''
+  return { displayName, memberName, userName, secondaryName }
 }
 
 function projectChatMemberDisplayNames(
@@ -1067,15 +1081,16 @@ function projectChatMemberDisplayNames(
   })
 }
 
-function projectChatMemberMentionDisplayName(
-  item: Record<string, unknown>,
+function projectChatMemberMentionDisplayNames(
+  names: Pick<ChatMemberDisplayNames, 'memberName' | 'userName'>,
+  remarkCandidates: readonly unknown[],
   userId: number,
-  publicDisplayName?: string,
-): string {
-  return resolveChatMemberDisplayNames({
-    userId,
-    userNameCandidates: [item.display_name, publicDisplayName],
-  }).displayName
+): ChatMemberMentionDisplayNames {
+  // A mention is public in the group: only its supporting label may consume the viewer's exact private remark.
+  const mentionDisplayName = names.memberName || names.userName || '群成员'
+  const remarkName = firstUsableChatMemberName(remarkCandidates, userId)
+  const mentionSecondaryName = remarkName !== mentionDisplayName ? remarkName : ''
+  return { mentionDisplayName, mentionSecondaryName }
 }
 
 function normalizedJoinTimestamp(value: unknown): number {
@@ -4929,20 +4944,24 @@ export class ChatService {
     const [profiles, viewerLabels] = await Promise.all([
       this.profile.publicProfileSummariesByUserIds(userIds, session, options.signal).catch(() => new Map()),
       options.includeViewerLabels
-        ? this.source.privateDisplayNamesByUserIds(userIds, {
+        ? this.source.privateChatViewerLabelsByUserIds(userIds, {
             ...(options.signal === undefined ? {} : { signal: options.signal }),
           }).catch(() => new Map())
-        : Promise.resolve(new Map<number, string>()),
+        : Promise.resolve(new Map<number, ArkmePrivateChatViewerLabel>()),
     ])
     const members: ArkmeConversationMemberItem[] = []
     for (const item of rawItems) {
       const userId = Math.trunc(numberValue(item.user_id))
       if (!Number.isSafeInteger(userId) || userId <= 0) continue
       const profile = profiles.get(userId)
-      const { displayName, memberName, secondaryName } = projectChatMemberDisplayNames(
-        item, userId, viewerLabels.get(userId), profile?.displayName,
+      const viewerLabel = viewerLabels.get(userId)
+      const names = projectChatMemberDisplayNames(
+        item, userId, viewerLabel?.displayName, profile?.displayName,
       )
-      const mentionDisplayName = projectChatMemberMentionDisplayName(item, userId, profile?.displayName)
+      const { displayName, memberName, secondaryName } = names
+      const { mentionDisplayName, mentionSecondaryName } = projectChatMemberMentionDisplayNames(
+        names, [viewerLabel?.remark, item.remark], userId,
+      )
       const role = chatMemberRole(item.role)
       const status = chatMemberStatus(item.status)
       const extra = parsedObject(item.extra)
@@ -4951,6 +4970,7 @@ export class ChatService {
         ...(options.includeHumanMentionRefs && status === 'active' && userId !== session.userId ? {
           mentionRef: await this.sealChatHumanMentionRef(session.userId, chatSessionUid, userId, mentionDisplayName),
           mentionDisplayName,
+          ...(mentionSecondaryName === '' ? {} : { mentionSecondaryName }),
         } : {}),
         displayName,
         ...(memberName === '' ? {} : { memberName }),
