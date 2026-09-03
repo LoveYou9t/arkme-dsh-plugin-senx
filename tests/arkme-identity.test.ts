@@ -155,15 +155,6 @@ function withoutOutgoingCallAssetCompatibilityAlias(file: string, content: strin
   return content.replaceAll('jotmo-video-linear.svg', '')
 }
 
-function withoutLegacyLinkMetadataCompatibility(file: string, content: string): string {
-  if (file !== join(root, 'src/link-metadata.ts')) return content
-  // Previously issued share hosts and page titles remain read-only link parsing aliases.
-  return content
-    .replaceAll('jotmo-app.senguo.me', '')
-    .replaceAll('jiwo.cc', '')
-    .replaceAll('即我', '')
-}
-
 describe('Arkme plugin identity', () => {
   it('removes legacy product identity outside unchanged service infrastructure', () => {
     const files = [
@@ -177,14 +168,11 @@ describe('Arkme plugin identity', () => {
     const residuals = files.flatMap(file => {
       const source = withoutOutgoingCallAssetCompatibilityAlias(
         file,
-        withoutLegacyLinkMetadataCompatibility(
+        withoutApprovedJiwoScanLoginFeature(
           file,
-          withoutApprovedJiwoScanLoginFeature(
+          withoutOfficialCommunityProductCopy(
             file,
-            withoutOfficialCommunityProductCopy(
-              file,
-              withoutArkmeIdCompatibilityAliases(file, readFileSync(file, 'utf8')),
-            ),
+            withoutArkmeIdCompatibilityAliases(file, readFileSync(file, 'utf8')),
           ),
         ),
       )
