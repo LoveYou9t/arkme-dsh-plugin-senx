@@ -60,20 +60,28 @@ describe('chat member action menu placement', () => {
   it('matches mention candidates by viewer label, public mention, member, or secondary name', () => {
     const candidate = {
       ...member,
-      displayName: '我的私有备注', mentionDisplayName: 'Tison', memberName: 'Lin', secondaryName: '设计师',
+      displayName: '我的私有备注', mentionDisplayName: 'Tison', mentionSecondaryName: '我的私有备注',
+      memberName: 'Lin', secondaryName: '设计师',
     }
     expect(arkmeMentionCandidateMatches(candidate, '')).toBe(true)
     expect(arkmeMentionCandidateMatches(candidate, 'tison')).toBe(true)
     expect(arkmeMentionCandidateMatches(candidate, 'lin')).toBe(true)
     expect(arkmeMentionCandidateMatches(candidate, '设计')).toBe(true)
+    expect(arkmeMentionCandidateMatches(candidate, '私有备注')).toBe(true)
     expect(arkmeMentionCandidateMatches(candidate, '周')).toBe(false)
   })
 
-  it('renders a member mention candidate with the secondary name in parentheses', () => {
-    expect(arkmeMentionCandidatePrimaryText({ kind: 'member', displayName: '菜市场', secondaryName: '阿萨' }))
-      .toBe('菜市场（阿萨）')
-    expect(arkmeMentionCandidatePrimaryText({ kind: 'member', displayName: '菜市场', secondaryName: '菜市场' }))
+  it('renders a public mention name first and the private viewer label in parentheses', () => {
+    expect(arkmeMentionCandidatePrimaryText({
+      kind: 'member', displayName: '我的私有备注', mentionDisplayName: '菜市场', mentionSecondaryName: '我的私有备注',
+    })).toBe('菜市场（我的私有备注）')
+    expect(arkmeMentionCandidatePrimaryText({
+      kind: 'member', displayName: '菜市场', mentionDisplayName: '菜市场', mentionSecondaryName: '菜市场',
+    }))
       .toBe('菜市场')
+    expect(arkmeMentionCandidatePrimaryText({
+      kind: 'member', displayName: '私聊旧快照', mentionDisplayName: '菜市场',
+    })).toBe('菜市场')
     expect(arkmeMentionCandidatePrimaryText({ kind: 'bot', displayName: 'Purge', secondaryName: 'Bot' }))
       .toBe('Purge')
   })

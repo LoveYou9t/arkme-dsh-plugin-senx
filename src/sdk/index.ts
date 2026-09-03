@@ -70,6 +70,8 @@ import type {
   ArkmeOfficialAuthorProfile,
   ArkmeOpenPrivateChatResult,
   ArkmePendingWrite,
+  ArkmeRecordSearchResult,
+  ArkmeRecordTagList,
   ArkmeRelatedRecordingEligibility,
   ArkmeRelatedRecordingPage,
   ArkmeRelatedRecordingPageOptions,
@@ -233,6 +235,7 @@ export type {
   ArkmeMessageReadReceiptSummaryList,
   ArkmeOfficialAuthorProfile,
   ArkmePendingWrite,
+  ArkmeRecordTagList,
   ArkmeRelatedRecordingEligibility,
   ArkmeRelatedRecordingItem,
   ArkmeRelatedRecordingMonthBucket,
@@ -1884,6 +1887,26 @@ export class ArkmeSdk {
     return await this.call<ArkmeCreateTextResult>('records.create', {
       recordUid: options.recordUid ?? crypto.randomUUID(),
       textContent,
+    }, options.signal)
+  }
+
+  async tags(options: { limit?: number; signal?: AbortSignal } = {}): Promise<ArkmeRecordTagList> {
+    return await this.call<ArkmeRecordTagList>('records.tags.list', {
+      limit: options.limit ?? 100,
+    }, options.signal)
+  }
+
+  async tagRecords(normalizedTag: string, options: {
+    limit?: number
+    cursorSendAt?: number
+    cursorRecordUid?: string
+    signal?: AbortSignal
+  } = {}): Promise<ArkmeRecordSearchResult> {
+    return await this.call<ArkmeRecordSearchResult>('records.tags.query', {
+      normalizedTag,
+      limit: options.limit ?? 50,
+      ...(options.cursorSendAt === undefined ? {} : { cursorSendAt: options.cursorSendAt }),
+      ...(options.cursorRecordUid?.trim() ? { cursorRecordUid: options.cursorRecordUid.trim() } : {}),
     }, options.signal)
   }
 

@@ -75,8 +75,10 @@ import type { ArkmeRelatedQuickNoteSourceLocator } from './related-quick-note-se
 import { ArkmePluginError, ServiceRuntime, objectValue, stringValue } from './service.js'
 import { arkmeMentionMetadataMentionsViewer } from '../mention-metadata.js'
 import { arkmeRichBackgroundSound } from '../record-background-sound.js'
+import { arkmeHashTagContentPayload, arkmeHashTagPayload } from '../hashtag.js'
 import {
   SourceService,
+  type ArkmePrivateChatViewerLabel,
   type ArkmeSourceRefPayload,
 } from './source-service.js'
 
@@ -96,7 +98,8 @@ export function arkmeRichContentPayload(
   const assets = input.assets ?? []
   const backgroundSound = arkmeRichBackgroundSound(input.backgroundSound)
   const mentionMetadata = mentionPayload?.mention_metadata
-  if (assets.length === 0 && backgroundSound === undefined && mentionMetadata === undefined) return undefined
+  const hashTags = arkmeHashTagPayload(normalizedTextContent)
+  if (assets.length === 0 && backgroundSound === undefined && mentionMetadata === undefined && hashTags.length === 0) return undefined
   const mediaRefs = [
     ...assets.map((asset, index) => ({
       file_asset_uid: asset.fileAssetUid,
@@ -123,6 +126,7 @@ export function arkmeRichContentPayload(
       ? {}
       : { background_sound_amplitudes: backgroundSound.amplitudes }),
     ...(mentionMetadata === undefined ? {} : { mention_metadata: mentionMetadata }),
+    ...(hashTags.length === 0 ? {} : { hash_tags: hashTags }),
   }
 }
 
@@ -1043,7 +1047,13 @@ function firstJoinDisplayName(source: Record<string, unknown>, keys: readonly st
 interface ChatMemberDisplayNames {
   displayName: string
   memberName: string
+  userName: string
   secondaryName: string
+}
+
+interface ChatMemberMentionDisplayNames {
+  mentionDisplayName: string
+  mentionSecondaryName: string
 }
 
 interface ChatMemberProjectionOptions {
@@ -1052,26 +1062,33 @@ interface ChatMemberProjectionOptions {
   signal?: AbortSignal
 }
 
+function isUsableChatMemberName(value: string, userId: number): boolean {
+  return value !== ''
+    && value !== '成员'
+    && value !== '群成员'
+    && value !== `用户 ${String(userId)}`
+}
+
+function firstUsableChatMemberName(values: readonly unknown[], userId: number): string {
+  return values
+    .map(normalizedJoinDisplayName)
+    .find(value => isUsableChatMemberName(value, userId)) ?? ''
+}
+
 function resolveChatMemberDisplayNames(input: {
   userId: number
   remarkCandidates?: readonly unknown[]
   memberNameCandidates?: readonly unknown[]
   userNameCandidates?: readonly unknown[]
 }): ChatMemberDisplayNames {
-  const isUsable = (value: string): boolean => value !== ''
-    && value !== '成员'
-    && value !== '群成员'
-    && value !== `用户 ${String(input.userId)}`
-  const firstUsable = (values: readonly unknown[]): string => values
-    .map(normalizedJoinDisplayName)
-    .find(isUsable) ?? ''
-  const remarkName = firstUsable(input.remarkCandidates ?? [])
-  const memberName = firstUsable(input.memberNameCandidates ?? [])
-  const userName = firstUsable(input.userNameCandidates ?? [])
-  const displayName = [remarkName, memberName, userName].find(isUsable) ?? '群成员'
+  const remarkName = firstUsableChatMemberName(input.remarkCandidates ?? [], input.userId)
+  const memberName = firstUsableChatMemberName(input.memberNameCandidates ?? [], input.userId)
+  const userName = firstUsableChatMemberName(input.userNameCandidates ?? [], input.userId)
+  const displayName = [remarkName, memberName, userName]
+    .find(value => isUsableChatMemberName(value, input.userId)) ?? '群成员'
   const secondaryName = [memberName, userName, remarkName]
-    .find(value => isUsable(value) && value !== displayName) ?? ''
-  return { displayName, memberName, secondaryName }
+    .find(value => isUsableChatMemberName(value, input.userId) && value !== displayName) ?? ''
+  return { displayName, memberName, userName, secondaryName }
 }
 
 function projectChatMemberDisplayNames(
@@ -1088,15 +1105,16 @@ function projectChatMemberDisplayNames(
   })
 }
 
-function projectChatMemberMentionDisplayName(
-  item: Record<string, unknown>,
+function projectChatMemberMentionDisplayNames(
+  names: Pick<ChatMemberDisplayNames, 'memberName' | 'userName'>,
+  remarkCandidates: readonly unknown[],
   userId: number,
-  publicDisplayName?: string,
-): string {
-  return resolveChatMemberDisplayNames({
-    userId,
-    userNameCandidates: [item.display_name, publicDisplayName],
-  }).displayName
+): ChatMemberMentionDisplayNames {
+  // A mention is public in the group: only its supporting label may consume the viewer's exact private remark.
+  const mentionDisplayName = names.memberName || names.userName || '群成员'
+  const remarkName = firstUsableChatMemberName(remarkCandidates, userId)
+  const mentionSecondaryName = remarkName !== mentionDisplayName ? remarkName : ''
+  return { mentionDisplayName, mentionSecondaryName }
 }
 
 function normalizedJoinTimestamp(value: unknown): number {
@@ -2872,20 +2890,24 @@ export class ChatService {
       const profile = profileSnapshot.profile
       if (profile === null) throw new ArkmePluginError('profile-unavailable', '无法读取当前 Arkme 账号资料', true)
       const sendAtMillis = Date.now()
-      const contentPayload = assets.length === 0 ? undefined : {
-        payload_kind: 2,
+      const hashTags = arkmeHashTagPayload(normalizedText)
+      const contentPayload = assets.length === 0 && hashTags.length === 0 ? undefined : {
+        payload_kind: assets.length === 0 ? 1 : 2,
         schema_version: 1,
         text_state: normalizedText === '' ? 3 : 1,
-        media_refs: assets.map((asset, index) => ({
-          file_asset_uid: asset.fileAssetUid,
-          content_file_role: 1,
-          render_role: 1,
-          sort_order: index,
-          file_name: asset.fileName,
-          file_kind: asset.fileKind,
-          mime_type: asset.mimeType,
-          size: asset.size,
-        })),
+        ...(hashTags.length === 0 ? {} : { hash_tags: hashTags }),
+        ...(assets.length === 0 ? {} : {
+          media_refs: assets.map((asset, index) => ({
+            file_asset_uid: asset.fileAssetUid,
+            content_file_role: 1,
+            render_role: 1,
+            sort_order: index,
+            file_name: asset.fileName,
+            file_kind: asset.fileKind,
+            mime_type: asset.mimeType,
+            size: asset.size,
+          })),
+        }),
       }
       const data = await this.runtime.authenticatedChatPost<Record<string, unknown>>(
         '/api/v1/chats/extensions/children/create',
@@ -2938,20 +2960,24 @@ export class ChatService {
       const profile = profileSnapshot.profile
       if (profile === null) throw new ArkmePluginError('profile-unavailable', '无法读取当前 Arkme 账号资料', true)
       const sendAtMillis = Date.now()
-      const contentPayload = assets.length === 0 ? undefined : {
-        payload_kind: 2,
+      const hashTags = arkmeHashTagPayload(normalizedText)
+      const contentPayload = assets.length === 0 && hashTags.length === 0 ? undefined : {
+        payload_kind: assets.length === 0 ? 1 : 2,
         schema_version: 1,
         text_state: normalizedText === '' ? 3 : 1,
-        media_refs: assets.map((asset, index) => ({
-          file_asset_uid: asset.fileAssetUid,
-          content_file_role: 1,
-          render_role: 1,
-          sort_order: index,
-          file_name: asset.fileName,
-          file_kind: asset.fileKind,
-          mime_type: asset.mimeType,
-          size: asset.size,
-        })),
+        ...(hashTags.length === 0 ? {} : { hash_tags: hashTags }),
+        ...(assets.length === 0 ? {} : {
+          media_refs: assets.map((asset, index) => ({
+            file_asset_uid: asset.fileAssetUid,
+            content_file_role: 1,
+            render_role: 1,
+            sort_order: index,
+            file_name: asset.fileName,
+            file_kind: asset.fileKind,
+            mime_type: asset.mimeType,
+            size: asset.size,
+          })),
+        }),
       }
       const data = await this.runtime.authenticatedPost<Record<string, unknown>>(
         '/api/v1/topics/records/extensions/create',
@@ -2976,6 +3002,7 @@ export class ChatService {
         || createdTopicUid !== source.ownerRef || edgeUid === '') {
         throw new ArkmePluginError('record-extension-response-invalid', '主题延展写入结果无效，请刷新后重试', true, 502)
       }
+      await this.record.syncCreatedRecordTags?.(createdRecordUid, normalizedText, session.userId)
       const relationUid = stringValue(data.rel_uid).trim()
       this.source.invalidateSourceListCache(session.userId, 'send_to_self')
       this.realtime.emitChatClientEvent({
@@ -3417,6 +3444,7 @@ export class ChatService {
         throw new ArkmePluginError('source-text-invalid', '发送内容为空或超过长度限制', false)
       }
       const recordUid = options.recordUid?.trim() || randomUUID()
+      const hashTagContentPayload = arkmeHashTagContentPayload(text)
       if (source.kind === 'send_to_self' || source.kind === 'default_category') {
         const sendAtMillis = Date.now()
         const result = await this.record.createTextForConversation(recordUid, text, {
@@ -3457,9 +3485,15 @@ export class ChatService {
             ...(captureContext === undefined || Object.keys(captureContext).length === 0
               ? {}
               : { capture_context: captureContext }),
+            ...(hashTagContentPayload === undefined ? {} : { content_payload: hashTagContentPayload }),
             send_at: sendAtMillis,
           },
           session,
+        )
+        await this.record.syncCreatedRecordTags?.(
+          stringValue(result.record_uid).trim() || recordUid,
+          text,
+          session.userId,
         )
         await this.realtime.invalidateRecordProjection()
         return await this.withSentMessageActionRef({
@@ -3519,6 +3553,7 @@ export class ChatService {
               agentAuthored,
               ...(options.recordDurationMillis === undefined ? {} : { recordDurationMillis: options.recordDurationMillis }),
               ...(options.captureContext === undefined ? {} : { captureContext: options.captureContext }),
+              ...(hashTagContentPayload === undefined ? {} : { contentPayload: hashTagContentPayload }),
               ...(options.signal === undefined ? {} : { signal: options.signal }),
             },
           )
@@ -3541,7 +3576,7 @@ export class ChatService {
         )
       } else {
         sent = await this.sendChatSourceTextRaw(
-          sourceRef, source.ownerRef, text, recordUid, relationUid, session, undefined, undefined, options.signal,
+          sourceRef, source.ownerRef, text, recordUid, relationUid, session, undefined, hashTagContentPayload, options.signal,
           {
             agentAuthored,
             ...(options.recordDurationMillis === undefined ? {} : { recordDurationMillis: options.recordDurationMillis }),
@@ -3596,6 +3631,9 @@ export class ChatService {
       payload_kind: 1,
       schema_version: 1,
       text_state: 1,
+      ...(arkmeHashTagPayload(normalizedText).length === 0
+        ? {}
+        : { hash_tags: arkmeHashTagPayload(normalizedText) }),
       mention_metadata: {
         schema_version: 1,
         source_checksum: createHash('sha256').update(JSON.stringify(checksumInput)).digest('hex'),
@@ -3792,6 +3830,9 @@ export class ChatService {
         payload_kind: 1,
         schema_version: 1,
         text_state: 1,
+        ...(arkmeHashTagPayload(visibleText).length === 0
+          ? {}
+          : { hash_tags: arkmeHashTagPayload(visibleText) }),
         mention_metadata: {
           schema_version: 1,
           source_checksum: createHash('sha256').update(JSON.stringify(checksumInput)).digest('hex'),
@@ -3961,6 +4002,11 @@ export class ChatService {
         const result = await this.runtime.authenticatedPost<Record<string, unknown>>(
           '/api/v1/records/create', commonBody, session, options.signal, { trackWriteOutcome: true },
         )
+        await this.record.syncCreatedRecordTags?.(
+          stringValue(result.record_uid).trim() || recordUid,
+          textContent,
+          session.userId,
+        )
         await this.realtime.invalidateRecordProjection()
         return await this.withSentMessageActionRef({
           sourceRef,
@@ -3983,6 +4029,11 @@ export class ChatService {
         const result = await this.runtime.authenticatedPost<Record<string, unknown>>(
           '/api/v1/topics/records/create', { topic_uid: source.ownerRef, ...commonBody }, session, options.signal,
           { trackWriteOutcome: true },
+        )
+        await this.record.syncCreatedRecordTags?.(
+          stringValue(result.record_uid).trim() || recordUid,
+          textContent,
+          session.userId,
         )
         await this.realtime.invalidateRecordProjection()
         return await this.withSentMessageActionRef({
@@ -5156,20 +5207,24 @@ export class ChatService {
     const [profiles, viewerLabels] = await Promise.all([
       this.profile.publicProfileSummariesByUserIds(userIds, session, options.signal).catch(() => new Map()),
       options.includeViewerLabels
-        ? this.source.privateDisplayNamesByUserIds(userIds, {
+        ? this.source.privateChatViewerLabelsByUserIds(userIds, {
             ...(options.signal === undefined ? {} : { signal: options.signal }),
           }).catch(() => new Map())
-        : Promise.resolve(new Map<number, string>()),
+        : Promise.resolve(new Map<number, ArkmePrivateChatViewerLabel>()),
     ])
     const members: ArkmeConversationMemberItem[] = []
     for (const item of rawItems) {
       const userId = Math.trunc(numberValue(item.user_id))
       if (!Number.isSafeInteger(userId) || userId <= 0) continue
       const profile = profiles.get(userId)
-      const { displayName, memberName, secondaryName } = projectChatMemberDisplayNames(
-        item, userId, viewerLabels.get(userId), profile?.displayName,
+      const viewerLabel = viewerLabels.get(userId)
+      const names = projectChatMemberDisplayNames(
+        item, userId, viewerLabel?.displayName, profile?.displayName,
       )
-      const mentionDisplayName = projectChatMemberMentionDisplayName(item, userId, profile?.displayName)
+      const { displayName, memberName, secondaryName } = names
+      const { mentionDisplayName, mentionSecondaryName } = projectChatMemberMentionDisplayNames(
+        names, [viewerLabel?.remark, item.remark], userId,
+      )
       const role = chatMemberRole(item.role)
       const status = chatMemberStatus(item.status)
       const extra = parsedObject(item.extra)
@@ -5178,6 +5233,7 @@ export class ChatService {
         ...(options.includeHumanMentionRefs && status === 'active' && userId !== session.userId ? {
           mentionRef: await this.sealChatHumanMentionRef(session.userId, chatSessionUid, userId, mentionDisplayName),
           mentionDisplayName,
+          ...(mentionSecondaryName === '' ? {} : { mentionSecondaryName }),
         } : {}),
         displayName,
         ...(memberName === '' ? {} : { memberName }),

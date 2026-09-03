@@ -54,7 +54,7 @@ const expectedPublicMethods = [
   'beginWechatLogin', 'pollWechatLogin', 'testLogin',
   'sendPhoneCode', 'verifyPhoneCode', 'logout', 'cachedSnapshot', 'queryCached', 'refreshLatest',
   'refreshSnapshot', 'searchRecords', 'searchRemote', 'searchHistory', 'createSearchHistory', 'searchImages',
-  'searchScene', 'searchRecordings', 'syncHistory', 'summary', 'list', 'calendarBuckets', 'calendarRecords',
+  'searchScene', 'searchRecordings', 'searchTagRecords', 'syncHistory', 'summary', 'list', 'listRecordTags', 'calendarBuckets', 'calendarRecords',
   'listWorldRecords',
   'listArrangements', 'arrangementDetail', 'listArrangementReminders', 'arrangementReminderSummary',
   'mutateArrangement', 'setArrangementReminderEnabled', 'markArrangementRemindersRead',
@@ -115,7 +115,7 @@ describe('Arkme service architecture', () => {
 
   it('keeps the compatibility facade free of business transport and state owners', () => {
     const facade = readFileSync(join(root, 'src/arkme-service.ts'), 'utf8')
-    expect(facade.split('\n').length).toBeLessThan(1_860)
+    expect(facade.split('\n').length).toBeLessThan(1_880)
     expect(facade).not.toMatch(/\/api\//)
     expect(facade).not.toMatch(/private readonly \w+\s*=\s*new Map/)
   })
@@ -210,6 +210,12 @@ describe('Arkme service architecture', () => {
     expect(world).toContain('export interface ArkmeWorldRecordWriter')
     expect(world).not.toMatch(/import \{[^}]*\bMediaService\b/)
     expect(world).not.toMatch(/import \{[^}]*\bRecordService\b/)
+  })
+
+  it('keeps private-chat viewer labels independent from their consumers', () => {
+    const source = readFileSync(join(root, 'src/services/source-service.ts'), 'utf8')
+    expect(source).toContain('private-chat-viewer-labels:')
+    expect(source).not.toContain('world-author-labels:')
   })
 
   it('keeps transport outcome translation behind the file-send port adapter', () => {

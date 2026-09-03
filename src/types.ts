@@ -394,6 +394,18 @@ export interface ArkmePendingWrite {
   lastError?: string
 }
 
+export interface ArkmeRecordTagItem {
+  normalizedTag: string
+  tagText: string
+  recordCount: number
+  latestRecordUid: string
+  latestSendAtMillis: number
+}
+
+export interface ArkmeRecordTagList {
+  items: ArkmeRecordTagItem[]
+}
+
 export interface ArkmeCreateTextResult {
   recordUid: string
   status: number
@@ -2152,6 +2164,8 @@ export interface ArkmeConversationMemberItem {
   mentionRef?: string
   /** Public/group-safe name bound to mentionRef; never contains the viewer's private contact label. */
   mentionDisplayName?: string
+  /** Viewer-private label shown only as supporting text in a mention candidate. */
+  mentionSecondaryName?: string
   /** Viewer-facing label; it may be the current viewer's private contact remark. */
   displayName: string
   memberName?: string
@@ -3039,6 +3053,8 @@ export type ArkmePluginOperation =
   | 'records.refresh'
   | 'records.search'
   | 'records.list'
+  | 'records.tags.list'
+  | 'records.tags.query'
   | 'records.create'
   | 'records.outbox'
   | 'records.retry'
