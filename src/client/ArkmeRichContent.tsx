@@ -111,11 +111,13 @@ function ArkmeLinkIcon({ size = 16 }: { size?: number }) {
 
 function ArkmeMessageCopyLink({
   href,
+  text,
   sid,
   linkLabelMode,
   onMessageCopyLinkOpen,
 }: {
   href: string
+  text: string
   sid: string
   linkLabelMode: ArkmeLinkLabelMode
   onMessageCopyLinkOpen?: (sid: string) => void
@@ -147,7 +149,7 @@ function ArkmeMessageCopyLink({
     }}
   >
     <ArkmeLinkIcon />
-    <span style={styles.inlineLinkTitle} data-arkme-link-label="true">{linkLabelMode === 'raw' ? href : '快记分享链接'}</span>
+    <span style={styles.inlineLinkTitle} data-arkme-link-label="true">{linkLabelMode === 'raw' ? text : '快记分享链接'}</span>
   </span>
 }
 
@@ -169,6 +171,7 @@ function ArkmeMessageRichText({
     if (sid === undefined) return undefined
     return <ArkmeMessageCopyLink
       href={link.href}
+      text={link.text}
       sid={sid}
       linkLabelMode={linkLabelMode}
       {...(onMessageCopyLinkOpen === undefined ? {} : { onMessageCopyLinkOpen })}

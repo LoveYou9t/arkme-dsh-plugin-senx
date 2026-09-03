@@ -367,7 +367,7 @@ describe('Arkme rich content presentation', () => {
       presentation="detail"
       item={{
         itemUid: 'detail-copy-link', senderName: '我', isMe: true, sendAtMillis: 1, status: 1,
-        title: '', textContent: `https://jiwo.cc/s/${sid}`,
+        title: '', textContent: `jiwo.cc/s/${sid}`,
       }}
       shareWebsite="https://jiwo.cc"
       onMessageCopyLinkOpen={onOpen}
@@ -376,7 +376,7 @@ describe('Arkme rich content presentation', () => {
     const link = renderer.root.findByProps({ 'data-arkme-inline-link': 'message-copy-link' })
     expect(link.props['data-arkme-link-mode']).toBe('raw')
     expect(link.findByProps({ 'data-arkme-link-label': 'true' }).children).toEqual([
-      `https://jiwo.cc/s/${sid}`,
+      `jiwo.cc/s/${sid}`,
     ])
 
     link.props.onClick({ stopPropagation: vi.fn() })
