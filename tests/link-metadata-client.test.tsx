@@ -12,6 +12,56 @@ function expectLinkLabel(renderer: ReturnType<typeof create>, label: string): vo
 }
 
 describe('Arkme link metadata presentation', () => {
+  it('keeps the original URL and skips metadata resolution in raw label mode', async () => {
+    const resolver: ArkmeLinkMetadataResolver = {
+      resolve: vi.fn(async () => ({ url: 'https://jotmo.ai/raw', title: '不应展示的标题' })),
+    }
+    let renderer: ReturnType<typeof create>
+
+    await act(async () => {
+      renderer = create(<ArkmeLinkText
+        text="查看 jotmo.ai/raw"
+        linkLabelMode="raw"
+        metadataResolver={resolver}
+      />)
+      await Promise.resolve()
+    })
+
+    const anchor = renderer!.root.findByProps({ 'data-arkme-text-link': 'true' })
+    expect(anchor.props.href).toBe('https://jotmo.ai/raw')
+    expect(anchor.props.target).toBe('_blank')
+    expect(anchor.props.rel).toBe('noopener noreferrer')
+    expect(anchor.props['data-arkme-link-title']).toBe('raw')
+    const label = renderer!.root.findByProps({ 'data-arkme-link-label': 'true' })
+    expect(label.children).toEqual(['jotmo.ai/raw'])
+    expect(label.props.style).toMatchObject({ overflowWrap: 'anywhere', whiteSpace: 'normal' })
+    expect(resolver.resolve).not.toHaveBeenCalled()
+  })
+
+  it('shows the original URL immediately when a mounted link changes to raw label mode', async () => {
+    const resolver: ArkmeLinkMetadataResolver = {
+      resolve: vi.fn(async () => ({ url: 'https://jotmo.ai/switch', title: '即我标题' })),
+    }
+    let renderer: ReturnType<typeof create>
+
+    await act(async () => {
+      renderer = create(<ArkmeLinkText text="https://jotmo.ai/switch" metadataResolver={resolver} />)
+      await Promise.resolve()
+    })
+    expectLinkLabel(renderer!, '即我标题')
+
+    renderer!.update(<ArkmeLinkText
+      text="https://jotmo.ai/switch"
+      linkLabelMode="raw"
+      metadataResolver={resolver}
+    />)
+    expectLinkLabel(renderer!, 'https://jotmo.ai/switch')
+    expect(renderer!.root.findByProps({ 'data-arkme-text-link': 'true' }).props['data-arkme-link-title']).toBe('raw')
+
+    await act(async () => { await Promise.resolve() })
+    expect(resolver.resolve).toHaveBeenCalledOnce()
+  })
+
   it('keeps the original href clickable while showing a title-style label', async () => {
     const pending = Promise.withResolvers<{ url: string; title: string } | null>()
     const resolver: ArkmeLinkMetadataResolver = { resolve: vi.fn(async () => await pending.promise) }

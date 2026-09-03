@@ -116,6 +116,7 @@ describe('Arkme rich content presentation', () => {
       onMessageCopyLinkOpen={() => undefined}
     />)
     expect(copyLinkHtml).toContain('data-arkme-inline-link="message-copy-link"')
+    expect(copyLinkHtml).toContain('data-arkme-link-label="true">快记分享链接</span>')
     expect(copyLinkHtml).toContain('快记分享链接')
     expect(copyLinkHtml).not.toContain(`https://jiwo.cc/s/${sid}</p>`)
 
@@ -335,15 +336,17 @@ describe('Arkme rich content presentation', () => {
       title: '', textContent: '详情 https://example.com/detail',
     }} />)
     expect(detailHtml).toContain('href="https://example.com/detail"')
+    expect(detailHtml).toContain('data-arkme-link-label="true">https://example.com/detail</span>')
     expect(detailHtml).not.toContain('data-arkme-text-collapsible')
 
-    const voiceHtml = renderToStaticMarkup(<ArkmeMessageContent item={{
+    const voiceHtml = renderToStaticMarkup(<ArkmeMessageContent presentation="detail" item={{
       itemUid: 'voice-link', senderName: '同事', isMe: false, sendAtMillis: 1, status: 1, templateKind: 3,
       title: '', textContent: '转写 https://example.com/voice',
       contentBlocks: [{ kind: 'audio', mediaRef: 'voice-link-ref', fileName: 'voice.m4a', mimeType: 'audio/mp4', size: 3, sortOrder: 0 }],
     }} />)
     expect(voiceHtml).toContain('data-arkme-voice-transcript')
     expect(voiceHtml).toContain('href="https://example.com/voice"')
+    expect(voiceHtml).toContain('data-arkme-link-label="true">https://example.com/voice</span>')
 
     const collapsedHtml = renderToStaticMarkup(<ArkmeMessageContent item={{
       itemUid: 'collapsed-link', senderName: '我', isMe: true, sendAtMillis: 1, status: 1,
@@ -351,6 +354,32 @@ describe('Arkme rich content presentation', () => {
     }} />)
     expect(collapsedHtml).toContain('data-arkme-text-collapsible="true"')
     expect(collapsedHtml).toContain('href="https://example.com/long"')
+  })
+
+  it('shows the original copied quick-link label in detail while retaining its business action', () => {
+    const sid = 'U2HQgn1RhPJZaFmx'
+    const onOpen = vi.fn()
+    const renderer = create(<ArkmeMessageContent
+      presentation="detail"
+      item={{
+        itemUid: 'detail-copy-link', senderName: '我', isMe: true, sendAtMillis: 1, status: 1,
+        title: '', textContent: `jiwo.cc/s/${sid}`,
+      }}
+      shareWebsite="https://jiwo.cc"
+      onMessageCopyLinkOpen={onOpen}
+    />)
+
+    const link = renderer.root.findByProps({ 'data-arkme-inline-link': 'message-copy-link' })
+    const label = link.findByProps({ 'data-arkme-link-label': 'true' })
+    expect(label.children).toEqual([
+      `jiwo.cc/s/${sid}`,
+    ])
+    expect(label.props.style).toMatchObject({ overflowWrap: 'anywhere', whiteSpace: 'normal' })
+    expect(label.props.style.overflow).toBeUndefined()
+    expect(label.props.style.textOverflow).toBeUndefined()
+
+    link.props.onClick({ stopPropagation: vi.fn() })
+    expect(onOpen).toHaveBeenCalledWith(sid)
   })
 
   it('keeps copied quick links on the message business renderer inside voice transcripts', () => {
@@ -383,11 +412,13 @@ describe('Arkme rich content presentation', () => {
     }
     const polishedHtml = renderToStaticMarkup(<ArkmeTimelineDetailDrawer item={item} showOriginal={false} onClose={() => undefined} onToggleOriginal={() => undefined} />)
     expect(polishedHtml).toContain('href="https://polished.example.com"')
+    expect(polishedHtml).toContain('data-arkme-link-label="true">https://polished.example.com</span>')
     expect(polishedHtml).not.toContain('original.example.com')
     expect(polishedHtml).not.toContain('current.example.com')
 
     const originalHtml = renderToStaticMarkup(<ArkmeTimelineDetailDrawer item={item} showOriginal onClose={() => undefined} onToggleOriginal={() => undefined} />)
     expect(originalHtml).toContain('href="https://original.example.com"')
+    expect(originalHtml).toContain('data-arkme-link-label="true">https://original.example.com</span>')
     expect(originalHtml).not.toContain('polished.example.com')
     expect(originalHtml).not.toContain('current.example.com')
   })
@@ -402,11 +433,16 @@ describe('Arkme rich content presentation', () => {
     expect(articlePreviewHtml).not.toContain('data-arkme-text-link')
     const articleDetailHtml = renderToStaticMarkup(<ArkmeMessageContent item={article} presentation="detail" />)
     expect(articleDetailHtml).toContain('href="https://example.com/article"')
+    expect(articleDetailHtml).toContain('data-arkme-link-label="true">https://example.com/article</span>')
 
     const forward = {
       itemUid: 'forward-link', senderName: '我', isMe: true, sendAtMillis: 1, status: 1, title: '', textContent: '',
       forwardRecords: { title: '转发链接', createdAtMillis: 1, summaryLines: [], items: [{
         senderName: '同事', sendAtMillis: 1, title: '', textContent: '查看 https://example.com/forward',
+        segments: [{
+          speakerName: '讲述人', startMillis: 0, endMillis: 1_000,
+          textContent: '分段 https://example.com/forward-segment',
+        }],
       }] },
     }
     const forwardPreviewHtml = renderToStaticMarkup(<ArkmeMessageContent item={forward} />)
@@ -414,6 +450,27 @@ describe('Arkme rich content presentation', () => {
     expect(forwardPreviewHtml).not.toContain('data-arkme-text-link')
     const forwardDetailHtml = renderToStaticMarkup(<ForwardRecordsDetail item={forward} onClose={() => {}} />)
     expect(forwardDetailHtml).toContain('href="https://example.com/forward"')
+    expect(forwardDetailHtml).toContain('data-arkme-link-label="true">https://example.com/forward</span>')
+    expect(forwardDetailHtml).toContain('href="https://example.com/forward-segment"')
+    expect(forwardDetailHtml).toContain('data-arkme-link-label="true">https://example.com/forward-segment</span>')
+  })
+
+  it('keeps direct record-detail links raw for text and voice content', () => {
+    const textHtml = renderToStaticMarkup(<ArkmeRecordDetailContent item={{
+      itemUid: 'direct-detail-link', senderName: '我', isMe: true, sendAtMillis: 1, status: 1,
+      title: '', textContent: '直接详情 https://example.com/direct',
+    }} />)
+    expect(textHtml).toContain('data-arkme-link-label="true">https://example.com/direct</span>')
+
+    const voiceHtml = renderToStaticMarkup(<ArkmeRecordDetailContent item={{
+      itemUid: 'direct-voice-detail-link', senderName: '我', isMe: true, sendAtMillis: 1, status: 1,
+      title: '', textContent: '直接转写 https://example.com/direct-voice', templateKind: 3,
+      contentBlocks: [{
+        kind: 'audio', mediaRef: 'direct-voice-ref', fileName: 'direct.m4a',
+        mimeType: 'audio/mp4', size: 3, sortOrder: 0,
+      }],
+    }} />)
+    expect(voiceHtml).toContain('data-arkme-link-label="true">https://example.com/direct-voice</span>')
   })
 
   it('shows a precise fallback when record media delivery is temporarily unavailable', () => {

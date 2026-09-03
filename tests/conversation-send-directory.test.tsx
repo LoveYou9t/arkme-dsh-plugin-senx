@@ -1,6 +1,11 @@
 import { act, create, type ReactTestRenderer } from 'react-test-renderer'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { ArkmeConversationMemberItem, ArkmeSourceItem, ArkmeTimelineItem } from '../src/types.js'
+import type {
+  ArkmeConversationMemberItem,
+  ArkmeMessageCopyLinkSnapshotItem,
+  ArkmeSourceItem,
+  ArkmeTimelineItem,
+} from '../src/types.js'
 
 const mocks = vi.hoisted(() => ({ callArkme: vi.fn() }))
 
@@ -100,6 +105,7 @@ describe('conversation send directory projection', () => {
     nextCursor?: { beforeSequence: number }
   }>()
   let copiedQuickLinkExtensionText = ''
+  let copiedQuickLinkItems: ArkmeMessageCopyLinkSnapshotItem[]
   let activeSource = target
 
   it.each([
@@ -141,6 +147,18 @@ describe('conversation send directory projection', () => {
     newerTimelinePages = new Map()
     olderTimelinePages = new Map()
     copiedQuickLinkExtensionText = ''
+    copiedQuickLinkItems = [{
+      sourceKind: 'chat_record',
+      senderDisplayName: '1D3E',
+      senderAvatarUrl: '',
+      title: '',
+      textContent: 'bot相关接口有点问题，会优化下',
+      sendAtMillis: 1_775_399_700_000,
+      templateKind: 1,
+      displayKind: 0,
+      officialMark: 0,
+      mediaItems: [],
+    }]
     activeSource = target
     vi.spyOn(Date, 'now').mockReturnValue(48)
     const localStorage = new Map<string, string>()
@@ -238,18 +256,7 @@ describe('conversation send directory projection', () => {
           recordOwnerUserId: 42,
           sequence: 8,
         }],
-        items: [{
-          sourceKind: 'chat_record',
-          senderDisplayName: '1D3E',
-          senderAvatarUrl: '',
-          title: '',
-          textContent: 'bot相关接口有点问题，会优化下',
-          sendAtMillis: 1_775_399_700_000,
-          templateKind: 1,
-          displayKind: 0,
-          officialMark: 0,
-          mediaItems: [],
-        }],
+        items: copiedQuickLinkItems,
         presentation: [{ kind: 'item', itemIndex: 0 }],
         ...(copiedQuickLinkExtensionText === '' ? {} : {
           recordContext: {
@@ -3650,6 +3657,72 @@ describe('conversation send directory projection', () => {
       height: '16',
     })
     expect(sendButton.findByType('path').props.d).toContain('M23.5521 7.04659')
+  })
+
+  it('keeps a raw URL label in a single copied quick-link detail record', async () => {
+    copiedQuickLinkItems[0] = {
+      ...copiedQuickLinkItems[0]!,
+      textContent: '单条 https://example.com/single',
+    }
+    timeline = [{
+      itemUid: 'copy-link-message', senderName: '1D3E', isMe: false, sendAtMillis: 1, status: 1,
+      title: '', textContent: 'https://jiwo.cc/s/U2HQgn1RhPJZaFmx', templateKind: 1, displayKind: 0,
+    }]
+    await act(async () => {
+      renderer = create(<ArkmeSurface productChrome={false} productNavigation={false} />)
+      await Promise.resolve()
+    })
+
+    const quickLink = renderer!.root.findByProps({ 'data-arkme-inline-link': 'message-copy-link' })
+    await act(async () => {
+      quickLink.props.onClick({ stopPropagation: vi.fn() })
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    const detail = renderer!.root.findByProps({ 'data-arkme-copy-link-detail': 'true' })
+    const link = detail.find(node => node.type === 'a' && node.props.href === 'https://example.com/single')
+    expect(link.findByProps({ 'data-arkme-link-label': 'true' }).children).toEqual([
+      'https://example.com/single',
+    ])
+  })
+
+  it('keeps raw URL labels in multi-record and extension copied-link details', async () => {
+    copiedQuickLinkItems = [
+      { ...copiedQuickLinkItems[0]!, textContent: '第一条 https://example.com/first' },
+      {
+        ...copiedQuickLinkItems[0]!,
+        senderDisplayName: '狗才',
+        sendAtMillis: 1_775_399_800_000,
+        textContent: '第二条 https://example.com/second',
+      },
+    ]
+    copiedQuickLinkExtensionText = '延展 https://example.com/extension'
+    timeline = [{
+      itemUid: 'copy-link-message', senderName: '1D3E', isMe: false, sendAtMillis: 1, status: 1,
+      title: '', textContent: 'https://jiwo.cc/s/U2HQgn1RhPJZaFmx', templateKind: 1, displayKind: 0,
+    }]
+    await act(async () => {
+      renderer = create(<ArkmeSurface productChrome={false} productNavigation={false} />)
+      await Promise.resolve()
+    })
+
+    const quickLink = renderer!.root.findByProps({ 'data-arkme-inline-link': 'message-copy-link' })
+    await act(async () => {
+      quickLink.props.onClick({ stopPropagation: vi.fn() })
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    const detail = renderer!.root.findByProps({ 'data-arkme-copy-link-detail': 'true' })
+    for (const href of [
+      'https://example.com/first',
+      'https://example.com/second',
+      'https://example.com/extension',
+    ]) {
+      const link = detail.find(node => node.type === 'a' && node.props.href === href)
+      expect(link.findByProps({ 'data-arkme-link-label': 'true' }).children).toEqual([href])
+    }
   })
 
   it('extends the copied quick-link detail record from the footer input', async () => {
