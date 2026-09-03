@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  buildRecordingGenerationTranscript,
   parseRecordingTimeline,
   recordingPendingTranscriptionCount,
   projectRecordingTranscripts,
@@ -7,6 +8,30 @@ import {
 } from '../src/recording-presentation.js'
 
 describe('recording presentation', () => {
+  it('builds the desktop generation transcript without leaking owner selectors', () => {
+    const dayStart = new Date(2026, 7, 31).getTime()
+    const transcript = buildRecordingGenerationTranscript([{
+      itemId: 'private-item', sessionId: 'session-secret', childId: 'child-secret', asrItemIndex: 0,
+      transcriptSource: 'system', childAsrItemStartAt: 1_000, childAsrItemEndAt: 6_000,
+      formalSpeakerId: 'speaker-secret', sourceSpeakerNumber: 1, assignmentSpeakerNumber: 1,
+      speakerIdentity: 'speaker:speaker-secret', startAtMillis: dayStart + 14 * 3_600_000,
+      endAtMillis: dayStart + 14 * 3_600_000 + 5_600, speakerNumber: 1, speakerColorIndex: 0,
+      speakerLabel: '小林', isSelf: false, isBackground: true, text: '键盘敲击声',
+      generationText: '(背景音) 键盘敲击声', event: '工作',
+    }], 'timeline', dayStart)
+
+    expect(transcript).toContain('说话人：小林')
+    expect(transcript).toContain('[important_note]: 这句话不是我本人说的')
+    expect(transcript).toContain('[2026-08-31 14:00:00 6秒] 工作：')
+    expect(transcript).toContain('(背景音) 键盘敲击声')
+    expect(transcript).not.toContain('[背景音]')
+    expect(transcript).toContain('其中，没有发现我自己说的话')
+    expect(transcript).toContain('直接输出「时间轴」正文内容')
+    expect(transcript).not.toContain('session-secret')
+    expect(transcript).not.toContain('child-secret')
+    expect(transcript).not.toContain('speaker-secret')
+  })
+
   it('keeps Audio owner transcription progress distinct from an empty day', () => {
     expect(recordingPendingTranscriptionCount({
       session_ls: [{ id: 'session-1', start_at: 1_000, end_at: 10_000 }],

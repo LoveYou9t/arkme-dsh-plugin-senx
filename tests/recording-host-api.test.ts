@@ -3,10 +3,16 @@ import type { ArkmeService } from '../src/arkme-service.js'
 import { dispatchArkmeHostOperation } from '../src/host-api.js'
 
 describe('recording UI-only host operations', () => {
-  it('dispatches calendar and day reads without adding public SDK methods', async () => {
+  it('dispatches calendar, day, and owner-backed generation operations without adding public SDK methods', async () => {
     const recordingCalendar = vi.fn(async () => ({ fromStamp: 10, toStamp: 20, days: [] }))
     const recordingDay = vi.fn(async () => ({ dateStamp: 10, totalDurationMillis: 0 }))
-    const service = { recordingCalendar, recordingDay } as unknown as ArkmeService
+    const recordingSummaryModelConfig = vi.fn(async () => ({ options: [] }))
+    const setRecordingSummaryModelRoute = vi.fn(async () => ({ effectiveRouteKey: 'dashscope/glm-5' }))
+    const generateRecordingProjection = vi.fn(async () => ({ state: 'processing', items: [], message: '内容仍在生成' }))
+    const service = {
+      recordingCalendar, recordingDay, recordingSummaryModelConfig,
+      setRecordingSummaryModelRoute, generateRecordingProjection,
+    } as unknown as ArkmeService
 
     const controller = new AbortController()
     await expect(dispatchArkmeHostOperation(service, 'recordings.calendar', {
@@ -17,9 +23,24 @@ describe('recording UI-only host operations', () => {
       service, 'recordings.day', { dateStamp: 10 }, undefined, undefined, undefined, undefined, controller.signal,
     ))
       .resolves.toMatchObject({ dateStamp: 10 })
+    await expect(dispatchArkmeHostOperation(
+      service, 'recordings.summary-model-config', {},
+      undefined, undefined, undefined, undefined, controller.signal,
+    )).resolves.toMatchObject({ options: [] })
+    await expect(dispatchArkmeHostOperation(
+      service, 'recordings.summary-model-config.set', { routeKey: 'dashscope/glm-5' },
+      undefined, undefined, undefined, undefined, controller.signal,
+    )).resolves.toMatchObject({ effectiveRouteKey: 'dashscope/glm-5' })
+    await expect(dispatchArkmeHostOperation(
+      service, 'recordings.generate', { dateStamp: 10, kind: 'summary', routeKey: 'dashscope/glm-5' },
+      undefined, undefined, undefined, undefined, controller.signal,
+    )).resolves.toMatchObject({ state: 'processing' })
 
     expect(recordingCalendar).toHaveBeenCalledWith(10, 20, controller.signal)
     expect(recordingDay).toHaveBeenCalledWith(10, controller.signal)
+    expect(recordingSummaryModelConfig).toHaveBeenCalledWith(controller.signal)
+    expect(setRecordingSummaryModelRoute).toHaveBeenCalledWith('dashscope/glm-5', controller.signal)
+    expect(generateRecordingProjection).toHaveBeenCalledWith(10, 'summary', 'dashscope/glm-5', controller.signal)
   })
 
   it('does not collapse a missing recording date into the valid Unix epoch', async () => {
@@ -32,6 +53,16 @@ describe('recording UI-only host operations', () => {
 
     expect(recordingCalendar).toHaveBeenCalledWith(Number.NaN, Number.NaN, undefined)
     expect(recordingDay).toHaveBeenCalledWith(Number.NaN, undefined)
+  })
+
+  it('rejects an unknown generation kind before reaching the Audio owner facade', async () => {
+    const generateRecordingProjection = vi.fn()
+    const service = { generateRecordingProjection } as unknown as ArkmeService
+
+    await expect(dispatchArkmeHostOperation(service, 'recordings.generate', {
+      dateStamp: 10, kind: 'transcript',
+    })).rejects.toMatchObject({ code: 'recording-generation-kind-invalid' })
+    expect(generateRecordingProjection).not.toHaveBeenCalled()
   })
 
   it('dispatches only opaque recording import control operations', async () => {

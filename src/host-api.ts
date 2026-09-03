@@ -270,6 +270,18 @@ function recordingSpeakerScopeParam(params: Record<string, unknown>): 'item' | '
   throw new ArkmePluginError('recording-speaker-scope-invalid', '说话人修改范围无效', false, 400)
 }
 
+function recordingProjectionKindParam(params: Record<string, unknown>): 'summary' | 'timeline' {
+  const kind = stringParam(params, 'kind')
+  if (kind === 'summary' || kind === 'timeline') return kind
+  throw new ArkmePluginError('recording-generation-kind-invalid', '录音生成类型无效', false, 400)
+}
+
+function recordingSummaryModelRouteParam(params: Record<string, unknown>, required: boolean): string {
+  const routeKey = stringParam(params, 'routeKey').trim()
+  if ((!required && routeKey === '') || (routeKey !== '' && routeKey.length <= 256)) return routeKey
+  throw new ArkmePluginError('recording-summary-model-route-invalid', '录音总结模型无效', false, 400)
+}
+
 function recordingImportOwnershipParam(params: Record<string, unknown>): 'self' | 'other' {
   const ownership = stringParam(params, 'ownership')
   if (ownership === 'self' || ownership === 'other') return ownership
@@ -856,7 +868,7 @@ export function createArkmeHostApi(service: ArkmeService, options: ArkmeHostApiO
       if (['user-ban.ban', 'user-ban.unban'].includes(request.operation) && origin === undefined) {
         throw new ArkmePluginError('origin-required', '封禁操作必须从当前 DSH 页面发起', false, 403)
       }
-      if (['user.arkme-id.set', 'extensions.delete', 'extensions.reviews.create', 'extensions.audit.check', 'extensions.install.start', 'extensions.install.pause', 'extensions.install.resume', 'extensions.enabled.set', 'extensions.metadata.update', 'extensions.share.rotate', 'extensions.preview.delete', 'extensions.preview.reorder', 'extensions.uninstall', 'extensions.restart', 'extensions.client.failure', 'extensions.persistent.invoke', 'extensions.bundle.invoke', 'extensions.mine.publish', 'extensions.quarantine.dismiss', 'extensions.quarantine.reenable', 'remote.renameDesktop', 'message-actions.copy-link', 'message-actions.forward', 'recordings.import.retry', 'recordings.import.cancel', 'recordings.import.session.update-start', 'recordings.import.session.update-ownership', 'recordings.import.session.delete', 'recordings.speaker.assign-item', 'openapi.mcp.retry']
+      if (['user.arkme-id.set', 'extensions.delete', 'extensions.reviews.create', 'extensions.audit.check', 'extensions.install.start', 'extensions.install.pause', 'extensions.install.resume', 'extensions.enabled.set', 'extensions.metadata.update', 'extensions.share.rotate', 'extensions.preview.delete', 'extensions.preview.reorder', 'extensions.uninstall', 'extensions.restart', 'extensions.client.failure', 'extensions.persistent.invoke', 'extensions.bundle.invoke', 'extensions.mine.publish', 'extensions.quarantine.dismiss', 'extensions.quarantine.reenable', 'remote.renameDesktop', 'message-actions.copy-link', 'message-actions.forward', 'recordings.summary-model-config.set', 'recordings.generate', 'recordings.import.retry', 'recordings.import.cancel', 'recordings.import.session.update-start', 'recordings.import.session.update-ownership', 'recordings.import.session.delete', 'recordings.speaker.assign-item', 'openapi.mcp.retry']
         .includes(request.operation) && origin === undefined) {
         throw new ArkmePluginError('origin-required', '该敏感变更必须从当前 DSH 页面发起', false, 403)
       }
@@ -1109,6 +1121,17 @@ export async function dispatchArkmeHostOperation(
     )
     case 'recordings.day': return await service.recordingDay(
       numberParam(params, 'dateStamp', Number.NaN),
+      requestSignal,
+    )
+    case 'recordings.summary-model-config': return await service.recordingSummaryModelConfig(requestSignal)
+    case 'recordings.summary-model-config.set': return await service.setRecordingSummaryModelRoute(
+      recordingSummaryModelRouteParam(params, true),
+      requestSignal,
+    )
+    case 'recordings.generate': return await service.generateRecordingProjection(
+      numberParam(params, 'dateStamp', Number.NaN),
+      recordingProjectionKindParam(params),
+      recordingSummaryModelRouteParam(params, false),
       requestSignal,
     )
     case 'recordings.import.preflight': return await service.recordingImportPreflight(

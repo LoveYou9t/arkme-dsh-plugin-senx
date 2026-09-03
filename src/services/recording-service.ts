@@ -26,6 +26,8 @@ import {
   isRecordingLocalDateOnOrAfterMinimum,
 } from '../recording-time.js'
 import {
+  buildRecordingGenerationTranscript,
+  projectRecordingSummaryModelConfig,
   projectRecordingTranscripts,
   projectRecordingVersions,
   recordingPendingTranscriptionCount,
@@ -38,6 +40,8 @@ import type {
   ArkmeRecordingPlayback,
   ArkmeRecordingProjectionKind,
   ArkmeRecordingSection,
+  ArkmeRecordingSummaryModelConfig,
+  ArkmeRecordingSummaryModelRouteUpdate,
   ArkmeRecordingSpeakerMutationResult,
   ArkmeRecordingTranscriptSection,
   ArkmeRecordingTranscriptItem,
@@ -1043,6 +1047,98 @@ export class RecordingService {
     signal?: AbortSignal,
   ): Promise<ArkmeRecordingSection<ArkmeRecordingVersion>> {
     return await this.recordingProjectionWithSession(dateStamp, kind, await this.runtime.requireSession(), signal)
+  }
+
+  async generateRecordingProjection(
+    dateStamp: number,
+    kind: ArkmeRecordingProjectionKind,
+    routeKey = '',
+    signal?: AbortSignal,
+  ): Promise<ArkmeRecordingSection<ArkmeRecordingVersion>> {
+    this.assertWorkbenchEnabled()
+    const normalizedRouteKey = routeKey.trim()
+    if (normalizedRouteKey.length > 256) {
+      throw new ArkmePluginError('recording-summary-model-route-invalid', '录音总结模型无效', false, 400)
+    }
+    const dayStart = this.recordingDayStart(dateStamp)
+    const session = await this.runtime.requireSession()
+    const transcript = await this.recordingTranscriptWithSession(dayStart.getTime(), session, signal)
+    if (transcript.state === 'processing') {
+      throw new ArkmePluginError(
+        'recording-generation-transcript-processing',
+        '录音仍在转写，请完成后再生成',
+        true,
+        409,
+      )
+    }
+    if (transcript.items.length === 0) {
+      throw new ArkmePluginError(
+        'recording-generation-transcript-empty',
+        '当天没有可用于生成的已完成转写',
+        false,
+        409,
+      )
+    }
+    const firstItem = transcript.items[0]!
+    const lastItem = transcript.items[transcript.items.length - 1]!
+    const response = await this.runtime.authenticatedAudioPost<Record<string, unknown>>(
+      '/api/v1/summary/create',
+      {
+        date_stamp: dayStart.getTime(),
+        tz_offset: -dayStart.getTimezoneOffset() * 60_000,
+        from_stamp: firstItem.startAtMillis,
+        to_stamp: lastItem.endAtMillis,
+        model_type: 1,
+        prompt_ver: 1,
+        transcripts: buildRecordingGenerationTranscript(transcript.items, kind, dayStart.getTime()),
+        kind: kind === 'timeline' ? 1 : 2,
+        ...(normalizedRouteKey === '' ? {} : { route_key: normalizedRouteKey }),
+      },
+      session,
+      signal,
+      { lane: 'write', bypassCache: true },
+    )
+    const flag = numberValue(response.flag)
+    const summaryId = stringValue(response.summary_id).trim()
+    if ((flag !== 1 && flag !== 2) || (flag === 1 && summaryId === '')) {
+      throw new ArkmePluginError('recording-generation-response-invalid', '生成请求响应无效', true, 502)
+    }
+    try {
+      const section = await this.recordingProjectionWithSession(dayStart.getTime(), kind, session, signal)
+      return section.state === 'empty'
+        ? { state: 'processing', items: section.items, message: '内容仍在生成' }
+        : section
+    } catch (reason) {
+      if (signal?.aborted === true) throw reason
+      // The owner accepted the write. A failed immediate read must not invite a duplicate retry.
+      return { state: 'processing', items: [], message: '内容仍在生成' }
+    }
+  }
+
+  async recordingSummaryModelConfig(signal?: AbortSignal): Promise<ArkmeRecordingSummaryModelConfig> {
+    this.assertWorkbenchEnabled()
+    const session = await this.runtime.requireSession()
+    const data = await this.runtime.authenticatedAudioPost<Record<string, unknown>>(
+      '/api/v1/audio-summary/model-config/list', {}, session, signal,
+    )
+    return projectRecordingSummaryModelConfig(data)
+  }
+
+  async setRecordingSummaryModelRoute(
+    routeKey: string,
+    signal?: AbortSignal,
+  ): Promise<ArkmeRecordingSummaryModelRouteUpdate> {
+    this.assertWorkbenchEnabled()
+    const normalizedRouteKey = routeKey.trim()
+    if (normalizedRouteKey === '' || normalizedRouteKey.length > 256) {
+      throw new ArkmePluginError('recording-summary-model-route-invalid', '录音总结模型无效', false, 400)
+    }
+    const session = await this.runtime.requireSession()
+    await this.runtime.authenticatedAudioPost(
+      '/api/v1/audio-summary/model-config/set', { route_key: normalizedRouteKey }, session, signal,
+      { lane: 'write', bypassCache: true },
+    )
+    return { effectiveRouteKey: normalizedRouteKey }
   }
 
   private async recordingProjectionWithSession(
