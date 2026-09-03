@@ -201,6 +201,7 @@ import type {
   ArkmeProviderState,
   ArkmeQuotaSnapshot,
   ArkmeRecordCursor,
+  ArkmeRecordTagList,
   ArkmeRecordSearchResult,
   ArkmeRecordingCalendarMonth, ArkmeRecordingCursorPayload, ArkmeRecordingDay, ArkmeRecordingPlayback,
   ArkmeRecordingProjectionKind, ArkmeRecordingSearchResult, ArkmeRecordingSection, ArkmeRecordingSpeakerMutationResult,
@@ -1535,6 +1536,8 @@ export class ArkmeService {
     return await this.search.searchRemote(options)
   }
 
+  async searchTagRecords(options: { normalizedTag: string; limit: number; cursorSendAt?: number; cursorRecordUid?: string; signal?: AbortSignal }): Promise<ArkmeRecordSearchResult> { return await this.search.searchTagRecords(options) }
+
   async searchHistory(limit = 10): Promise<ArkmeSearchHistoryResult> {
     return await this.search.searchHistory(limit)
   }
@@ -1797,6 +1800,10 @@ export class ArkmeService {
   async createText(recordUid: string, textContent: string): Promise<ArkmeCreateTextResult> {
     const result = await this.record.createText(recordUid, textContent)
     await this.realtime.invalidateRecordProjection(); return result
+  }
+
+  async listRecordTags(limit = 100, signal?: AbortSignal): Promise<ArkmeRecordTagList> {
+    return await this.record.listTags(limit, signal)
   }
 
   async createTextForConversation(

@@ -26,7 +26,12 @@ import type {
   ArkmeSharedRecordingPreview,
   ArkmeBackgroundSoundPreference, ArkmeBackgroundSoundEligibilityReason, ArkmeProviderCapabilities,
   ArkmeUserBanRecord, ArkmeUserBanSnapshot,
+  ArkmeRecordTagItem, ArkmeRecordTagList,
 } from '../types.js'
+import {
+  arkmeHashTagMatches, arkmeHashTagTrigger, arkmeMergeHashTagSuggestions,
+  arkmeReconcileHashTagSuggestionSnapshots, type ArkmeHashTagTrigger,
+} from '../hashtag.js'
 import { callArkme, ArkmeClientError } from './api.js'
 import { createArkmeSdk } from '../sdk/index.js'
 import type { ArkmeContentBlock } from '../types.js'
@@ -2613,6 +2618,20 @@ export function ArkmeSurface({
   const [privateMentionBots, setPrivateMentionBots] = useState<ArkmeBotList>()
   const [mentionTrigger, setMentionTrigger] = useState<ArkmeComposerMentionTrigger>()
   const [mentionCandidateIndex, setMentionCandidateIndex] = useState(0)
+  const [hashTagTrigger, setHashTagTrigger] = useState<ArkmeHashTagTrigger>()
+  const [hashTagItems, setHashTagItems] = useState<ArkmeRecordTagItem[]>([])
+  const [hashTagLoading, setHashTagLoading] = useState(false)
+  const [hashTagCandidateIndex, setHashTagCandidateIndex] = useState(0)
+  const [hashTagRefreshRevision, setHashTagRefreshRevision] = useState(0)
+  const hashTagSuggestionListRef = useRef<HTMLDivElement | null>(null)
+  const activeHashTagStartRef = useRef<number>()
+  const dismissedHashTagStartRef = useRef<number>()
+  const hashTagActive = hashTagTrigger !== undefined
+  useEffect(() => {
+    // Candidate memory belongs to an account, never to a conversation. Clear it
+    // only when the authenticated account changes or logs out.
+    setHashTagItems([])
+  }, [authenticatedAccountKey])
   const [memberMenu, setMemberMenu] = useState<{
     member: ArkmeConversationMemberItem
     position: ArkmeMemberMenuPosition
@@ -2736,6 +2755,30 @@ export function ArkmeSurface({
     }
     return () => { controller.abort() }
   }, [activeConversation, authenticatedUserId, conversationKey, mentionTrigger?.startIndex, source?.kind, source?.sourceRef])
+
+  useEffect(() => {
+    if (!activeConversation || authenticatedAccountKey === undefined || authenticatedUserId === undefined || source === undefined || !hashTagActive) return
+    const controller = new AbortController()
+    const localItems = arkmeMergeHashTagSuggestions([], items)
+    setHashTagItems(current => arkmeReconcileHashTagSuggestionSnapshots(current, localItems))
+    setHashTagLoading(true)
+    void callArkme<ArkmeRecordTagList>('records.tags.list', { limit: 100 }, controller.signal)
+      .then(snapshot => {
+        if (!controller.signal.aborted) {
+          setHashTagItems(current => arkmeReconcileHashTagSuggestionSnapshots(snapshot.items, current, localItems))
+        }
+      })
+      .catch(caught => {
+        if (!controller.signal.aborted) {
+          setHashTagItems(current => arkmeReconcileHashTagSuggestionSnapshots(current, localItems))
+          console.warn('dsh-arkme: hashtag refresh failed', errorMessage(caught))
+        }
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setHashTagLoading(false)
+    })
+    return () => { controller.abort() }
+  }, [activeConversation, authenticatedAccountKey, authenticatedUserId, conversationKey, hashTagActive, hashTagRefreshRevision, source?.sourceRef])
 
   useEffect(() => {
     if (!activeConversation || auth?.status !== 'authenticated' || typeof window === 'undefined') return
@@ -4282,6 +4325,20 @@ export function ArkmeSurface({
     await job
   }
 
+  const rememberSentHashTags = useCallback((
+    accountKey: string,
+    itemUid: string,
+    textContent: string,
+    sendAtMillis: number,
+  ) => {
+    if (arkmeAuthenticatedAccountKey(arkmeAuthStore.getSnapshot().auth) !== accountKey) return
+    setHashTagItems(current => arkmeMergeHashTagSuggestions(current, [{
+      itemUid,
+      textContent,
+      sendAtMillis,
+    }]))
+  }, [])
+
   const send = async () => {
     if (source === undefined || composerDraftKey === undefined) return
     const targetSource = source
@@ -4320,6 +4377,10 @@ export function ArkmeSurface({
     // Take the draft before any network await.  The next keystroke now belongs to a
     // fresh draft and can be sent independently instead of being swallowed by a busy lock.
     const pendingDraft = arkmeComposerDraftStore.take(targetDraftKey)
+    setHashTagTrigger(undefined)
+    setHashTagCandidateIndex(0)
+    activeHashTagStartRef.current = undefined
+    dismissedHashTagStartRef.current = undefined
     const pendingAttachments = [...pendingDraft.attachments]
     const pendingAssets = pendingAttachments.flatMap(attachment => attachment.asset === undefined ? [] : [attachment.asset])
     const pendingFileRefs = pendingAttachments.flatMap(attachment => attachment.localFile === undefined ? [] : [attachment.localFile.fileRef])
@@ -4427,6 +4488,7 @@ export function ArkmeSurface({
             latestSequence: result.sequence,
           }, targetSource.sourceKey)
         }
+        rememberSentHashTags(targetAccountKey, result.recordUid, textContent, now)
         await Promise.allSettled(pendingFileRefs.map(fileRef => callArkme('files.local.remove', { fileRef })))
         releaseArkmeComposerDraft(pendingDraft)
         if (sameTargetComposer()) {
@@ -4566,6 +4628,7 @@ export function ArkmeSurface({
         backgroundDirectUploadCacheRef.current.delete(recordUid)
         releaseArkmeComposerDraft(pendingDraft)
         fileTasks.accept(acceptedTask)
+        rememberSentHashTags(targetAccountKey, acceptedTask.recordUid, rawTextContent, now)
         const locationFeedback = locationCaptureFeedback(locationCapture)
         if (sameTargetComposer()) {
           if (locationFeedback !== undefined) setError(locationFeedback)
@@ -4595,6 +4658,9 @@ export function ArkmeSurface({
         })
       if (!sameTargetAccount()) throw new Error('账号已切换，本次发送结果已丢弃')
       backgroundDirectUploadCacheRef.current.delete(recordUid)
+      if (result.localState !== 'failed') {
+        rememberSentHashTags(targetAccountKey, result.itemUid, rawTextContent, now)
+      }
       const confirmedItem = applySourceSendResult([optimistic], recordUid, result)[0]
       const targetSourceKey = arkmeSourceIdentityKey(targetSource)
       if (result.localState === 'synced' && confirmedItem !== undefined) {
@@ -4843,14 +4909,29 @@ export function ArkmeSurface({
     },
     [composerMentionsEnabled, conversationMembers, groupMentionBots?.items, mentionTrigger, privateMentionBots?.items, source?.kind],
   )
+  const hashTagCandidates = useMemo(() => {
+    if (hashTagTrigger === undefined) return []
+    return hashTagItems.filter(item => arkmeHashTagMatches(item.tagText, hashTagTrigger.query))
+  }, [hashTagItems, hashTagTrigger])
   const selfConversationMember = useMemo(
     () => conversationMembers.find(member => member.isSelf),
     [conversationMembers],
   )
   useEffect(() => { setMentionCandidateIndex(0) }, [mentionTrigger?.startIndex, mentionTrigger?.endIndex, mentionTrigger?.query])
+  useEffect(() => { setHashTagCandidateIndex(0) }, [hashTagTrigger?.startIndex, hashTagTrigger?.endIndex, hashTagTrigger?.query])
+  useLayoutEffect(() => {
+    if (hashTagTrigger === undefined || hashTagCandidates.length === 0) return
+    hashTagSuggestionListRef.current
+      ?.querySelector<HTMLElement>('[role="option"][aria-selected="true"]')
+      ?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+  }, [hashTagCandidateIndex, hashTagCandidates.length, hashTagTrigger?.endIndex, hashTagTrigger?.startIndex])
   useEffect(() => {
     setMentionTrigger(undefined)
     setMentionCandidateIndex(0)
+    setHashTagTrigger(undefined)
+    setHashTagCandidateIndex(0)
+    activeHashTagStartRef.current = undefined
+    dismissedHashTagStartRef.current = undefined
   }, [conversationKey, source?.kind])
   const closeMemberMenu = useCallback(() => { setMemberMenu(undefined) }, [])
   const openMemberMenu = useCallback((member: ArkmeConversationMemberItem, anchorRect: DOMRect) => {
@@ -4967,7 +5048,43 @@ export function ArkmeSurface({
     }
     insertMemberMentionAt(member, mentionTrigger.startIndex, mentionTrigger.endIndex)
   }, [composerDraftKey, composerMentionsEnabled, insertMemberMentionAt, mentionTrigger, syncComposerUserInput])
-  const updateMentionTrigger = useCallback((text: string, selectionStart: number, selectionEnd: number) => {
+  const insertHashTagCandidate = useCallback((item: ArkmeRecordTagItem) => {
+    if (hashTagTrigger === undefined || composerDraftKey === undefined) return
+    syncComposerUserInput(true)
+    const cursor = arkmeComposerDraftStore.insertHashTag(
+      composerDraftKey,
+      item.tagText,
+      hashTagTrigger.startIndex,
+      hashTagTrigger.endIndex,
+    )
+    setHashTagTrigger(undefined)
+    activeHashTagStartRef.current = undefined
+    dismissedHashTagStartRef.current = undefined
+    if (cursor === undefined) return
+    requestAnimationFrame(() => {
+      textareaRef.current?.focus()
+      textareaRef.current?.setSelectionRange(cursor, cursor)
+    })
+  }, [composerDraftKey, hashTagTrigger, syncComposerUserInput])
+  const updateComposerRichTrigger = useCallback((text: string, selectionStart: number, selectionEnd: number) => {
+    const nextHashTagTrigger = arkmeHashTagTrigger(text, selectionStart, selectionEnd)
+    if (nextHashTagTrigger === undefined) {
+      activeHashTagStartRef.current = undefined
+      dismissedHashTagStartRef.current = undefined
+    }
+    if (nextHashTagTrigger !== undefined && dismissedHashTagStartRef.current === nextHashTagTrigger.startIndex) {
+      setHashTagTrigger(undefined)
+      return
+    }
+    if (nextHashTagTrigger !== undefined && activeHashTagStartRef.current !== nextHashTagTrigger.startIndex) {
+      activeHashTagStartRef.current = nextHashTagTrigger.startIndex
+      setHashTagRefreshRevision(value => value + 1)
+    }
+    setHashTagTrigger(nextHashTagTrigger)
+    if (nextHashTagTrigger !== undefined) {
+      setMentionTrigger(undefined)
+      return
+    }
     if (!composerMentionsEnabled) {
       setMentionTrigger(undefined)
       return
@@ -6209,7 +6326,12 @@ export function ArkmeSurface({
             onBackToWorld={() => { arkmeUi.showWorld() }}
             onSourceActivated={activateSource}
           />
-          : ui.mode === 'search' ? <div style={styles.utilityBody}><ArkmeSearchSurface /></div>
+          : ui.mode === 'search' ? <div style={styles.utilityBody}><ArkmeSearchSurface
+            {...(ui.searchTarget === undefined ? {} : {
+              initialQuery: ui.searchTarget.query,
+              initialQueryRevision: ui.searchTarget.revision,
+            })}
+          /></div>
           : ui.mode === 'extensions' ? <ArkmeMarketplace
             displayMode="page"
             {...(currentSessionId === undefined ? {} : { currentSessionId })}
@@ -6612,6 +6734,31 @@ export function ArkmeSurface({
               }}
             />}
             {activeConversation && draftPreview !== undefined && typeof document !== 'undefined' && createPortal(<ArkmeMediaPreview selected={draftPreview} blocks={attachments.flatMap(attachment => attachment.localFile === undefined ? [] : [localFileBlock(attachment.localFile)])} onSelect={setDraftPreview} onClose={() => setDraftPreview(undefined)} openLocalFile={false} />, document.body)}
+            {hashTagTrigger !== undefined && <div ref={hashTagSuggestionListRef} style={styles.mentionSuggestions} role="listbox" aria-label="选择标签">
+              {hashTagCandidates.length === 0
+                ? <div style={styles.mentionSuggestionsEmpty}>{hashTagLoading ? '正在加载标签…' : '暂无匹配标签，可继续输入创建新标签'}</div>
+                : hashTagCandidates.map((item, index) => <button
+                  key={`${item.normalizedTag}:${item.tagText}`}
+                  type="button"
+                  role="option"
+                  aria-selected={index === hashTagCandidateIndex}
+                  style={{
+                    ...styles.mentionSuggestionRow,
+                    ...(index === hashTagCandidateIndex ? styles.mentionSuggestionRowActive : {}),
+                  }}
+                  onMouseEnter={() => { setHashTagCandidateIndex(index) }}
+                  onMouseDown={event => {
+                    event.preventDefault()
+                    insertHashTagCandidate(item)
+                  }}
+                >
+                  <span style={{ ...styles.mentionSuggestionBotAvatar, flex: 'none', fontWeight: 600 }} aria-hidden>#</span>
+                  <span style={styles.mentionSuggestionText}>
+                    <span style={styles.mentionSuggestionName}>{item.tagText}</span>
+                    <span style={styles.mentionSuggestionSecondary}>使用 {item.recordCount} 次</span>
+                  </span>
+                </button>)}
+            </div>}
             {mentionTrigger !== undefined && <div style={styles.mentionSuggestions} role="listbox" aria-label="选择要 @ 的对象">
               {mentionCandidates.length === 0
                 ? <div style={styles.mentionSuggestionsEmpty}>暂无可 @ 的对象</div>
@@ -6657,7 +6804,7 @@ export function ArkmeSurface({
               onTextChange={updateComposerText}
               onFocus={() => { setComposerInputFocused(true) }}
               onBlur={() => { setComposerInputFocused(false) }}
-              onSelectionChange={updateMentionTrigger}
+              onSelectionChange={updateComposerRichTrigger}
               onPaste={event => {
                 const files = arkmeClipboardFiles(event.clipboardData)
                 if (files.length === 0) return
@@ -6665,6 +6812,30 @@ export function ArkmeSurface({
                 void selectFiles(files)
               }}
               onKeyDown={event => {
+                if (hashTagTrigger !== undefined) {
+                  if (event.key === 'Escape') {
+                    event.preventDefault()
+                    dismissedHashTagStartRef.current = hashTagTrigger.startIndex
+                    setHashTagTrigger(undefined)
+                    return
+                  }
+                  if (event.key === 'ArrowDown' && hashTagCandidates.length > 0) {
+                    event.preventDefault()
+                    setHashTagCandidateIndex(index => (index + 1) % hashTagCandidates.length)
+                    return
+                  }
+                  if (event.key === 'ArrowUp' && hashTagCandidates.length > 0) {
+                    event.preventDefault()
+                    setHashTagCandidateIndex(index => (index + hashTagCandidates.length - 1) % hashTagCandidates.length)
+                    return
+                  }
+                  if ((event.key === 'Enter' || event.key === 'Tab') && hashTagCandidates.length > 0) {
+                    event.preventDefault()
+                    const selectedCandidate = hashTagCandidates[Math.min(hashTagCandidateIndex, hashTagCandidates.length - 1)]
+                    if (selectedCandidate !== undefined) insertHashTagCandidate(selectedCandidate)
+                    return
+                  }
+                }
                 if (mentionTrigger !== undefined) {
                   if (event.key === 'Escape') {
                     event.preventDefault()
