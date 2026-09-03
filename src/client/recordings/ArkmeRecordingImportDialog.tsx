@@ -309,9 +309,9 @@ function progressStatusLabel(row: ProcessingDetailsRow): string {
 
 function progressStatusColor(status: ProcessingDetailsStatus): string {
   switch (status) {
-    case 'completed': return '#52c41a'
+    case 'completed': return arkmeTheme.success
     case 'processing': return arkmeTheme.accent
-    case 'partial': return '#fa8c16'
+    case 'partial': return arkmeTheme.warning
     case 'failed': return desktop.danger
     case 'pending':
     case 'unavailable': return desktop.tertiary

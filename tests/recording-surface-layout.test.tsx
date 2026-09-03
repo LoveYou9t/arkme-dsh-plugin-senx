@@ -95,6 +95,10 @@ describe('ArkmeRecordingSurface layout', () => {
       expect(childSource).not.toContain("base: '#ffffff'")
       expect(childSource).not.toContain("background: '#ffffff'")
     }
+    expect(importSource).toContain("case 'completed': return arkmeTheme.success")
+    expect(importSource).toContain("case 'partial': return arkmeTheme.warning")
+    expect(importSource).not.toContain("return '#52c41a'")
+    expect(importSource).not.toContain("return '#fa8c16'")
     expect(importSource).toContain("overflowX: 'auto'")
   })
 
