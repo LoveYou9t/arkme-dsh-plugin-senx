@@ -75,6 +75,7 @@ import type { ArkmeRelatedQuickNoteSourceLocator } from './related-quick-note-se
 import { ArkmePluginError, ServiceRuntime, objectValue, stringValue } from './service.js'
 import { arkmeMentionMetadataMentionsViewer } from '../mention-metadata.js'
 import { arkmeRichBackgroundSound } from '../record-background-sound.js'
+import { arkmeHashTagContentPayload, arkmeHashTagPayload } from '../hashtag.js'
 import {
   SourceService,
   type ArkmePrivateChatViewerLabel,
@@ -97,7 +98,8 @@ export function arkmeRichContentPayload(
   const assets = input.assets ?? []
   const backgroundSound = arkmeRichBackgroundSound(input.backgroundSound)
   const mentionMetadata = mentionPayload?.mention_metadata
-  if (assets.length === 0 && backgroundSound === undefined && mentionMetadata === undefined) return undefined
+  const hashTags = arkmeHashTagPayload(normalizedTextContent)
+  if (assets.length === 0 && backgroundSound === undefined && mentionMetadata === undefined && hashTags.length === 0) return undefined
   const mediaRefs = [
     ...assets.map((asset, index) => ({
       file_asset_uid: asset.fileAssetUid,
@@ -124,6 +126,7 @@ export function arkmeRichContentPayload(
       ? {}
       : { background_sound_amplitudes: backgroundSound.amplitudes }),
     ...(mentionMetadata === undefined ? {} : { mention_metadata: mentionMetadata }),
+    ...(hashTags.length === 0 ? {} : { hash_tags: hashTags }),
   }
 }
 
@@ -2887,20 +2890,24 @@ export class ChatService {
       const profile = profileSnapshot.profile
       if (profile === null) throw new ArkmePluginError('profile-unavailable', '无法读取当前 Arkme 账号资料', true)
       const sendAtMillis = Date.now()
-      const contentPayload = assets.length === 0 ? undefined : {
-        payload_kind: 2,
+      const hashTags = arkmeHashTagPayload(normalizedText)
+      const contentPayload = assets.length === 0 && hashTags.length === 0 ? undefined : {
+        payload_kind: assets.length === 0 ? 1 : 2,
         schema_version: 1,
         text_state: normalizedText === '' ? 3 : 1,
-        media_refs: assets.map((asset, index) => ({
-          file_asset_uid: asset.fileAssetUid,
-          content_file_role: 1,
-          render_role: 1,
-          sort_order: index,
-          file_name: asset.fileName,
-          file_kind: asset.fileKind,
-          mime_type: asset.mimeType,
-          size: asset.size,
-        })),
+        ...(hashTags.length === 0 ? {} : { hash_tags: hashTags }),
+        ...(assets.length === 0 ? {} : {
+          media_refs: assets.map((asset, index) => ({
+            file_asset_uid: asset.fileAssetUid,
+            content_file_role: 1,
+            render_role: 1,
+            sort_order: index,
+            file_name: asset.fileName,
+            file_kind: asset.fileKind,
+            mime_type: asset.mimeType,
+            size: asset.size,
+          })),
+        }),
       }
       const data = await this.runtime.authenticatedChatPost<Record<string, unknown>>(
         '/api/v1/chats/extensions/children/create',
@@ -2953,20 +2960,24 @@ export class ChatService {
       const profile = profileSnapshot.profile
       if (profile === null) throw new ArkmePluginError('profile-unavailable', '无法读取当前 Arkme 账号资料', true)
       const sendAtMillis = Date.now()
-      const contentPayload = assets.length === 0 ? undefined : {
-        payload_kind: 2,
+      const hashTags = arkmeHashTagPayload(normalizedText)
+      const contentPayload = assets.length === 0 && hashTags.length === 0 ? undefined : {
+        payload_kind: assets.length === 0 ? 1 : 2,
         schema_version: 1,
         text_state: normalizedText === '' ? 3 : 1,
-        media_refs: assets.map((asset, index) => ({
-          file_asset_uid: asset.fileAssetUid,
-          content_file_role: 1,
-          render_role: 1,
-          sort_order: index,
-          file_name: asset.fileName,
-          file_kind: asset.fileKind,
-          mime_type: asset.mimeType,
-          size: asset.size,
-        })),
+        ...(hashTags.length === 0 ? {} : { hash_tags: hashTags }),
+        ...(assets.length === 0 ? {} : {
+          media_refs: assets.map((asset, index) => ({
+            file_asset_uid: asset.fileAssetUid,
+            content_file_role: 1,
+            render_role: 1,
+            sort_order: index,
+            file_name: asset.fileName,
+            file_kind: asset.fileKind,
+            mime_type: asset.mimeType,
+            size: asset.size,
+          })),
+        }),
       }
       const data = await this.runtime.authenticatedPost<Record<string, unknown>>(
         '/api/v1/topics/records/extensions/create',
@@ -2991,6 +3002,7 @@ export class ChatService {
         || createdTopicUid !== source.ownerRef || edgeUid === '') {
         throw new ArkmePluginError('record-extension-response-invalid', '主题延展写入结果无效，请刷新后重试', true, 502)
       }
+      await this.record.syncCreatedRecordTags?.(createdRecordUid, normalizedText, session.userId)
       const relationUid = stringValue(data.rel_uid).trim()
       this.source.invalidateSourceListCache(session.userId, 'send_to_self')
       this.realtime.emitChatClientEvent({
@@ -3432,6 +3444,7 @@ export class ChatService {
         throw new ArkmePluginError('source-text-invalid', '发送内容为空或超过长度限制', false)
       }
       const recordUid = options.recordUid?.trim() || randomUUID()
+      const hashTagContentPayload = arkmeHashTagContentPayload(text)
       if (source.kind === 'send_to_self' || source.kind === 'default_category') {
         const sendAtMillis = Date.now()
         const result = await this.record.createTextForConversation(recordUid, text, {
@@ -3472,9 +3485,15 @@ export class ChatService {
             ...(captureContext === undefined || Object.keys(captureContext).length === 0
               ? {}
               : { capture_context: captureContext }),
+            ...(hashTagContentPayload === undefined ? {} : { content_payload: hashTagContentPayload }),
             send_at: sendAtMillis,
           },
           session,
+        )
+        await this.record.syncCreatedRecordTags?.(
+          stringValue(result.record_uid).trim() || recordUid,
+          text,
+          session.userId,
         )
         await this.realtime.invalidateRecordProjection()
         return await this.withSentMessageActionRef({
@@ -3534,6 +3553,7 @@ export class ChatService {
               agentAuthored,
               ...(options.recordDurationMillis === undefined ? {} : { recordDurationMillis: options.recordDurationMillis }),
               ...(options.captureContext === undefined ? {} : { captureContext: options.captureContext }),
+              ...(hashTagContentPayload === undefined ? {} : { contentPayload: hashTagContentPayload }),
               ...(options.signal === undefined ? {} : { signal: options.signal }),
             },
           )
@@ -3556,7 +3576,7 @@ export class ChatService {
         )
       } else {
         sent = await this.sendChatSourceTextRaw(
-          sourceRef, source.ownerRef, text, recordUid, relationUid, session, undefined, undefined, options.signal,
+          sourceRef, source.ownerRef, text, recordUid, relationUid, session, undefined, hashTagContentPayload, options.signal,
           {
             agentAuthored,
             ...(options.recordDurationMillis === undefined ? {} : { recordDurationMillis: options.recordDurationMillis }),
@@ -3611,6 +3631,9 @@ export class ChatService {
       payload_kind: 1,
       schema_version: 1,
       text_state: 1,
+      ...(arkmeHashTagPayload(normalizedText).length === 0
+        ? {}
+        : { hash_tags: arkmeHashTagPayload(normalizedText) }),
       mention_metadata: {
         schema_version: 1,
         source_checksum: createHash('sha256').update(JSON.stringify(checksumInput)).digest('hex'),
@@ -3807,6 +3830,9 @@ export class ChatService {
         payload_kind: 1,
         schema_version: 1,
         text_state: 1,
+        ...(arkmeHashTagPayload(visibleText).length === 0
+          ? {}
+          : { hash_tags: arkmeHashTagPayload(visibleText) }),
         mention_metadata: {
           schema_version: 1,
           source_checksum: createHash('sha256').update(JSON.stringify(checksumInput)).digest('hex'),
@@ -3976,6 +4002,11 @@ export class ChatService {
         const result = await this.runtime.authenticatedPost<Record<string, unknown>>(
           '/api/v1/records/create', commonBody, session, options.signal, { trackWriteOutcome: true },
         )
+        await this.record.syncCreatedRecordTags?.(
+          stringValue(result.record_uid).trim() || recordUid,
+          textContent,
+          session.userId,
+        )
         await this.realtime.invalidateRecordProjection()
         return await this.withSentMessageActionRef({
           sourceRef,
@@ -3998,6 +4029,11 @@ export class ChatService {
         const result = await this.runtime.authenticatedPost<Record<string, unknown>>(
           '/api/v1/topics/records/create', { topic_uid: source.ownerRef, ...commonBody }, session, options.signal,
           { trackWriteOutcome: true },
+        )
+        await this.record.syncCreatedRecordTags?.(
+          stringValue(result.record_uid).trim() || recordUid,
+          textContent,
+          session.userId,
         )
         await this.realtime.invalidateRecordProjection()
         return await this.withSentMessageActionRef({

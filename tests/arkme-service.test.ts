@@ -2465,10 +2465,17 @@ describe('ArkmeService', () => {
     await expect(service.messageReadReceiptDetail(privateRef, 'chat-record-2', 8))
       .rejects.toMatchObject({ code: 'message-read-receipt-group-required' })
     expect(calls).toHaveLength(callsBeforeInvalidReceiptReads)
-    await expect(service.sendSourceText(privateRef, '回复', { recordUid: 'record-send', relationUid: 'rel-send' })).resolves.toMatchObject({
+    await expect(service.sendSourceText(privateRef, '#项目 回复', { recordUid: 'record-send', relationUid: 'rel-send' })).resolves.toMatchObject({
       itemUid: 'record-send', sequence: 8, localState: 'synced',
     })
-    expect(lastCall('/api/v1/chats/records/send')?.body).toMatchObject({ chat_session_uid: 'chat-private', text_content: '回复' })
+    expect(lastCall('/api/v1/chats/records/send')?.body).toMatchObject({
+      chat_session_uid: 'chat-private',
+      text_content: '#项目 回复',
+      content_payload: {
+        payload_kind: 1, schema_version: 1, text_state: 1,
+        hash_tags: [{ tag: '项目', start_index: 0, length: 3 }],
+      },
+    })
     const clientEvents: unknown[] = []
     service.subscribeChatRealtime(event => { clientEvents.push(event) })
     await expect(service.markSourceRead(privateRef, 8)).resolves.toMatchObject({

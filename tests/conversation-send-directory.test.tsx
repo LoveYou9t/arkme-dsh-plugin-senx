@@ -321,6 +321,11 @@ describe('conversation send directory projection', () => {
           templateKind: 1, displayKind: 0, officialMark: 0, mediaItems: [],
         },
       }
+      if (operation === 'records.tags.list') return { items: [
+        { normalizedTag: 'projectalpha', tagText: 'ProjectAlpha', recordCount: 7, latestRecordUid: '', latestSendAtMillis: 0 },
+        { normalizedTag: 'product', tagText: 'Product', recordCount: 3, latestRecordUid: '', latestSendAtMillis: 0 },
+        { normalizedTag: 'meeting', tagText: '会议', recordCount: 2, latestRecordUid: '', latestSendAtMillis: 0 },
+      ] }
       throw new Error(`unexpected operation ${operation}`)
     })
   })
@@ -386,6 +391,32 @@ describe('conversation send directory projection', () => {
       node.type === 'span' && node.props.style?.color === 'var(--dsw-alias-state-business-primary, #3964fe)',
     ).map(node => renderedText(node.children))
     expect(highlighted).toEqual(expect.arrayContaining(['@狗才', '@🚀助手']))
+  })
+
+  it('requests the global search dialog without replacing the conversation when a completed hashtag is clicked', async () => {
+    timeline = [{
+      itemUid: 'tagged-message', sequence: 1, senderName: '朋友', isMe: false,
+      sendAtMillis: 1, title: '', textContent: '跟进 ＃项目，明天复盘', status: 1,
+    }]
+    await act(async () => {
+      renderer = create(<ArkmeSurface productChrome={false} productNavigation={false} />)
+      await Promise.resolve(); await Promise.resolve()
+    })
+
+    const tag = renderer.root.findByProps({ role: 'link' })
+    const preventDefault = vi.fn()
+    const stopPropagation = vi.fn()
+    await act(async () => {
+      tag.props.onClick({ preventDefault, stopPropagation })
+      await Promise.resolve()
+    })
+
+    expect(preventDefault).toHaveBeenCalled()
+    expect(stopPropagation).toHaveBeenCalled()
+    expect(arkmeUi.getSnapshot()).toMatchObject({
+      mode: 'source', searchTarget: { query: '#项目' },
+    })
+    expect(renderer.root.findAllByProps({ 'aria-label': '搜索' }).find(node => node.type === 'input')).toBeUndefined()
   })
 
   it('lets the user remove terminal local file tasks without hiding an unknown remote outcome', async () => {
@@ -849,6 +880,97 @@ describe('conversation send directory projection', () => {
     expect(sendCall?.[1]).not.toHaveProperty('humanMentions')
     expect(sendCall?.[1]).not.toHaveProperty('botMentions')
     expect(renderer!.root.findByProps({ 'data-arkme-read-receipt-indicator': 'unread' })).toBeDefined()
+  })
+
+  it('filters hashtag candidates, supports keyboard selection, and keeps Escape dismissed for the current fragment', async () => {
+    const scrollIntoView = vi.fn()
+    await act(async () => {
+      renderer = create(<ArkmeSurface productChrome={false} productNavigation={false} />, {
+        createNodeMock: element => {
+          if (element.props['aria-label'] !== '选择标签') return null
+          return { querySelector: () => ({ scrollIntoView }) }
+        },
+      })
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    const composer = renderer!.root.findByType(ArkmeRichComposerInput)
+    await act(async () => {
+      composer.props.onTextChange('#o')
+      composer.props.onSelectionChange('#o', 2, 2)
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    const tagList = renderer!.root.findByProps({ 'aria-label': '选择标签' })
+    const options = tagList.findAllByProps({ role: 'option' })
+    expect(options.map(renderedText)).toEqual(['#ProjectAlpha使用 7 次', '#Product使用 3 次'])
+    expect(mocks.callArkme).toHaveBeenCalledWith('records.tags.list', { limit: 100 }, expect.any(AbortSignal))
+
+    await act(async () => {
+      composer.props.onKeyDown({ key: 'ArrowDown', nativeEvent: { isComposing: false }, preventDefault: vi.fn() })
+    })
+    expect(scrollIntoView).toHaveBeenLastCalledWith({ block: 'nearest', inline: 'nearest' })
+    expect(scrollIntoView.mock.calls.length).toBeGreaterThanOrEqual(2)
+    await act(async () => {
+      composer.props.onKeyDown({ key: 'Enter', nativeEvent: { isComposing: false }, preventDefault: vi.fn() })
+    })
+    const draftKey = arkmeSourceComposerDraftKey(42, target)!
+    expect(arkmeComposerDraftStore.get(draftKey).text).toBe('#Product ')
+    expect(renderer!.root.findAllByProps({ 'aria-label': '选择标签' })).toHaveLength(0)
+
+    await act(async () => {
+      composer.props.onTextChange('#new')
+      composer.props.onSelectionChange('#new', 4, 4)
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(renderer!.root.findAllByProps({ 'aria-label': '选择标签' })).toHaveLength(1)
+    await act(async () => {
+      composer.props.onKeyDown({ key: 'Escape', nativeEvent: { isComposing: false }, preventDefault: vi.fn() })
+      composer.props.onSelectionChange('#new', 4, 4)
+    })
+    expect(renderer!.root.findAllByProps({ 'aria-label': '选择标签' })).toHaveLength(0)
+  })
+
+  it('keeps a newly sent free tag in the account candidate source after switching conversations', async () => {
+    await act(async () => {
+      renderer = create(<ArkmeSurface productChrome={false} productNavigation={false} />)
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    let composer = renderer!.root.findByType(ArkmeRichComposerInput)
+    await act(async () => {
+      composer.props.onTextChange('#FreshTag')
+      composer.props.onSelectionChange('#FreshTag', 9, 9)
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(renderer!.root.findByProps({ 'aria-label': '选择标签' }).findAllByProps({ role: 'option' })).toHaveLength(0)
+
+    await act(async () => {
+      renderer!.root.findByProps({ 'aria-label': '发送消息' }).props.onClick()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(renderer!.root.findAllByProps({ 'aria-label': '选择标签' })).toHaveLength(0)
+
+    activeSource = other
+    await act(async () => {
+      arkmeUi.selectSource(other)
+      arkmeUi.chatChanged()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    composer = renderer!.root.findByType(ArkmeRichComposerInput)
+    await act(async () => {
+      composer.props.onTextChange('#fresh')
+      composer.props.onSelectionChange('#fresh', 6, 6)
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    const options = renderer!.root.findByProps({ 'aria-label': '选择标签' }).findAllByProps({ role: 'option' })
+    expect(options.map(renderedText)).toEqual(['#FreshTag使用 1 次'])
+    expect(mocks.callArkme.mock.calls.filter(([operation]) => operation === 'records.tags.list')).toHaveLength(2)
   })
 
   it('requests location permission on the first supported send and records that message', async () => {

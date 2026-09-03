@@ -852,6 +852,8 @@ export type {
   ArkmeIdAvailabilitySnapshot,
   ArkmeIdMutationResult,
   ArkmePendingWrite,
+  ArkmeRecordTagItem,
+  ArkmeRecordTagList,
   ArkmeRelatedRecordingEligibility,
   ArkmeRelatedRecordingItem,
   ArkmeRelatedRecordingMonthBucket,

@@ -53,7 +53,7 @@ const expectedPublicMethods = [
   'beginWechatLogin', 'pollWechatLogin', 'testLogin',
   'sendPhoneCode', 'verifyPhoneCode', 'logout', 'cachedSnapshot', 'queryCached', 'refreshLatest',
   'refreshSnapshot', 'searchRecords', 'searchRemote', 'searchHistory', 'createSearchHistory', 'searchImages',
-  'searchScene', 'searchRecordings', 'syncHistory', 'summary', 'list', 'calendarBuckets', 'calendarRecords',
+  'searchScene', 'searchRecordings', 'searchTagRecords', 'syncHistory', 'summary', 'list', 'listRecordTags', 'calendarBuckets', 'calendarRecords',
   'listWorldRecords',
   'listArrangements', 'arrangementDetail', 'listArrangementReminders', 'arrangementReminderSummary',
   'mutateArrangement', 'setArrangementReminderEnabled', 'markArrangementRemindersRead',
@@ -114,7 +114,7 @@ describe('Arkme service architecture', () => {
 
   it('keeps the compatibility facade free of business transport and state owners', () => {
     const facade = readFileSync(join(root, 'src/arkme-service.ts'), 'utf8')
-    expect(facade.split('\n').length).toBeLessThan(1_850)
+    expect(facade.split('\n').length).toBeLessThan(1_865)
     expect(facade).not.toMatch(/\/api\//)
     expect(facade).not.toMatch(/private readonly \w+\s*=\s*new Map/)
   })

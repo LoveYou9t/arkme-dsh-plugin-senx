@@ -394,6 +394,18 @@ export interface ArkmePendingWrite {
   lastError?: string
 }
 
+export interface ArkmeRecordTagItem {
+  normalizedTag: string
+  tagText: string
+  recordCount: number
+  latestRecordUid: string
+  latestSendAtMillis: number
+}
+
+export interface ArkmeRecordTagList {
+  items: ArkmeRecordTagItem[]
+}
+
 export interface ArkmeCreateTextResult {
   recordUid: string
   status: number
@@ -3022,6 +3034,8 @@ export type ArkmePluginOperation =
   | 'records.refresh'
   | 'records.search'
   | 'records.list'
+  | 'records.tags.list'
+  | 'records.tags.query'
   | 'records.create'
   | 'records.outbox'
   | 'records.retry'
