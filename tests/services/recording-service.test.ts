@@ -13,6 +13,7 @@ import {
   type RecordingImportOwnerGateway,
   type RecordingImportOwnerProgress,
   type RecordingImportOwnerSession,
+  type PublicRecordingImportProgress,
 } from '../../src/recording-import-contract.js'
 import type { RecordingImportGateway } from '../../src/recording-import-coordinator.js'
 
@@ -652,11 +653,11 @@ describe('RecordingService', () => {
       }] : [])]
       const progress = new Map(sessions.map(owner => [owner.sessionId, {
         displayStatus: owner.sessionId === 'session-completed' ? 'completed' as const : 'transcribing' as const,
-        timingState: owner.sessionId === 'session-completed' ? 'completed' as const : 'processing' as const,
-        processingTiming: {
-          timingState: owner.sessionId === 'session-completed' ? 'completed' as const : 'processing' as const,
-          totalDurationMillis: 18_000, rows: [],
-        },
+        importProgress: ownerProgress(
+          owner.sessionId === 'session-completed' ? 'completed' : 'processing',
+          startAtMillis,
+          18_000,
+        ),
       }]))
       return ownerPage(
         sessions,
@@ -672,7 +673,8 @@ describe('RecordingService', () => {
     expect(current).toContainEqual(expect.objectContaining({
       kind: 'owner',
       fileName: 'processing.m4a', status: 'uploading', statusDetail: '上传中',
-      startAtMillis, endAtMillis: startAtMillis + 60_000, processingDurationMillis: 18_000,
+      startAtMillis, endAtMillis: startAtMillis + 60_000,
+      importProgress: expect.objectContaining({ totalDurationMillis: 18_000 }),
       sessionRef: expect.stringMatching(/^arkme-recording-import-session-v1\./),
     }))
     expect(current.find(item => item.fileName === 'processing.m4a')).not.toHaveProperty('importRef')
@@ -688,7 +690,8 @@ describe('RecordingService', () => {
       items: [expect.objectContaining({
         taskKey: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/),
         sessionRef: expect.stringMatching(/^arkme-recording-import-session-v1\./),
-        fileName: 'completed.m4a', status: 'completed', processingDurationMillis: 18_000,
+        fileName: 'completed.m4a', status: 'completed',
+        importProgress: expect.objectContaining({ totalDurationMillis: 18_000 }),
       })],
       total: 1, offset: 0, hasMore: false,
     })
@@ -720,6 +723,42 @@ describe('RecordingService', () => {
         message: 'Audio 上传任务读取失败，请稍后重试',
       },
     })
+  })
+
+  it('projects local import timing onto the matching owner task during the handoff', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'arkme-recording-owner-timing-handoff-'))
+    const sessions: ArkmeSessionStore = {
+      async read() { return { userId: 42, accessToken: 'access', refreshToken: 'refresh' } },
+      async write() {}, async delete() {},
+    }
+    const store = new ArkmeStateStore(root)
+    const startedAtMillis = 1_725_000_000_000
+    const acceptedAtMillis = startedAtMillis + 10_000
+    await store.putRecordingImportJob(42, {
+      ...failedImportJob(1, startedAtMillis),
+      jobId: 'accepted-owner-timing', revision: 8, phase: 'accepted', failedFromPhase: undefined,
+      fileName: 'handoff.m4a', mimeType: 'audio/mp4', sessionId: 'session-owner-timing',
+      uploadedBytes: 1_024, errorCode: undefined, errorMessage: undefined, retryable: undefined,
+      sourceHandle: '', sha256: '', createdAtMillis: startedAtMillis, updatedAtMillis: acceptedAtMillis,
+    })
+    const gateway = gatewayNoop()
+    gateway.listOwnerTasks = vi.fn(async () => ownerPage([{
+      sessionId: 'session-owner-timing', ownership: 'self', fileName: 'handoff.m4a',
+      fileSize: 1_024, parsedSize: 1_024, durationMillis: 60_000,
+      startAtMillis: startedAtMillis, endAtMillis: startedAtMillis + 60_000,
+      createdAtMillis: startedAtMillis, updatedAtMillis: acceptedAtMillis,
+      hasFinishedUpload: true,
+    }]))
+    const service = new RecordingService(new ServiceRuntime(config, sessions, store), dependencies(gateway))
+
+    const current = await service.recordingImportList()
+
+    expect(current.items).toEqual([expect.objectContaining({
+      kind: 'owner', fileName: 'handoff.m4a', status: 'waiting',
+      localImportTiming: { startedAtMillis, acceptedAtMillis },
+    })])
+    expect(current.items[0]).not.toHaveProperty('importRef')
+    expect(JSON.stringify(current)).not.toContain('session-owner-timing')
   })
 
   it('does not downgrade a cancelled owner read into an empty current-task result', async () => {
@@ -842,8 +881,7 @@ describe('RecordingService', () => {
       createdAtMillis: 1_725_000_000_000, updatedAtMillis: 1_725_000_002_000,
       hasFinishedUpload: true,
     }, processingCompleted: true, progress: {
-      displayStatus: 'unavailable', timingState: 'unavailable',
-      processingTiming: { timingState: 'unavailable', totalDurationMillis: 0, rows: [] },
+      displayStatus: 'unavailable',
     } }], total: 1, hasMore: false }))
     const service = new RecordingService(
       new ServiceRuntime(config, sessions, new ArkmeStateStore(root)),
@@ -854,11 +892,9 @@ describe('RecordingService', () => {
       toMillis: 1_725_100_000_000, limit: 50, offset: 0,
     })
     expect(history).toEqual(expect.objectContaining({
-      items: [expect.objectContaining({ status: 'completed', processing: {
-        timingState: 'unavailable', totalDurationMillis: 0, rows: [],
-      } })],
+      items: [expect.objectContaining({ status: 'completed' })],
     }))
-    expect(history.items[0]).not.toHaveProperty('processingDurationMillis')
+    expect(history.items[0]).not.toHaveProperty('importProgress')
   })
 
   it('does not let stale active child detail downgrade the Audio owner completion fact', async () => {
@@ -875,8 +911,8 @@ describe('RecordingService', () => {
       createdAtMillis: 1_725_000_000_000, updatedAtMillis: 1_725_000_002_000,
       hasFinishedUpload: true,
     }, processingCompleted: true, progress: {
-      displayStatus: 'transcribing', timingState: 'processing',
-      processingTiming: { timingState: 'processing', totalDurationMillis: 0, rows: [] },
+      displayStatus: 'transcribing',
+      importProgress: ownerProgress('processing', 1_725_000_000_000, 0),
     } }], total: 1, hasMore: false }))
     const service = new RecordingService(
       new ServiceRuntime(config, sessions, new ArkmeStateStore(root)),
@@ -1048,11 +1084,7 @@ describe('RecordingService', () => {
       }] : []
       return ownerPage(sessions, new Map([['session-not-completed', {
       displayStatus: 'completed' as const,
-      timingState: 'completed' as const,
-      processingTiming: {
-        timingState: 'completed' as const,
-        totalDurationMillis: 2_000, rows: [],
-      },
+      importProgress: ownerProgress('completed', startAtMillis, 2_000),
       }]]))
     })
     const service = new RecordingService(new ServiceRuntime(config, sessions, store), dependencies(gateway))
@@ -1586,6 +1618,32 @@ describe('RecordingService', () => {
     })
   })
 })
+
+function ownerProgress(
+  status: PublicRecordingImportProgress['status'],
+  startedAtMillis: number,
+  totalDurationMillis: number,
+): PublicRecordingImportProgress {
+  return {
+    status,
+    totalDurationMillis,
+    serverNowMillis: startedAtMillis + totalDurationMillis,
+    observedAtMillis: startedAtMillis + totalDurationMillis,
+    rows: [{
+      code: 'upload',
+      status,
+      startedAtMillis,
+      endedAtMillis: status === 'processing' ? 0 : startedAtMillis + totalDurationMillis,
+      durationMillis: totalDurationMillis,
+      provider: '',
+      model: '',
+      modelVersion: '',
+      modelDurationMillis: 0,
+      nextRelation: '',
+      relationDurationMillis: 0,
+    }],
+  }
+}
 
 function ownerPage(
   sessions: RecordingImportOwnerSession[],

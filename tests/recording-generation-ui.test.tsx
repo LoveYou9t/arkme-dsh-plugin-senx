@@ -321,4 +321,43 @@ describe('recording summary and timeline generation', () => {
       dateStamp: expect.any(Number), kind: 'summary', routeKey: 'dashscope/glm-5',
     }, expect.any(AbortSignal))
   })
+
+  it('lets an existing version recover from a transient model-config failure', async () => {
+    const originalImplementation = mocks.callArkme.getMockImplementation()!
+    let modelConfigReads = 0
+    mocks.callArkme.mockImplementation(async (operation, params, signal) => {
+      if (operation === 'recordings.summary-model-config') {
+        modelConfigReads += 1
+        if (modelConfigReads === 1) throw new Error('模型配置暂时不可用')
+      }
+      if (operation === 'recordings.day') {
+        const day = await originalImplementation(operation, params, signal)
+        return {
+          ...day,
+          summary: {
+            state: 'ready', message: '', items: [{
+              id: 'summary-1', status: 'done', selectable: true, generationStage: 2,
+              generatedAtMillis: Number(params?.dateStamp) + 8_000, modelDisplayName: 'Qwen3 Max',
+              content: '## 今日总结', timelineEvents: [], error: '',
+            }],
+          },
+        }
+      }
+      return await originalImplementation(operation, params, signal)
+    })
+
+    await act(async () => {
+      renderer = create(<ArkmeRecordingSurface onOpenRecordingImport={() => {}} recordingRefreshRevision={0} />)
+      await tick()
+      await tick()
+    })
+    await act(async () => { button(renderer, '总结').props.onClick(); await tick() })
+
+    const regenerate = button(renderer, '重新生成')
+    expect(regenerate.props.disabled).toBe(false)
+    await act(async () => { regenerate.props.onClick(); await tick(); await tick() })
+
+    expect(modelConfigReads).toBe(2)
+    expect(renderer.root.findByProps({ 'aria-label': '选择总结生成模型' })).toBeDefined()
+  })
 })

@@ -9,7 +9,6 @@ import {
   type PublicRecordingImportHistoryItem,
   type PublicRecordingImportHistoryPage,
   type PublicRecordingImportOwnerTask,
-  type PublicRecordingImportProcessingTiming,
   type RecordingImportDisplayStatus,
   type RecordingImportJob,
   type RecordingImportOwnerProgress,
@@ -190,13 +189,6 @@ function recordingImportOwnerStatus(
     case 'unavailable': return { status: 'unavailable', statusDetail: '状态不可用' }
     default: return { status: 'waiting', statusDetail: '等待中' }
   }
-}
-
-function recordingImportProcessingDuration(
-  timing?: PublicRecordingImportProcessingTiming,
-): number | undefined {
-  if (timing === undefined || timing.timingState === 'unavailable') return undefined
-  return Math.max(0, timing.totalDurationMillis)
 }
 
 export class RecordingService {
@@ -611,12 +603,21 @@ export class RecordingService {
     if (activeOwnerTasks === undefined) return { items: projectedLocal, owner }
     const ownerRefKey = await this.recordingRefKey(RECORDING_IMPORT_SESSION_REF_PREFIX)
     const unresolvedOwnerSessionIds = new Set(unresolved.flatMap(job => job.sessionId === undefined ? [] : [job.sessionId]))
+    const acceptedByOwnerSessionId = new Map<string, RecordingImportJob>()
+    for (const job of jobs) {
+      if (job.phase !== 'accepted' || job.sessionId === undefined) continue
+      const previous = acceptedByOwnerSessionId.get(job.sessionId)
+      if (previous === undefined || job.updatedAtMillis > previous.updatedAtMillis) {
+        acceptedByOwnerSessionId.set(job.sessionId, job)
+      }
+    }
     const projectedOwner = await Promise.all(activeOwnerTasks
       .filter(task => !unresolvedOwnerSessionIds.has(task.session.sessionId))
       .map(async task => await this.projectRecordingImportOwnerTask(
         task,
         session.userId,
         ownerRefKey,
+        acceptedByOwnerSessionId.get(task.session.sessionId),
       )))
     return {
       items: [...projectedLocal, ...projectedOwner]
@@ -840,7 +841,6 @@ export class RecordingService {
     const owner = task.session
     const ownerProgress = task.progress
     const status = recordingImportOwnerStatus(task)
-    const processingDurationMillis = recordingImportProcessingDuration(ownerProgress?.processingTiming)
     return {
       taskKey: await this.recordingImportTaskKey(owner.sessionId, viewerUserId, ownerRefKey),
       sessionRef: await this.recordingImportSessionRef(owner, viewerUserId, ownerRefKey),
@@ -854,10 +854,9 @@ export class RecordingService {
       progress: 1,
       status: status.status,
       statusDetail: status.statusDetail,
-      ...(processingDurationMillis === undefined ? {} : { processingDurationMillis }),
       createdAtMillis: owner.createdAtMillis,
       updatedAtMillis: owner.updatedAtMillis,
-      ...(ownerProgress?.processingTiming === undefined ? {} : { processing: ownerProgress.processingTiming }),
+      ...(ownerProgress?.importProgress === undefined ? {} : { importProgress: ownerProgress.importProgress }),
     }
   }
 
@@ -865,11 +864,21 @@ export class RecordingService {
     task: RecordingImportOwnerTaskSnapshot,
     viewerUserId?: number,
     ownerRefKey?: Buffer,
+    acceptedLocalJob?: RecordingImportJob,
   ): Promise<PublicRecordingImportOwnerTask> {
     const owner = task.session
     const ownerProgress = task.progress
     const status = recordingImportOwnerStatus(task)
-    const processingDurationMillis = recordingImportProcessingDuration(ownerProgress?.processingTiming)
+    const localImportTiming = acceptedLocalJob !== undefined
+      && Number.isSafeInteger(acceptedLocalJob.createdAtMillis)
+      && Number.isSafeInteger(acceptedLocalJob.updatedAtMillis)
+      && acceptedLocalJob.createdAtMillis > 0
+      && acceptedLocalJob.updatedAtMillis >= acceptedLocalJob.createdAtMillis
+      ? {
+          startedAtMillis: acceptedLocalJob.createdAtMillis,
+          acceptedAtMillis: acceptedLocalJob.updatedAtMillis,
+        }
+      : undefined
     return {
       kind: 'owner',
       taskKey: await this.recordingImportTaskKey(owner.sessionId, viewerUserId, ownerRefKey),
@@ -884,10 +893,10 @@ export class RecordingService {
       progress: owner.hasFinishedUpload ? 1 : owner.fileSize <= 0 ? 0 : Math.min(1, owner.parsedSize / owner.fileSize),
       status: status.status,
       statusDetail: status.statusDetail,
-      ...(processingDurationMillis === undefined ? {} : { processingDurationMillis }),
       createdAtMillis: owner.createdAtMillis,
       updatedAtMillis: owner.updatedAtMillis,
-      ...(ownerProgress?.processingTiming === undefined ? {} : { processing: ownerProgress.processingTiming }),
+      ...(localImportTiming === undefined ? {} : { localImportTiming }),
+      ...(ownerProgress?.importProgress === undefined ? {} : { importProgress: ownerProgress.importProgress }),
     }
   }
 

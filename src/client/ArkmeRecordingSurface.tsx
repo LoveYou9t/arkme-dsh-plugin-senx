@@ -565,6 +565,7 @@ export function ArkmeRecordingSurface({ onOpenRecordingImport, recordingRefreshR
   const [generatingKinds, setGeneratingKinds] = useState<Record<ArkmeRecordingProjectionKind, boolean>>({ summary: false, timeline: false })
   const [generationErrors, setGenerationErrors] = useState<Partial<Record<ArkmeRecordingProjectionKind, string>>>({})
   const generationAbortRef = useRef<Partial<Record<ArkmeRecordingProjectionKind, AbortController>>>({})
+  const modelConfigAbortRef = useRef<AbortController>()
   const [modelConfig, setModelConfig] = useState<RecordingModelConfigState>({ state: 'loading' })
   const [modelDialogKind, setModelDialogKind] = useState<ArkmeRecordingProjectionKind>()
   const [editingSpeaker, setEditingSpeaker] = useState<{ item: ArkmeRecordingWorkbenchItem; anchor: RecordingSpeakerPopoverAnchor; forceBatchUpdate: boolean }>()
@@ -589,13 +590,31 @@ export function ArkmeRecordingSurface({ onOpenRecordingImport, recordingRefreshR
     }
   }, [playback.stop, selectedDate])
 
-  useEffect(() => {
+  const loadModelConfig = (dialogKind?: ArkmeRecordingProjectionKind) => {
     const controller = new AbortController()
+    modelConfigAbortRef.current?.abort()
+    modelConfigAbortRef.current = controller
     setModelConfig({ state: 'loading' })
     void callArkme<ArkmeRecordingSummaryModelConfig>('recordings.summary-model-config', undefined, controller.signal)
-      .then(value => { if (!controller.signal.aborted) setModelConfig({ state: 'ready', value }) })
-      .catch(error => { if (!controller.signal.aborted) setModelConfig({ state: 'error', message: errorMessage(error) }) })
-    return () => { controller.abort() }
+      .then(value => {
+        if (controller.signal.aborted) return
+        setModelConfig({ state: 'ready', value })
+        if (dialogKind !== undefined && value.options.length > 0) setModelDialogKind(dialogKind)
+      })
+      .catch(error => {
+        if (controller.signal.aborted) return
+        const message = errorMessage(error)
+        setModelConfig({ state: 'error', message })
+        if (dialogKind !== undefined) setGenerationErrors(current => ({ ...current, [dialogKind]: message }))
+      })
+      .finally(() => {
+        if (modelConfigAbortRef.current === controller) modelConfigAbortRef.current = undefined
+      })
+  }
+
+  useEffect(() => {
+    loadModelConfig()
+    return () => { modelConfigAbortRef.current?.abort() }
   }, [])
 
   useEffect(() => {
@@ -730,6 +749,20 @@ export function ArkmeRecordingSurface({ onOpenRecordingImport, recordingRefreshR
     }
   }
 
+  const openModelDialog = (kind: ArkmeRecordingProjectionKind) => {
+    if (modelConfig.state === 'ready') {
+      if (modelConfig.value.options.length > 0) setModelDialogKind(kind)
+      return
+    }
+    if (modelConfig.state !== 'error') return
+    setGenerationErrors(current => {
+      const next = { ...current }
+      delete next[kind]
+      return next
+    })
+    loadModelConfig(kind)
+  }
+
   const renderTranscript = () => {
     const section = day?.transcript
     if (dayLoading) return <ArkmeRecordingTranscriptLoading />
@@ -775,9 +808,9 @@ export function ArkmeRecordingSurface({ onOpenRecordingImport, recordingRefreshR
         versions={section.items}
         selectedId={selectedSummary.id}
         generating={generatingKinds.summary || section.state === 'processing'}
-        regenerateAvailable={modelConfig.state === 'ready' && modelConfig.value.options.length > 0}
+        regenerateAvailable={modelConfig.state === 'error' || (modelConfig.state === 'ready' && modelConfig.value.options.length > 0)}
         onChange={setSummaryVersionId}
-        onGenerate={() => { setModelDialogKind('summary') }}
+        onGenerate={() => { openModelDialog('summary') }}
       />
       <SafeMarkdown content={selectedSummary.content} />
     </>
@@ -802,9 +835,9 @@ export function ArkmeRecordingSurface({ onOpenRecordingImport, recordingRefreshR
         versions={section.items}
         selectedId={selectedTimeline.id}
         generating={generatingKinds.timeline || section.state === 'processing'}
-        regenerateAvailable={modelConfig.state === 'ready' && modelConfig.value.options.length > 0}
+        regenerateAvailable={modelConfig.state === 'error' || (modelConfig.state === 'ready' && modelConfig.value.options.length > 0)}
         onChange={setTimelineVersionId}
-        onGenerate={() => { setModelDialogKind('timeline') }}
+        onGenerate={() => { openModelDialog('timeline') }}
       />
       <div style={styles.eventList}>{selectedTimeline.timelineEvents.map(event => <article key={event.eventId} style={styles.event}>
         <header style={styles.eventHeader}><time style={styles.eventTime}>{event.timeRange || '时间未标注'}</time><h3 style={styles.eventTitle}>{event.title}</h3></header>
