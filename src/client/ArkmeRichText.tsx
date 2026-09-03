@@ -1,6 +1,6 @@
 import type { CSSProperties } from 'react'
 import { arkmeEmojiTextRuns } from './arkme-emoji.js'
-import { ArkmeLinkText, type ArkmeLinkRenderer } from './ArkmeLinkText.js'
+import { ArkmeLinkText, type ArkmeLinkLabelMode, type ArkmeLinkRenderer } from './ArkmeLinkText.js'
 
 const emojiInlineStyle: CSSProperties = { display: 'inline-block', width: 22, height: 22, objectFit: 'contain', verticalAlign: '-6px' }
 
@@ -34,11 +34,12 @@ export function ArkmeMentionText({ text }: { text: string }) {
   >{run.text}</span>)}</>
 }
 
-export function ArkmeRichText({ text, highlightMentions = false, renderLink, emojiSize }: {
+export function ArkmeRichText({ text, highlightMentions = false, renderLink, emojiSize, linkLabelMode = 'resolved' }: {
   text: string
   highlightMentions?: boolean
   renderLink?: ArkmeLinkRenderer
   emojiSize?: number
+  linkLabelMode?: ArkmeLinkLabelMode
 }) {
   const renderText = highlightMentions ? (value: string) => <ArkmeMentionText text={value} /> : undefined
   return <>{arkmeEmojiTextRuns(text).map((run, index) => run.kind === 'emoji' && run.emoji !== undefined
@@ -53,6 +54,7 @@ export function ArkmeRichText({ text, highlightMentions = false, renderLink, emo
     />
     : <span key={`${String(index)}:text`}><ArkmeLinkText
       text={run.text}
+      linkLabelMode={linkLabelMode}
       {...(renderText === undefined ? {} : { renderText })}
       {...(renderLink === undefined ? {} : { renderLink })}
     /></span>)}</>

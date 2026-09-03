@@ -30,20 +30,22 @@ const resolvedLinkLabelStyle: CSSProperties = {
 }
 
 export const ARKME_LINK_FALLBACK_LABEL = '分享链接'
+export type ArkmeLinkLabelMode = 'raw' | 'resolved'
 
 function arkmeResolvedLinkTitle(title: string | undefined, href: string): string {
   const trimmed = title?.trim() ?? ''
   return !arkmeIsGenericLinkMetadataTitle(trimmed) && trimmed !== href ? trimmed : ''
 }
 
-export function ArkmeTextLink({ href, text, fallbackLabel = ARKME_LINK_FALLBACK_LABEL, metadataResolver = arkmeLinkMetadataResolver }: {
+export function ArkmeTextLink({ href, text, linkLabelMode = 'resolved', fallbackLabel = ARKME_LINK_FALLBACK_LABEL, metadataResolver = arkmeLinkMetadataResolver }: {
   href: string
   text: string
+  linkLabelMode?: ArkmeLinkLabelMode
   fallbackLabel?: string
   metadataResolver?: ArkmeLinkMetadataResolver
 }) {
   const [title, setTitle] = useState('')
-  const shouldResolve = arkmeShouldResolveLinkMetadata(href)
+  const shouldResolve = linkLabelMode === 'resolved' && arkmeShouldResolveLinkMetadata(href)
 
   useEffect(() => {
     let active = true
@@ -67,6 +69,7 @@ export function ArkmeTextLink({ href, text, fallbackLabel = ARKME_LINK_FALLBACK_
     title={resolved || fallback ? href : undefined}
     style={linkPresentationStyle}
     data-arkme-text-link="true"
+    data-arkme-link-mode={linkLabelMode}
     data-arkme-link-title={resolved ? 'resolved' : fallback ? 'fallback' : 'raw'}
   >
     <LinkIcon aria-hidden style={linkIconStyle} data-arkme-link-icon="true" />
@@ -77,10 +80,11 @@ export function ArkmeTextLink({ href, text, fallbackLabel = ARKME_LINK_FALLBACK_
   </a>
 }
 
-export function ArkmeLinkText({ text, renderText, renderLink, metadataResolver = arkmeLinkMetadataResolver, fallbackLabel = ARKME_LINK_FALLBACK_LABEL }: {
+export function ArkmeLinkText({ text, renderText, renderLink, linkLabelMode = 'resolved', metadataResolver = arkmeLinkMetadataResolver, fallbackLabel = ARKME_LINK_FALLBACK_LABEL }: {
   text: string
   renderText?: (text: string) => ReactNode
   renderLink?: ArkmeLinkRenderer
+  linkLabelMode?: ArkmeLinkLabelMode
   metadataResolver?: ArkmeLinkMetadataResolver
   fallbackLabel?: string
 }) {
@@ -95,6 +99,7 @@ export function ArkmeLinkText({ text, renderText, renderLink, metadataResolver =
       {projection === undefined ? <ArkmeTextLink
         href={run.href}
         text={run.text}
+        linkLabelMode={linkLabelMode}
         fallbackLabel={fallbackLabel}
         metadataResolver={metadataResolver}
       /> : projection}
