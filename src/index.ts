@@ -480,7 +480,6 @@ export function apply(ctx: Context, config: Config): void {
       currentSelection?: () => unknown
     } | undefined
     const sessionPersistence = apiCtx.get('sessionPersistence') as DshRemoteSessionPersistenceLike | undefined
-    const sessionStore = apiCtx.get('sessions') as { get(sessionRef: string): unknown } | undefined
     const apiProxy = new DshApiProxyAdapter(
       apiCtx.apiProxy as unknown as DshPublicApiProxyLike,
       {
@@ -532,10 +531,7 @@ export function apply(ctx: Context, config: Config): void {
       sessionOwnership: new DshRemoteSessionOwnershipStore(stateDirectory, profileRef),
       controlPlane,
       realtime, apiProxy,
-      ...(sessionPersistence === undefined ? {} : {
-        sessionPersistence,
-        isSessionLive: (sessionRef: string) => sessionStore?.get(sessionRef) !== undefined,
-      }),
+      ...(sessionPersistence === undefined ? {} : { sessionPersistence }),
       readSession: async () => {
         const session = await service.accountScope.scopedSession()
         if (session === undefined) return undefined

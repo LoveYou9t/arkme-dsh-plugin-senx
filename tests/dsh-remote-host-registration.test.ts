@@ -70,7 +70,6 @@ async function fixture(input: {
   turnObjectCapabilities?: () => Promise<Record<string, unknown>>
   knownHistorySessions?: (input: Record<string, unknown>, signal?: AbortSignal) => Promise<Record<string, unknown>>
   sessionPersistence?: DshRemoteSessionPersistenceLike
-  isSessionLive?: (sessionRef: string) => boolean
   yieldToEventLoop?: () => Promise<void>
 } = {}) {
   const directory = await mkdtemp(join(tmpdir(), 'dsh-remote-host-'))
@@ -112,7 +111,6 @@ async function fixture(input: {
     ledgerForAccount: (_accountId, key) => new DshRemoteCommandLedger(join(directory, 'ledger'), key),
     ...(input.turnUploadForAccount === undefined ? {} : { turnUploadForAccount: input.turnUploadForAccount }),
     ...(input.sessionPersistence === undefined ? {} : { sessionPersistence: input.sessionPersistence }),
-    ...(input.isSessionLive === undefined ? {} : { isSessionLive: input.isSessionLive }),
     ...(input.yieldToEventLoop === undefined ? {} : { yieldToEventLoop: input.yieldToEventLoop }),
     now: input.now ?? (() => 2_000),
   })
@@ -473,9 +471,12 @@ describe('Host login-only registration lifecycle', () => {
     await host.stop()
   })
 
-  it('skips a live session before opening its persistence log', async () => {
+  it('backfills a completed Turn from the current Session after delayed Outbox activation', async () => {
     const outbox = historyOutbox()
-    const readFrom = vi.fn()
+    const readFrom = vi.fn(async () => ({
+      meta: { id: 'session-01' },
+      events: [historyEvent('turn/start', 1), historyEvent('assistant/message', 2), historyEvent('turn/end', 3)],
+    }))
     const knownHistorySessions = vi.fn(async () => ({ session_refs: ['session-01'] }))
     const { host } = await fixture({
       turnUploadForAccount: () => outbox as unknown as DshRemoteTurnUploadOutbox,
@@ -488,7 +489,6 @@ describe('Host login-only registration lifecycle', () => {
         listSnapshots: async () => [{ header: { id: 'session-01' }, revision: 'revision-1' }],
         readFrom,
       },
-      isSessionLive: () => true,
     })
     await host.start()
     await vi.waitFor(() => { expect(outbox.activate).toHaveBeenCalledOnce() })
@@ -498,9 +498,15 @@ describe('Host login-only registration lifecycle', () => {
     }
 
     await expect(internal.backfillOneHistorySession('42', internal.runtime, new AbortController().signal))
-      .resolves.toBe(false)
-    expect(knownHistorySessions).not.toHaveBeenCalled()
-    expect(readFrom).not.toHaveBeenCalled()
+      .resolves.toBe(true)
+    expect(knownHistorySessions).toHaveBeenCalledOnce()
+    expect(readFrom).toHaveBeenCalledOnce()
+    expect(outbox.capture).toHaveBeenCalledWith('session-01', [
+      { event: historyEvent('turn/start', 1) },
+      { event: historyEvent('assistant/message', 2) },
+      { event: historyEvent('turn/end', 3) },
+    ])
+    expect(outbox.markHistoryRevision).toHaveBeenCalledWith('session-01', 'revision-1')
     await host.stop()
   })
 
