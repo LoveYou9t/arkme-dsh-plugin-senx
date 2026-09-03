@@ -81,7 +81,8 @@ describe('related quick note shared UI', () => {
     const related = item('a', '没什么问题')
     const detail: ArkmeRelatedQuickNoteDetailDto = {
       relatedRef: 'opaque-a', senderName: '小林', isMe: false,
-      sendAtMillis: 1_710_000_000_000, title: '详情标题', textContent: '@狗才 完整详情正文', status: 1,
+      sendAtMillis: 1_710_000_000_000, title: '详情标题',
+      textContent: '@狗才 完整详情正文 https://example.com/related', status: 1,
     }
     const markup = renderToStaticMarkup(createElement(ArkmeRelatedQuickNoteDetail, {
       state: { kind: 'success', item: related, detail }, onRetry: vi.fn(),
@@ -90,6 +91,7 @@ describe('related quick note shared UI', () => {
     expect(markup).toContain('小林')
     expect(markup).toContain('完整详情正文')
     expect(markup).toContain('<span style="color:var(--dsw-alias-state-business-primary, #3964fe)">@狗才</span>')
+    expect(markup).toContain('data-arkme-link-label="true">https://example.com/related</span>')
     expect(relatedDrawerBackTarget('related-detail')).toBe('related-list')
     expect(relatedDrawerBackTarget('related-list')).toBe('source-detail')
     expect(relatedDrawerBackTarget('source-detail')).toBe('source-detail')

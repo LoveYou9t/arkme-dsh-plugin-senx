@@ -439,6 +439,10 @@ describe('Arkme rich content presentation', () => {
       itemUid: 'forward-link', senderName: '我', isMe: true, sendAtMillis: 1, status: 1, title: '', textContent: '',
       forwardRecords: { title: '转发链接', createdAtMillis: 1, summaryLines: [], items: [{
         senderName: '同事', sendAtMillis: 1, title: '', textContent: '查看 https://example.com/forward',
+        segments: [{
+          speakerName: '讲述人', startMillis: 0, endMillis: 1_000,
+          textContent: '分段 https://example.com/forward-segment',
+        }],
       }] },
     }
     const forwardPreviewHtml = renderToStaticMarkup(<ArkmeMessageContent item={forward} />)
@@ -447,6 +451,8 @@ describe('Arkme rich content presentation', () => {
     const forwardDetailHtml = renderToStaticMarkup(<ForwardRecordsDetail item={forward} onClose={() => {}} />)
     expect(forwardDetailHtml).toContain('href="https://example.com/forward"')
     expect(forwardDetailHtml).toContain('data-arkme-link-label="true">https://example.com/forward</span>')
+    expect(forwardDetailHtml).toContain('href="https://example.com/forward-segment"')
+    expect(forwardDetailHtml).toContain('data-arkme-link-label="true">https://example.com/forward-segment</span>')
   })
 
   it('keeps direct record-detail links raw for text and voice content', () => {
