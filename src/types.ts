@@ -1853,6 +1853,21 @@ export interface ArkmeLongArticleDraft {
   updatedAtMillis: number
 }
 
+/** Host-owned durable candidate for editing one existing Record. */
+export interface ArkmeRecordReeditDraft {
+  schemaVersion: 1
+  draftRevision: number
+  sourceIdentityKey: string
+  lastSourceRef: string
+  itemUid: string
+  title: string
+  textContent: string
+  baseVersion: number
+  baseContentFingerprint: string
+  editDurationMillis: number
+  updatedAtMillis: number
+}
+
 export type ArkmeMessageReportType = 1 | 2 | 3 | 4
 
 export interface ArkmeMessageReportResult {
@@ -3169,6 +3184,10 @@ export type ArkmePluginOperation =
   | 'source.long-article.draft.get'
   | 'source.long-article.draft.put'
   | 'source.long-article.draft.delete'
+  | 'source.record-reedit.detail'
+  | 'source.record-reedit.draft.put'
+  | 'source.record-reedit.draft.delete'
+  | 'source.record-reedit.update'
   | 'calls.outgoing.intent.claim'
   | 'calls.outgoing.intent.resolve'
   | 'calls.outgoing.prepare'

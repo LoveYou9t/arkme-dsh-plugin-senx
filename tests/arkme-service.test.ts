@@ -5876,6 +5876,24 @@ describe('ArkmeService', () => {
       })
   })
 
+  it.each([false, true])('keeps projection pending after owner commit whether local invalidation rejects: %s', async rejects => {
+    const sessions = new MemorySessionStore()
+    sessions.session = { userId: 10001, accessToken: 'access', refreshToken: 'refresh' }
+    const service = new ArkmeService(config, sessions, new MemoryStateStore(), vi.fn() as never)
+    const ownerResult = {
+      status: 'committed' as const, itemUid: 'record-1', version: 2,
+      revisionUid: 'revision-1', projectionState: 'pending' as const,
+    }
+    vi.spyOn((service as unknown as { record: { commitRecordReedit: () => Promise<typeof ownerResult> } }).record, 'commitRecordReedit')
+      .mockResolvedValue(ownerResult)
+    const invalidate = vi.spyOn((service as unknown as { realtime: { invalidateRecordProjection: () => Promise<void> } }).realtime, 'invalidateRecordProjection')
+    if (rejects) invalidate.mockRejectedValue(new Error('projection offline'))
+    else invalidate.mockResolvedValue()
+
+    await expect(service.commitRecordReedit({} as never)).resolves.toEqual(ownerResult)
+    expect(invalidate).toHaveBeenCalledOnce()
+  })
+
   it('rejects forged, expired and cross-account moment refs before record detail access', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-08-19T00:00:00Z'))

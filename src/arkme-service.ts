@@ -9,6 +9,7 @@ import type {
   ArkmeExtensionReviewPage,
 } from './extensions/types.js'
 import type { ArkmeSessionStore } from './keychain-store.js'
+import type { ArkmeRecordReeditCommitResult, ArkmeRecordReeditDiscardPreparedContext, ArkmeRecordReeditDiscardResult, ArkmeRecordReeditEditorSnapshot, ArkmeRecordReeditPrepareInput, ArkmeRecordReeditPreparedContext } from './record-reedit-contract.js'
 import { createArkmeAccountSessionOwner } from './account-session-owner.js'
 import { resolveManagedAccessCredential } from './managed-access-credential.js'
 import type { createOpenClawProvisioner, OpenClawProvisionResult } from './openclaw/index.js'
@@ -1380,6 +1381,15 @@ export class ArkmeService {
   async removeLongArticleDraft(sourceRef: string, itemUid?: string): Promise<void> {
     return await this.chat.removeLongArticleDraft(sourceRef, itemUid)
   }
+
+  async prepareRecordReedit(input: ArkmeRecordReeditPrepareInput, options: { expectedBaseVersion?: number } = {}): Promise<ArkmeRecordReeditPreparedContext> { return await this.record.prepareRecordReedit(input, options) }
+  async recordReeditEditor(sourceRef: string, itemUid: string): Promise<ArkmeRecordReeditEditorSnapshot> { return await this.record.recordReeditEditor(sourceRef, itemUid) }
+  async commitRecordReedit(context: ArkmeRecordReeditPreparedContext): Promise<ArkmeRecordReeditCommitResult> {
+    const result = await this.record.commitRecordReedit(context)
+    await this.realtime.invalidateRecordProjection().catch(() => undefined); return result
+  }
+  async prepareDiscardRecordReeditDraft(sourceRef: string, itemUid: string): Promise<ArkmeRecordReeditDiscardPreparedContext> { return await this.record.prepareDiscardRecordReeditDraft(sourceRef, itemUid) }
+  async discardRecordReeditDraft(context: ArkmeRecordReeditDiscardPreparedContext): Promise<ArkmeRecordReeditDiscardResult> { return await this.record.discardRecordReeditDraft(context) }
 
   async uploadLocalFile(
     filePath: string,

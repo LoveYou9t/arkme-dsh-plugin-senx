@@ -1869,6 +1869,36 @@ export async function dispatchArkmeHostOperation(
       stringParam(params, 'sourceRef'),
       stringParam(params, 'itemUid') || undefined,
     )
+    case 'source.record-reedit.detail': return await service.recordReeditEditor(
+      stringParam(params, 'sourceRef'),
+      stringParam(params, 'itemUid'),
+    )
+    case 'source.record-reedit.draft.put': {
+      const prepared = await service.prepareRecordReedit({
+        sourceRef: stringParam(params, 'sourceRef'),
+        itemUid: stringParam(params, 'itemUid'),
+        newText: stringParam(params, 'newText'),
+        ...(params.newTitle === undefined ? {} : { newTitle: stringParam(params, 'newTitle') }),
+      }, { expectedBaseVersion: Math.trunc(numberParam(params, 'expectedVersion', 0)) })
+      return { saved: true, draftRevision: prepared.draftRevision }
+    }
+    case 'source.record-reedit.update': {
+      const input = {
+        sourceRef: stringParam(params, 'sourceRef'),
+        itemUid: stringParam(params, 'itemUid'),
+        newText: stringParam(params, 'newText'),
+        ...(params.newTitle === undefined ? {} : { newTitle: stringParam(params, 'newTitle') }),
+      }
+      const expectedBaseVersion = Math.trunc(numberParam(params, 'expectedVersion', 0))
+      const prepared = await service.prepareRecordReedit(input, { expectedBaseVersion })
+      return await service.commitRecordReedit(prepared)
+    }
+    case 'source.record-reedit.draft.delete': {
+      const prepared = await service.prepareDiscardRecordReeditDraft(
+        stringParam(params, 'sourceRef'), stringParam(params, 'itemUid'),
+      )
+      return await service.discardRecordReeditDraft(prepared)
+    }
     case 'calls.outgoing.intent.claim': return await service.claimOutgoingCallIntent()
     case 'calls.outgoing.intent.resolve': {
       const intentId = requiredCallParam(params, 'intentId', 'call-intent-invalid')

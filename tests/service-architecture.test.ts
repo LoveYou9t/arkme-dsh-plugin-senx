@@ -47,7 +47,8 @@ const expectedPublicMethods = [
   'recordRelatedRecordingsToolEvent', 'reportMessage', 'withdrawGroupMessage', 'copySourceMessageLink', 'copyMessageActionsLink', 'resolveMessageCopyLink', 'extendMessageCopyLink', 'sourceMessageExtensionContext', 'extendSourceMessage', 'forwardSourceMessages', 'forwardMessageActions',
   'sendSourceText', 'retryGroupAiPolish',
   'sendSourceRich', 'favoriteStickers', 'addFavoriteSticker', 'manageFavoriteSticker', 'sendFavoriteSticker', 'longArticleDetail', 'updateLongArticle', 'getLongArticleDraft',
-  'putLongArticleDraft', 'removeLongArticleDraft', 'uploadLocalFile', 'fetchMedia', 'sendDirectText',
+  'putLongArticleDraft', 'removeLongArticleDraft', 'recordReeditEditor', 'prepareRecordReedit', 'commitRecordReedit',
+  'prepareDiscardRecordReeditDraft', 'discardRecordReeditDraft', 'uploadLocalFile', 'fetchMedia', 'sendDirectText',
   'markSourceRead', 'listWechatConversations', 'readWechatMessages', 'getWechatConversationDetail',
   'listWechatGroupMembers', 'listWechatPhones', 'listWechatCommonGroups', 'listWechatMoneyFlows',
   'listWechatLocations', 'readImage', 'beginJiwoLogin', 'pollJiwoLogin', 'cancelJiwoLogin',
@@ -200,6 +201,21 @@ describe('Arkme service architecture', () => {
     expect(infrastructure).toMatch(/createCipheriv|createDecipheriv/)
     expect(infrastructure).toContain('/api/v1/chats/messages/copy-link/get-or-create')
     expect(infrastructure).toContain('/api/v1/chats/records/forward')
+  })
+
+  it('keeps record re-edit orchestration on the Record owner path instead of the Chat service', () => {
+    const facade = readFileSync(join(root, 'src/arkme-service.ts'), 'utf8')
+    const chat = readFileSync(join(root, 'src/services/chat-service.ts'), 'utf8')
+    const reeditFacade = facade.slice(
+      facade.indexOf('async prepareRecordReedit('),
+      facade.indexOf('async uploadLocalFile(', facade.indexOf('async prepareRecordReedit(')),
+    )
+
+    expect(reeditFacade).toContain('this.record.prepareRecordReedit')
+    expect(reeditFacade).toContain('this.record.commitRecordReedit')
+    expect(reeditFacade).not.toContain('this.chat.')
+    expect(chat).not.toContain('prepareRecordReedit')
+    expect(chat).not.toContain('commitRecordReedit')
   })
 
   it('keeps World cross-domain dependencies behind narrow ports', () => {
