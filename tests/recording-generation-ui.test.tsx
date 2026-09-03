@@ -58,7 +58,96 @@ describe('recording summary and timeline generation', () => {
 
   afterEach(async () => {
     await act(async () => { renderer?.unmount(); await tick() })
+    vi.useRealTimers()
     vi.restoreAllMocks()
+  })
+
+  it('continues owner polling beyond the fast budget until the owner exposes a retryable state', async () => {
+    vi.useFakeTimers()
+    const originalImplementation = mocks.callArkme.getMockImplementation()!
+    let dayReads = 0
+    mocks.callArkme.mockImplementation(async (operation, params, signal) => {
+      if (operation === 'recordings.day') {
+        dayReads += 1
+        const day = await originalImplementation(operation, params, signal)
+        return {
+          ...day,
+          summary: dayReads <= 91
+            ? { state: 'processing', message: '内容仍在生成', items: [] }
+            : { state: 'failed', message: '生成失败，请重试', items: [] },
+        }
+      }
+      return await originalImplementation(operation, params, signal)
+    })
+    await act(async () => {
+      renderer = create(<ArkmeRecordingSurface onOpenRecordingImport={() => {}} recordingRefreshRevision={0} />)
+      await tick()
+    })
+    await act(async () => { button(renderer, '总结').props.onClick(); await tick() })
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(300_000)
+      await tick()
+    })
+
+    expect(dayReads).toBeGreaterThan(91)
+    expect(renderedText(renderer.root)).toContain('总结生成失败，')
+    expect(button(renderer, '点击生成总结')).toBeDefined()
+  })
+
+  it('preserves the selected timeline version while polling an independent summary generation', async () => {
+    vi.useFakeTimers()
+    const originalImplementation = mocks.callArkme.getMockImplementation()!
+    mocks.callArkme.mockImplementation(async (operation, params, signal) => {
+      if (operation === 'recordings.day') {
+        const day = await originalImplementation(operation, params, signal)
+        return {
+          ...day,
+          summary: { state: 'processing', message: '内容仍在生成', items: [] },
+          timeline: {
+            state: 'ready', message: '', items: [
+              {
+                id: 'timeline-new', status: 'done', selectable: true, generationStage: 2,
+                generatedAtMillis: 2_000, modelDisplayName: 'Qwen3 Max', content: '最新时间轴',
+                timelineEvents: [{ eventId: 'new', timeRange: '10:00', title: '最新时间轴', description: '', todo: '', scene: '', emotion: '', participants: [], tags: [] }],
+                error: '',
+              },
+              {
+                id: 'timeline-old', status: 'done', selectable: true, generationStage: 2,
+                generatedAtMillis: 1_000, modelDisplayName: 'Qwen3 Max', content: '历史时间轴',
+                timelineEvents: [{ eventId: 'old', timeRange: '09:00', title: '历史时间轴', description: '', todo: '', scene: '', emotion: '', participants: [], tags: [] }],
+                error: '',
+              },
+            ],
+          },
+        }
+      }
+      return await originalImplementation(operation, params, signal)
+    })
+    await act(async () => {
+      renderer = create(<ArkmeRecordingSurface onOpenRecordingImport={() => {}} recordingRefreshRevision={0} />)
+      await tick()
+    })
+    await act(async () => { button(renderer, '时间轴').props.onClick(); await tick() })
+    const picker = renderer.root.findByProps({ 'aria-label': '切换时间轴版本' })
+    await act(async () => {
+      picker.props.onClick({ currentTarget: { getBoundingClientRect: () => ({ left: 100, right: 420, top: 100, bottom: 136 }) } })
+      await tick()
+    })
+    const options = renderer.root.findByProps({ 'aria-label': '切换时间轴版本选项' })
+    await act(async () => {
+      options.findAllByProps({ role: 'option' })[1]!.props.onClick()
+      await tick()
+    })
+    expect(renderedText(renderer.root)).toContain('历史时间轴')
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_500)
+      await tick()
+    })
+
+    expect(renderedText(renderer.root)).toContain('历史时间轴')
+    expect(renderedText(renderer.root)).not.toContain('最新时间轴')
   })
 
   it('starts each owner generation from the matching desktop empty action', async () => {

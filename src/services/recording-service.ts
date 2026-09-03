@@ -1023,6 +1023,7 @@ export class RecordingService {
     const dayEnd = new Date(dayStart)
     dayEnd.setDate(dayEnd.getDate() + 1)
     const items = projectRecordingTranscripts(transcriptResult.value, speakerData, profilesByUserId, {
+      viewerUserId: session.userId,
       dayStartMillis: date,
       dayEndMillis: dayEnd.getTime(),
     })

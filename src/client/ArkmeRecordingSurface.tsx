@@ -396,6 +396,12 @@ function versionLabel(version: ArkmeRecordingVersion): string {
   return `${time}${version.modelDisplayName === '' ? '' : ` · ${version.modelDisplayName}`}`
 }
 
+function reconcileRecordingVersionId(currentId: string, versions: readonly ArkmeRecordingVersion[]): string {
+  return versions.some(version => version.selectable && version.id === currentId)
+    ? currentId
+    : versions.find(version => version.selectable)?.id ?? ''
+}
+
 function SectionState({ section, loading, kind = 'transcript', onGenerate = () => {} }: {
   section: ArkmeRecordingSection<unknown> | undefined
   loading: boolean
@@ -648,13 +654,13 @@ export function ArkmeRecordingSurface({ onOpenRecordingImport, recordingRefreshR
         )
         if (controller.signal.aborted) return
         setDay(next)
-        setSummaryVersionId(next.summary.items.find(version => version.selectable)?.id ?? '')
-        setTimelineVersionId(next.timeline.items.find(version => version.selectable)?.id ?? '')
-        if ((next.summary.state === 'processing' || next.timeline.state === 'processing') && attempts < 90) {
-          timer = setTimeout(() => { void poll() }, 3_000)
+        setSummaryVersionId(current => reconcileRecordingVersionId(current, next.summary.items))
+        setTimelineVersionId(current => reconcileRecordingVersionId(current, next.timeline.items))
+        if (next.summary.state === 'processing' || next.timeline.state === 'processing') {
+          timer = setTimeout(() => { void poll() }, attempts < 90 ? 3_000 : 15_000)
         }
       } catch {
-        if (!controller.signal.aborted && attempts < 90) timer = setTimeout(() => { void poll() }, 5_000)
+        if (!controller.signal.aborted) timer = setTimeout(() => { void poll() }, attempts < 90 ? 5_000 : 15_000)
       }
     }
     timer = setTimeout(() => { void poll() }, 1_500)

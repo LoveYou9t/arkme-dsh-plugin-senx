@@ -1,6 +1,8 @@
+import { once } from 'node:events'
+import { createServer } from 'node:http'
 import { describe, expect, it, vi } from 'vitest'
 import type { ArkmeService } from '../src/arkme-service.js'
-import { dispatchArkmeHostOperation } from '../src/host-api.js'
+import { createArkmeHostApi, dispatchArkmeHostOperation } from '../src/host-api.js'
 
 describe('recording UI-only host operations', () => {
   it('dispatches calendar, day, and owner-backed generation operations without adding public SDK methods', async () => {
@@ -63,6 +65,40 @@ describe('recording UI-only host operations', () => {
       dateStamp: 10, kind: 'transcript',
     })).rejects.toMatchObject({ code: 'recording-generation-kind-invalid' })
     expect(generateRecordingProjection).not.toHaveBeenCalled()
+  })
+
+  it('requires the active same-origin browser before generation mutations', async () => {
+    const generateRecordingProjection = vi.fn()
+    const setRecordingSummaryModelRoute = vi.fn()
+    const server = createServer(createArkmeHostApi({
+      generateRecordingProjection, setRecordingSummaryModelRoute,
+    } as unknown as ArkmeService, {
+      expectedPort: 3080,
+      allowNonLoopback: false,
+    }))
+    server.listen(0, '127.0.0.1')
+    await once(server, 'listening')
+    const address = server.address()
+    if (address === null || typeof address === 'string') throw new Error('test server address missing')
+    try {
+      for (const body of [
+        { operation: 'recordings.generate', params: { dateStamp: 10, kind: 'summary' } },
+        { operation: 'recordings.summary-model-config.set', params: { routeKey: 'dashscope/qwen3-max' } },
+      ]) {
+        const response = await fetch(`http://127.0.0.1:${String(address.port)}/arkme-self/api`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        })
+        expect(response.status).toBe(403)
+        await expect(response.json()).resolves.toMatchObject({ ok: false, error: { code: 'origin-required' } })
+      }
+      expect(generateRecordingProjection).not.toHaveBeenCalled()
+      expect(setRecordingSummaryModelRoute).not.toHaveBeenCalled()
+    } finally {
+      server.close()
+      await once(server, 'close')
+    }
   })
 
   it('dispatches only opaque recording import control operations', async () => {

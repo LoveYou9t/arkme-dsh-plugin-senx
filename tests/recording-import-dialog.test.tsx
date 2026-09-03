@@ -774,7 +774,7 @@ describe('recording import dialog behavior', () => {
     })
 
     expect(renderer.root.findByProps({ 'aria-label': '已完成修改.wav录音开始时间' }).props.value).toBe(nextValue)
-    expect(renderedText(renderer.root.findByProps({ role: 'alert' }))).toContain('当前显示本地记录，云端同步失败')
+    expect(renderedText(renderer.root.findByProps({ role: 'alert' }))).toContain('当前显示上次结果，云端同步失败')
   })
 
   it('asks for desktop deletion confirmation before cancelling a background import', async () => {

@@ -59,7 +59,7 @@ describe('recording presentation', () => {
           { s: 70_000, e: 71_000, n: 1, t: '越过会话边界' },
         ],
       }],
-    }, [], new Map(), { dayStartMillis: dayStart, dayEndMillis: dayStart + 86_400_000 })
+    }, [], new Map(), { viewerUserId: 7, dayStartMillis: dayStart, dayEndMillis: dayStart + 86_400_000 })
 
     expect(items).toEqual([expect.objectContaining({
       text: '早期录音', startAtMillis: sessionStart + 1_000, endAtMillis: sessionStart + 2_000,
@@ -86,7 +86,7 @@ describe('recording presentation', () => {
         ],
         doubao_asr: [{ s: 9_000, e: 10_000, n: 1, t: '不应展示' }],
       }],
-    }, [{ id: 'speaker-me', ref_usr_id: 7 }])
+    }, [{ id: 'speaker-me', ref_usr_id: 7 }], new Map(), { viewerUserId: 7 })
 
     expect(items).toEqual([
       {
@@ -122,6 +122,21 @@ describe('recording presentation', () => {
     ])
   })
 
+  it('identifies the viewer speaker independently from recording data ownership', () => {
+    const items = projectRecordingTranscripts({
+      session_ls: [{
+        id: 'session-owned-by-other', belong_usr: 99, start_at: 1_700_000_000_000,
+        spk_ls: [{ num: 1, spk_id: 'speaker-viewer' }],
+      }],
+      child_ls: [{
+        id: 'child-1', session_id: 'session-owned-by-other', start_at: 0,
+        asr: [{ s: 0, e: 1_000, n: 1, t: '这是当前用户说的话' }],
+      }],
+    }, [{ id: 'speaker-viewer', ref_usr_id: 7 }], new Map(), { viewerUserId: 7 })
+
+    expect(items).toEqual([expect.objectContaining({ isSelf: true })])
+  })
+
   it('uses the labelled speaker name and associated avatar when available', () => {
     const items = projectRecordingTranscripts({
       session_ls: [{
@@ -134,7 +149,7 @@ describe('recording presentation', () => {
       }],
     }, [{ speaker_id: 'speaker-1', ref_usr_id: 42, nick_name: '英梦华' }], new Map([
       [42, { displayName: '小林', avatarRef: 'arkme-profile-image-v1.avatar' }],
-    ]))
+    ]), { viewerUserId: 7 })
 
     expect(items).toEqual([expect.objectContaining({
       speakerLabel: '英梦华', speakerAvatarRef: 'arkme-profile-image-v1.avatar', isSelf: false,
@@ -157,7 +172,7 @@ describe('recording presentation', () => {
     }, [
       { id: 'speaker-source', nick_name: '原始声纹' },
       { id: 'speaker-assigned', ref_usr_id: 7, nick_name: '本人' },
-    ])
+    ], new Map(), { viewerUserId: 7 })
 
     expect(items).toEqual([expect.objectContaining({
       formalSpeakerId: 'speaker-assigned',
@@ -186,7 +201,7 @@ describe('recording presentation', () => {
           { s: 90_000, e: 110_000, n: 1, t: '当天内容' },
         ],
       }],
-    }, [], new Map(), { dayStartMillis: dayStart, dayEndMillis: dayStart + 86_400_000 })
+    }, [], new Map(), { viewerUserId: 7, dayStartMillis: dayStart, dayEndMillis: dayStart + 86_400_000 })
 
     expect(items.map(value => [value.text, value.startAtMillis, value.endAtMillis])).toEqual([
       ['当天内容', dayStart + 30_000, dayStart + 50_000],
@@ -204,7 +219,7 @@ describe('recording presentation', () => {
         { id: 'old-child', session_id: 'old', start_at: dayStart, asr: [{ s: 40_000, e: 50_000, n: 1, t: '旧内容' }] },
         { id: 'new-child', session_id: 'new', start_at: dayStart + 30_000, asr: [{ s: 10_000, e: 20_000, n: 1, t: '新内容' }] },
       ],
-    }, [], new Map(), { dayStartMillis: dayStart, dayEndMillis: dayStart + 86_400_000 })
+    }, [], new Map(), { viewerUserId: 7, dayStartMillis: dayStart, dayEndMillis: dayStart + 86_400_000 })
 
     expect(items.map(value => value.text)).toEqual(['新内容'])
   })
@@ -220,7 +235,7 @@ describe('recording presentation', () => {
         { id: 'old-child', session_id: 'session-1', start_at: 0, upload_at: 10, asr: [{ s: 40_000, e: 60_000, n: 1, t: '旧上传' }] },
         { id: 'new-child', session_id: 'session-1', start_at: 0, upload_at: 20, asr: [{ s: 45_000, e: 55_000, n: 1, t: '新上传' }] },
       ],
-    }, [], new Map(), { dayStartMillis: dayStart, dayEndMillis: dayStart + 86_400_000 })
+    }, [], new Map(), { viewerUserId: 7, dayStartMillis: dayStart, dayEndMillis: dayStart + 86_400_000 })
 
     expect(items.map(value => value.text)).toEqual(['新上传'])
   })

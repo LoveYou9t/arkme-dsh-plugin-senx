@@ -157,9 +157,13 @@ function displayVersionTimestamp(value: unknown): number | undefined {
   return Number.isFinite(parsed) ? parsed : undefined
 }
 
-export interface ProjectRecordingTranscriptOptions {
+interface RecordingTranscriptWindowOptions {
   dayStartMillis?: number
   dayEndMillis?: number
+}
+
+export interface ProjectRecordingTranscriptOptions extends RecordingTranscriptWindowOptions {
+  viewerUserId: number
 }
 
 interface RecordingSessionInterval {
@@ -207,7 +211,7 @@ function projectEffectiveSessionIntervals(
 
 export function recordingPendingTranscriptionCount(
   response: unknown,
-  options: ProjectRecordingTranscriptOptions = {},
+  options: RecordingTranscriptWindowOptions = {},
 ): number {
   const data = objectValue(response)
   const sessions = new Map<string, Record<string, unknown>>()
@@ -238,8 +242,8 @@ export function recordingPendingTranscriptionCount(
 export function projectRecordingTranscripts(
   response: unknown,
   speakerResponse: unknown,
-  profilesByUserId: ReadonlyMap<number, { displayName: string; avatarRef?: string }> = new Map(),
-  options: ProjectRecordingTranscriptOptions = {},
+  profilesByUserId: ReadonlyMap<number, { displayName: string; avatarRef?: string }>,
+  options: ProjectRecordingTranscriptOptions,
 ): ArkmeRecordingPrivateTranscriptItem[] {
   const data = objectValue(response)
   const sessions = new Map<string, Record<string, unknown>>()
@@ -334,7 +338,7 @@ export function projectRecordingTranscripts(
         formalSpeaker.ref_usr_id ?? formalSpeaker.ref_user_id ?? formalSpeaker.user_id,
       )
       const profile = speakerUserId === undefined ? undefined : profilesByUserId.get(speakerUserId)
-      const isSelf = speakerUserId !== undefined && speakerUserId === numberValue(session.belong_usr)
+      const isSelf = speakerUserId !== undefined && speakerUserId === options.viewerUserId
       const persistentSpeakerNumber = optionalNumberValue(
         assignmentSessionSpeaker.speaker_display_number ?? assignmentSessionSpeaker.speakerDisplayNumber,
       )

@@ -837,7 +837,7 @@ export const ArkmeRecordingImportDialog = forwardRef<ArkmeRecordingImportDialogH
                 ? <div style={styles.historyEmpty} aria-label="暂无已完成任务"><span>暂无已完成任务</span><small style={styles.historyEmptyHint}>导入完成的音频会显示在这里</small></div>
                 : <div style={styles.historyReady}>
                   {(history.loading || (history.error !== '' && history.retryReset)) && <div role={history.error === '' ? 'status' : 'alert'} style={styles.historySync}>
-                    {history.error === '' ? '正在同步云端记录' : <>当前显示本地记录，云端同步失败 <button type="button" style={{ ...styles.historyButton, color: arkmeTheme.accent }} onClick={() => { void loadHistory(true, history.toMillis) }}>重试</button></>}
+                    {history.error === '' ? '正在同步云端记录' : <>当前显示上次结果，云端同步失败 <button type="button" style={{ ...styles.historyButton, color: arkmeTheme.accent }} onClick={() => { void loadHistory(true, history.toMillis) }}>重试</button></>}
                   </div>}
                   <div style={{ ...styles.historyTableViewport, minHeight: 0, flex: 1 }}><div style={styles.historyTable} aria-label="已完成任务表格">
                     <div style={styles.historyHeader} role="row"><span>文件名称</span><span style={styles.historyMetricCell}>录音时长</span><span style={styles.historyMetricCell}>文件大小</span><span style={styles.cellCenter}>数据归属</span><span style={styles.cellCenter}>上传状态</span><span style={styles.cellCenter}>处理耗时</span><span /></div>
