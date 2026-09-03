@@ -199,6 +199,12 @@ describe('Arkme service architecture', () => {
     expect(world).not.toMatch(/import \{[^}]*\bRecordService\b/)
   })
 
+  it('keeps private-chat viewer labels independent from their consumers', () => {
+    const source = readFileSync(join(root, 'src/services/source-service.ts'), 'utf8')
+    expect(source).toContain('private-chat-viewer-labels:')
+    expect(source).not.toContain('world-author-labels:')
+  })
+
   it('keeps transport outcome translation behind the file-send port adapter', () => {
     const owner = readFileSync(join(root, 'src/file-transfer-owner.ts'), 'utf8')
     const transfers = readFileSync(join(root, 'src/services/file-transfers.ts'), 'utf8')

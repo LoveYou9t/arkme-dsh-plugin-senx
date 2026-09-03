@@ -2774,7 +2774,7 @@ describe('ArkmeService', () => {
     let includeSameNameMember = false
     let rawMemberDisplayName = 'Tison'
     let rawMemberSnapshot = ''
-    let rawMemberRemark = ''
+    let rawMemberRemark = '成员接口备注'
     let privateRemark = '我的私有备注'
     let privateCounterpartSnapshot = 'Tison'
     const service = new ArkmeService(config, sessions, new MemoryStateStore(), async (input, init) => {
@@ -2858,6 +2858,7 @@ describe('ArkmeService', () => {
       targetUserId: 2001,
       displayNameSnapshot: 'Tison',
     })
+    rawMemberRemark = ''
     rawMemberSnapshot = '群内 Tison'
     const groupNamedMembers = await service.listSourceMembers(sourceRef)
     expect(groupNamedMembers.items[0]).toMatchObject({
@@ -2872,8 +2873,10 @@ describe('ArkmeService', () => {
         chatSessionUid: 'group-mention',
         targetUserId: 2001,
         displayNameSnapshot: '群内 Tison',
-      })
+    })
     rawMemberSnapshot = ''
+
+    rawMemberRemark = ''
 
     privateRemark = ''
     privateCounterpartSnapshot = '私聊旧快照'

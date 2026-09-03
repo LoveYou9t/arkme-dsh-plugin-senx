@@ -463,14 +463,14 @@ export class SourceService {
     let pageCursor: Record<string, unknown> | undefined
 
     // The chat directory is paged newest-first. Bound the scan so an unusually
-    // large history cannot make rendering a World page unbounded.
+    // large history cannot make a viewer-label projection unbounded.
     for (let page = 0; page < 20 && remaining.size > 0; page += 1) {
       const data = await this.runtime.authenticatedChatPost<Record<string, unknown>>(
         '/api/v1/chats/list',
         { limit: 50, ...(pageCursor === undefined ? {} : { page_cursor: pageCursor }) },
         session,
         options.signal,
-        { lane: 'background-read', key: `world-author-labels:${pageCursor === undefined ? 'first' : String(page)}` },
+        { lane: 'background-read', key: `private-chat-viewer-labels:${pageCursor === undefined ? 'first' : String(page)}` },
       )
       for (const raw of listValue(data.items)) {
         const bundle = objectValue(raw)
