@@ -8,6 +8,22 @@ function agent(events: Array<Record<string, unknown>>) {
 }
 
 describe('Arkme conversational confirmation', () => {
+  it('does not let concurrent preparation replace the scope awaiting confirmation', async () => {
+    const conversation = new ArkmeConversationalConfirmation()
+    let release!: () => void
+    const ready = new Promise<void>(resolve => { release = resolve })
+    const first = conversation.prepareOrExecute({
+      agent: agent([]), operationKey: 'folder', arguments: { path: 'a' },
+      prepare: async () => { await ready; return { count: 1 } },
+      question: prepared => `上传 ${prepared!.count} 个？`, execute: vi.fn(),
+    })
+    try {
+      await expect(conversation.prepareOrExecute({
+        agent: agent([]), operationKey: 'folder', arguments: { path: 'b' }, question: '上传 B？', execute: vi.fn(),
+      })).rejects.toThrow(/正在/)
+    } finally { release(); await first }
+  })
+
   it('accepts any later direct natural-language confirmation without matching fixed text', async () => {
     const events: Array<Record<string, unknown>> = [
       { seq: 1, type: 'user/message', data: { source: { kind: 'user' }, content: [{ type: 'text', text: '修改资料' }] } },

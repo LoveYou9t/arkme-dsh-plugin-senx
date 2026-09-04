@@ -130,6 +130,8 @@ describe('registerArkmeTools', () => {
       'arkme_extension_review_create',
       'arkme_recording_days_list',
       'arkme_recording_read',
+      'arkme_recording_import',
+      'arkme_recording_import_folder',
       'arkme_wechat_conversations',
       'arkme_wechat_messages',
       'arkme_wechat_conversation_detail',
@@ -637,5 +639,344 @@ describe('registerArkmeTools', () => {
     await tools.dispose()
     expect(names()).toEqual([])
     await remounted.dispose()
+  })
+})
+
+describe('recording import write authorization', () => {
+  async function directoryFixture() {
+    const ctx = await setup()
+    const prepared = { expectedUserId: 42, scan: { root: { path: '/recordings', dev: 1, ino: 2 },
+      files: [{ relativePath: 'meeting.wav', fileName: 'meeting.wav', fileSize: 1024, dev: 1, ino: 3, mtimeMs: 4, ctimeMs: 5 }], skipped: 0 },
+    preview: [{ relativePath: 'meeting.wav', outcome: 'pending_upload' }] }
+    const prepareRecordingDirectory = vi.fn(async () => prepared)
+    const importRecordingDirectory = vi.fn(async () => ({ total: 1, skipped: 0, remaining: 0, items: [],
+      counts: { uploaded: 1, matched_uploaded: 0, in_progress: 0, failed: 0, conflict: 0, time_required: 0, invalid: 0 } }))
+    const backgroundSoundPreference = vi.fn(async () => ({ userId: 42, found: true, enabled: true }))
+    await mountArkmeTools(ctx, 'business', { ...ports, prepareRecordingDirectory, importRecordingDirectory, backgroundSoundPreference } as unknown as ArkmeToolPorts)
+    const events: Array<Record<string, unknown>> = []
+    const agent = { id: SessionId('directory-intent'), session: { get events() { return events } } } as unknown as Agent
+    let call = 0
+    const args = { directory_path: '/recordings' }
+    const invoke = (arguments_: Record<string, unknown> = args, signal = new AbortController().signal) => ctx.tools.execute({
+      callId: CallId(`directory-${++call}`), name: 'arkme_recording_import_folder', arguments: arguments_, agent, signal,
+    })
+    const message = (text: string) => events.push({ seq: events.length + 1, type: 'user/message',
+      data: { source: { kind: 'user' }, content: [{ type: 'text', text }] } })
+    return { ctx, prepared, prepareRecordingDirectory, importRecordingDirectory, backgroundSoundPreference, agent, args, invoke, message }
+  }
+
+  it('refreshes the same directory after refusal without treating the read as upload confirmation', async () => {
+    const f = await directoryFixture()
+    await f.invoke()
+    f.message('取消，这次先不上传')
+    f.message('重新看一下这个目录现在还剩哪些录音需要上传')
+    const refreshed = await f.invoke()
+    expect(refreshed.isError).toBe(false)
+    expect(refreshed.isError ? '' : refreshed.value).toContain('confirmation_required')
+    expect(f.prepareRecordingDirectory).toHaveBeenCalledTimes(2)
+    expect(f.importRecordingDirectory).not.toHaveBeenCalled()
+  })
+
+  it('repeated preparation refreshes the snapshot and only explicit upload commits it after a human message', async () => {
+    const f = await directoryFixture()
+    await f.invoke()
+    const refreshed = { ...f.prepared, scan: { ...f.prepared.scan, root: { ...f.prepared.scan.root, ino: 9 } } }
+    f.prepareRecordingDirectory.mockResolvedValue(refreshed)
+    await f.invoke({ ...f.args, action: 'prepare' })
+    const early = await f.invoke({ ...f.args, action: 'upload', recursive: true, ownership: 'self' })
+    expect(early.isError ? '' : early.value).toContain('confirmation_required')
+    expect(f.importRecordingDirectory).not.toHaveBeenCalled()
+    f.message('确认上传')
+    const uploaded = await f.invoke({ ...f.args, action: 'upload', recursive: true, ownership: 'self' })
+    expect(uploaded.isError).toBe(false)
+    expect(f.prepareRecordingDirectory).toHaveBeenCalledTimes(2)
+    expect(f.importRecordingDirectory).toHaveBeenCalledExactlyOnceWith(
+      { directoryPath: '/recordings', recursive: true, ownership: 'self' }, refreshed, expect.any(AbortSignal),
+    )
+  })
+
+  it('prepares an explicit upload without an existing confirmation instead of writing immediately', async () => {
+    const f = await directoryFixture()
+    const response = await f.invoke({ ...f.args, action: 'upload' })
+    expect(response.isError ? '' : response.value).toContain('confirmation_required')
+    expect(f.prepareRecordingDirectory).toHaveBeenCalledOnce()
+    expect(f.importRecordingDirectory).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    { name: 'omitted to empty times', prepare: {}, upload: { start_times: [] }, expectedTimes: undefined },
+    { name: 'empty to omitted times', prepare: { start_times: [] }, upload: {}, expectedTimes: undefined },
+    {
+      name: 'reordered per-file times',
+      prepare: { start_times: [
+        { relative_path: 'b.wav', start_at_millis: 1_700_000_001_000 },
+        { relative_path: 'a.wav', start_at_millis: 1_700_000_000_000 },
+      ] },
+      upload: { start_times: [
+        { relative_path: 'a.wav', start_at_millis: 1_700_000_000_000 },
+        { relative_path: 'b.wav', start_at_millis: 1_700_000_001_000 },
+      ] },
+      expectedTimes: [
+        { relativePath: 'a.wav', startAtMillis: 1_700_000_000_000 },
+        { relativePath: 'b.wav', startAtMillis: 1_700_000_001_000 },
+      ],
+    },
+  ])('keeps one confirmation for equivalent directory arguments: $name', async ({ prepare, upload, expectedTimes }) => {
+    const f = await directoryFixture()
+    await f.invoke({ ...f.args, ...prepare })
+    f.message('确认上传')
+    const result = await f.invoke({ ...f.args, ...upload, action: 'upload' })
+    expect(result.isError).toBe(false)
+    expect(result.isError ? '' : result.value).not.toContain('confirmation_required')
+    const input = { directoryPath: '/recordings', recursive: true, ownership: 'self',
+      ...(expectedTimes === undefined ? {} : { startTimes: expectedTimes }) }
+    expect(f.prepareRecordingDirectory).toHaveBeenCalledExactlyOnceWith(input, expect.any(AbortSignal))
+    expect(f.importRecordingDirectory).toHaveBeenCalledExactlyOnceWith(input, f.prepared, expect.any(AbortSignal))
+  })
+
+  it('requires fresh confirmation for an expired explicit upload', async () => {
+    const now = vi.spyOn(Date, 'now').mockReturnValue(1_788_500_000_000)
+    try {
+      const f = await directoryFixture()
+      await f.invoke()
+      now.mockReturnValue(1_788_500_600_001)
+      f.message('确认上传')
+      const expired = await f.invoke({ ...f.args, action: 'upload' })
+      expect(expired.isError ? '' : expired.value).toContain('confirmation_required')
+      expect(f.prepareRecordingDirectory).toHaveBeenCalledTimes(2)
+      expect(f.importRecordingDirectory).not.toHaveBeenCalled()
+      f.message('确认刚才重新核对的清单')
+      expect((await f.invoke({ ...f.args, action: 'upload' })).isError).toBe(false)
+      expect(f.importRecordingDirectory).toHaveBeenCalledOnce()
+    } finally { now.mockRestore() }
+  })
+
+  it.each([
+    { directory_path: '/other-recordings' }, { recursive: false }, { ownership: 'other' },
+    { start_times: [{ relative_path: 'meeting.wav', start_at_millis: 1_700_000_000_000 }] },
+  ])('reconfirms changed directory scope before upload: %j', async changed => {
+    const f = await directoryFixture()
+    await f.invoke()
+    f.message('改成这个范围上传')
+    const args = { ...f.args, ...changed, action: 'upload' }
+    const response = await f.invoke(args)
+    expect(response.isError ? '' : response.value).toContain('confirmation_required')
+    expect(f.prepareRecordingDirectory).toHaveBeenCalledTimes(2)
+    expect(f.importRecordingDirectory).not.toHaveBeenCalled()
+    f.message('确认更改后的范围')
+    expect((await f.invoke(args)).isError).toBe(false)
+    expect(f.importRecordingDirectory).toHaveBeenCalledOnce()
+  })
+
+  it('blocks concurrent upload during preparation and releases other business confirmations after cancellation', async () => {
+    const f = await directoryFixture()
+    const controller = new AbortController()
+    let release!: () => void
+    const gate = new Promise<void>(resolve => { release = resolve })
+    f.prepareRecordingDirectory.mockImplementationOnce(async () => { await gate; controller.signal.throwIfAborted(); return f.prepared })
+    const preparing = f.invoke(f.args, controller.signal)
+    try {
+      await vi.waitFor(() => expect(f.prepareRecordingDirectory).toHaveBeenCalledOnce())
+      const concurrent = await f.invoke({ ...f.args, action: 'upload' })
+      expect(concurrent.isError).toBe(true)
+      expect(f.importRecordingDirectory).not.toHaveBeenCalled()
+      controller.abort()
+    } finally { release(); await preparing }
+    const background = await f.ctx.tools.execute({ callId: CallId('after-directory-abort'), name: 'arkme_background_sound_disable',
+      arguments: {}, agent: f.agent, signal: new AbortController().signal })
+    expect(background.isError ? '' : background.value).toContain('confirmation_required')
+    expect(f.backgroundSoundPreference).toHaveBeenCalledOnce()
+  })
+
+  it('does not replace another business confirmation during an unsolicited directory preparation', async () => {
+    const f = await directoryFixture()
+    await f.ctx.tools.execute({ callId: CallId('pending-background'), name: 'arkme_background_sound_disable',
+      arguments: {}, agent: f.agent, signal: new AbortController().signal })
+    expect((await f.invoke()).isError).toBe(true)
+    expect(f.prepareRecordingDirectory).not.toHaveBeenCalled()
+    f.message('先检查这个录音目录')
+    const prepared = await f.invoke()
+    expect(prepared.isError ? '' : prepared.value).toContain('confirmation_required')
+    expect(f.importRecordingDirectory).not.toHaveBeenCalled()
+  })
+
+  it('executes a confirmed upload only once when another upload call arrives concurrently', async () => {
+    const f = await directoryFixture()
+    await f.invoke()
+    f.message('确认上传')
+    let release!: () => void
+    const gate = new Promise<void>(resolve => { release = resolve })
+    const result = { total: 1, skipped: 0, remaining: 0, items: [],
+      counts: { uploaded: 1, matched_uploaded: 0, in_progress: 0, failed: 0, conflict: 0, time_required: 0, invalid: 0 } }
+    f.importRecordingDirectory.mockImplementationOnce(async () => { await gate; return result })
+    const uploading = f.invoke({ ...f.args, action: 'upload' })
+    try {
+      await vi.waitFor(() => expect(f.importRecordingDirectory).toHaveBeenCalledOnce())
+      const concurrent = await f.invoke({ ...f.args, action: 'upload' })
+      expect(concurrent.isError).toBe(true)
+      expect(JSON.stringify(concurrent)).toContain('正在执行')
+      expect(f.importRecordingDirectory).toHaveBeenCalledOnce()
+    } finally { release(); await uploading }
+  })
+
+  it('returns an empty preflight without confirmation or an import execution', async () => {
+    const f = await directoryFixture()
+    f.prepareRecordingDirectory.mockResolvedValue({ ...f.prepared, scan: { ...f.prepared.scan, files: [] }, preview: [] })
+    const response = await f.invoke()
+    expect(response.isError).toBe(false)
+    expect(response.isError ? '' : response.value).not.toContain('confirmation_required')
+    expect(response.isError ? '' : response.value).toContain('"total": 0')
+    expect(f.importRecordingDirectory).not.toHaveBeenCalled()
+  })
+
+  it('returns a read-only summary without confirmation when every recording is already uploaded', async () => {
+    const ctx = await setup()
+    const prepared = { expectedUserId: 42, scan: { root: { path: '/recordings', dev: 1, ino: 2 },
+      files: [{ relativePath: 'recording.wav', fileName: 'recording.wav', fileSize: 1024, dev: 1, ino: 3, mtimeMs: 4, ctimeMs: 5 }], skipped: 0 },
+      preview: [{ relativePath: 'recording.wav', outcome: 'matched_uploaded' }] }
+    const prepareRecordingDirectory = vi.fn(async () => prepared)
+    const importRecordingDirectory = vi.fn(async () => ({ total: 1, skipped: 0, remaining: 0,
+      items: [{ relativePath: 'recording.wav', outcome: 'matched_uploaded' }],
+      counts: { uploaded: 0, matched_uploaded: 1, in_progress: 0, failed: 0, conflict: 0, time_required: 0, invalid: 0 } }))
+    await mountArkmeTools(ctx, 'business', { ...ports, prepareRecordingDirectory, importRecordingDirectory } as unknown as ArkmeToolPorts)
+    const agent = { id: SessionId('all-uploaded-folder'), session: { events: [] } } as unknown as Agent
+    const output = await ctx.tools.execute({ callId: CallId('folder-preflight'), name: 'arkme_recording_import_folder',
+      arguments: { directory_path: '/recordings' }, agent, signal: new AbortController().signal })
+    expect(output.isError).toBe(false)
+    expect(output.isError ? '' : output.value).not.toContain('confirmation_required')
+    expect(output.isError ? '' : output.value).toContain('matched_uploaded')
+    expect(output.isError ? '' : output.value).toContain('"total": 1')
+    expect(importRecordingDirectory).not.toHaveBeenCalled()
+    expect(prepareRecordingDirectory).toHaveBeenCalledWith({ directoryPath: '/recordings', recursive: true, ownership: 'self' }, expect.any(AbortSignal))
+  })
+
+  it('identifies exceptional files before confirmation and refreshes the plan when recording times are supplied', async () => {
+    const ctx = await setup()
+    const preview = [
+      { relativePath: '20260901-100000.wav', outcome: 'pending_upload' },
+      { relativePath: 'unknown-one.wav', outcome: 'time_required' },
+      { relativePath: 'nested/unknown-two.wav', outcome: 'time_required' },
+      { relativePath: 'collision.wav', outcome: 'conflict' },
+      { relativePath: 'broken.wav', outcome: 'invalid', errorCode: 'private-details-must-stay-in-host' },
+    ]
+    const captured = { expectedUserId: 42,
+      scan: { root: { path: '/private/recordings', dev: 1, ino: 2 }, files: [], skipped: 0 }, preview }
+    const prepareRecordingDirectory = vi.fn(async () => captured)
+    const importRecordingDirectory = vi.fn(async () => ({ total: 5, skipped: 0, remaining: 0, items: [],
+      counts: { uploaded: 3, matched_uploaded: 0, in_progress: 0, failed: 0, conflict: 1, time_required: 0, invalid: 1 } }))
+    await mountArkmeTools(ctx, 'business', { ...ports, prepareRecordingDirectory, importRecordingDirectory } as unknown as ArkmeToolPorts)
+    const events: Array<Record<string, unknown>> = []
+    const agent = { id: SessionId('mixed-directory-confirmation'), session: { get events() { return events } } } as unknown as Agent
+    const signal = new AbortController().signal
+    const args = { directory_path: '/private/recordings' }
+    const first = await ctx.tools.execute({ callId: CallId('mixed-preflight'), name: 'arkme_recording_import_folder', arguments: args, agent, signal })
+    expect(first.isError).toBe(false)
+    const text = first.isError ? '' : first.value
+    expect(text).toContain('confirmation_required')
+    for (const item of preview.slice(1)) expect(text).toContain(item.relativePath)
+    expect(text).not.toContain('private-details-must-stay-in-host')
+    expect(text).not.toContain('expectedUserId')
+    expect(importRecordingDirectory).not.toHaveBeenCalled()
+
+    const revised = { ...captured, preview: preview.map(item => item.outcome === 'time_required'
+      ? { ...item, outcome: 'pending_upload' } : item) }
+    prepareRecordingDirectory.mockResolvedValue(revised)
+    events.push({ seq: 1, type: 'user/message', data: { content: [{ type: 'text', text: '这两个文件都是9月1日上午录的，补上时间再确认' }], source: { kind: 'user' } } })
+    const corrected = { ...args, start_times: [
+      { relative_path: 'unknown-one.wav', start_at_millis: 1_788_228_000_000 },
+      { relative_path: 'nested/unknown-two.wav', start_at_millis: 1_788_231_600_000 },
+    ] }
+    const next = await ctx.tools.execute({ callId: CallId('corrected-preflight'), name: 'arkme_recording_import_folder', arguments: corrected, agent, signal })
+    expect(next.isError ? '' : next.value).toContain('待上传 3')
+    expect(next.isError ? '' : next.value).toContain('时间待补 0')
+    expect(importRecordingDirectory).not.toHaveBeenCalled()
+    events.push({ seq: 2, type: 'user/message', data: { content: [{ type: 'text', text: '确认上传，归属自己' }], source: { kind: 'user' } } })
+    const done = await ctx.tools.execute({ callId: CallId('mixed-confirmed'), name: 'arkme_recording_import_folder', arguments: { ...corrected, action: 'upload' }, agent, signal })
+    expect(done.isError).toBe(false)
+    expect(prepareRecordingDirectory).toHaveBeenCalledTimes(2)
+    expect(importRecordingDirectory).toHaveBeenCalledExactlyOnceWith({
+      directoryPath: '/private/recordings', recursive: true, ownership: 'self',
+      startTimes: [
+        { relativePath: 'nested/unknown-two.wav', startAtMillis: 1_788_231_600_000 },
+        { relativePath: 'unknown-one.wav', startAtMillis: 1_788_228_000_000 },
+      ],
+    }, revised, signal)
+  })
+
+  it('captures the directory scope before confirmation and imports that snapshot after confirmation', async () => {
+    const ctx = await setup()
+    const captured = { expectedUserId: 42, scan: { root: { path: '/private/folder', dev: 1, ino: 2 }, files: [
+      { relativePath: 'meeting.wav', fileName: 'meeting.wav', fileSize: 1024, dev: 1, ino: 3, mtimeMs: 4, ctimeMs: 5 },
+    ], skipped: 0 }, preview: [{ relativePath: 'meeting.wav', outcome: 'pending_upload' }] }
+    const prepareRecordingDirectory = vi.fn(async () => captured)
+    const importRecordingDirectory = vi.fn(async () => ({ total: 1, skipped: 0, remaining: 0, items: [],
+      counts: { uploaded: 1, matched_uploaded: 0, in_progress: 0, failed: 0, conflict: 0, time_required: 0, invalid: 0 } }))
+    await mountArkmeTools(ctx, 'business', { ...ports, prepareRecordingDirectory, importRecordingDirectory } as unknown as ArkmeToolPorts)
+    const events: Array<Record<string, unknown>> = [
+      { seq: 1, type: 'user/message', data: { content: [{ type: 'text', text: '导入这个目录及子目录的录音，归属其他' }], source: { kind: 'user' } } },
+    ]
+    const agent = { id: SessionId('recording-directory-confirmation'), session: { get events() { return events } } } as unknown as Agent
+    const signal = new AbortController().signal
+    const args = { directory_path: '/private/folder', ownership: 'other' }
+    const prepared = await ctx.tools.execute({ callId: CallId('prepare-directory'), name: 'arkme_recording_import_folder', arguments: args, agent, signal })
+    expect(prepared.isError ? '' : prepared.value).toContain('confirmation_required')
+    expect(prepared.isError ? '' : prepared.value).toContain('子目录')
+    expect(prepared.isError ? '' : prepared.value).toContain('其他')
+    expect(prepared.isError ? '' : prepared.value).toContain('/private/folder')
+    expect(prepared.isError ? '' : prepared.value).toContain('待上传 1')
+    expect(prepared.isError ? '' : prepared.value).toContain('已匹配上传 0')
+    expect(prepareRecordingDirectory).toHaveBeenCalledOnce()
+    expect(importRecordingDirectory).not.toHaveBeenCalled()
+    prepareRecordingDirectory.mockResolvedValue({ ...captured, expectedUserId: 77 })
+    events.push({ seq: 2, type: 'user/message', data: { content: [{ type: 'text', text: '确认导入' }], source: { kind: 'user' } } })
+    const confirmed = await ctx.tools.execute({ callId: CallId('confirm-directory'), name: 'arkme_recording_import_folder', arguments: { ...args, action: 'upload' }, agent, signal })
+    expect(confirmed.isError).toBe(false)
+    expect(prepareRecordingDirectory).toHaveBeenCalledOnce()
+    expect(importRecordingDirectory).toHaveBeenCalledWith(
+      { directoryPath: '/private/folder', recursive: true, ownership: 'other' }, captured, signal,
+    )
+  })
+
+  it.each([
+    { action: 'upload', file_ref: 'arkme-file-v1.00000000-0000-4000-8000-000000000001', start_at_millis: 1_700_000_000_000 },
+    { action: 'retry', import_ref: 'opaque-import', revision: 3 },
+  ])('confirms $action while status remains a direct read', async args => {
+    const ctx = await setup()
+    const job = { importRef: 'opaque-import', phase: 'prepared', revision: 3 }
+    const importRecordingFile = vi.fn(async () => job)
+    const retryRecordingImport = vi.fn(async () => job)
+    const recordingImportStatus = vi.fn(async () => job)
+    await mountArkmeTools(ctx, 'business', { ...ports, importRecordingFile, retryRecordingImport, recordingImportStatus } as unknown as ArkmeToolPorts)
+    const events: Array<Record<string, unknown>> = [
+      { seq: 1, type: 'user/message', data: { content: [{ type: 'text', text: '导入这份录音' }], source: { kind: 'user' } } },
+    ]
+    const agent = { id: SessionId(`recording-${args.action}`), session: { get events() { return events } } } as unknown as Agent
+    const signal = new AbortController().signal
+    const prepared = await ctx.tools.execute({ callId: CallId('prepare'), name: 'arkme_recording_import', arguments: args, agent, signal })
+    expect(prepared.isError ? '' : prepared.value).toContain('confirmation_required')
+    expect(importRecordingFile).not.toHaveBeenCalled()
+    expect(retryRecordingImport).not.toHaveBeenCalled()
+    const status = await ctx.tools.execute({ callId: CallId('status'), name: 'arkme_recording_import', arguments: { action: 'status', import_ref: 'opaque-import' }, signal })
+    expect(status.isError).toBe(false)
+    expect(status.isError ? '' : status.value).not.toContain('confirmation_required')
+    expect(recordingImportStatus).toHaveBeenCalledWith('opaque-import')
+    // Reading status must not replace the pending write confirmation.
+    events.push({ seq: 2, type: 'user/message', data: { content: [{ type: 'text', text: '确认' }], source: { kind: 'user' } } })
+    const confirmed = await ctx.tools.execute({ callId: CallId('confirm'), name: 'arkme_recording_import', arguments: args, agent, signal })
+    expect(confirmed.isError).toBe(false)
+    expect(args.action === 'upload' ? importRecordingFile : retryRecordingImport).toHaveBeenCalledOnce()
+  })
+
+  it('rejects a recording write outside a human Agent session', async () => {
+    const ctx = await setup()
+    const importRecordingFile = vi.fn(async () => ({ phase: 'prepared' }))
+    await mountArkmeTools(ctx, 'business', { ...ports, importRecordingFile } as unknown as ArkmeToolPorts)
+    const result = await ctx.tools.execute({
+      callId: CallId('unscoped'), name: 'arkme_recording_import',
+      arguments: { action: 'upload', file_ref: 'arkme-file-v1.00000000-0000-4000-8000-000000000001', start_at_millis: 1_700_000_000_000 },
+      signal: new AbortController().signal,
+    })
+    expect(result.isError).toBe(true)
+    expect(importRecordingFile).not.toHaveBeenCalled()
   })
 })
