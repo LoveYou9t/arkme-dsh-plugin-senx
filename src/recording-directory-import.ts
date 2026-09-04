@@ -10,9 +10,12 @@ export interface RecordingDirectoryInput {
   ownership: 'self' | 'other'
   startTimes?: Array<{ relativePath: string; startAtMillis: number }>
 }
+interface PreparedRecordingDirectoryEntry extends RecordingDirectoryEntry {
+  startAtMillis: number | undefined
+}
 export interface PreparedRecordingDirectory {
   expectedUserId: number
-  scan: RecordingDirectorySelection
+  scan: Omit<RecordingDirectorySelection, 'files'> & { files: PreparedRecordingDirectoryEntry[] }
   preview: RecordingDirectoryPreviewItem[]
 }
 export type RecordingDirectoryOutcome = 'uploaded' | 'matched_uploaded' | 'in_progress' | 'failed' | 'cancelled' | 'conflict' | 'time_required' | 'invalid'
@@ -109,7 +112,7 @@ export async function prepareRecordingDirectory(
     }
   }
   await assertAccount(owner, expectedUserId, signal)
-  return { expectedUserId, scan, preview }
+  return { expectedUserId, scan: { ...scan, files: candidates }, preview }
 }
 function nameCounts(scan: RecordingDirectorySelection): Map<string, number> {
   const counts = new Map<string, number>()
@@ -170,7 +173,7 @@ export async function importRecordingDirectory(
   owner: DirectoryRecordingOwner, source: RecordingDirectorySource, input: RecordingDirectoryInput,
   prepared: PreparedRecordingDirectory, signal?: AbortSignal,
 ): Promise<RecordingDirectoryResult> {
-  const times = validateInput(input)
+  validateInput(input)
   await assertAccount(owner, prepared.expectedUserId, signal)
   const { scan } = prepared
   const belongUserId = input.ownership === 'self' ? prepared.expectedUserId : 0
@@ -178,10 +181,9 @@ export async function importRecordingDirectory(
     total: scan.files.length, skipped: scan.skipped, remaining: scan.files.length,
     counts: { uploaded: 0, matched_uploaded: 0, in_progress: 0, failed: 0, cancelled: 0, conflict: 0, time_required: 0, invalid: 0 }, items: [],
   }
-  const candidates = scan.files.map(file => ({ ...file, startAtMillis: times.get(file.relativePath) ?? recordingDirectoryStartTime(file.fileName) }))
   const namedCount = nameCounts(scan)
   const approved = new Map(prepared.preview.map(item => [item.relativePath, item]))
-  for (const file of candidates) {
+  for (const file of scan.files) {
     let sourceHandle: string | undefined
     let admitted: PublicRecordingImportJob | undefined
     let item: RecordingDirectoryItem = { relativePath: file.relativePath, outcome: 'invalid' }

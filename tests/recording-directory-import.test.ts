@@ -14,7 +14,8 @@ const scan = { files: [file()], skipped: 0 }
 const input: RecordingDirectoryInput = { directoryPath: '/recordings', recursive: true, ownership: 'self' }
 function fixture(files = [file()]) {
   let userId = 42
-  const prepared = { expectedUserId: 42, scan: { ...scan, files }, preview: files.map(f => ({ relativePath: f.relativePath, outcome: 'pending_upload' })) }
+  const prepared = { expectedUserId: 42, scan: { ...scan, files: files.map(f => ({ ...f, startAtMillis: recordingDirectoryStartTime(f.fileName) })) },
+    preview: files.map(f => ({ relativePath: f.relativePath, outcome: 'pending_upload' })) }
   const snapshot: RecordingDirectorySnapshot = { local: [], existingFileNames: [], owner: [] }
   const pub = { importRef: 'ref', revision: 1, phase: 'prepared', fileName: file().fileName }
   const ports = {
@@ -165,8 +166,12 @@ describe('directory recording import', () => {
   })
   it('accepts an explicit per-file timestamp override without guessing', async () => {
     const f = fixture([file('meeting.wav')])
-    const result = await f.run(undefined, { ...input, startTimes: [{ relativePath: 'meeting.wav', startAtMillis: start }] } as never)
+    const options = { ...input, startTimes: [{ relativePath: 'meeting.wav', startAtMillis: start }] }
+    source.scan.mockResolvedValueOnce({ ...scan, files: [file('meeting.wav')] })
+    const prepared = await prepareRecordingDirectory(f.ports as never, source, options)
+    const result = await importRecordingDirectory(f.ports as never, source, options, prepared)
     expect(result.items[0].outcome).toBe('uploaded')
+    expect(f.ports.acceptRecordingImport).toHaveBeenCalledWith('opaque-staged-recording', expect.objectContaining({ startAtMillis: start }), 42, undefined)
   })
   it('does not treat a same-name owner session as proof of a completed upload', async () => {
     const f = fixture(); f.snapshot.existingFileNames = [file().fileName]
