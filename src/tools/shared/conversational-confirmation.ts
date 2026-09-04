@@ -85,15 +85,20 @@ export class ArkmeConversationalConfirmation {
     const agentId = requiredAgentId(input.agent)
     const operationKey = input.operationKey.trim()
     if (operationKey === '') throw new Error('对话确认缺少有效操作或问题')
-    if (this.running.has(agentId)) throw new Error('操作正在执行或准备，请勿重复提交')
+    const runningKey = JSON.stringify([agentId, operationKey])
+    if (this.running.has(runningKey)) throw new Error('操作正在执行或准备，请勿重复提交')
 
     this.clearExpired()
     const argumentsFingerprint = fingerprintArguments(operationKey, input.arguments)
     const existing = this.pending.get(agentId)
     const prepare = async () => {
-      this.running.add(agentId)
+      const startedAfterSeq = lastSessionSeq(input.agent)
+      this.running.add(runningKey)
       try {
         const preparedContext = input.prepare === undefined ? undefined : await input.prepare()
+        if (this.pending.get(agentId) !== existing || hasLaterDirectUserMessage(input.agent, startedAfterSeq)) {
+          throw new Error('准备期间对话操作已变化，请重新发起确认')
+        }
         const question = typeof input.question === 'function' ? input.question(preparedContext) : input.question
         if (question === undefined) {
           this.pending.delete(agentId)
@@ -102,7 +107,7 @@ export class ArkmeConversationalConfirmation {
         if (question.trim() === '') throw new Error('对话确认缺少有效操作或问题')
         return this.prepare(agentId, input.agent, operationKey, argumentsFingerprint, question.trim(), preparedContext)
       } finally {
-        this.running.delete(agentId)
+        this.running.delete(runningKey)
       }
     }
     if (existing === undefined) {
@@ -124,14 +129,14 @@ export class ArkmeConversationalConfirmation {
     }
 
     this.pending.delete(agentId)
-    this.running.add(agentId)
+    this.running.add(runningKey)
     try {
       if (fingerprintPreparedContext(operationKey, existing.preparedContext) !== existing.preparedContextFingerprint) {
         throw new Error('已确认操作的 Host 上下文已变化，请重新发起')
       }
       return await input.execute(existing.preparedContext as PreparedContext | undefined)
     } finally {
-      this.running.delete(agentId)
+      this.running.delete(runningKey)
     }
   }
 
@@ -163,7 +168,7 @@ export class ArkmeConversationalConfirmation {
   private clearExpired(): void {
     const now = this.now()
     for (const [agentId, pending] of this.pending) {
-      if (pending.expiresAtMillis <= now && !this.running.has(agentId)) this.pending.delete(agentId)
+      if (pending.expiresAtMillis <= now && !this.running.has(JSON.stringify([agentId, pending.operationKey]))) this.pending.delete(agentId)
     }
   }
 }

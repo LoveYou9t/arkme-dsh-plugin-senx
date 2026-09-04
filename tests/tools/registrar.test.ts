@@ -11,6 +11,8 @@ import ToolRuntime from '@deepseek-ai/dsh-tools'
 import { describe, expect, it, vi } from 'vitest'
 import type { ArkmeToolPorts } from '../../src/tools/index.js'
 import type { ArkmeToolProfile } from '../../src/tools/index.js'
+import type { PreparedRecordingDirectory } from '../../src/recording-directory-import.js'
+import { preparedDirectory, directoryResult } from '../helpers/recording-directory.js'
 import { promptForArkmeToolProfile, registerArkmeTools } from '../../src/tools/index.js'
 
 const ports = {
@@ -645,14 +647,16 @@ describe('registerArkmeTools', () => {
 describe('recording import write authorization', () => {
   async function directoryFixture() {
     const ctx = await setup()
-    const prepared = { expectedUserId: 42, scan: { root: { path: '/recordings', dev: 1, ino: 2 },
-      files: [{ relativePath: 'meeting.wav', fileName: 'meeting.wav', fileSize: 1024, dev: 1, ino: 3, mtimeMs: 4, ctimeMs: 5 }], skipped: 0 },
-    preview: [{ relativePath: 'meeting.wav', outcome: 'pending_upload' }] }
+    const prepared = preparedDirectory()
     const prepareRecordingDirectory = vi.fn(async () => prepared)
-    const importRecordingDirectory = vi.fn(async () => ({ total: 1, skipped: 0, remaining: 0, items: [],
-      counts: { uploaded: 1, matched_uploaded: 0, in_progress: 0, failed: 0, conflict: 0, time_required: 0, invalid: 0 } }))
-    const backgroundSoundPreference = vi.fn(async () => ({ userId: 42, found: true, enabled: true }))
-    await mountArkmeTools(ctx, 'business', { ...ports, prepareRecordingDirectory, importRecordingDirectory, backgroundSoundPreference } as unknown as ArkmeToolPorts)
+    const importRecordingDirectory = vi.fn(async () => directoryResult())
+    const backgroundSoundPreference = vi.fn<ArkmeToolPorts['backgroundSoundPreference']>(async () => ({
+      userId: 42, found: true, enabled: true, eligible: true, eligibilityReason: 'eligible',
+    }))
+    const updateBackgroundSoundPreference = vi.fn<ArkmeToolPorts['updateBackgroundSoundPreference']>(async () => ({
+      userId: 42, found: true, enabled: false, eligible: true, eligibilityReason: 'eligible',
+    }))
+    await mountArkmeTools(ctx, 'business', { ...ports, prepareRecordingDirectory, importRecordingDirectory, backgroundSoundPreference, updateBackgroundSoundPreference })
     const events: Array<Record<string, unknown>> = []
     const agent = { id: SessionId('directory-intent'), session: { get events() { return events } } } as unknown as Agent
     let call = 0
@@ -662,8 +666,38 @@ describe('recording import write authorization', () => {
     })
     const message = (text: string) => events.push({ seq: events.length + 1, type: 'user/message',
       data: { source: { kind: 'user' }, content: [{ type: 'text', text }] } })
-    return { ctx, prepared, prepareRecordingDirectory, importRecordingDirectory, backgroundSoundPreference, agent, args, invoke, message }
+    return { ctx, prepared, prepareRecordingDirectory, importRecordingDirectory, backgroundSoundPreference, updateBackgroundSoundPreference, agent, args, invoke, message }
   }
+
+  it.each(['preparing', 'uploading'] as const)('lets another business tool finish while a directory is %s', async phase => {
+    const f = await directoryFixture()
+    let release!: () => void
+    const gate = new Promise<void>(resolve => { release = resolve })
+    if (phase === 'uploading') {
+      await f.invoke()
+      f.message('确认上传')
+      f.importRecordingDirectory.mockImplementationOnce(async () => { await gate; return directoryResult() })
+    } else f.prepareRecordingDirectory.mockImplementationOnce(async () => { await gate; return f.prepared })
+    const directory = f.invoke({ ...f.args, action: phase === 'preparing' ? 'prepare' : 'upload' })
+    try {
+      await vi.waitFor(() => expect(phase === 'preparing' ? f.prepareRecordingDirectory : f.importRecordingDirectory).toHaveBeenCalledOnce())
+      f.message('关闭文字背景音')
+      const invokeOther = (call: string) => f.ctx.tools.execute({
+        callId: CallId(call), name: 'arkme_background_sound_disable', arguments: {}, agent: f.agent,
+        signal: new AbortController().signal,
+      })
+      const prepared = await invokeOther('background-prepare')
+      expect(prepared.isError).toBe(false)
+      expect(prepared.isError ? '' : prepared.value).toContain('confirmation_required')
+      f.message('确认关闭文字背景音')
+      expect((await invokeOther('background-confirm')).isError).toBe(false)
+      expect(f.updateBackgroundSoundPreference).toHaveBeenCalledOnce()
+    } finally { release() }
+    const result = await directory
+    expect(result.isError).toBe(phase === 'preparing')
+    expect(f.importRecordingDirectory).toHaveBeenCalledTimes(phase === 'preparing' ? 0 : 1)
+    expect((await f.invoke()).isError).toBe(false)
+  })
 
   it('refreshes the same directory after refusal without treating the read as upload confirmation', async () => {
     const f = await directoryFixture()
@@ -680,7 +714,7 @@ describe('recording import write authorization', () => {
   it('repeated preparation refreshes the snapshot and only explicit upload commits it after a human message', async () => {
     const f = await directoryFixture()
     await f.invoke()
-    const refreshed = { ...f.prepared, scan: { ...f.prepared.scan, root: { ...f.prepared.scan.root, ino: 9 } } }
+    const refreshed = { ...f.prepared, scan: { ...f.prepared.scan, files: f.prepared.scan.files.map(file => ({ ...file, sourceSnapshot: 'refreshed-source' })) } }
     f.prepareRecordingDirectory.mockResolvedValue(refreshed)
     await f.invoke({ ...f.args, action: 'prepare' })
     const early = await f.invoke({ ...f.args, action: 'upload', recursive: true, ownership: 'self' })
@@ -806,8 +840,7 @@ describe('recording import write authorization', () => {
     f.message('确认上传')
     let release!: () => void
     const gate = new Promise<void>(resolve => { release = resolve })
-    const result = { total: 1, skipped: 0, remaining: 0, items: [],
-      counts: { uploaded: 1, matched_uploaded: 0, in_progress: 0, failed: 0, conflict: 0, time_required: 0, invalid: 0 } }
+    const result = directoryResult()
     f.importRecordingDirectory.mockImplementationOnce(async () => { await gate; return result })
     const uploading = f.invoke({ ...f.args, action: 'upload' })
     try {
@@ -831,14 +864,10 @@ describe('recording import write authorization', () => {
 
   it('returns a read-only summary without confirmation when every recording is already uploaded', async () => {
     const ctx = await setup()
-    const prepared = { expectedUserId: 42, scan: { root: { path: '/recordings', dev: 1, ino: 2 },
-      files: [{ relativePath: 'recording.wav', fileName: 'recording.wav', fileSize: 1024, dev: 1, ino: 3, mtimeMs: 4, ctimeMs: 5 }], skipped: 0 },
-      preview: [{ relativePath: 'recording.wav', outcome: 'matched_uploaded' }] }
+    const prepared = preparedDirectory([{ relativePath: 'recording.wav', outcome: 'matched_uploaded' }])
     const prepareRecordingDirectory = vi.fn(async () => prepared)
-    const importRecordingDirectory = vi.fn(async () => ({ total: 1, skipped: 0, remaining: 0,
-      items: [{ relativePath: 'recording.wav', outcome: 'matched_uploaded' }],
-      counts: { uploaded: 0, matched_uploaded: 1, in_progress: 0, failed: 0, conflict: 0, time_required: 0, invalid: 0 } }))
-    await mountArkmeTools(ctx, 'business', { ...ports, prepareRecordingDirectory, importRecordingDirectory } as unknown as ArkmeToolPorts)
+    const importRecordingDirectory = vi.fn(async () => directoryResult([{ relativePath: 'recording.wav', outcome: 'matched_uploaded' }]))
+    await mountArkmeTools(ctx, 'business', { ...ports, prepareRecordingDirectory, importRecordingDirectory })
     const agent = { id: SessionId('all-uploaded-folder'), session: { events: [] } } as unknown as Agent
     const output = await ctx.tools.execute({ callId: CallId('folder-preflight'), name: 'arkme_recording_import_folder',
       arguments: { directory_path: '/recordings' }, agent, signal: new AbortController().signal })
@@ -852,19 +881,19 @@ describe('recording import write authorization', () => {
 
   it('identifies exceptional files before confirmation and refreshes the plan when recording times are supplied', async () => {
     const ctx = await setup()
-    const preview = [
+    const preview: PreparedRecordingDirectory['preview'] = [
       { relativePath: '20260901-100000.wav', outcome: 'pending_upload' },
       { relativePath: 'unknown-one.wav', outcome: 'time_required' },
       { relativePath: 'nested/unknown-two.wav', outcome: 'time_required' },
       { relativePath: 'collision.wav', outcome: 'conflict' },
       { relativePath: 'broken.wav', outcome: 'invalid', errorCode: 'private-details-must-stay-in-host' },
     ]
-    const captured = { expectedUserId: 42,
-      scan: { root: { path: '/private/recordings', dev: 1, ino: 2 }, files: [], skipped: 0 }, preview }
+    const captured = preparedDirectory(preview)
     const prepareRecordingDirectory = vi.fn(async () => captured)
-    const importRecordingDirectory = vi.fn(async () => ({ total: 5, skipped: 0, remaining: 0, items: [],
-      counts: { uploaded: 3, matched_uploaded: 0, in_progress: 0, failed: 0, conflict: 1, time_required: 0, invalid: 1 } }))
-    await mountArkmeTools(ctx, 'business', { ...ports, prepareRecordingDirectory, importRecordingDirectory } as unknown as ArkmeToolPorts)
+    const importRecordingDirectory = vi.fn(async () => directoryResult(preview.map(item => ({
+      ...item, outcome: item.outcome === 'conflict' || item.outcome === 'invalid' ? item.outcome : 'uploaded',
+    }))))
+    await mountArkmeTools(ctx, 'business', { ...ports, prepareRecordingDirectory, importRecordingDirectory })
     const events: Array<Record<string, unknown>> = []
     const agent = { id: SessionId('mixed-directory-confirmation'), session: { get events() { return events } } } as unknown as Agent
     const signal = new AbortController().signal
@@ -878,7 +907,7 @@ describe('recording import write authorization', () => {
     expect(text).not.toContain('expectedUserId')
     expect(importRecordingDirectory).not.toHaveBeenCalled()
 
-    const revised = { ...captured, preview: preview.map(item => item.outcome === 'time_required'
+    const revised: PreparedRecordingDirectory = { ...captured, preview: preview.map(item => item.outcome === 'time_required'
       ? { ...item, outcome: 'pending_upload' } : item) }
     prepareRecordingDirectory.mockResolvedValue(revised)
     events.push({ seq: 1, type: 'user/message', data: { content: [{ type: 'text', text: '这两个文件都是9月1日上午录的，补上时间再确认' }], source: { kind: 'user' } } })
@@ -905,13 +934,10 @@ describe('recording import write authorization', () => {
 
   it('captures the directory scope before confirmation and imports that snapshot after confirmation', async () => {
     const ctx = await setup()
-    const captured = { expectedUserId: 42, scan: { root: { path: '/private/folder', dev: 1, ino: 2 }, files: [
-      { relativePath: 'meeting.wav', fileName: 'meeting.wav', fileSize: 1024, dev: 1, ino: 3, mtimeMs: 4, ctimeMs: 5 },
-    ], skipped: 0 }, preview: [{ relativePath: 'meeting.wav', outcome: 'pending_upload' }] }
+    const captured = preparedDirectory()
     const prepareRecordingDirectory = vi.fn(async () => captured)
-    const importRecordingDirectory = vi.fn(async () => ({ total: 1, skipped: 0, remaining: 0, items: [],
-      counts: { uploaded: 1, matched_uploaded: 0, in_progress: 0, failed: 0, conflict: 0, time_required: 0, invalid: 0 } }))
-    await mountArkmeTools(ctx, 'business', { ...ports, prepareRecordingDirectory, importRecordingDirectory } as unknown as ArkmeToolPorts)
+    const importRecordingDirectory = vi.fn(async () => directoryResult())
+    await mountArkmeTools(ctx, 'business', { ...ports, prepareRecordingDirectory, importRecordingDirectory })
     const events: Array<Record<string, unknown>> = [
       { seq: 1, type: 'user/message', data: { content: [{ type: 'text', text: '导入这个目录及子目录的录音，归属其他' }], source: { kind: 'user' } } },
     ]

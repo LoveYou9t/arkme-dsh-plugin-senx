@@ -1,25 +1,20 @@
 import { describe, expect, it, vi } from 'vitest'
 import { arkmeToolCatalog, ARKME_TOOL_PROMPT, createArkmeCoreToolDefinitions, type ArkmeCoreToolPorts } from '../src/tools/index.js'
+import { preparedDirectory, directoryResult } from './helpers/recording-directory.js'
 import { arkmeConfirmationContextHooks } from '../src/tools/shared/conversational-confirmation.js'
 
 function fixture() {
-  const prepared = { expectedUserId: 42, scan: {
-    root: { path: '/private/recordings', dev: 1, ino: 2 }, skipped: 0,
-    files: [{ relativePath: 'meeting.wav', fileName: 'meeting.wav', fileSize: 1024, dev: 1, ino: 3, mtimeMs: 4, ctimeMs: 5 }],
-  }, preview: [{ relativePath: 'meeting.wav', outcome: 'pending_upload' }] }
-  const result = {
-    total: 1, skipped: 0, remaining: 0,
-    counts: { uploaded: 0, matched_uploaded: 0, in_progress: 0, failed: 0, conflict: 0, time_required: 0, invalid: 1,
-      privatePath: '/private/count-secret' },
-    items: [{ relativePath: 'meeting.wav', outcome: 'invalid', importRef: 'opaque-import', revision: 3,
-      errorCode: 'recording-directory-file-failed', message: 'ENOENT /private/audio.upload https://oss.invalid/?signature=secret',
-      sessionId: 'private-session', sha256: 'private-hash', sourceHandle: '/private/audio.upload' }],
-    stopped: 'capacity', expectedUserId: 42, privatePath: '/private/output-secret',
-  }
+  const prepared = preparedDirectory()
+  const unsafeItems = [{ relativePath: 'meeting.wav', outcome: 'invalid' as const, importRef: 'opaque-import', revision: 3,
+    errorCode: 'recording-directory-file-failed', message: 'ENOENT /private/audio.upload https://oss.invalid/?signature=secret',
+    sessionId: 'private-session', sha256: 'private-hash', sourceHandle: '/private/audio.upload' }]
+  const base = directoryResult(unsafeItems)
+  const result = { ...base, items: unsafeItems, counts: { ...base.counts, privatePath: '/private/count-secret' },
+    stopped: 'capacity' as const, expectedUserId: 42, privatePath: '/private/output-secret' }
   const ports = {
     prepareRecordingDirectory: vi.fn(async () => prepared),
     importRecordingDirectory: vi.fn(async () => result),
-  }
+  } satisfies Pick<ArkmeCoreToolPorts, 'prepareRecordingDirectory' | 'importRecordingDirectory'>
   const tool = createArkmeCoreToolDefinitions(ports as unknown as ArkmeCoreToolPorts)
     .find(item => item.name === 'arkme_recording_import_folder')
   return { tool, ports, prepared, result }
@@ -105,7 +100,7 @@ describe('recording directory tool', () => {
     const result = JSON.parse(output.split('<data_from_arkme>\n')[1]!.split('\n</data_from_arkme>')[0]!)
     expect(result).toEqual({
       total: 1, skipped: 0, remaining: 0,
-      counts: { uploaded: 0, matched_uploaded: 0, in_progress: 0, failed: 0, conflict: 0, time_required: 0, invalid: 1 },
+      counts: { uploaded: 0, matched_uploaded: 0, in_progress: 0, failed: 0, cancelled: 0, conflict: 0, time_required: 0, invalid: 1 },
       items: [{ relative_path: 'meeting.wav', outcome: 'invalid', import_ref: 'opaque-import', revision: 3,
         error_code: 'recording-directory-file-failed', error_message: expect.any(String) }],
       stopped: 'capacity',
