@@ -660,7 +660,7 @@ describe('recording import write authorization', () => {
     const events: Array<Record<string, unknown>> = []
     const agent = { id: SessionId('directory-intent'), session: { get events() { return events } } } as unknown as Agent
     let call = 0
-    const args = { directory_path: '/recordings' }
+    const args = { action: 'prepare', directory_path: '/recordings' }
     const invoke = (arguments_: Record<string, unknown> = args, signal = new AbortController().signal) => ctx.tools.execute({
       callId: CallId(`directory-${++call}`), name: 'arkme_recording_import_folder', arguments: arguments_, agent, signal,
     })
@@ -699,6 +699,21 @@ describe('recording import write authorization', () => {
     expect((await f.invoke()).isError).toBe(false)
   })
 
+  it('preserves the human confirmation when a missing action is corrected to upload', async () => {
+    const f = await directoryFixture()
+    await f.invoke({ ...f.args, action: 'prepare' })
+    f.message('确认')
+    const missing = await f.invoke({ directory_path: f.args.directory_path })
+    const corrected = await f.invoke({ ...f.args, action: 'upload' })
+    expect(missing.isError).toBe(true)
+    expect(corrected.isError).toBe(false)
+    expect(corrected.isError ? '' : corrected.value).not.toContain('confirmation_required')
+    expect(f.prepareRecordingDirectory).toHaveBeenCalledOnce()
+    expect(f.importRecordingDirectory).toHaveBeenCalledExactlyOnceWith(
+      { directoryPath: '/recordings', recursive: true, ownership: 'self' }, f.prepared, expect.any(AbortSignal),
+    )
+  })
+
   it('refreshes the same directory after refusal without treating the read as upload confirmation', async () => {
     const f = await directoryFixture()
     await f.invoke()
@@ -708,6 +723,9 @@ describe('recording import write authorization', () => {
     expect(refreshed.isError).toBe(false)
     expect(refreshed.isError ? '' : refreshed.value).toContain('confirmation_required')
     expect(f.prepareRecordingDirectory).toHaveBeenCalledTimes(2)
+    expect(f.importRecordingDirectory).not.toHaveBeenCalled()
+    const earlyUpload = await f.invoke({ ...f.args, action: 'upload' })
+    expect(earlyUpload.isError ? '' : earlyUpload.value).toContain('confirmation_required')
     expect(f.importRecordingDirectory).not.toHaveBeenCalled()
   })
 
@@ -870,7 +888,7 @@ describe('recording import write authorization', () => {
     await mountArkmeTools(ctx, 'business', { ...ports, prepareRecordingDirectory, importRecordingDirectory })
     const agent = { id: SessionId('all-uploaded-folder'), session: { events: [] } } as unknown as Agent
     const output = await ctx.tools.execute({ callId: CallId('folder-preflight'), name: 'arkme_recording_import_folder',
-      arguments: { directory_path: '/recordings' }, agent, signal: new AbortController().signal })
+      arguments: { action: 'prepare', directory_path: '/recordings' }, agent, signal: new AbortController().signal })
     expect(output.isError).toBe(false)
     expect(output.isError ? '' : output.value).not.toContain('confirmation_required')
     expect(output.isError ? '' : output.value).toContain('matched_uploaded')
@@ -897,7 +915,7 @@ describe('recording import write authorization', () => {
     const events: Array<Record<string, unknown>> = []
     const agent = { id: SessionId('mixed-directory-confirmation'), session: { get events() { return events } } } as unknown as Agent
     const signal = new AbortController().signal
-    const args = { directory_path: '/private/recordings' }
+    const args = { action: 'prepare', directory_path: '/private/recordings' }
     const first = await ctx.tools.execute({ callId: CallId('mixed-preflight'), name: 'arkme_recording_import_folder', arguments: args, agent, signal })
     expect(first.isError).toBe(false)
     const text = first.isError ? '' : first.value
@@ -943,7 +961,7 @@ describe('recording import write authorization', () => {
     ]
     const agent = { id: SessionId('recording-directory-confirmation'), session: { get events() { return events } } } as unknown as Agent
     const signal = new AbortController().signal
-    const args = { directory_path: '/private/folder', ownership: 'other' }
+    const args = { action: 'prepare', directory_path: '/private/folder', ownership: 'other' }
     const prepared = await ctx.tools.execute({ callId: CallId('prepare-directory'), name: 'arkme_recording_import_folder', arguments: args, agent, signal })
     expect(prepared.isError ? '' : prepared.value).toContain('confirmation_required')
     expect(prepared.isError ? '' : prepared.value).toContain('子目录')
