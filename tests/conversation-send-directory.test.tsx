@@ -1330,6 +1330,59 @@ describe('conversation send directory projection', () => {
     expect(getUserMedia).toHaveBeenCalledOnce()
   })
 
+  it.each(['report', 'cancel'] as const)('keeps real composer sends and the next draft independent of a pending preparing %s', async blocked => {
+    const pending = deferred<null>()
+    const baseCall = mocks.callArkme.getMockImplementation()!
+    mocks.callArkme.mockImplementation(async (operation: string, params?: Record<string, unknown>, signal?: AbortSignal) => {
+      if (operation === `source.message-preparing.${blocked}`) return await pending.promise
+      if (operation.startsWith('source.message-preparing.')) return null
+      return await baseCall(operation, params, signal)
+    })
+    await act(async () => {
+      renderer = create(<ArkmeSurface productChrome={false} productNavigation={false} />)
+      await Promise.resolve()
+    })
+    vi.useFakeTimers()
+    vi.setSystemTime(100_000)
+    try {
+      const composer = renderer!.root.findByType(ArkmeRichComposerInput)
+      await act(async () => {
+        composer.props.onFocus()
+        composer.props.onTextChange('第一条正文')
+        composer.props.onInputActivity('第一条正文')
+        await vi.advanceTimersByTimeAsync(600)
+      })
+      expect(mocks.callArkme.mock.calls.filter(([operation]) => operation === 'source.message-preparing.report')).toHaveLength(1)
+      await act(async () => {
+        renderer!.root.findByProps({ 'aria-label': '发送消息' }).props.onClick()
+        await vi.advanceTimersByTimeAsync(0)
+      })
+      const draftKey = arkmeSourceComposerDraftKey(42, target)!
+      expect(arkmeComposerDraftStore.get(draftKey).text).toBe('')
+      expect(mocks.callArkme.mock.calls.filter(([operation]) => operation === 'source.send-text')).toHaveLength(1)
+      await act(async () => {
+        composer.props.onTextChange('下一条草稿')
+        composer.props.onInputActivity('下一条草稿')
+        await vi.advanceTimersByTimeAsync(600)
+      })
+      expect(arkmeComposerDraftStore.get(draftKey).text).toBe('下一条草稿')
+      expect(renderer!.root.findByProps({ 'aria-label': '发送消息' }).props.disabled).toBe(false)
+      await act(async () => {
+        renderer!.root.findByProps({ 'aria-label': '发送消息' }).props.onClick()
+        await vi.advanceTimersByTimeAsync(0)
+      })
+      expect(mocks.callArkme.mock.calls.filter(([operation]) => operation === 'source.send-text')
+        .map(([, params]) => params.textContent)).toEqual(['第一条正文', '下一条草稿'])
+      const hints = mocks.callArkme.mock.calls.filter(([operation]) => operation.startsWith('source.message-preparing.'))
+      expect(hints.some(([operation]) => operation === `source.message-preparing.${blocked}`)).toBe(true)
+      expect(hints.every(([, params]) => !Object.hasOwn(params, 'textContent'))).toBe(true)
+    } finally {
+      await act(async () => { pending.resolve(null); await vi.advanceTimersByTimeAsync(0); renderer?.unmount() })
+      renderer = undefined
+      vi.useRealTimers()
+    }
+  })
+
   it('keeps the owner directory unchanged after send until the authoritative session projection arrives', async () => {
     await act(async () => {
       renderer = create(<ArkmeSurface productChrome={false} productNavigation={false} />)
