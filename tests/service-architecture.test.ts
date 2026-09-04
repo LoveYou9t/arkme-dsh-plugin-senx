@@ -17,7 +17,7 @@ const expectedPublicMethods = [
   'providerCapabilities', 'providerState', 'requestOutgoingCall', 'claimOutgoingCallIntent',
   'resolveOutgoingCallIntent', 'prepareOutgoingCall', 'heartbeatOutgoingCall', 'releaseOutgoingCall',
   'listCallHistory', 'callDetail', 'retryCallSummary',
-  'dispose', 'requestStats', 'resolveManagedAccessCredential', 'cachedProfile', 'extensionAuthors', 'listExtensionReviews',
+  'dispose', 'requestStats', 'resolveManagedAccessCredential', 'cachedProfile', 'publicAvatarPresentationsByArkmeIds', 'extensionAuthors', 'listExtensionReviews',
   'backgroundSoundPreference', 'updateBackgroundSoundPreference',
   'resolveLinkMetadata',
   'searchContact', 'addContact',
@@ -84,6 +84,7 @@ const expectedServiceFiles = [
   'arko-service.ts', 'ai-video-service.ts', 'outgoing-call-service.ts', 'interwoven-service.ts',
   'community-service.ts', 'extension-review-service.ts', 'calendar-service.ts',
   'contact-service.ts', 'contact-directory-service.ts', 'unmarked-speaker-service.ts',
+  'team-service.ts',
   'voiceprint-service.ts', 'user-ban-service.ts', 'call-history-service.ts', 'privacy-visibility.ts',
   'link-metadata-service.ts', 'message-action-infrastructure.ts', 'message-action-service.ts',
 ].sort()
@@ -112,6 +113,17 @@ describe('Arkme service architecture', () => {
   it('keeps every planned product domain in its own service file', () => {
     expect(readdirSync(join(root, 'src/services')).filter(name => name.endsWith('.ts')).sort())
       .toEqual(expectedServiceFiles)
+  })
+
+  it('keeps Team business availability independent from managed MCP mounting', () => {
+    const compositionRoot = readFileSync(join(root, 'src/index.ts'), 'utf8')
+    const teamService = readFileSync(join(root, 'src/services/team-service.ts'), 'utf8')
+    expect(compositionRoot).toContain('const teamService = new TeamService(')
+    expect(compositionRoot).toContain('mountMcp: config.openApiMcpEnabled')
+    expect(compositionRoot).toContain('teamService,')
+    expect(compositionRoot).not.toMatch(/const teamService\s*=\s*config\.openApiMcpEnabled/u)
+    expect(teamService).toContain('export interface TeamMemberAvatarPort')
+    expect(teamService).not.toMatch(/import .*ProfileService/u)
   })
 
   it('keeps the compatibility facade free of business transport and state owners', () => {
