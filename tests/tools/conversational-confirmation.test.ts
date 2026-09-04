@@ -1,7 +1,24 @@
+import { CallId } from '@deepseek-ai/dsh-llm'
+import { appendToolResult, sessionEvents } from '../helpers/tool-session.js'
 import { describe, expect, it, vi } from 'vitest'
 import {
   ArkmeConversationalConfirmation,
 } from '../../src/tools/shared/conversational-confirmation.js'
+
+function conversationFixture(options: ConstructorParameters<typeof ArkmeConversationalConfirmation>[0] = {}) {
+  const conversation = new ArkmeConversationalConfirmation(options)
+  let count = 0
+  return {
+    async prepareOrExecute<Result, PreparedContext = undefined>(
+      input: Omit<Parameters<typeof conversation.prepareOrExecute<Result, PreparedContext>>[0], 'callId' | 'rootCallId'>,
+    ) {
+      const rootCallId = CallId(`confirmation-${++count}`)
+      const result = await conversation.prepareOrExecute({ ...input, callId: rootCallId, rootCallId })
+      appendToolResult(input.agent.session.events as unknown as Array<Record<string, unknown>>, rootCallId, result)
+      return result
+    },
+  }
+}
 
 function agent(events: Array<Record<string, unknown>>) {
   return { id: 'session-1', session: { events } } as never
@@ -9,9 +26,9 @@ function agent(events: Array<Record<string, unknown>>) {
 
 describe('Arkme conversational confirmation', () => {
   it.each(['pending', 'completed', 'no-question'] as const)('preserves a newer operation when a delayed preparation returns (%s)', async scenario => {
-    const events: Array<Record<string, unknown>> = []
+    const events = sessionEvents()
     const current = agent(events)
-    const conversation = new ArkmeConversationalConfirmation()
+    const conversation = conversationFixture()
     let release!: () => void
     const ready = new Promise<void>(resolve => { release = resolve })
     const staleExecute = vi.fn()
@@ -38,8 +55,8 @@ describe('Arkme conversational confirmation', () => {
   })
 
   it('does not publish a preparation after the user cancels or changes the request', async () => {
-    const events: Array<Record<string, unknown>> = []
-    const conversation = new ArkmeConversationalConfirmation()
+    const events = sessionEvents()
+    const conversation = conversationFixture()
     let release!: () => void
     const ready = new Promise<void>(resolve => { release = resolve })
     const delayed = conversation.prepareOrExecute({
@@ -53,7 +70,7 @@ describe('Arkme conversational confirmation', () => {
   })
 
   it('does not let concurrent preparation replace the scope awaiting confirmation', async () => {
-    const conversation = new ArkmeConversationalConfirmation()
+    const conversation = conversationFixture()
     let release!: () => void
     const ready = new Promise<void>(resolve => { release = resolve })
     const first = conversation.prepareOrExecute({
@@ -69,12 +86,12 @@ describe('Arkme conversational confirmation', () => {
   })
 
   it('accepts any later direct natural-language confirmation without matching fixed text', async () => {
-    const events: Array<Record<string, unknown>> = [
+    const events = sessionEvents([
       { seq: 1, type: 'user/message', data: { source: { kind: 'user' }, content: [{ type: 'text', text: '修改资料' }] } },
-    ]
+    ])
     const current = agent(events)
     const execute = vi.fn(async () => ({ changed: true }))
-    const conversation = new ArkmeConversationalConfirmation({ now: () => 1_000 })
+    const conversation = conversationFixture({ now: () => 1_000 })
     const input = {
       agent: current,
       operationKey: 'arkme_extension_edit',
@@ -98,13 +115,13 @@ describe('Arkme conversational confirmation', () => {
   })
 
   it('ignores plugin messages and re-prepares changed arguments after a later user correction', async () => {
-    const events: Array<Record<string, unknown>> = [
+    const events = sessionEvents([
       { seq: 1, type: 'user/message', data: { source: { kind: 'user' }, content: [{ type: 'text', text: '关闭 A' }] } },
-    ]
+    ])
     const current = agent(events)
     const executeA = vi.fn()
     const executeB = vi.fn(async () => 'done')
-    const conversation = new ArkmeConversationalConfirmation()
+    const conversation = conversationFixture()
 
     await conversation.prepareOrExecute({
       agent: current, operationKey: 'set-enabled', arguments: { id: 'a' }, question: '关闭 A？', execute: executeA,
@@ -138,12 +155,12 @@ describe('Arkme conversational confirmation', () => {
 
   it('requires a fresh later message after an expired confirmation', async () => {
     let now = 100
-    const events: Array<Record<string, unknown>> = [
+    const events = sessionEvents([
       { seq: 1, type: 'user/message', data: { source: { kind: 'user' }, content: [] } },
-    ]
+    ])
     const current = agent(events)
     const execute = vi.fn(async () => 'done')
-    const conversation = new ArkmeConversationalConfirmation({ now: () => now, confirmationTtlMillis: 10 })
+    const conversation = conversationFixture({ now: () => now, confirmationTtlMillis: 10 })
     const input = { agent: current, operationKey: 'delete', arguments: { id: 'a' }, question: '删除？', execute }
 
     await conversation.prepareOrExecute(input)
@@ -159,12 +176,12 @@ describe('Arkme conversational confirmation', () => {
   })
 
   it('treats omitted and undefined optional Tool arguments as the same JSON action', async () => {
-    const events: Array<Record<string, unknown>> = [
+    const events = sessionEvents([
       { seq: 1, type: 'user/message', data: { source: { kind: 'user' }, content: [] } },
-    ]
+    ])
     const current = agent(events)
     const execute = vi.fn(async () => 'done')
-    const conversation = new ArkmeConversationalConfirmation()
+    const conversation = conversationFixture()
 
     await conversation.prepareOrExecute({
       agent: current,
@@ -187,14 +204,14 @@ describe('Arkme conversational confirmation', () => {
   })
 
   it('commits with the Host context captured once during preparation', async () => {
-    const events: Array<Record<string, unknown>> = [
+    const events = sessionEvents([
       { seq: 1, type: 'user/message', data: { source: { kind: 'user' }, content: [] } },
-    ]
+    ])
     const current = agent(events)
     let liveUserId = 42
     const prepare = vi.fn(async () => ({ expectedUserId: liveUserId }))
     const execute = vi.fn(async (context: { expectedUserId: number } | undefined) => context)
-    const conversation = new ArkmeConversationalConfirmation()
+    const conversation = conversationFixture()
     const input = {
       agent: current, operationKey: 'account-write', arguments: {}, question: '确认写入？', prepare, execute,
     }
@@ -212,13 +229,13 @@ describe('Arkme conversational confirmation', () => {
   })
 
   it('blocks a concurrent second execution after one confirmed write starts', async () => {
-    const events: Array<Record<string, unknown>> = [
+    const events = sessionEvents([
       { seq: 1, type: 'user/message', data: { source: { kind: 'user' }, content: [] } },
-    ]
+    ])
     const current = agent(events)
     let finish!: () => void
     const execute = vi.fn(async () => await new Promise<string>(resolve => { finish = () => resolve('done') }))
-    const conversation = new ArkmeConversationalConfirmation()
+    const conversation = conversationFixture()
     const input = { agent: current, operationKey: 'record-reedit', arguments: { id: 'a' }, question: '确认编辑？', execute }
     await conversation.prepareOrExecute(input)
     events.push({ seq: 2, type: 'user/message', data: { source: { kind: 'user' }, content: [] } })

@@ -770,7 +770,7 @@ describe('AudioRecordingImportGateway', () => {
     expect(JSON.stringify(posts)).not.toContain('access_key_secret')
   })
 
-  it('closes the final owner duplicate race with the same case-insensitive file-name identity', async () => {
+  it('rejects names returned by the owner using the conservative local conflict key', async () => {
     const runtime = {
       async requireSession() { return { userId: 42, accessToken: 'access', refreshToken: 'refresh' } },
       async authenticatedAudioPost(path: string) {

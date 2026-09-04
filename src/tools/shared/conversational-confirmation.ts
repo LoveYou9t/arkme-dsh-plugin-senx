@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
 import type { Agent } from '@deepseek-ai/dsh-agent'
+import type { CallId } from '@deepseek-ai/dsh-llm'
 import type { ToolDefinition } from '@deepseek-ai/dsh-tools'
 
 const DEFAULT_CONFIRMATION_TTL_MILLIS = 10 * 60_000
@@ -15,6 +16,8 @@ interface PendingConfirmation {
   operationKey: string
   argumentsFingerprint: string
   preparedAfterSeq: number
+  preparedCallId: CallId
+  preparedRootCallId: CallId
   question: string
   expiresAtMillis: number
   preparedContext: unknown
@@ -75,6 +78,8 @@ export class ArkmeConversationalConfirmation {
 
   async prepareOrExecute<Result, PreparedContext = undefined>(input: {
     agent: Agent
+    callId: CallId
+    rootCallId: CallId
     operationKey: string
     arguments: unknown
     forcePrepare?: boolean
@@ -96,7 +101,7 @@ export class ArkmeConversationalConfirmation {
       this.running.add(runningKey)
       try {
         const preparedContext = input.prepare === undefined ? undefined : await input.prepare()
-        if (this.pending.get(agentId) !== existing || hasLaterDirectUserMessage(input.agent, startedAfterSeq)) {
+        if (this.pending.get(agentId) !== existing || hasLaterDirectUserInput(input.agent, startedAfterSeq)) {
           throw new Error('准备期间对话操作已变化，请重新发起确认')
         }
         const question = typeof input.question === 'function' ? input.question(preparedContext) : input.question
@@ -105,7 +110,7 @@ export class ArkmeConversationalConfirmation {
           return await input.execute(preparedContext)
         }
         if (question.trim() === '') throw new Error('对话确认缺少有效操作或问题')
-        return this.prepare(agentId, input.agent, operationKey, argumentsFingerprint, question.trim(), preparedContext)
+        return this.prepare(agentId, input.agent, input.callId, input.rootCallId, operationKey, argumentsFingerprint, question.trim(), preparedContext)
       } finally {
         this.running.delete(runningKey)
       }
@@ -114,13 +119,17 @@ export class ArkmeConversationalConfirmation {
       return await prepare()
     }
 
-    const hasLaterMessage = hasLaterDirectUserMessage(input.agent, existing.preparedAfterSeq)
     if (existing.operationKey !== operationKey || existing.argumentsFingerprint !== argumentsFingerprint) {
-      if (!hasLaterMessage) throw new Error('当前已有等待用户确认的其他操作，请先在对话中处理该操作')
+      if (!hasLaterDirectUserMessage(input.agent, existing.preparedAfterSeq)) {
+        throw new Error('当前已有等待用户确认的其他操作，请先在对话中处理该操作')
+      }
       return await prepare()
     }
     if (input.forcePrepare === true) return await prepare()
-    if (!hasLaterMessage) {
+    const published = confirmationResult(input.agent, existing)
+    if (published?.isError === true) return await prepare()
+    if (published === undefined && input.rootCallId !== existing.preparedRootCallId) return await prepare()
+    if (published === undefined || !hasLaterDirectUserMessage(input.agent, published.seq)) {
       return {
         status: 'confirmation_required',
         question: existing.question,
@@ -143,6 +152,8 @@ export class ArkmeConversationalConfirmation {
   private prepare(
     agentId: string,
     agent: Agent,
+    callId: CallId,
+    rootCallId: CallId,
     operationKey: string,
     argumentsFingerprint: string,
     question: string,
@@ -157,6 +168,8 @@ export class ArkmeConversationalConfirmation {
       operationKey,
       argumentsFingerprint,
       preparedAfterSeq: lastSessionSeq(agent),
+      preparedCallId: callId,
+      preparedRootCallId: rootCallId,
       question,
       expiresAtMillis,
       preparedContext: capturedContext,
@@ -174,8 +187,47 @@ export class ArkmeConversationalConfirmation {
 }
 
 export function hasLaterDirectUserMessage(agent: Agent, preparedAfterSeq: number): boolean {
-  return agent.session.events.some(event => event.seq > preparedAfterSeq
-    && event.type === 'user/message' && event.data.source.kind === 'user')
+  const arrivalByMessageId = new Map<string, number>()
+  for (const event of agent.session.events) {
+    if (event.type === 'agent/inbox/spliced') {
+      for (const message of event.data.inserted) {
+        if (message.source.kind === 'user' && !arrivalByMessageId.has(message.id)) {
+          arrivalByMessageId.set(message.id, event.seq)
+        }
+      }
+      continue
+    }
+    if (event.type !== 'user/message' || event.data.source.kind !== 'user') continue
+    if ((arrivalByMessageId.get(event.data.id) ?? event.seq) > preparedAfterSeq) return true
+  }
+  return false
+}
+
+function hasLaterDirectUserInput(agent: Agent, afterSeq: number): boolean {
+  return agent.session.events.some(event => {
+    if (event.seq <= afterSeq) return false
+    if (event.type === 'user/message') return event.data.source.kind === 'user'
+    return event.type === 'agent/inbox/spliced'
+      && event.data.inserted.some(message => message.source.kind === 'user')
+  })
+}
+
+function confirmationResult(agent: Agent, pending: PendingConfirmation): { seq: number; isError: boolean } | undefined {
+  let preparedSucceeded = pending.preparedCallId === pending.preparedRootCallId
+  for (const event of agent.session.events) {
+    if (event.seq <= pending.preparedAfterSeq) continue
+    if (event.type === 'tool/code-dispatch' && event.data.rootCallId === pending.preparedRootCallId
+      && event.data.subCallId === pending.preparedCallId) {
+      if (event.data.isError) return { seq: event.seq, isError: true }
+      preparedSucceeded = true
+    }
+    if (event.type !== 'tool/result' || (event.surfaceOp !== undefined && event.surfaceOp !== 'append')) continue
+    const [result] = event.data.message.content
+    if (event.data.message.source.callId === pending.preparedRootCallId && result.toolCallId === pending.preparedRootCallId) {
+      return { seq: event.seq, isError: result.isError === true || !preparedSucceeded }
+    }
+  }
+  return undefined
 }
 
 export function lastSessionSeq(agent: Agent): number {

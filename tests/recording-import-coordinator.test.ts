@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
+import { ArkmePluginError, ServiceRuntime } from '../src/services/service.js'
 import { RecordingImportContractError, type RecordingImportJob, type RecordingImportSource } from '../src/recording-import-contract.js'
 import {
   RecordingImportCoordinator,
@@ -47,12 +48,55 @@ function gateway(): RecordingImportGateway {
 
 function source(): RecordingImportSource {
   return {
-    inspect: vi.fn(async () => ({ kind: 'm4a', durationMillis: 60_000 })),
+    inspect: vi.fn<RecordingImportSource['inspect']>(async () => ({ kind: 'm4a', durationMillis: 60_000 })),
     discard: vi.fn(async () => undefined),
   }
 }
 
 describe('RecordingImportCoordinator', () => {
+  it.each(['login-required', 'login-expired'])('resumes the retained upload after %s without recreating owner records', async code => {
+    let signedIn = true
+    const runtime = new ServiceRuntime({ environment: 'test' } as never, {
+      read: async () => signedIn ? { userId: 42, accessToken: 'test', refreshToken: 'test' } : undefined,
+    } as never, {} as never)
+    const store = memoryStore(job({ phase: 'uploading', sessionId: 'session-1', childId: 'child-1',
+      uploadedBytes: 512, uploadCheckpoint: { uploadId: 'checkpoint-1' } }))
+    const owner = gateway()
+    vi.mocked(owner.upload).mockImplementationOnce(async (_job, progress) => {
+      signedIn = false
+      if (code === 'login-expired') throw new ArkmePluginError(code, '登录已过期', false, 401)
+      await progress(768)
+    })
+    const input = source()
+    const coordinator = new RecordingImportCoordinator(store, owner, input, async () => (await runtime.requireSession()).userId)
+    try {
+      await expect(coordinator.run(42, 'job-1')).resolves.toMatchObject({
+        phase: 'failed', failedFromPhase: 'uploading', errorCode: code, retryable: true,
+        sessionId: 'session-1', childId: 'child-1', sourceHandle: '/private/job-1.upload',
+        uploadCheckpoint: { uploadId: 'checkpoint-1' },
+      })
+      expect(input.discard).not.toHaveBeenCalled()
+      signedIn = true
+      await expect(coordinator.retry(42, 'job-1', store.value.revision - 1)).rejects.toMatchObject({ code: 'recording-import-revision-conflict' })
+      await expect(coordinator.retry(77, 'job-1', store.value.revision)).rejects.toMatchObject({ code: 'recording-import-not-found' })
+      await expect(coordinator.retry(42, 'job-1', store.value.revision)).resolves.toMatchObject({ phase: 'accepted' })
+      expect(owner.ensureSession).not.toHaveBeenCalled()
+      expect(owner.createChild).not.toHaveBeenCalled()
+      expect(owner.upload).toHaveBeenLastCalledWith(expect.objectContaining({
+        sessionId: 'session-1', childId: 'child-1', uploadCheckpoint: { uploadId: 'checkpoint-1' },
+      }), expect.any(Function), undefined)
+    } finally { runtime.dispose() }
+  })
+
+  it('does not turn a permanent business rejection into a recoverable login failure', async () => {
+    const store = memoryStore(job())
+    const owner = gateway()
+    vi.mocked(owner.ensureSession).mockRejectedValue(new ArkmePluginError('account-unavailable', '账号不可用', false, 403))
+    const coordinator = new RecordingImportCoordinator(store, owner, source(), async () => 42)
+    await expect(coordinator.run(42, 'job-1')).resolves.toMatchObject({ phase: 'failed', retryable: false })
+    await expect(coordinator.retry(42, 'job-1', store.value.revision)).rejects.toMatchObject({ code: 'recording-import-retry-forbidden' })
+  })
+
   it('releases only a rejected duplicate source after persisting the failure and preserves its identity', async () => {
     const store = memoryStore(job())
     const owner = gateway()
