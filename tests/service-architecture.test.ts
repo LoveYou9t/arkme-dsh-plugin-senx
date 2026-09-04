@@ -24,6 +24,7 @@ const expectedPublicMethods = [
   'listDirectory', 'directoryContactProfile', 'directoryContactWorld', 'openDirectoryContactChat', 'openDirectoryGroupChat',
   'unmarkedSpeakerOptions', 'retryUnmarkedSpeakerInference', 'unmarkedSpeakerSegments', 'markUnmarkedSpeaker',
   'createExtensionReview', 'recordingCalendar', 'recordingTranscript', 'recordingProjection',
+  'recordingSummaryModelConfig', 'setRecordingSummaryModelRoute', 'generateRecordingProjection',
   'sealRecordingCursor', 'openRecordingCursor', 'recordingDay', 'recordingPlayback',
   'recordingSpeakerOptions', 'assignRecordingSpeaker',
   'acceptRecordingImport', 'recordingImportUserId', 'recordingImportPreflight', 'recordingImportStatus', 'recordingImportList', 'recordingImportHistory', 'retryRecordingImport',

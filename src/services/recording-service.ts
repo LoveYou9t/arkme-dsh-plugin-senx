@@ -9,7 +9,6 @@ import {
   type PublicRecordingImportHistoryItem,
   type PublicRecordingImportHistoryPage,
   type PublicRecordingImportOwnerTask,
-  type PublicRecordingImportProcessingTiming,
   type RecordingImportDisplayStatus,
   type RecordingImportJob,
   type RecordingImportOwnerProgress,
@@ -26,6 +25,8 @@ import {
   isRecordingLocalDateOnOrAfterMinimum,
 } from '../recording-time.js'
 import {
+  buildRecordingGenerationTranscript,
+  projectRecordingSummaryModelConfig,
   projectRecordingTranscripts,
   projectRecordingVersions,
   recordingPendingTranscriptionCount,
@@ -38,6 +39,8 @@ import type {
   ArkmeRecordingPlayback,
   ArkmeRecordingProjectionKind,
   ArkmeRecordingSection,
+  ArkmeRecordingSummaryModelConfig,
+  ArkmeRecordingSummaryModelRouteUpdate,
   ArkmeRecordingSpeakerMutationResult,
   ArkmeRecordingTranscriptSection,
   ArkmeRecordingTranscriptItem,
@@ -186,13 +189,6 @@ function recordingImportOwnerStatus(
     case 'unavailable': return { status: 'unavailable', statusDetail: '状态不可用' }
     default: return { status: 'waiting', statusDetail: '等待中' }
   }
-}
-
-function recordingImportProcessingDuration(
-  timing?: PublicRecordingImportProcessingTiming,
-): number | undefined {
-  if (timing === undefined || timing.timingState === 'unavailable') return undefined
-  return Math.max(0, timing.totalDurationMillis)
 }
 
 export class RecordingService {
@@ -607,12 +603,21 @@ export class RecordingService {
     if (activeOwnerTasks === undefined) return { items: projectedLocal, owner }
     const ownerRefKey = await this.recordingRefKey(RECORDING_IMPORT_SESSION_REF_PREFIX)
     const unresolvedOwnerSessionIds = new Set(unresolved.flatMap(job => job.sessionId === undefined ? [] : [job.sessionId]))
+    const acceptedByOwnerSessionId = new Map<string, RecordingImportJob>()
+    for (const job of jobs) {
+      if (job.phase !== 'accepted' || job.sessionId === undefined) continue
+      const previous = acceptedByOwnerSessionId.get(job.sessionId)
+      if (previous === undefined || job.updatedAtMillis > previous.updatedAtMillis) {
+        acceptedByOwnerSessionId.set(job.sessionId, job)
+      }
+    }
     const projectedOwner = await Promise.all(activeOwnerTasks
       .filter(task => !unresolvedOwnerSessionIds.has(task.session.sessionId))
       .map(async task => await this.projectRecordingImportOwnerTask(
         task,
         session.userId,
         ownerRefKey,
+        acceptedByOwnerSessionId.get(task.session.sessionId),
       )))
     return {
       items: [...projectedLocal, ...projectedOwner]
@@ -836,7 +841,6 @@ export class RecordingService {
     const owner = task.session
     const ownerProgress = task.progress
     const status = recordingImportOwnerStatus(task)
-    const processingDurationMillis = recordingImportProcessingDuration(ownerProgress?.processingTiming)
     return {
       taskKey: await this.recordingImportTaskKey(owner.sessionId, viewerUserId, ownerRefKey),
       sessionRef: await this.recordingImportSessionRef(owner, viewerUserId, ownerRefKey),
@@ -850,10 +854,9 @@ export class RecordingService {
       progress: 1,
       status: status.status,
       statusDetail: status.statusDetail,
-      ...(processingDurationMillis === undefined ? {} : { processingDurationMillis }),
       createdAtMillis: owner.createdAtMillis,
       updatedAtMillis: owner.updatedAtMillis,
-      ...(ownerProgress?.processingTiming === undefined ? {} : { processing: ownerProgress.processingTiming }),
+      ...(ownerProgress?.importProgress === undefined ? {} : { importProgress: ownerProgress.importProgress }),
     }
   }
 
@@ -861,11 +864,21 @@ export class RecordingService {
     task: RecordingImportOwnerTaskSnapshot,
     viewerUserId?: number,
     ownerRefKey?: Buffer,
+    acceptedLocalJob?: RecordingImportJob,
   ): Promise<PublicRecordingImportOwnerTask> {
     const owner = task.session
     const ownerProgress = task.progress
     const status = recordingImportOwnerStatus(task)
-    const processingDurationMillis = recordingImportProcessingDuration(ownerProgress?.processingTiming)
+    const localImportTiming = acceptedLocalJob !== undefined
+      && Number.isSafeInteger(acceptedLocalJob.createdAtMillis)
+      && Number.isSafeInteger(acceptedLocalJob.updatedAtMillis)
+      && acceptedLocalJob.createdAtMillis > 0
+      && acceptedLocalJob.updatedAtMillis >= acceptedLocalJob.createdAtMillis
+      ? {
+          startedAtMillis: acceptedLocalJob.createdAtMillis,
+          acceptedAtMillis: acceptedLocalJob.updatedAtMillis,
+        }
+      : undefined
     return {
       kind: 'owner',
       taskKey: await this.recordingImportTaskKey(owner.sessionId, viewerUserId, ownerRefKey),
@@ -880,10 +893,10 @@ export class RecordingService {
       progress: owner.hasFinishedUpload ? 1 : owner.fileSize <= 0 ? 0 : Math.min(1, owner.parsedSize / owner.fileSize),
       status: status.status,
       statusDetail: status.statusDetail,
-      ...(processingDurationMillis === undefined ? {} : { processingDurationMillis }),
       createdAtMillis: owner.createdAtMillis,
       updatedAtMillis: owner.updatedAtMillis,
-      ...(ownerProgress?.processingTiming === undefined ? {} : { processing: ownerProgress.processingTiming }),
+      ...(localImportTiming === undefined ? {} : { localImportTiming }),
+      ...(ownerProgress?.importProgress === undefined ? {} : { importProgress: ownerProgress.importProgress }),
     }
   }
 
@@ -1019,6 +1032,7 @@ export class RecordingService {
     const dayEnd = new Date(dayStart)
     dayEnd.setDate(dayEnd.getDate() + 1)
     const items = projectRecordingTranscripts(transcriptResult.value, speakerData, profilesByUserId, {
+      viewerUserId: session.userId,
       dayStartMillis: date,
       dayEndMillis: dayEnd.getTime(),
     })
@@ -1043,6 +1057,98 @@ export class RecordingService {
     signal?: AbortSignal,
   ): Promise<ArkmeRecordingSection<ArkmeRecordingVersion>> {
     return await this.recordingProjectionWithSession(dateStamp, kind, await this.runtime.requireSession(), signal)
+  }
+
+  async generateRecordingProjection(
+    dateStamp: number,
+    kind: ArkmeRecordingProjectionKind,
+    routeKey = '',
+    signal?: AbortSignal,
+  ): Promise<ArkmeRecordingSection<ArkmeRecordingVersion>> {
+    this.assertWorkbenchEnabled()
+    const normalizedRouteKey = routeKey.trim()
+    if (normalizedRouteKey.length > 256) {
+      throw new ArkmePluginError('recording-summary-model-route-invalid', '录音总结模型无效', false, 400)
+    }
+    const dayStart = this.recordingDayStart(dateStamp)
+    const session = await this.runtime.requireSession()
+    const transcript = await this.recordingTranscriptWithSession(dayStart.getTime(), session, signal)
+    if (transcript.state === 'processing') {
+      throw new ArkmePluginError(
+        'recording-generation-transcript-processing',
+        '录音仍在转写，请完成后再生成',
+        true,
+        409,
+      )
+    }
+    if (transcript.items.length === 0) {
+      throw new ArkmePluginError(
+        'recording-generation-transcript-empty',
+        '当天没有可用于生成的已完成转写',
+        false,
+        409,
+      )
+    }
+    const firstItem = transcript.items[0]!
+    const lastItem = transcript.items[transcript.items.length - 1]!
+    const response = await this.runtime.authenticatedAudioPost<Record<string, unknown>>(
+      '/api/v1/summary/create',
+      {
+        date_stamp: dayStart.getTime(),
+        tz_offset: -dayStart.getTimezoneOffset() * 60_000,
+        from_stamp: firstItem.startAtMillis,
+        to_stamp: lastItem.endAtMillis,
+        model_type: 1,
+        prompt_ver: 1,
+        transcripts: buildRecordingGenerationTranscript(transcript.items, kind, dayStart.getTime()),
+        kind: kind === 'timeline' ? 1 : 2,
+        ...(normalizedRouteKey === '' ? {} : { route_key: normalizedRouteKey }),
+      },
+      session,
+      signal,
+      { lane: 'write', bypassCache: true },
+    )
+    const flag = numberValue(response.flag)
+    const summaryId = stringValue(response.summary_id).trim()
+    if ((flag !== 1 && flag !== 2) || (flag === 1 && summaryId === '')) {
+      throw new ArkmePluginError('recording-generation-response-invalid', '生成请求响应无效', true, 502)
+    }
+    try {
+      const section = await this.recordingProjectionWithSession(dayStart.getTime(), kind, session, signal)
+      return section.state === 'empty'
+        ? { state: 'processing', items: section.items, message: '内容仍在生成' }
+        : section
+    } catch (reason) {
+      if (signal?.aborted === true) throw reason
+      // The owner accepted the write. A failed immediate read must not invite a duplicate retry.
+      return { state: 'processing', items: [], message: '内容仍在生成' }
+    }
+  }
+
+  async recordingSummaryModelConfig(signal?: AbortSignal): Promise<ArkmeRecordingSummaryModelConfig> {
+    this.assertWorkbenchEnabled()
+    const session = await this.runtime.requireSession()
+    const data = await this.runtime.authenticatedAudioPost<Record<string, unknown>>(
+      '/api/v1/audio-summary/model-config/list', {}, session, signal,
+    )
+    return projectRecordingSummaryModelConfig(data)
+  }
+
+  async setRecordingSummaryModelRoute(
+    routeKey: string,
+    signal?: AbortSignal,
+  ): Promise<ArkmeRecordingSummaryModelRouteUpdate> {
+    this.assertWorkbenchEnabled()
+    const normalizedRouteKey = routeKey.trim()
+    if (normalizedRouteKey === '' || normalizedRouteKey.length > 256) {
+      throw new ArkmePluginError('recording-summary-model-route-invalid', '录音总结模型无效', false, 400)
+    }
+    const session = await this.runtime.requireSession()
+    await this.runtime.authenticatedAudioPost(
+      '/api/v1/audio-summary/model-config/set', { route_key: normalizedRouteKey }, session, signal,
+      { lane: 'write', bypassCache: true },
+    )
+    return { effectiveRouteKey: normalizedRouteKey }
   }
 
   private async recordingProjectionWithSession(

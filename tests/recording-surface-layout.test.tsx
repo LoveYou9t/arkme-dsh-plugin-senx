@@ -59,8 +59,8 @@ describe('ArkmeRecordingSurface layout', () => {
     expect(markup).toContain('aria-label="选择月份"')
     expect(markup).toContain('aria-label="选择年份"')
     expect(source).toContain('function RecordingCalendarDropdown')
-    expect(source).toContain('interface RecordingCalendarDropdownAnchor')
-    expect(source).toContain('useState<RecordingCalendarDropdownAnchor>()')
+    expect(source).toContain('interface RecordingDropdownAnchor')
+    expect(source).toContain('useState<RecordingDropdownAnchor>()')
     expect(source).not.toContain('<select aria-label="月份"')
     expect(source).not.toContain('<select aria-label="年份"')
   })
@@ -95,6 +95,10 @@ describe('ArkmeRecordingSurface layout', () => {
       expect(childSource).not.toContain("base: '#ffffff'")
       expect(childSource).not.toContain("background: '#ffffff'")
     }
+    expect(importSource).toContain("case 'completed': return arkmeTheme.success")
+    expect(importSource).toContain("case 'partial': return arkmeTheme.warning")
+    expect(importSource).not.toContain("return '#52c41a'")
+    expect(importSource).not.toContain("return '#fa8c16'")
     expect(importSource).toContain("overflowX: 'auto'")
   })
 
@@ -204,23 +208,29 @@ describe('ArkmeRecordingSurface layout', () => {
     expect(source).toContain('{emptyDay ? <ArkmeRecordingEmptyState />')
   })
 
-  it('uses desktop empty panels for summary and analysis timeline without inventing generation actions', () => {
+  it('uses the desktop empty-panel generation actions and hides them while processing', () => {
     const EmptyState = (recordingSurface as typeof recordingSurface & {
-      ArkmeRecordingAnalysisEmptyState: ComponentType<{ kind: 'summary' | 'timeline'; state: 'empty' | 'processing' | 'failed' }>
+      ArkmeRecordingAnalysisEmptyState: ComponentType<{
+        kind: 'summary' | 'timeline'
+        state: 'empty' | 'processing' | 'failed'
+        onGenerate(): void
+      }>
     }).ArkmeRecordingAnalysisEmptyState
 
-    const summary = renderToStaticMarkup(<EmptyState kind="summary" state="empty" />)
-    const summaryLoading = renderToStaticMarkup(<EmptyState kind="summary" state="processing" />)
-    const timelineFailure = renderToStaticMarkup(<EmptyState kind="timeline" state="failed" />)
+    const summary = renderToStaticMarkup(<EmptyState kind="summary" state="empty" onGenerate={() => {}} />)
+    const summaryLoading = renderToStaticMarkup(<EmptyState kind="summary" state="processing" onGenerate={() => {}} />)
+    const timelineFailure = renderToStaticMarkup(<EmptyState kind="timeline" state="failed" onGenerate={() => {}} />)
 
     for (const markup of [summary, summaryLoading, timelineFailure]) {
       expect(markup).toContain('width="186"')
       expect(markup).toContain('height="133"')
-      expect(markup).not.toContain('>点击生成')
     }
-    expect(summary).toContain('暂无总结内容')
+    expect(summary).toContain('暂无总结内容，')
+    expect(summary).toContain('>点击生成总结</button>')
     expect(summaryLoading).toContain('生成总结中...')
-    expect(timelineFailure).toContain('时间轴生成失败')
+    expect(summaryLoading).not.toContain('>点击生成')
+    expect(timelineFailure).toContain('时间轴生成失败，')
+    expect(timelineFailure).toContain('>点击生成时间轴</button>')
   })
 
   it('formats transcript timestamps and durations with the desktop contract', () => {

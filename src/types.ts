@@ -2381,6 +2381,25 @@ export interface ArkmeRecordingCalendarMonth {
 export type ArkmeRecordingProjectionKind = 'summary' | 'timeline'
 export type ArkmeRecordingToolContent = 'transcript' | ArkmeRecordingProjectionKind
 
+export interface ArkmeRecordingSummaryModelRouteOption {
+  routeKey: string
+  provider: string
+  modelKey: string
+  displayName: string
+}
+
+/** Audio-owner model configuration; intentionally distinct from the Arko model catalog. */
+export interface ArkmeRecordingSummaryModelConfig {
+  defaultRouteKey: string
+  effectiveRouteKey: string
+  personalRouteKey?: string
+  options: ArkmeRecordingSummaryModelRouteOption[]
+}
+
+export interface ArkmeRecordingSummaryModelRouteUpdate {
+  effectiveRouteKey: string
+}
+
 export interface ArkmeRecordingCursorPayload {
   version: 1
   dateStamp: number
@@ -3214,6 +3233,9 @@ export type ArkmeHostOperation = ArkmePluginOperation
   | 'dsh-beta-community.join'
   | 'recordings.calendar'
   | 'recordings.day'
+  | 'recordings.summary-model-config'
+  | 'recordings.summary-model-config.set'
+  | 'recordings.generate'
   | 'recordings.import.preflight'
   | 'recordings.import.list'
   | 'recordings.import.history'
