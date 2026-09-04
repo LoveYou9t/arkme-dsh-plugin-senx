@@ -20,7 +20,7 @@ function fixture() {
   return { tool, ports, prepared, result }
 }
 const exec = { signal: new AbortController().signal } as never
-const args = { directory_path: '/private/recordings' }
+const args = { action: 'prepare', directory_path: '/private/recordings' }
 
 describe('recording directory tool', () => {
   it('registers a concurrent explicit-write business tool with accurate time and matching guidance', () => {
@@ -44,7 +44,16 @@ describe('recording directory tool', () => {
       .not.toContain('Add large files through Arkme UI first')
   })
 
-  it('defaults raw tool definitions to a read-only preflight with recursive/self defaults', async () => {
+  it('rejects a missing action before directory I/O or confirmation preparation', async () => {
+    const { tool, ports } = fixture()
+    const missing = { directory_path: '/private/recordings' }
+    await expect(tool!.execute(missing, exec)).rejects.toThrow('action')
+    expect(() => arkmeConfirmationContextHooks(tool!)!.confirmationRequest!(missing)).toThrow('action')
+    expect(ports.prepareRecordingDirectory).not.toHaveBeenCalled()
+    expect(ports.importRecordingDirectory).not.toHaveBeenCalled()
+  })
+
+  it('runs an explicit read-only preflight with recursive/self defaults', async () => {
     const { tool, ports } = fixture()
     const output = String(await tool!.execute(args, exec))
     expect(ports.prepareRecordingDirectory).toHaveBeenCalledWith(

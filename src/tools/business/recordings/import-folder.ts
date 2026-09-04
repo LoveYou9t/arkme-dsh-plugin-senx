@@ -6,8 +6,10 @@ import { taggedJSON, TEXT_OUTPUT } from '../../shared/output.js'
 
 function directoryInput(value: unknown): RecordingDirectoryInput {
   const args = value !== null && typeof value === 'object' ? value as Record<string, unknown> : {}
+  if (args.action !== 'prepare' && args.action !== 'upload') {
+    throw new TypeError('请指定 action：prepare 只读预检，upload 上传已确认的录音')
+  }
   if (typeof args.directory_path !== 'string' || args.directory_path.trim() === ''
-    || (args.action !== undefined && args.action !== 'prepare' && args.action !== 'upload')
     || (args.recursive !== undefined && typeof args.recursive !== 'boolean')
     || (args.ownership !== undefined && args.ownership !== 'self' && args.ownership !== 'other')
     || (args.start_times !== undefined && !Array.isArray(args.start_times))) {
@@ -33,7 +35,7 @@ function directoryInput(value: unknown): RecordingDirectoryInput {
 
 function directoryConfirmationRequest(value: unknown): { arguments: RecordingDirectoryInput; forcePrepare: boolean } {
   const input = directoryInput(value)
-  return { arguments: input, forcePrepare: (value as Record<string, unknown>).action !== 'upload' }
+  return { arguments: input, forcePrepare: (value as Record<string, unknown>).action === 'prepare' }
 }
 
 function directoryPreviewResult(prepared: PreparedRecordingDirectory): string {
@@ -89,9 +91,9 @@ export const recordingImportFolderToolModule = defineArkmeCoreToolModule({
   },
   create: ports => withArkmeConfirmationContext<PreparedRecordingDirectory>(defineTool({
     name: 'arkme_recording_import_folder',
-    description: 'Import WAV, MP3 and M4A recordings from a human-selected local absolute or ~/ directory. Use action=prepare (default) to check or refresh cloud matches without uploading, directly once the directory is known. The preflight returns one final confirmation with upload counts, exceptional file paths and ownership, which defaults to self. Only after a later human confirmation use action=upload with the same directory, scope, ownership and recording times; missing, expired or changed confirmation scope requires a fresh confirmation. Includes subdirectories by default and does not follow symlinks. Filename YYYYMMDD-HHMMSS uses the host local timezone; use start_times for unknown recording times. matched_uploaded means metadata match and upload finalization, not content hash verification. Returns after Audio receives the uploads; transcription is separate.',
+    description: 'Import WAV, MP3 and M4A recordings from a human-selected local absolute or ~/ directory. Use action=prepare to check or refresh cloud matches without uploading, directly once the directory is known. The preflight returns one final confirmation with upload counts, exceptional file paths and ownership, which defaults to self. Only after a later human confirmation use action=upload with the same directory, scope, ownership and recording times; missing, expired or changed confirmation scope requires a fresh confirmation. Includes subdirectories by default and does not follow symlinks. Filename YYYYMMDD-HHMMSS uses the host local timezone; use start_times for unknown recording times. matched_uploaded means metadata match and upload finalization, not content hash verification. Returns after Audio receives the uploads; transcription is separate.',
     parameters: {
-      action: { type: 'string', enum: ['prepare', 'upload'], description: 'Defaults to prepare: read-only preflight or refresh. Use upload only after the human confirms the returned scope.' },
+      action: { type: 'string', enum: ['prepare', 'upload'], required: true, description: 'Use prepare for read-only preflight or refresh; use upload after the human confirms the returned scope.' },
       directory_path: { type: 'string', required: true, description: 'Exact local absolute or ~/ recording directory selected by the human.' },
       recursive: { type: 'boolean', description: 'Include subdirectories; defaults to true.' },
       ownership: { type: 'string', enum: ['self', 'other'], description: 'Recording ownership; defaults to self.' },
@@ -112,7 +114,7 @@ export const recordingImportFolderToolModule = defineArkmeCoreToolModule({
       exec.signal?.throwIfAborted()
       const input = directoryInput(args)
       const prepared = await ports.prepareRecordingDirectory(input, exec.signal)
-      if (args.action !== 'upload') return directoryPreviewResult(prepared)
+      if (args.action === 'prepare') return directoryPreviewResult(prepared)
       return directoryResult(await ports.importRecordingDirectory(input, prepared, exec.signal))
     },
   }), {
