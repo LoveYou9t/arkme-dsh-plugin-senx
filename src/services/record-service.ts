@@ -28,6 +28,7 @@ import type {
   ArkmeUploadedAsset,
 } from '../types.js'
 import { arkmeHashTagPayload } from '../hashtag.js'
+import { projectRecordRecordingForward } from '../recording-forward-presentation.js'
 import { MediaService } from './media-service.js'
 import { ArkmePrivacyVisibilityService, arkmePrivacyLockedRecord } from './privacy-visibility.js'
 import type { ArkmeSourceRefPayload } from './source-service.js'
@@ -655,6 +656,9 @@ export class RecordService {
     }
     const version = Math.trunc(numberValue(core.version))
     if (version <= 0) throw new ArkmePluginError('record-reedit-detail-invalid', '快记版本无效，请刷新后重试', true, 502)
+    if (objectValue(objectValue(core.content_payload).forward_records).source_type === 'long_recording_segments') {
+      throw new ArkmePluginError('record-reedit-shape-unsupported', '录音片段快照不支持重新编辑', false, 409)
+    }
     const contentPayload = recordReeditReadContentPayload(core.content_payload)
     const snapshotFields: Omit<RecordReeditOwnerSnapshot, 'source' | 'sourceIdentityKey' | 'fingerprint'> = {
       itemUid,
@@ -1246,6 +1250,7 @@ export class RecordService {
       version: item.version,
       ...(item.displayKind === undefined ? {} : { displayKind: item.displayKind }),
       ...(item.contentBlocks === undefined ? {} : { contentBlocks: item.contentBlocks }),
+      ...(item.forwardRecords === undefined ? {} : { forwardRecords: item.forwardRecords }),
       ...(item.extensionParentRecordUid === undefined ? {} : { extensionParentRecordUid: item.extensionParentRecordUid }),
       ...(item.extensionParent === undefined ? {} : { extensionParent: item.extensionParent }),
       ...(item.mediaUnavailable === true ? { mediaUnavailable: true } : {}),
@@ -1305,6 +1310,7 @@ export class RecordService {
     const item = objectValue(raw)
     const core = objectValue(item.record_core)
     const extensionProjection = this.recordExtensionProjection(raw, userId)
+    const forwardRecords = projectRecordRecordingForward(item.content_payload ?? core.content_payload)
     return {
       itemUid: stringValue(item.record_uid ?? core.record_uid).trim(),
       senderName: stringValue(item.nickname).trim() || '我',
@@ -1320,6 +1326,7 @@ export class RecordService {
       recordDurationMillis: numberValue(item.record_duration_millis ?? core.record_duration_millis),
       editDurationMillis: numberValue(item.edit_duration_millis ?? core.edit_duration_millis),
       contentBlocks: this.media.richContentBlocks(raw, userId, options.displayItems),
+      ...(forwardRecords === undefined ? {} : { forwardRecords }),
       ...(extensionProjection === undefined ? {} : extensionProjection),
       ...(options.selfTopic === undefined ? {} : { selfTopic: options.selfTopic }),
       ...(options.mediaUnavailable === true ? { mediaUnavailable: true } : {}),
@@ -1336,6 +1343,7 @@ export class RecordService {
     const recordUid = stringValue(item.record_uid ?? core.record_uid).trim()
     if (recordUid === '') return undefined
     const extensionProjection = userId === undefined ? undefined : this.recordExtensionProjection(raw, userId)
+    const forwardRecords = projectRecordRecordingForward(item.content_payload ?? core.content_payload)
     return {
       recordUid,
       sendAtMillis: numberValue(item.send_at ?? core.send_at),
@@ -1346,6 +1354,7 @@ export class RecordService {
       version: numberValue(core.version),
       creationSource: recordCreationSource(raw),
       displayKind: numberValue(item.display_kind ?? core.display_kind),
+      ...(forwardRecords === undefined ? {} : { forwardRecords }),
       ...(userId === undefined ? {} : { contentBlocks: this.media.richContentBlocks(raw, userId, options.displayItems) }),
       ...(extensionProjection === undefined ? {} : extensionProjection),
       ...(options.mediaUnavailable === true ? { mediaUnavailable: true } : {}),

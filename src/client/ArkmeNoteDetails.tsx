@@ -32,6 +32,7 @@ import { ArkmeAttachmentStrip, ArkmeFilePreparingIndicator } from './ArkmeAttach
 import { releaseArkmeComposerAttachment, type ArkmeComposerAttachment } from './composer-draft-store.js'
 import { localFileBlock } from './file-send-tasks.js'
 import { useResizableNoteDetail } from './use-resizable-note-detail.js'
+import { recordingSpeakerColor } from './recordings/recording-speaker-presentation.js'
 
 const styles: Record<string, CSSProperties> = {
   drawer: { position: 'absolute', top: ARKME_CONVERSATION_HEADER_HEIGHT, right: 0, bottom: 0, zIndex: 10,
@@ -745,6 +746,31 @@ function ForwardDetailRow({ name, time, avatarRef, segment = false, children }: 
 export function ForwardRecordsDetail({ item, onClose }: { item: ArkmeTimelineItem; onClose: () => void }) {
   const forward = item.forwardRecords
   if (forward === undefined) return null
+  const recording = forward.items.length === 1 ? forward.items[0] : undefined
+  if (recording?.sourceType === 'long_recording_segments' && (recording.segments?.length ?? 0) > 0) {
+    const segments = recording.segments!
+    const startedAt = recording.sendAtMillis
+    const selectedAt = startedAt > 0 ? startedAt + Math.min(...segments.map(segment => segment.startMillis)) : 0
+    const selectedDate = selectedAt > 0 ? new Date(selectedAt) : undefined
+    return <NoteDetailShell title={recording.title || forward.title || '录音转写'} label="录音片段详情"
+      subtitle={selectedDate === undefined ? '' : `${selectedDate.toLocaleDateString('zh-CN', { year: 'numeric', month: 'long', day: 'numeric' })} ${selectedDate.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false })}`} onClose={onClose}>
+      <div data-arkme-forward-recording-detail>
+        {segments.map((segment, index) => {
+          const hours = Math.floor(segment.startMillis / 3_600_000)
+          const time = hours > 0 ? `${String(hours).padStart(2, '0')}:${offsetLabel(segment.startMillis % 3_600_000)}` : offsetLabel(segment.startMillis)
+          return <div key={index} data-arkme-forward-recording-segment style={{ padding: '8px 0', borderTop: index === 0 ? undefined : `0.5px solid ${arkmeTheme.borderSoft}` }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, lineHeight: '22px' }}>
+              <span aria-hidden style={{ width: 12, height: 12, flex: 'none', borderRadius: '50%', background: recordingSpeakerColor(segment.speakerNumber ?? index) }} />
+              <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 14, fontWeight: 500, letterSpacing: '.02px' }}>{segment.speakerName}</span>
+              <time style={{ marginLeft: 4, color: arkmeTheme.tertiary, fontSize: 12, letterSpacing: '.24px' }}>{time}</time>
+            </div>
+            <p style={{ margin: '6px 0 0 20px', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', fontSize: 14, lineHeight: '22px', letterSpacing: '.28px' }}>{segment.textContent}</p>
+          </div>
+        })}
+      </div>
+      {(forward.truncated || recording.truncated) && <p style={styles.notice}>内容较多，当前展示部分转发记录</p>}
+    </NoteDetailShell>
+  }
   const dates = forward.items.map(value => epoch(value.sendAtMillis)).filter(value => value > 0)
   const firstDate = dateLabel(dates.length ? Math.min(...dates) : forward.createdAtMillis)
   const lastDate = dateLabel(dates.length ? Math.max(...dates) : forward.createdAtMillis)
