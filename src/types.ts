@@ -371,6 +371,8 @@ export interface ArkmeRecordCursor {
 }
 
 export interface ArkmeSelfRecordItem {
+  /** Frozen long-recording selection returned by the Record owner. */
+  forwardRecords?: ArkmeForwardRecordsPreview
   recordUid: string
   sendAtMillis: number
   title: string
@@ -1571,7 +1573,7 @@ export interface ArkmeTimelineItem {
   mediaUnavailable?: boolean
   /** Present only for a categorized record in the aggregate “发给自己” feed. */
   selfTopic?: ArkmeTimelineSelfTopic
-  /** Browser-safe Chat forward snapshot. It is present only for explicit `render_kind=forward_records` payloads. */
+  /** Browser-safe Chat forward or Record-owned long-recording selection snapshot. */
   forwardRecords?: ArkmeForwardRecordsPreview
   /** Browser-safe shared recording snapshot. It is present only for explicit `render_kind=shared_recording_memory` payloads. */
   sharedRecording?: ArkmeSharedRecordingPreview
@@ -1691,6 +1693,8 @@ export interface ArkmeForwardRecordsPreview {
 }
 
 export interface ArkmeForwardTranscriptSegment {
+  /** Recording-local speaker number, never an account identity. */
+  speakerNumber?: number
   speakerName: string
   textContent: string
   /** Offsets in the forwarded recording, not wall-clock timestamps. */
@@ -2477,6 +2481,7 @@ export interface ArkmeRecordingCalendarMonth {
 
 export type ArkmeRecordingProjectionKind = 'summary' | 'timeline'
 export type ArkmeRecordingToolContent = 'transcript' | ArkmeRecordingProjectionKind
+export type ArkmeRecordingTranscriptSource = 'system' | 'doubao'
 
 export interface ArkmeRecordingSummaryModelRouteOption {
   routeKey: string
@@ -2512,7 +2517,7 @@ export interface ArkmeRecordingTranscriptItem {
   sessionId: string
   childId: string
   asrItemIndex: number
-  transcriptSource: ArkmeAiVideoTranscriptSource
+  transcriptSource: ArkmeRecordingTranscriptSource
   startAtMillis: number
   endAtMillis: number
   speakerNumber: number
@@ -2529,6 +2534,8 @@ export interface ArkmeRecordingTranscriptItem {
 export interface ArkmeRecordingWorkbenchItem {
   itemId: string
   itemRef: string
+  transcriptSource: ArkmeRecordingTranscriptSource
+  sessionKey: string
   startAtMillis: number
   endAtMillis: number
   speakerNumber: number
@@ -2613,6 +2620,15 @@ export interface ArkmeRecordingDay {
   transcript: ArkmeRecordingTranscriptSection<ArkmeRecordingWorkbenchItem>
   summary: ArkmeRecordingSection<ArkmeRecordingVersion>
   timeline: ArkmeRecordingSection<ArkmeRecordingVersion>
+}
+
+export interface ArkmeRecordingComparison {
+  dateStamp: number
+  system: ArkmeRecordingTranscriptSection<ArkmeRecordingWorkbenchItem>
+  doubao: ArkmeRecordingTranscriptSection<ArkmeRecordingWorkbenchItem>
+  candidateCount: number
+  failedCount: number
+  silentCount: number
 }
 
 export type ArkmeWechatMessageFilter =
@@ -3339,6 +3355,10 @@ export type ArkmeHostOperation = ArkmePluginOperation
   | 'dsh-beta-community.join'
   | 'recordings.calendar'
   | 'recordings.day'
+  | 'recordings.compare'
+  | 'recordings.compare.start'
+  | 'recordings.forward.capabilities'
+  | 'recordings.forward'
   | 'recordings.summary-model-config'
   | 'recordings.summary-model-config.set'
   | 'recordings.generate'

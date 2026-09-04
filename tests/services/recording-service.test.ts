@@ -1687,6 +1687,10 @@ function dependencies(
   return {
     recordingImportGateway,
     recordingImportOwnerGateway: recordingImportGateway,
+    forwardGateway: {
+      supportsRecordTargets: async () => false,
+      forward: async () => { throw new Error('Unexpected forward in recording read/import test') },
+    },
     recordingImportSource: new LocalRecordingImportSource(),
     ...overrides,
   }

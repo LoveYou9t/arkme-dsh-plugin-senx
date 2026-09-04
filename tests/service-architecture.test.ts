@@ -24,6 +24,7 @@ const expectedPublicMethods = [
   'listDirectory', 'directoryContactProfile', 'directoryContactWorld', 'openDirectoryContactChat', 'openDirectoryGroupChat',
   'unmarkedSpeakerOptions', 'retryUnmarkedSpeakerInference', 'unmarkedSpeakerSegments', 'markUnmarkedSpeaker',
   'createExtensionReview', 'recordingCalendar', 'recordingTranscript', 'recordingProjection',
+  'recordingComparison', 'startRecordingComparison', 'recordingForwardCapabilities', 'forwardRecording',
   'recordingSummaryModelConfig', 'setRecordingSummaryModelRoute', 'generateRecordingProjection',
   'sealRecordingCursor', 'openRecordingCursor', 'recordingDay', 'recordingPlayback',
   'recordingSpeakerOptions', 'assignRecordingSpeaker',
@@ -79,7 +80,7 @@ const expectedServiceFiles = [
   'conversation-list-preference-service.ts', 'conversation-directory-visibility-service.ts',
   'chat-service.ts', 'chat-realtime-service.ts', 'group-service.ts', 'group-ai-polish-service.ts',
   'desktop-attention-bridge.ts',
-  'record-service.ts', 'related-quick-note-service.ts', 'related-recording-service.ts', 'recording-service.ts', 'recording-import-gateway.ts', 'search-service.ts',
+  'record-service.ts', 'related-quick-note-service.ts', 'related-recording-service.ts', 'recording-service.ts', 'recording-import-gateway.ts', 'recording-forward-gateway.ts', 'search-service.ts',
   'media-service.ts', 'world-service.ts', 'arrangement-service.ts', 'wechat-service.ts',
   'arko-service.ts', 'ai-video-service.ts', 'outgoing-call-service.ts', 'interwoven-service.ts',
   'community-service.ts', 'extension-review-service.ts', 'calendar-service.ts',
@@ -102,6 +103,15 @@ function publicMethodNames(path: string): string[] {
 }
 
 describe('Arkme service architecture', () => {
+  it('keeps recording delivery identity outside React and pure snapshots independent of service runtime', () => {
+    const dialog = readFileSync(join(root, 'src/client/recordings/RecordingTranscriptForward.tsx'), 'utf8')
+    const attempt = readFileSync(join(root, 'src/client/recordings/recording-forward-attempt.ts'), 'utf8')
+    const projection = readFileSync(join(root, 'src/recording-forward-presentation.ts'), 'utf8')
+    expect(dialog).not.toMatch(/RecordingForwardInput|RecordingForwardReceipt|randomUUID|setTimeout|['"]recordings\.forward['"]/)
+    expect(attempt).not.toMatch(/from ['"]react['"]|callArkme|setTimeout|AbortController|services\/|node:/)
+    expect(projection).not.toMatch(/services\/|ServiceRuntime|node:/)
+  })
+
   it('preserves the public facade method contract', () => {
     expect(publicMethodNames(join(root, 'src/arkme-service.ts'))).toEqual(expectedPublicMethods)
   })
