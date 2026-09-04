@@ -1,3 +1,4 @@
+import { recordToolResults, sessionEvents } from '../helpers/tool-session.js'
 import { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import AttachmentStore, { AttachmentId } from '@deepseek-ai/dsh-attachment'
@@ -65,6 +66,7 @@ async function setup() {
   const ctx = new Context()
   await ctx.plugin(SystemPrompt)
   await ctx.plugin(ToolRuntime)
+    recordToolResults(ctx)
   return ctx
 }
 
@@ -216,11 +218,11 @@ describe('registerArkmeTools', () => {
       ...ports,
       inviteWorldVoiceprint,
     } as unknown as ArkmeToolPorts)
-    const events: Array<Record<string, unknown>> = [
+    const events = sessionEvents([
       { seq: 0, type: 'turn/start', data: { turn: 1 } },
       { seq: 1, type: 'user/message', data: { content: [{ type: 'text', text: '提醒这条动态的作者开启声纹' }], source: { kind: 'user' } } },
       { seq: 2, type: 'tool/call', data: { turn: 1, step: 1, callId: 'prepare', name: 'arkme_world_voiceprint_invite', arguments: '{}' } },
-    ]
+    ])
     const agent = {
       id: SessionId('session-world-voiceprint-invite'),
       session: { get events() { return events } },
@@ -255,11 +257,11 @@ describe('registerArkmeTools', () => {
     await mountArkmeTools(ctx, 'business', {
       ...ports, createRecognizedPersonVoiceprintInvitation,
     } as unknown as ArkmeToolPorts)
-    const events: Array<Record<string, unknown>> = [
+    const events = sessionEvents([
       { seq: 0, type: 'turn/start', data: { turn: 1 } },
       { seq: 1, type: 'user/message', data: { content: [{ type: 'text', text: '邀请小林认领这个声音并授权' }], source: { kind: 'user' } } },
       { seq: 2, type: 'tool/call', data: { turn: 1, step: 1, callId: 'prepare', name: 'arkme_voiceprint_recognized_person_invite', arguments: '{}' } },
-    ]
+    ])
     const agent = {
       id: SessionId('session-recognized-person-invite'), session: { get events() { return events } },
     } as unknown as Agent
@@ -296,11 +298,11 @@ describe('registerArkmeTools', () => {
     await mountArkmeTools(ctx, 'business', {
       ...ports, createRecognizedPersonVoiceprintInvitation,
     } as unknown as ArkmeToolPorts)
-    const events: Array<Record<string, unknown>> = [
+    const events = sessionEvents([
       { seq: 0, type: 'turn/start', data: { turn: 1 } },
       { seq: 1, type: 'user/message', data: { content: [{ type: 'text', text: '给这个已绑定的人生成邀请' }], source: { kind: 'user' } } },
       { seq: 2, type: 'tool/call', data: { turn: 1, step: 1, callId: 'prepare', name: 'arkme_voiceprint_recognized_person_invite', arguments: '{}' } },
-    ]
+    ])
     const agent = {
       id: SessionId('session-bound-person-invite'), session: { get events() { return events } },
     } as unknown as Agent
@@ -342,11 +344,11 @@ describe('registerArkmeTools', () => {
     const ctx = await setup()
     const write = vi.fn(async () => ({ ok: true }))
     await mountArkmeTools(ctx, 'business', { ...ports, [port]: write } as unknown as ArkmeToolPorts)
-    const events: Array<Record<string, unknown>> = [
+    const events = sessionEvents([
       { seq: 0, type: 'turn/start', data: { turn: 1 } },
       { seq: 1, type: 'user/message', data: { content: [{ type: 'text', text: '执行这项声纹操作' }], source: { kind: 'user' } } },
       { seq: 2, type: 'tool/call', data: { turn: 1, step: 1, callId: 'prepare', name, arguments: '{}' } },
-    ]
+    ])
     const agent = {
       id: SessionId(`session-${name}`), session: { get events() { return events } },
     } as unknown as Agent
@@ -417,9 +419,9 @@ describe('registerArkmeTools', () => {
     await mountArkmeTools(ctx, 'business', {
       ...ports, prepareRecordReedit, commitRecordReedit,
     } as unknown as ArkmeToolPorts)
-    const events: Array<Record<string, unknown>> = [
+    const events = sessionEvents([
       { seq: 1, type: 'user/message', data: { source: { kind: 'user' }, content: [{ type: 'text', text: '把这条改一下' }] } },
-    ]
+    ])
     const agent = {
       id: SessionId('session-record-reedit'), session: { get events() { return events } },
     } as unknown as Agent
@@ -480,9 +482,9 @@ describe('registerArkmeTools', () => {
     await mountArkmeTools(ctx, 'business', {
       ...ports, prepareDiscardRecordReeditDraft, discardRecordReeditDraft, commitRecordReedit,
     } as unknown as ArkmeToolPorts)
-    const events: Array<Record<string, unknown>> = [
+    const events = sessionEvents([
       { seq: 1, type: 'user/message', data: { source: { kind: 'user' }, content: [{ type: 'text', text: '放弃刚才的草稿' }] } },
-    ]
+    ])
     const agent = {
       id: SessionId('session-record-reedit-discard'), session: { get events() { return events } },
     } as unknown as Agent
@@ -520,10 +522,10 @@ describe('registerArkmeTools', () => {
     await mountArkmeTools(ctx, 'business', {
       ...ports, userBanStatus, banPrivateChatUser,
     } as unknown as ArkmeToolPorts)
-    const events: Array<Record<string, unknown>> = [
+    const events = sessionEvents([
       { seq: 0, type: 'turn/start', data: { turn: 1 } },
       { seq: 1, type: 'user/message', data: { content: [{ type: 'text', text: '封禁这个私聊用户' }], source: { kind: 'user' } } },
-    ]
+    ])
     const agent = {
       id: SessionId('session-user-ban-target-fence'), session: { get events() { return events } },
     } as unknown as Agent
@@ -562,10 +564,10 @@ describe('registerArkmeTools', () => {
     await mountArkmeTools(ctx, 'business', {
       ...ports, backgroundSoundPreference, updateBackgroundSoundPreference,
     } as unknown as ArkmeToolPorts)
-    const events: Array<Record<string, unknown>> = [
+    const events = sessionEvents([
       { seq: 0, type: 'turn/start', data: { turn: 1 } },
       { seq: 1, type: 'user/message', data: { content: [{ type: 'text', text: '关闭背景音' }], source: { kind: 'user' } } },
-    ]
+    ])
     const agent = {
       id: SessionId('session-background-sound-account-fence'), session: { get events() { return events } },
     } as unknown as Agent
@@ -657,7 +659,7 @@ describe('recording import write authorization', () => {
       userId: 42, found: true, enabled: false, eligible: true, eligibilityReason: 'eligible',
     }))
     await mountArkmeTools(ctx, 'business', { ...ports, prepareRecordingDirectory, importRecordingDirectory, backgroundSoundPreference, updateBackgroundSoundPreference })
-    const events: Array<Record<string, unknown>> = []
+    const events = sessionEvents()
     const agent = { id: SessionId('directory-intent'), session: { get events() { return events } } } as unknown as Agent
     let call = 0
     const args = { action: 'prepare', directory_path: '/recordings' }
@@ -912,7 +914,7 @@ describe('recording import write authorization', () => {
       ...item, outcome: item.outcome === 'conflict' || item.outcome === 'invalid' ? item.outcome : 'uploaded',
     }))))
     await mountArkmeTools(ctx, 'business', { ...ports, prepareRecordingDirectory, importRecordingDirectory })
-    const events: Array<Record<string, unknown>> = []
+    const events = sessionEvents()
     const agent = { id: SessionId('mixed-directory-confirmation'), session: { get events() { return events } } } as unknown as Agent
     const signal = new AbortController().signal
     const args = { action: 'prepare', directory_path: '/private/recordings' }
@@ -956,9 +958,9 @@ describe('recording import write authorization', () => {
     const prepareRecordingDirectory = vi.fn(async () => captured)
     const importRecordingDirectory = vi.fn(async () => directoryResult())
     await mountArkmeTools(ctx, 'business', { ...ports, prepareRecordingDirectory, importRecordingDirectory })
-    const events: Array<Record<string, unknown>> = [
+    const events = sessionEvents([
       { seq: 1, type: 'user/message', data: { content: [{ type: 'text', text: '导入这个目录及子目录的录音，归属其他' }], source: { kind: 'user' } } },
-    ]
+    ])
     const agent = { id: SessionId('recording-directory-confirmation'), session: { get events() { return events } } } as unknown as Agent
     const signal = new AbortController().signal
     const args = { action: 'prepare', directory_path: '/private/folder', ownership: 'other' }
@@ -991,9 +993,9 @@ describe('recording import write authorization', () => {
     const retryRecordingImport = vi.fn(async () => job)
     const recordingImportStatus = vi.fn(async () => job)
     await mountArkmeTools(ctx, 'business', { ...ports, importRecordingFile, retryRecordingImport, recordingImportStatus } as unknown as ArkmeToolPorts)
-    const events: Array<Record<string, unknown>> = [
+    const events = sessionEvents([
       { seq: 1, type: 'user/message', data: { content: [{ type: 'text', text: '导入这份录音' }], source: { kind: 'user' } } },
-    ]
+    ])
     const agent = { id: SessionId(`recording-${args.action}`), session: { get events() { return events } } } as unknown as Agent
     const signal = new AbortController().signal
     const prepared = await ctx.tools.execute({ callId: CallId('prepare'), name: 'arkme_recording_import', arguments: args, agent, signal })

@@ -1,6 +1,8 @@
 import { mkdtemp, mkdir, readdir, readFile, rm, unlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { CallId } from '@deepseek-ai/dsh-llm'
+import { appendToolResult, sessionEvents } from './helpers/tool-session.js'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { prepareRecordingDirectory, importRecordingDirectory } from '../src/recording-directory-import.js'
 import { LocalRecordingDirectorySource } from '../src/recording-directory-source.js'
@@ -9,11 +11,16 @@ import { LocalRecordingImportSource } from '../src/recording-import-probe.js'
 import { RecordingService } from '../src/services/recording-service.js'
 import { ServiceRuntime, type ArkmeServiceConfig } from '../src/services/service.js'
 import { ArkmeStateStore } from '../src/state-store.js'
+import { ArkmeLocalDatabase } from '../src/local-database.js'
 import { RecordingImportContractError, type RecordingImportOwnerGateway, type RecordingDirectoryUploadedSession } from '../src/recording-import-contract.js'
 import type { RecordingImportGateway } from '../src/recording-import-coordinator.js'
 
 const roots: string[] = []
-afterEach(async () => { await Promise.all(roots.splice(0).map(path => rm(path, { recursive: true, force: true }))) })
+const databases: ArkmeLocalDatabase[] = []
+afterEach(async () => {
+  for (const database of databases.splice(0)) database.close()
+  await Promise.all(roots.splice(0).map(path => rm(path, { recursive: true, force: true })))
+})
 
 function wav(): Buffer {
   const bytes = Buffer.alloc(16_044)
@@ -56,14 +63,19 @@ async function fixture(count: number) {
   }
   const sessions = { read: async () => ({ userId: 42, accessToken: 'access', refreshToken: 'refresh' }), write: async () => {}, delete: async () => {} }
   const store = new ArkmeStateStore(join(root, 'state'))
-  const service = new RecordingService(new ServiceRuntime(config, sessions, store), {
+  const runtime = (state: ArkmeStateStore) => {
+    const database = new ArkmeLocalDatabase(join(root, 'state'), state)
+    databases.push(database)
+    return new ServiceRuntime(config, sessions, database)
+  }
+  const service = new RecordingService(runtime(store), {
     recordingImportGateway: gateway, recordingImportOwnerGateway: gateway, recordingImportSource: new LocalRecordingImportSource(),
   })
   const source = new LocalRecordingDirectorySource(uploads)
   const input = { directoryPath, recursive: true, ownership: 'self' as const }
   const run = async (signal?: AbortSignal) => importRecordingDirectory(service, source, input, await prepareRecordingDirectory(service, source, input, signal), signal)
   return { source, root, names, directoryPath, uploads, store, service, gateway, owners, run, maxActive: () => maxActiveUploads, input,
-    reopen: () => new RecordingService(new ServiceRuntime(config, sessions, new ArkmeStateStore(join(root, 'state'))), {
+    reopen: () => new RecordingService(runtime(new ArkmeStateStore(join(root, 'state'))), {
       recordingImportGateway: gateway, recordingImportOwnerGateway: gateway, recordingImportSource: new LocalRecordingImportSource(),
     }),
   }
@@ -72,23 +84,25 @@ async function fixture(count: number) {
 describe('directory import through the existing recording coordinator', () => {
   it.each([false, true])('preserves the real source snapshot through final confirmation (source changed: %s)', async changed => {
     const f = await fixture(1)
-    const events: Array<Record<string, unknown>> = []
+    const events = sessionEvents()
     const confirmation = new ArkmeConversationalConfirmation()
     const execute = vi.fn(async (prepared: Awaited<ReturnType<typeof prepareRecordingDirectory>> | undefined) =>
       await importRecordingDirectory(f.service, f.source, f.input, prepared!))
     const request = {
       agent: { id: 'real-folder-confirmation', session: { events } } as never,
+      callId: CallId('prepare'), rootCallId: CallId('prepare'),
       operationKey: 'arkme_recording_import_folder', arguments: f.input,
       prepare: async () => await prepareRecordingDirectory(f.service, f.source, f.input),
       question: '确认上传？', execute,
     }
     try {
       await expect(confirmation.prepareOrExecute(request)).resolves.toMatchObject({ status: 'confirmation_required' })
+      appendToolResult(events, 'prepare', { status: 'confirmation_required' })
       expect(execute).not.toHaveBeenCalled()
       expect(await readdir(f.uploads)).toEqual([])
       if (changed) await writeFile(join(f.directoryPath, f.names[0]!), Buffer.from('changed'))
       events.push({ seq: 1, type: 'user/message', data: { source: { kind: 'user' }, content: [{ type: 'text', text: '确认上传' }] } })
-      const result = await confirmation.prepareOrExecute(request)
+      const result = await confirmation.prepareOrExecute({ ...request, callId: CallId('upload'), rootCallId: CallId('upload') })
       expect(result).toMatchObject({ remaining: 0, counts: changed ? { invalid: 1 } : { uploaded: 1 } })
       expect(execute).toHaveBeenCalledOnce()
       expect(f.gateway.ensureSession).toHaveBeenCalledTimes(changed ? 0 : 1)
@@ -99,7 +113,7 @@ describe('directory import through the existing recording coordinator', () => {
   it('reconciles a duplicate rejected during admission without retaining a pending task or source across restart', async () => {
     const f = await fixture(1)
     const inspect = LocalRecordingImportSource.prototype.inspect
-    const probe = vi.spyOn(LocalRecordingImportSource.prototype, 'inspect').mockImplementationOnce(async function (path, metadata) {
+    const probe = vi.spyOn(LocalRecordingImportSource.prototype, 'inspect').mockImplementationOnce(async function (this: LocalRecordingImportSource, path, metadata) {
       f.owners.push({ sessionId: 'other-entry', fileName: f.names[0]!, fileSize: wav().length,
         startAtMillis: new Date(2026, 0, 2, 10).getTime(),
         durationMillis: 1000, belongUserId: 42, hasFinishedUpload: true })

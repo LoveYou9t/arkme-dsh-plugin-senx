@@ -1,6 +1,6 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
-import type { ToolDefinition } from '@deepseek-ai/dsh-tools'
+import { ToolArgsError, validateJsonSchemaValue, type ToolDefinition } from '@deepseek-ai/dsh-tools'
 import { isArkmeContextToolModule, isArkmeCoreToolModule } from '../contract/module.js'
 import type { ArkmeToolModule, ArkmeToolProfile } from '../contract/module.js'
 import type { ArkmeCoreToolPorts, ArkmeToolPorts } from '../ports/index.js'
@@ -164,6 +164,8 @@ function withCoreConversationalConfirmation(
   return {
     ...definition,
     async execute(args, exec) {
+      const violations = validateJsonSchemaValue(definition.parameters, args, '')
+      if (violations.length > 0) throw new ToolArgsError(violations)
       if (definition.name === 'arkme_recording_import'
         && typeof args === 'object' && args !== null && 'action' in args && args.action === 'status') {
         return await definition.execute(args, exec)
@@ -173,6 +175,7 @@ function withCoreConversationalConfirmation(
       const request = hooks?.confirmationRequest?.(args)
       const result = await conversation.prepareOrExecute({
         agent: exec.agent as Agent,
+        callId: exec.callId, rootCallId: exec.rootCallId,
         operationKey: definition.name,
         arguments: request === undefined ? args : request.arguments,
         ...(request === undefined ? {} : { forcePrepare: request.forcePrepare }),
