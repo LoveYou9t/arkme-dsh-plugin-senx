@@ -6,6 +6,7 @@ export function preparedDirectory(
   return { expectedUserId: 42, preview, scan: { skipped: 0, files: preview.map(item => ({
     relativePath: item.relativePath, fileName: item.relativePath.split('/').at(-1)!,
     fileSize: 1024, sourceSnapshot: `fixture-source:${item.relativePath}`,
+    startAtMillis: item.outcome === 'time_required' ? undefined : Date.UTC(2026, 0, 1),
   })) } }
 }
 

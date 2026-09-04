@@ -18,6 +18,7 @@ import type { RecordingImportGateway } from '../src/recording-import-coordinator
 const roots: string[] = []
 const databases: ArkmeLocalDatabase[] = []
 afterEach(async () => {
+  vi.unstubAllEnvs()
   for (const database of databases.splice(0)) database.close()
   await Promise.all(roots.splice(0).map(path => rm(path, { recursive: true, force: true })))
 })
@@ -82,6 +83,27 @@ async function fixture(count: number) {
 }
 
 describe('directory import through the existing recording coordinator', () => {
+  it.each(['during preflight', 'after preflight'])('keeps the approved recording instant when the host timezone changes %s', async when => {
+    vi.stubEnv('TZ', 'Asia/Shanghai')
+    const f = await fixture(1)
+    const startAtMillis = Date.parse('2026-01-02T02:00:00Z')
+    if (when === 'during preflight') {
+      vi.mocked(f.gateway.findExistingFileNames).mockImplementationOnce(async () => {
+        vi.stubEnv('TZ', 'America/New_York')
+        return []
+      })
+    }
+    try {
+      const prepared = await prepareRecordingDirectory(f.service, f.source, f.input)
+      vi.stubEnv('TZ', 'America/New_York')
+      const result = await importRecordingDirectory(f.service, f.source, f.input, prepared)
+      expect(result.counts.uploaded).toBe(1)
+      expect(f.gateway.ensureSession).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ startAtMillis }), expect.any(AbortSignal))
+      expect(f.owners[0]?.startAtMillis).toBe(startAtMillis)
+      expect((await f.store.listRecordingImportJobs(42))[0]?.startAtMillis).toBe(startAtMillis)
+    } finally { f.service.dispose() }
+  })
+
   it.each([false, true])('preserves the real source snapshot through final confirmation (source changed: %s)', async changed => {
     const f = await fixture(1)
     const events = sessionEvents()
