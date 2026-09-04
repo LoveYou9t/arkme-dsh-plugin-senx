@@ -2568,6 +2568,7 @@ export function ArkmeSurface({
   const surfaceRef = useRef<HTMLDivElement>(null)
   const panelRef = useRef<HTMLElement>(null)
   const bodyRef = useRef<HTMLDivElement>(null)
+  const endAccessoryRef = useRef<HTMLDivElement>(null)
   const sentinelRef = useRef<HTMLDivElement>(null)
   const newerSentinelRef = useRef<HTMLDivElement>(null)
   const composerRef = useRef<HTMLDivElement>(null)
@@ -6261,7 +6262,7 @@ export function ArkmeSurface({
     conversationCacheRef.current.storeViewport(pending.sourceKey, arkmeConversationViewport(body))
     pendingViewportRestoreRef.current = undefined
   }, [active, displayRows, timelineStateKey])
-  useConversationResizeAnchor(bodyRef, active && activeConversation ? conversationKey : undefined)
+  useConversationResizeAnchor(bodyRef, active && activeConversation ? conversationKey : undefined, endAccessoryRef)
   const handleConversationScroll = useCallback(() => {
     const body = bodyRef.current
     if (body === null || timelineStateKey === '') return
@@ -6703,6 +6704,7 @@ export function ArkmeSurface({
           </div> : <>
           <div className="arkme-conversation-body" ref={bodyRef} style={{
             ...styles.body,
+            ...(displayRows.length === 0 ? { display: 'flex', flexDirection: 'column' as const } : {}),
             ...(activeSelectMode === undefined ? {} : styles.bodySelectMode),
           }} onScroll={handleConversationScroll}>
             {error !== '' && <div style={styles.error}>{error}</div>}
@@ -6949,14 +6951,17 @@ export function ArkmeSurface({
               })}
             </ul>}
             <div ref={newerSentinelRef} style={styles.sentinel} />
+            <div ref={endAccessoryRef} style={{ flexShrink: 0, ...(displayRows.length === 0 ? { marginTop: 'auto' } : {}) }}>
+              {activeConversation && activeSelectMode === undefined && !newerHasMore
+                && timelineStateKey === conversationKey && timelineLoadingKey !== conversationKey && error === ''
+                && (source?.kind === 'private_chat' || source?.kind === 'group_chat')
+                && source.sourceKey !== undefined && authenticatedAccountKey !== undefined
+                && <ArkmeMessagePreparingIndicator sourceKey={source.sourceKey} accountScope={authenticatedAccountKey} />}
+            </div>
             {newMessageCount > 0 && <button type="button" style={styles.newMessages} onClick={scrollToLatest}>
               {newMessageCount} 条新消息
             </button>}
           </div>
-          {activeConversation && activeSelectMode === undefined
-            && (source?.kind === 'private_chat' || source?.kind === 'group_chat')
-            && source.sourceKey !== undefined && authenticatedAccountKey !== undefined
-            && <ArkmeMessagePreparingIndicator sourceKey={source.sourceKey} accountScope={authenticatedAccountKey} />}
           {activeSelectMode !== undefined && <div style={styles.selectBar} role="toolbar" aria-label={`已选择 ${selectedMessageCount} 条消息`}>
             {(() => {
               const copyTextEnabled = arkmeCanCopySelectedMessageText(selectedMessageItems.length, messageActionBusy !== undefined)

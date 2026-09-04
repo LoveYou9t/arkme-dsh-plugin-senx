@@ -131,7 +131,6 @@ describe('preparing production wiring', () => {
     const submit = sidebar.slice(sidebar.indexOf('const send = async'), sidebar.indexOf('const updateComposerText ='))
     expect(submit.indexOf('messagePreparing.stop()')).toBeGreaterThan(submit.indexOf("if (textContent === '' && readyDraft.attachments.length === 0) return"))
     expect(sidebar).toContain('<ArkmeMessagePreparingIndicator sourceKey={source.sourceKey} accountScope={authenticatedAccountKey} />')
-    expect(sidebar.indexOf('<ArkmeMessagePreparingIndicator')).toBeGreaterThan(sidebar.indexOf('{newMessageCount > 0 &&'))
     const atomicEdits = sidebar.slice(sidebar.indexOf('const insertMemberMentionAt'), sidebar.indexOf('const updateComposerRichTrigger'))
     expect(atomicEdits.match(/focusEditedComposer\((cursor|caretIndex)\)/g)).toHaveLength(5)
     const deletionStart = sidebar.indexOf('const caret = arkmeComposerDraftStore.deleteMentionAtSelection')
