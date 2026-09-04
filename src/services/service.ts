@@ -13,6 +13,7 @@ import type {
   ArkmeEnvironment,
   ArkmeLongArticleDraft,
   ArkmePendingWrite,
+  ArkmeRecordReeditDraft,
   ArkmeRecordCursor,
   ArkmeSelfRecordList,
   ArkmeSelfSummary,
@@ -50,6 +51,21 @@ export interface StateStore {
   getLongArticleDraft(userId: number, sourceRef: string, itemUid?: string): Promise<ArkmeLongArticleDraft | undefined>
   putLongArticleDraft(userId: number, draft: ArkmeLongArticleDraft): Promise<void>
   removeLongArticleDraft(userId: number, sourceRef: string, itemUid?: string): Promise<void>
+  getRecordReeditDraft(
+    userId: number,
+    sourceIdentityKey: string,
+    itemUid: string,
+  ): Promise<ArkmeRecordReeditDraft | undefined>
+  putRecordReeditDraft(
+    userId: number,
+    draft: Omit<ArkmeRecordReeditDraft, 'draftRevision'>,
+  ): Promise<ArkmeRecordReeditDraft>
+  removeRecordReeditDraft(
+    userId: number,
+    sourceIdentityKey: string,
+    itemUid: string,
+    expectedRevision: number,
+  ): Promise<boolean>
   listRecordingImportJobs(userId: number): Promise<RecordingImportJob[]>
   listAllRecordingImportJobs(): Promise<RecordingImportJob[]>
   getRecordingImportJob(userId: number, jobId: string): Promise<RecordingImportJob | undefined>
