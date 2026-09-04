@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import type { RecordingImportJob, RecordingImportSource } from '../src/recording-import-contract.js'
+import { RecordingImportContractError, type RecordingImportJob, type RecordingImportSource } from '../src/recording-import-contract.js'
 import {
   RecordingImportCoordinator,
   type RecordingImportGateway,
@@ -53,6 +53,50 @@ function source(): RecordingImportSource {
 }
 
 describe('RecordingImportCoordinator', () => {
+  it('releases only a rejected duplicate source after persisting the failure and preserves its identity', async () => {
+    const store = memoryStore(job())
+    const owner = gateway()
+    vi.mocked(owner.ensureSession).mockRejectedValue(new RecordingImportContractError('recording-import-duplicate', 'duplicate'))
+    const input = source()
+    vi.mocked(input.discard).mockImplementation(async () => {
+      expect(store.value).toMatchObject({ phase: 'failed', sourceHandle: '', sha256: 'a'.repeat(64) })
+    })
+    await new RecordingImportCoordinator(store, owner, input, async () => 42).run(42, 'job-1')
+    expect(input.discard).toHaveBeenCalledWith('/private/job-1.upload')
+    expect(owner.deleteSession).not.toHaveBeenCalled()
+    expect(store.value).toMatchObject({ failedFromPhase: 'prepared', retryable: false, uploadedBytes: 0 })
+  })
+
+  it.each([
+    { sessionId: 'owned-session' }, { childId: 'owned-child' }, { uploadedBytes: 1 },
+    { uploadCheckpoint: { uploadId: 'checkpoint' } }, { childFinished: true },
+  ])('retains the source when a duplicate error coexists with owner evidence: %o', async evidence => {
+    const store = memoryStore(job(evidence))
+    const owner = gateway()
+    const duplicate = new RecordingImportContractError('recording-import-duplicate', 'duplicate')
+    vi.mocked(owner.ensureSession).mockRejectedValue(duplicate)
+    vi.mocked(owner.createChild).mockRejectedValue(duplicate)
+    const input = source()
+    await new RecordingImportCoordinator(store, owner, input, async () => 42).run(42, 'job-1')
+    expect(store.value).toMatchObject({ phase: 'failed', sourceHandle: '/private/job-1.upload', ...evidence })
+    expect(input.discard).not.toHaveBeenCalled()
+    expect(owner.deleteSession).not.toHaveBeenCalled()
+  })
+
+  it('keeps the failed checkpoint when retry is cancelled during the task read', async () => {
+    const store = memoryStore(job({ phase: 'failed', failedFromPhase: 'uploading', retryable: true }))
+    const controller = new AbortController()
+    const read = store.getRecordingImportJob.bind(store)
+    vi.spyOn(store, 'getRecordingImportJob').mockImplementationOnce(async (...args) => {
+      const result = await read(...args); controller.abort(); return result
+    })
+    const owner = gateway()
+    const coordinator = new RecordingImportCoordinator(store, owner, source(), async () => 42)
+    await expect(coordinator.resumeRetry(42, 'job-1', 1, controller.signal)).rejects.toThrow()
+    expect(store.value).toMatchObject({ phase: 'failed', revision: 1 })
+    expect(owner.upload).not.toHaveBeenCalled()
+  })
+
   it('reuses owner checkpoints and completes the desktop upload sequence', async () => {
     const store = memoryStore(job())
     const owner = gateway()
