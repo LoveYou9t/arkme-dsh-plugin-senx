@@ -8,6 +8,50 @@ function agent(events: Array<Record<string, unknown>>) {
 }
 
 describe('Arkme conversational confirmation', () => {
+  it.each(['pending', 'completed', 'no-question'] as const)('preserves a newer operation when a delayed preparation returns (%s)', async scenario => {
+    const events: Array<Record<string, unknown>> = []
+    const current = agent(events)
+    const conversation = new ArkmeConversationalConfirmation()
+    let release!: () => void
+    const ready = new Promise<void>(resolve => { release = resolve })
+    const staleExecute = vi.fn()
+    const delayed = conversation.prepareOrExecute({
+      agent: current, operationKey: 'folder', arguments: {}, prepare: async () => { await ready },
+      question: () => scenario === 'no-question' ? undefined : '上传？', execute: staleExecute,
+    }).then(value => ({ value }), error => ({ error }))
+    const execute = vi.fn(async () => 'saved')
+    const other = { agent: current, operationKey: 'record', arguments: {}, question: '保存？', execute }
+    try {
+      await expect(conversation.prepareOrExecute(other)).resolves.toMatchObject({ question: '保存？' })
+      if (scenario === 'completed') {
+        events.push({ seq: 1, type: 'user/message', data: { source: { kind: 'user' }, content: [] } })
+        await expect(conversation.prepareOrExecute(other)).resolves.toBe('saved')
+      }
+    } finally { release() }
+    expect(await delayed).toMatchObject({ error: expect.objectContaining({ message: expect.stringMatching(/已变化/) }) })
+    expect(staleExecute).not.toHaveBeenCalled()
+    if (scenario !== 'completed') {
+      events.push({ seq: 1, type: 'user/message', data: { source: { kind: 'user' }, content: [] } })
+      await expect(conversation.prepareOrExecute(other)).resolves.toBe('saved')
+    }
+    expect(execute).toHaveBeenCalledOnce()
+  })
+
+  it('does not publish a preparation after the user cancels or changes the request', async () => {
+    const events: Array<Record<string, unknown>> = []
+    const conversation = new ArkmeConversationalConfirmation()
+    let release!: () => void
+    const ready = new Promise<void>(resolve => { release = resolve })
+    const delayed = conversation.prepareOrExecute({
+      agent: agent(events), operationKey: 'folder', arguments: {}, question: '上传？',
+      prepare: async () => { await ready }, execute: vi.fn(),
+    })
+    events.push({ seq: 1, type: 'user/message', data: { source: { kind: 'user' }, content: [{ type: 'text', text: '取消上传' }] } })
+    const rejected = expect(delayed).rejects.toThrow(/已变化/)
+    release()
+    await rejected
+  })
+
   it('does not let concurrent preparation replace the scope awaiting confirmation', async () => {
     const conversation = new ArkmeConversationalConfirmation()
     let release!: () => void
