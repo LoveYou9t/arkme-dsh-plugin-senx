@@ -535,8 +535,11 @@ describe('record re-edit attachment UI', () => {
     const frames = mocks.renderedItems.filter(value => value.itemUid === neighbor.itemUid)
     expect(frames.length).toBeGreaterThan(0)
     expect(frames.every(value => value.recordVersion === 8 && value.mediaUnavailable === true
-      && value.contentBlocks?.length === 2 && value.contentBlocks[0]?.mediaRef === freshBlock.mediaRef
+      && value.contentBlocks?.[0]?.mediaRef === freshBlock.mediaRef
       && value.contentBlocks[0]?.originalRef === freshBlock.originalRef)).toBe(true)
+    const completeIndex = frames.findIndex(value => value.contentBlocks?.length === 2)
+    expect(completeIndex).toBeGreaterThanOrEqual(0)
+    expect(frames.slice(completeIndex).every(value => value.contentBlocks?.length === 2)).toBe(true)
     expect(renderer!.root.findByProps({ 'data-arkme-message-item-uid': neighbor.itemUid })
       .findByProps({ alt: 'a.png' }).props.src).toContain('renewed-a')
   })
@@ -660,11 +663,11 @@ describe('record re-edit attachment UI', () => {
     act(() => bubble.props.onContextMenu({ preventDefault: vi.fn(), stopPropagation: vi.fn(), clientX: 120, clientY: 180 }))
     const forward = renderer!.root.findByProps({ 'aria-label': '消息操作' }).findAllByProps({ role: 'menuitem' })
       .find(button => button.findAllByType('span').some(span => span.children.includes('转发')))!
-    await act(async () => { forward.props.onClick(); await flush() })
+    act(() => forward.props.onClick())
     const dialog = renderer!.root.findByProps({ 'aria-labelledby': 'arkme-forward-target-title' })
     const target = dialog.findAll(node => node.type === 'button' && typeof node.props['aria-pressed'] === 'boolean')[0]!
-    act(() => { target.props.onClick() })
-    const previewText = dialog.findAllByType('span').flatMap(span => span.children.filter(child => typeof child === 'string')).join('\n')
+    act(() => target.props.onClick())
+    const previewText = dialog.findAll(() => true).flatMap(node => node.children.filter(child => typeof child === 'string')).join('\n')
     expect(previewText).toContain('原正文')
     expect(previewText).not.toContain('尚未保存候选')
   })

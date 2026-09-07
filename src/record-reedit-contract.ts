@@ -1,4 +1,5 @@
 import type { ArkmeContentBlock, ArkmeSourceKind, ArkmeUploadedAsset } from './types.js'
+import type { ArkmeTextFormat } from './markdown.js'
 import type { ArkmeLocalFile } from './file-transfer-contract.js'
 
 export type ArkmeRecordReeditAttachmentSelection =
@@ -112,6 +113,7 @@ export interface ArkmeRecordReeditEditorSnapshot {
   itemUid: string
   title: string
   textContent: string
+  textFormat?: ArkmeTextFormat
   sendAtMillis: number
   templateKind: number
   displayKind: number

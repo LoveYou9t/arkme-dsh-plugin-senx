@@ -63,6 +63,42 @@ async function setup(overrides: Record<string, unknown> = {}, onCommitted?: () =
 const target = { sourceRef: 'source', itemUid: 'r1' }
 
 describe('Record attachment re-edit', () => {
+  it.each(['ui', 'tool'] as const)('preserves Markdown whitespace while %s replaces attachments', async entry => {
+    const text = '    code\n'
+    const x = await setup({ text_content: text,
+      content_payload: { payload_kind: 2, schema_version: 1, text_format: 'markdown', text_state: 1,
+        media_refs: [media('a'), media('b', 1)] } })
+    try {
+      const input = { ...target, expectedVersion: 7, attachments: [{ fileAssetUid: 'b' }, { fileRef }] }
+      if (entry === 'ui') {
+        await x.service.recordReeditEditor('source', 'r1')
+        await x.service.submitRecordReedit(input)
+        await vi.waitFor(async () => expect((await x.service.recordReeditSubmissions('source'))[0]?.state).toBe('committed'))
+      } else {
+        const context = await x.service.prepareRecordReedit(input)
+        await x.service.commitRecordReedit(context)
+      }
+      expect(x.writes).toHaveLength(1)
+      expect(x.writes[0]).toMatchObject({ text_content: text,
+        content_payload: { text_format: 'markdown', media_refs: [{ file_asset_uid: 'b' }, { file_asset_uid: 'new-asset' }] } })
+    } finally { x.service.dispose() }
+  })
+
+  it('does not treat a Markdown indentation change as the same in-flight candidate', async () => {
+    const x = await setup({ content_payload: { payload_kind: 2, schema_version: 1, text_format: 'markdown', text_state: 1,
+      media_refs: [media('a'), media('b', 1)] } })
+    const gate = new Promise<never>(() => {})
+    x.files.uploadRefs.mockImplementationOnce(() => gate)
+    try {
+      await x.service.recordReeditEditor('source', 'r1')
+      const input = { ...target, expectedVersion: 7, newText: 'code', attachments: [{ fileRef }] }
+      const receipt = await x.service.submitRecordReedit(input)
+      expect((await x.service.submitRecordReedit(input)).submissionId).toBe(receipt.submissionId)
+      await expect(x.service.submitRecordReedit({ ...input, newText: '    code\n' }))
+        .rejects.toMatchObject({ code: 'record-reedit-in-progress' })
+    } finally { x.service.dispose() }
+  })
+
   it.each([false, true])('does not block another Record while rebuilding an editor (rebuild fails: %s)', async fails => {
     const x = await setup()
     const owners = new Map(['r1', 'r2'].map(record_uid => [record_uid, { ...structuredClone(x.core), record_uid } as Record<string, unknown>]))
