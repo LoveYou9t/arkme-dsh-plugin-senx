@@ -1554,6 +1554,8 @@ export interface ArkmeTimelineItem {
   sendAtMillis: number
   title: string
   textContent: string
+  /** Safe rich preview retained from raw Chat metadata even when media delivery URLs are unavailable. */
+  conversationPreview?: string
   status: number
   sequence?: number
   recordVersion?: number

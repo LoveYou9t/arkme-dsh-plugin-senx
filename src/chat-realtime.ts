@@ -90,6 +90,7 @@ export interface ArkmeChatRealtimeNotice {
   /** Host-only receiving connection evidence; never project these fields to Browser. */
   connectionUserId?: number
   connectionSignal?: AbortSignal
+  connectionStartedAtMillis?: number
   projectionInvalidation?: ArkmeProjectionInvalidatedHint
   conversationListPreferenceUpdated?: ArkmeConversationListPreferenceUpdatedHint
 }
@@ -569,10 +570,17 @@ export class ArkmeChatRealtimeRuntime {
       }
       this.reportIdentityCapability(response)
       acceptedAtMillis = this.now()
+      const responseDateMillis = Date.parse(response.headers.get('date') ?? '')
+      const connectionStartedAtMillis = Number.isFinite(responseDateMillis) && responseDateMillis > 0
+        ? responseDateMillis : undefined
       this.connected = true
       this.lastAcceptedAccessToken = session.accessToken
       this.connectionGeneration += 1
-      this.advanceRevision('reconcile')
+      this.advanceRevision('reconcile', {
+        connectionUserId: session.userId,
+        connectionSignal: controller.signal,
+        ...(connectionStartedAtMillis === undefined ? {} : { connectionStartedAtMillis }),
+      })
       leaseTimer = setTimeout(() => controller.abort(new Error('chat SSE lease rotation')), this.leaseDurationMs)
       const reader = response.body.getReader()
       const decoder = new TextDecoder()
@@ -583,10 +591,10 @@ export class ArkmeChatRealtimeRuntime {
         buffer += decoder.decode(next.value, { stream: true })
         const lines = buffer.split(/\r?\n/)
         buffer = lines.pop() ?? ''
-        for (const line of lines) this.acceptLine(line, session.userId, controller.signal)
+        for (const line of lines) this.acceptLine(line, session.userId, controller.signal, connectionStartedAtMillis)
       }
       buffer += decoder.decode()
-      if (buffer !== '') this.acceptLine(buffer, session.userId, controller.signal)
+      if (buffer !== '') this.acceptLine(buffer, session.userId, controller.signal, connectionStartedAtMillis)
       await reader.cancel().catch(() => undefined)
     } finally {
       controller.abort()
@@ -629,7 +637,12 @@ export class ArkmeChatRealtimeRuntime {
     }
   }
 
-  private acceptLine(line: string, connectionUserId: number, connectionSignal: AbortSignal): void {
+  private acceptLine(
+    line: string,
+    connectionUserId: number,
+    connectionSignal: AbortSignal,
+    connectionStartedAtMillis?: number,
+  ): void {
     if (connectionSignal.aborted) return
     const conversationListPreferenceUpdated = decodeArkmeConversationListPreferenceUpdatedDataLine(line)
     const projectionInvalidation = conversationListPreferenceUpdated === undefined
@@ -670,13 +683,22 @@ export class ArkmeChatRealtimeRuntime {
     } else if (projectionInvalidation !== undefined) {
       this.advanceRevision('projection-invalidation', { projectionInvalidation })
     } else if (timelineChanged !== undefined) {
-      this.advanceRevision('chat-hint', { timelineChanged })
+      this.advanceRevision('chat-hint', {
+        timelineChanged, connectionUserId, connectionSignal,
+        ...(connectionStartedAtMillis === undefined ? {} : { connectionStartedAtMillis }),
+      })
     } else if (readCursorAdvanced !== undefined) {
       this.advanceRevision('chat-hint', { readCursorAdvanced })
     } else if (messagePreparing !== undefined) {
-      this.advanceRevision('chat-hint', { messagePreparing, connectionUserId, connectionSignal })
+      this.advanceRevision('chat-hint', {
+        messagePreparing, connectionUserId, connectionSignal,
+        ...(connectionStartedAtMillis === undefined ? {} : { connectionStartedAtMillis }),
+      })
     } else if (hint !== undefined) {
-      this.advanceRevision('chat-hint', { hint, connectionUserId, connectionSignal })
+      this.advanceRevision('chat-hint', {
+        hint, connectionUserId, connectionSignal,
+        ...(connectionStartedAtMillis === undefined ? {} : { connectionStartedAtMillis }),
+      })
     }
   }
 
@@ -690,6 +712,7 @@ export class ArkmeChatRealtimeRuntime {
       messagePreparing?: ArkmeChatMessagePreparingHint
       connectionUserId?: number
       connectionSignal?: AbortSignal
+      connectionStartedAtMillis?: number
       conversationListPreferenceUpdated?: ArkmeConversationListPreferenceUpdatedHint
     } = {},
   ): void {
@@ -701,6 +724,7 @@ export class ArkmeChatRealtimeRuntime {
       messagePreparing,
       connectionUserId,
       connectionSignal,
+      connectionStartedAtMillis,
       conversationListPreferenceUpdated,
     } = evidence
     this.revision += 1
@@ -712,6 +736,7 @@ export class ArkmeChatRealtimeRuntime {
       ...(messagePreparing === undefined ? {} : { messagePreparing }),
       ...(connectionUserId === undefined ? {} : { connectionUserId }),
       ...(connectionSignal === undefined ? {} : { connectionSignal }),
+      ...(connectionStartedAtMillis === undefined ? {} : { connectionStartedAtMillis }),
       ...(hint === undefined ? {} : { hint }),
       ...(readCursorAdvanced === undefined ? {} : { readCursorAdvanced }),
       ...(projectionInvalidation === undefined ? {} : { projectionInvalidation }),
