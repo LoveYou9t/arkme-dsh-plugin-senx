@@ -431,6 +431,18 @@ export class ArkmeChatDirectoryStore {
     }
   }
 
+  confirmPin(source: ArkmeSourceItem, pinned: boolean): void {
+    if (source.kind !== 'private_chat' && source.kind !== 'group_chat') return
+    // A directory read started before this acknowledgement cannot confirm its result.
+    this.generation += 1
+    this.refreshInFlight = undefined
+    this.refreshedAtMillis = 0
+    this.isRefreshing = false
+    const targetKey = arkmeSourceIdentityKey(source)
+    this.commit(this.snapshot.sources.map(item =>
+      arkmeSourceIdentityKey(item) === targetKey ? { ...item, isPinned: pinned } : item))
+  }
+
   publish(sources: ArkmeSourceItem[]): void {
     const merged = applyDirectoryMutations(
       sources,

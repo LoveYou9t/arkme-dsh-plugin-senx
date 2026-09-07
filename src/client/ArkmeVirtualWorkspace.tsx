@@ -1509,11 +1509,6 @@ export function ArkmeNavigation({
     persistCache({ directory, selectedSourceRef: source.sourceRef })
     onActivateSurface?.()
   }
-  const updateRootSources = (nextSources: ArkmeSourceItem[]) => {
-    setSources(nextSources)
-    arkmeChatDirectory.publish(nextSources)
-    persistCache({ directory: 'root', sources: { root: nextSources } })
-  }
   const updateConversationDirectoryPin = async (
     target: { kind: 'source'; source: ArkmeSourceItem } | { kind: 'bot'; bot: ArkmeBotSummary },
     pinned: boolean,
@@ -1521,11 +1516,7 @@ export function ArkmeNavigation({
     if (directoryMutationSourceRef !== undefined || directoryMutationBotRef !== undefined) return
     const mutationUserId = authenticatedUserIdRef.current
     if (mutationUserId === undefined) return
-    const previousSources = sources
     const previousBotPreferences = botDirectoryPreferences
-    const nextSources = target.kind === 'source'
-      ? sources.map(item => item.sourceRef === target.source.sourceRef ? { ...item, isPinned: pinned } : item)
-      : sources
     const nextBotPreferences = target.kind === 'bot'
       ? updateBotDirectoryPreferences(botDirectoryPreferences, target.bot, { pinned })
       : botDirectoryPreferences
@@ -1533,16 +1524,17 @@ export function ArkmeNavigation({
     setDirectoryContextMenu(undefined)
     if (target.kind === 'source') {
       setDirectoryMutationSourceRef(target.source.sourceRef)
-      updateRootSources(nextSources)
     } else {
       setDirectoryMutationBotRef(target.bot.botRef)
     }
     try {
       if (target.kind === 'source') {
-        await callArkme<{ sourceRef: string; pinned: boolean }>('source.directory.policy.set', {
+        const result = await callArkme<{ sourceRef: string; pinned: boolean }>('source.directory.policy.set', {
           sourceRef: target.source.sourceRef,
           pinned,
         })
+        if (authenticatedUserIdRef.current !== mutationUserId) return
+        arkmeChatDirectory.confirmPin(target.source, result.pinned)
       } else {
         setBotDirectoryPreferences(nextBotPreferences)
         writeBotDirectoryPreferences(auth?.userId, nextBotPreferences)
@@ -1551,8 +1543,7 @@ export function ArkmeNavigation({
       setDirectoryActionFeedback(pinned ? '已置顶对话' : '已取消置顶')
     } catch (caught) {
       if (authenticatedUserIdRef.current !== mutationUserId) return
-      if (target.kind === 'source') updateRootSources(previousSources)
-      else {
+      if (target.kind === 'bot') {
         setBotDirectoryPreferences(previousBotPreferences)
         writeBotDirectoryPreferences(auth?.userId, previousBotPreferences)
       }

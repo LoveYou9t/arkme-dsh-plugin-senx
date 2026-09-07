@@ -1150,43 +1150,43 @@ export class SourceService {
     if (source.kind !== 'private_chat' && source.kind !== 'group_chat') {
       throw new ArkmePluginError('chat-directory-policy-invalid', '仅支持更新私聊或群聊的会话列表状态', false)
     }
-    const pinTarget = await this.resolveChatPinTarget(source, session, signal)
+    if (signal?.aborted === true) throw new DOMException('The operation was aborted', 'AbortError')
     const current = await this.runtime.authenticatedChatPost<Record<string, unknown>>(
       '/api/v1/chats/policy/get', { chat_session_uid: source.ownerRef }, session, signal,
     )
-    const updatedAt = Date.now()
-    await Promise.all([
-      this.runtime.authenticatedChatPost<Record<string, unknown>>(
-        '/api/v1/chats/policy/update',
-        {
-          chat_session_uid: source.ownerRef,
-          show_in_home_state: numberValue(current.show_in_home_state) || 1,
-          privacy_state: numberValue(current.privacy_state) || 1,
-          mute_state: numberValue(current.mute_state) || 1,
-          pin_state: pinned ? 2 : 1,
-          notify_state: numberValue(current.notify_state) || 1,
-          status: numberValue(current.status) || 1,
-          update_at: updatedAt,
-        },
-        session,
-        signal,
-      ),
-      this.runtime.authenticatedPost<Record<string, unknown>>(
-        '/api/v1/topics/pin/set',
-        {
-          topic_uid: pinTarget.subjectUid,
-          pin_state: pinned ? 1 : 2,
-          ...(pinned ? { pinned_at: updatedAt } : {}),
-        },
-        session,
-        signal,
-      ),
-    ])
+    const policyFields = ['show_in_home_state', 'privacy_state', 'mute_state', 'pin_state', 'notify_state', 'status'] as const
+    if (policyFields.some(field => !Number.isSafeInteger(current[field]) || Number(current[field]) <= 0)) {
+      throw new ArkmePluginError('chat-pin-policy-invalid', '会话设置读取不完整，请重试', true, 502)
+    }
+    // Chat owns conversation pinning. A legacy subject UID is not a personal topic UID.
+    // The Chat endpoint requires a full policy, so preserve its unrelated fields.
+    const updated = await this.runtime.authenticatedChatPost<Record<string, unknown>>(
+      '/api/v1/chats/policy/update',
+      {
+        chat_session_uid: source.ownerRef,
+        show_in_home_state: current.show_in_home_state,
+        privacy_state: current.privacy_state,
+        mute_state: current.mute_state,
+        pin_state: pinned ? 2 : 1,
+        notify_state: current.notify_state,
+        status: current.status,
+        update_at: Date.now(),
+      },
+      session,
+      signal,
+    )
+    if (updated.chat_session_uid !== source.ownerRef || (updated.pin_state !== 1 && updated.pin_state !== 2)) {
+      throw new ArkmePluginError('chat-pin-result-invalid', '无法确认置顶结果，请刷新后重试', true, 502)
+    }
+    const effectivePinned = updated.pin_state === 2
     const cacheKey = `${String(session.userId)}:${source.ownerRef}`
     const cached = this.chatSourceCache.get(cacheKey)
-    if (cached !== undefined) this.storeChatSourceByKey(cacheKey, { ...cached, isPinned: pinned })
-    this.sourceListCache.clear()
-    return { sourceRef, pinned }
+    if (cached !== undefined) this.storeChatSourceByKey(cacheKey, { ...cached, isPinned: effectivePinned })
+    this.invalidateSourceListCache(session.userId, 'root')
+    if (effectivePinned !== pinned) {
+      throw new ArkmePluginError('chat-pin-conflict', '会话置顶状态已变化，请刷新后重试', true, 409)
+    }
+    return { sourceRef, pinned: effectivePinned }
   }
 
   async chatConversationListPreferenceEntry(
@@ -1231,36 +1231,6 @@ export class SourceService {
         activityAtMillis: cached?.activeAtMillis ?? 0,
       },
     }
-  }
-
-  private async resolveChatPinTarget(
-    source: ArkmeSourceRefPayload,
-    session: ArkmeSessionCredentials,
-    signal?: AbortSignal,
-  ): Promise<{ subjectUid: string }> {
-    if (source.sidebarSubjectUid !== undefined && source.sidebarSubjectUid.trim() !== '') {
-      return { subjectUid: source.sidebarSubjectUid.trim() }
-    }
-    const detail = await this.runtime.authenticatedChatPost<Record<string, unknown>>(
-      '/api/v1/chats/detail',
-      { chat_session_uid: source.ownerRef },
-      session,
-      signal,
-      { lane: 'interactive-read', key: `chat-sidebar-target:${source.ownerRef}`, failureCooldownMs: 2_000 },
-    )
-    const target = arkmeChatDirectoryMetadataFromBundle(
-      detail,
-      source.kind === 'group_chat' ? source.ownerRef : '',
-    )
-    if (target.subjectUid === undefined) {
-      throw new ArkmePluginError(
-        'chat-sidebar-target-unavailable',
-        '未能定位该会话的跨端侧边栏数据，请刷新后重试',
-        true,
-        502,
-      )
-    }
-    return { subjectUid: target.subjectUid }
   }
 
   async listGroupSources(

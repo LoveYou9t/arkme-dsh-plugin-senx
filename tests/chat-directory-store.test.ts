@@ -29,6 +29,33 @@ describe('ArkmeChatDirectoryStore', () => {
     expect(store.getSnapshot()).toEqual({ revision: 3, sources: [], baselineReady: false, isRefreshing: false })
   })
 
+  it('accepts a fresh owner snapshot after a confirmed pin supersedes an older refresh', async () => {
+    const source = { sourceRef: 'old-ref', sourceKey: 'chat-key', kind: 'private_chat' as const, displayName: '会话', activeAtMillis: 1, unreadCount: 2, isPinned: false }
+    let releaseStale!: (value: { items: typeof source[]; directory: 'root'; hasMore: boolean }) => void
+    const loadPage = vi.fn()
+      .mockImplementationOnce(async () => await new Promise(resolve => { releaseStale = resolve }))
+      .mockResolvedValue({ directory: 'root', items: [{ ...source, sourceRef: 'new-ref', isPinned: false, unreadCount: 5 }], hasMore: false })
+    const store = new ArkmeChatDirectoryStore({ loadPage })
+    store.publish([source])
+    const stale = store.refreshRoot({ force: true })
+    store.confirmPin(source, true)
+    expect(store.getSnapshot()).toMatchObject({ isRefreshing: false, sources: [expect.objectContaining({ isPinned: true })] })
+    await store.refreshRoot({ force: true })
+    expect(loadPage).toHaveBeenCalledTimes(2)
+    releaseStale({ directory: 'root', items: [source], hasMore: false })
+    await stale
+    expect(store.getSnapshot().sources).toEqual([expect.objectContaining({ sourceRef: 'new-ref', isPinned: false, unreadCount: 5 })])
+  })
+
+  it('does not treat a personal topic pin as a chat pin acknowledgement', () => {
+    const source = { sourceRef: 'topic-ref', kind: 'topic' as const, displayName: '主题', activeAtMillis: 1, unreadCount: 0, isPinned: false }
+    const store = new ArkmeChatDirectoryStore()
+    store.publish([source])
+    const before = store.getSnapshot()
+    store.confirmPin(source, true)
+    expect(store.getSnapshot()).toBe(before)
+  })
+
   it('can exclude muted conversations from an unread total', () => {
     const store = new ArkmeChatDirectoryStore()
     store.publish([{
