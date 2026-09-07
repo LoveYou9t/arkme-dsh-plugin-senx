@@ -84,7 +84,7 @@ describe('ChatService', () => {
   it.each(['private_chat', 'group_chat'] as const)('carries partial media evidence through %s page and realtime projections', async kind => {
     const session = { userId: 42, accessToken: 'fixture', refreshToken: 'fixture' }
     const raw = { relation: { record_uid: 'r', sender_user_id: 42 }, record: { version: 8, status: 1,
-      payload: { content_payload: { media_refs: [{ file_asset_uid: 'a' }, { file_asset_uid: 'b' }] },
+      payload: { template_kind: 2, content_payload: { media_refs: [{ file_asset_uid: 'a' }, { file_asset_uid: 'b' }] },
         media_display_items: [{ file_asset_uid: 'a', file_name: 'a.png', file_kind: 1, preview_url: 'https://example.test/a' }],
       } } }
     const runtime = { config, stateStore: { uniqueCode: async () => 'fixture-signing-key' },
@@ -96,7 +96,7 @@ describe('ChatService', () => {
       profile as never, media, {} as never, {} as never,
       { currentUserAgentSourceFallback: () => undefined } as never,
       { timelineAiPolish: () => undefined } as never, {} as never)
-    const expected = { recordVersion: 8, mediaUnavailable: true, contentBlocks: [{ fileAssetUid: 'a' }] }
+    const expected = { templateKind: 2, recordVersion: 8, mediaUnavailable: true, contentBlocks: [{ fileAssetUid: 'a' }] }
     expect((await chat.readSource('source', { cursor: { beforeSequence: 1 } })).items[0]).toMatchObject(expected)
     expect((await chat.chatTimelineItems({ items: [raw] }, session, 'chat', kind))[0]).toMatchObject(expected)
   })

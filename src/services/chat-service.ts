@@ -4609,6 +4609,7 @@ export class ChatService {
           ...(forwardRecords === undefined ? {} : { forwardRecords }),
           ...(sharedRecording === undefined ? {} : { sharedRecording }),
           ...(extensionProjection === undefined ? {} : extensionProjection),
+          templateKind: numberValue(payload.template_kind),
           displayKind: numberValue(payload.display_kind),
           contentBlocks,
           ...(this.media.recordMediaUnavailable(item, contentBlocks) ? { mediaUnavailable: true } : {}),

@@ -31,6 +31,7 @@ import { arkmeMessageReadReceipts } from '../src/client/message-read-receipt-sto
 import { arkmeUi } from '../src/client/ui-controller.js'
 import { ArkmeConversationMemoryCache } from '../src/client/conversation-memory-cache.js'
 import { MediaService } from '../src/services/media-service.js'
+import { ChatService } from '../src/services/chat-service.js'
 
 const source: ArkmeSourceItem = {
   sourceRef: 'reedit-source', sourceKey: 'chat:reedit', kind: 'private_chat', displayName: '附件编辑',
@@ -96,6 +97,70 @@ describe('record re-edit attachment UI', () => {
       return { json: async () => ({ ok: true, value: await mocks.callArkme(request.operation, request.params) }) }
     }))
   }
+
+  it('can edit again after adding an image and receiving the actual realtime projection', async () => {
+    const image = { ...local, fileName: 'added.png', mimeType: 'image/png', fileKind: 1 as const }
+    const attachments = [existing('a'), {
+      asset: { fileAssetUid: 'image', fileName: image.fileName, mimeType: image.mimeType, size: 1, fileKind: 1 as const },
+      selection: { fileAssetUid: 'image' },
+      block: { kind: 'image' as const, fileAssetUid: 'image', mediaRef: 'image-ref', fileName: image.fileName, sortOrder: 1 },
+    }]
+    const raw = { relation: { record_uid: item.itemUid, sender_user_id: 42, attach_at: 1 },
+      record: { status: 1, version: 4, payload: { template_kind: 2, display_kind: 0, text_content: '添加图片后',
+        content_payload: { media_refs: attachments.map(view => ({ file_asset_uid: view.asset.fileAssetUid })) },
+        media_display_items: attachments.map(view => ({ file_asset_uid: view.asset.fileAssetUid,
+          file_name: view.asset.fileName, file_kind: view.asset.fileKind, preview_url: `https://example.test/${view.asset.fileAssetUid}` })),
+      } } }
+    const session = { userId: 42, accessToken: 'fixture', refreshToken: 'fixture' }
+    const runtime = { config: { environment: 'test' }, stateStore: { uniqueCode: async () => 'fixture-signing-key' } }
+    const media = new MediaService(runtime as never, {} as never, {} as never, { recordUid: () => item.itemUid })
+    const chat = new ChatService(runtime as never, {} as never, { sealProfileImageRef: async () => 'avatar' } as never,
+      media, {} as never, {} as never, { currentUserAgentSourceFallback: () => undefined } as never,
+      { timelineAiPolish: () => undefined } as never, {} as never)
+    const [delta] = await chat.chatTimelineItems({ items: [raw] }, session, 'chat', 'private_chat')
+    let submitted = false
+    const base = mocks.callArkme.getMockImplementation()!
+    mocks.callArkme.mockImplementation(async (operation, params) => {
+      if (operation === 'source.record-reedit.detail') return submitted
+        ? { ...baseline(), version: 4, textContent: '添加图片后', attachments } : { ...baseline(), attachments: [existing('a')] }
+      if (operation === 'source.timeline' && submitted) return { source, hasMore: false,
+        items: [{ ...item, templateKind: 2, recordVersion: 4, textContent: '添加图片后', contentBlocks: attachments.map(view => view.block) }] }
+      if (operation === 'source.record-reedit.acknowledge') return {}
+      if (operation === 'source.record-reedit.submit') {
+        submitted = true
+        const baseVersion = Number(params?.expectedVersion)
+        return { submissionId: `image-edit-${baseVersion}`, state: 'committed', baseVersion, itemUid: item.itemUid,
+          title: '', textContent: params?.newText, attachments,
+          result: { status: 'committed', itemUid: item.itemUid, version: baseVersion + 1, revisionUid: `revision-${baseVersion}`, projectionState: 'pending' } }
+      }
+      return base(operation, params)
+    })
+    stubStage(async () => ({ json: async () => ({ ok: true, value: image }) }))
+    await mount(); await open()
+    const input = renderer!.root.findAllByType('input').find(node => node.props.type === 'file')!
+    await act(async () => {
+      input.props.onChange({ currentTarget: { files: [new File(['x'], image.fileName, { type: image.mimeType })] } })
+      await flush()
+    })
+    act(() => composer().props.onTextChange('添加图片后'))
+    await act(async () => { renderer!.root.findByProps({ 'aria-label': '保存重新编辑' }).props.onClick(); await flush() })
+    expect(mocks.callArkme).toHaveBeenCalledWith('source.record-reedit.submit', expect.objectContaining({
+      attachments: [{ fileAssetUid: 'a' }, { fileRef: image.fileRef }], expectedVersion: 3,
+    }))
+    await act(async () => { arkmeChatTimelineDelta.publish([{ source, items: [delta!] }]); await flush() })
+    const bubble = renderer!.root.findByProps({ 'data-arkme-message-item-uid': item.itemUid })
+      .findByProps({ 'aria-label': '打开快记详情' })
+    act(() => bubble.props.onContextMenu({ preventDefault: vi.fn(), stopPropagation: vi.fn(), clientX: 120, clientY: 180 }))
+    const entry = renderer!.root.findByProps({ 'aria-label': '消息操作' }).findAllByProps({ role: 'menuitem' })
+      .find(button => button.findAllByType('span').some(span => span.children.includes('重新编辑')))
+    expect(entry).toBeDefined()
+    await act(async () => { entry!.props.onClick(); await flush() })
+    expect(composer().props.value).toBe('添加图片后')
+    expect(strip().props.attachments.map((view: typeof attachments[number]) => view.selection)).toEqual(attachments.map(view => view.selection))
+    act(() => composer().props.onTextChange('再次编辑'))
+    await act(async () => { renderer!.root.findByProps({ 'aria-label': '保存重新编辑' }).props.onClick(); await flush() })
+    expect(mocks.callArkme).toHaveBeenCalledWith('source.record-reedit.submit', expect.objectContaining({ newText: '再次编辑', expectedVersion: 4 }))
+  })
 
   it('shows submitted text and attachments in place while remote saving is still pending', async () => {
     arkmeComposerDraftStore.setText(normalKey, '普通发送草稿')
