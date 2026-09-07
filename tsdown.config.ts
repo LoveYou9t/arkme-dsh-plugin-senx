@@ -27,7 +27,16 @@ export default defineConfig([
     fixedExtension: false,
     dts: false,
     clean: false,
-    deps: { alwaysBundle: ['mediabunny', 'pinyin-pro'] },
+    deps: {
+      alwaysBundle: [
+        'mediabunny',
+        'pinyin-pro',
+        'unified',
+        'remark-parse',
+        'remark-gfm',
+        'micromark-util-decode-string',
+      ],
+    },
   },
   {
     name: '@senguoyun/dsh-arkme/client',
@@ -35,6 +44,9 @@ export default defineConfig([
     outDir: 'lib',
     format: 'cjs',
     platform: 'browser',
+    // tsdown defaults CJS resolution to Node even for a browser factory.
+    // Keep conditional imports (such as vfile's #minproc) on browser entries.
+    inputOptions: { platform: 'browser' },
     target: 'es2022',
     fixedExtension: false,
     dts: false,
