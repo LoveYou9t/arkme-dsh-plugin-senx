@@ -14,6 +14,7 @@ import { ProfileService } from '../src/services/profile-service.js'
 import { SourceService } from '../src/services/source-service.js'
 import { ServiceRuntime, type ArkmeServiceConfig, type StateStore } from '../src/services/service.js'
 import type { ArkmeChatClientEvent, ArkmeSourceKind } from '../src/types.js'
+import { ArkmeMessagePreparingStore } from '../src/client/message-preparing-store.js'
 
 const wireHint = {
   t: 21, event_uid: 'preparing-event', chat_session_uid: 'raw-chat', actor_user_id: 82,
@@ -353,6 +354,7 @@ describe('Chat preparing realtime projection', () => {
         avatarRef: await f.profile.sealProfileImageRef(42, 82),
         prepareAtMillis: 100_000, expireAtMillis: 105_000, preparingState: 1,
         stateVersion: 100_001, eventAtMillis: 100_002,
+        chatConnectionGeneration: 1, chatRevision: 1,
       })
       expect(timeline.chatTimelineItems).not.toHaveBeenCalled()
       expect(f.fetchImpl).not.toHaveBeenCalled()
@@ -384,6 +386,7 @@ describe('Chat preparing realtime projection', () => {
       actorKey: await f.source.chatPreparingActorKey(42, 'raw-chat', 82),
       avatarRef: await f.profile.sealProfileImageRef(42, 82),
       prepareAtMillis: 100_000, expireAtMillis: 105_000, preparingState: 1, stateVersion: 100_001, eventAtMillis: 100_002,
+      chatConnectionGeneration: 1, chatRevision: 1,
     })
     expect(JSON.stringify(f.events)).not.toContain('raw-chat')
     expect(f.fetchImpl).not.toHaveBeenCalled()
@@ -433,10 +436,44 @@ describe('Chat preparing realtime projection', () => {
     expect(f.events[0]).toEqual({
       type: 'message-arrived', revision: 1, sourceKey: await f.source.chatDirectorySourceKey(42, 'raw-chat'),
       actorKey: await f.source.chatPreparingActorKey(42, 'raw-chat', 82), eventAtMillis: 100_100,
+      chatConnectionGeneration: 1, chatRevision: 1,
     })
     expect(schedule).toHaveBeenCalledOnce()
     expect(f.actorPresentation).not.toHaveBeenCalled()
     expect(f.fetchImpl).not.toHaveBeenCalled()
+    f.realtime.dispose()
+  })
+  it('does not revive an older preparing hint when its identity projection finishes after the message arrival', async () => {
+    const f = fixture()
+    const store = new ArkmeMessagePreparingStore(() => 100_000)
+    store.activateAccount('prod:42')
+    const actorKey = await f.source.chatPreparingActorKey(42, 'raw-chat', 82)
+    let release!: () => void
+    f.actorPresentation.mockImplementationOnce(async () => {
+      await new Promise<void>(resolve => { release = resolve })
+      return { actorKey, avatarRef: 'opaque-avatar' }
+    })
+    f.realtime.handleChatRealtimeNotice(f.notice({
+      state: { connected: true, connectionGeneration: 1, revision: 1 },
+    }))
+    await vi.waitFor(() => { expect(release).toBeTypeOf('function') })
+    f.realtime.handleChatRealtimeNotice(f.notice({
+      state: { connected: true, connectionGeneration: 1, revision: 2 },
+      messagePreparing: undefined,
+      hint: {
+        eventUid: 'message-event', chatSessionUid: 'raw-chat', relationUid: 'raw-relation', latestSequence: 3,
+        senderUserId: 82, eventAtMillis: 100_100,
+      },
+    }))
+    await vi.waitFor(() => { expect(f.events).toHaveLength(1) })
+    release()
+    await vi.waitFor(() => { expect(f.events).toHaveLength(2) })
+    for (const event of f.events) {
+      if (event.type === 'message-preparing') store.apply(event)
+      if (event.type === 'message-arrived') store.messageArrived(event)
+    }
+    expect(store.get(await f.source.chatDirectorySourceKey(42, 'raw-chat'), 'prod:42')).toEqual([])
+    store.reset()
     f.realtime.dispose()
   })
 })

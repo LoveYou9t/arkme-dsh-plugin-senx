@@ -14,29 +14,39 @@ afterEach(() => {
 })
 
 describe('preparing production wiring', () => {
-  it('does not disable a surviving realtime consumer when another surface unmounts', async () => {
+  it.each(['open', 'error', 'reconcile', 'unmount'] as const)('preserves active preparing when the non-owner surface receives %s', async action => {
     const connections: FakeEventSource[] = []
     class FakeEventSource {
+      onopen: (() => void) | null = null
+      onerror: (() => void) | null = null
       onmessage: ((event: MessageEvent<string>) => void) | null = null
       constructor() { connections.push(this) }
       close() {}
     }
     vi.stubGlobal('EventSource', FakeEventSource)
     vi.spyOn(arkmeAuthStore, 'refresh').mockResolvedValue()
-    function Consumer() {
-      useArkmeRealtimeClientEvents({ status: 'authenticated', userId: 1, environment: 'prod' }, 1, false)
+    function Consumer({ owner = false }: { owner?: boolean }) {
+      useArkmeRealtimeClientEvents({ status: 'authenticated', userId: 1, environment: 'prod' }, 1, false, { ownsMessagePreparing: owner })
       return null
     }
     function Harness({ extra = true }: { extra?: boolean }) {
-      return <><Consumer key="persistent" />{extra && <Consumer key="footer" />}</>
+      return <><Consumer key="persistent" owner />{extra && <Consumer key="footer" />}</>
     }
     await act(async () => { renderer = create(<Harness />) })
-    await act(async () => { renderer!.update(<Harness extra={false} />) })
     act(() => { connections[0]!.onmessage?.({ data: JSON.stringify({
       type: 'message-preparing', revision: 1, sourceKey: 'chat', actorKey: 'actor',
       prepareAtMillis: Date.now(), expireAtMillis: Date.now() + 5000, preparingState: 1,
-      stateVersion: Date.now(), eventAtMillis: Date.now(),
+      stateVersion: Date.now(), eventAtMillis: Date.now(), chatConnectionGeneration: 1, chatRevision: 1,
     }) } as MessageEvent<string>) })
+    expect(arkmeMessagePreparing.get('chat', 'prod:1')).toHaveLength(1)
+    await act(async () => {
+      if (action === 'open') connections[1]!.onopen?.()
+      if (action === 'error') connections[1]!.onerror?.()
+      if (action === 'reconcile') connections[1]!.onmessage?.({ data: JSON.stringify({
+        type: 'reconcile', revision: 2, connected: true, connectionGeneration: 1, refresh: 'none',
+      }) } as MessageEvent<string>)
+      if (action === 'unmount') renderer!.update(<Harness extra={false} />)
+    })
     expect(arkmeMessagePreparing.get('chat', 'prod:1')).toHaveLength(1)
   })
   it('does not let a lagging duplicate arrival from another consumer clear a newer Host projection', async () => {
@@ -49,7 +59,7 @@ describe('preparing production wiring', () => {
     vi.stubGlobal('EventSource', FakeEventSource)
     vi.spyOn(arkmeAuthStore, 'refresh').mockResolvedValue()
     function Consumer() {
-      useArkmeRealtimeClientEvents({ status: 'authenticated', userId: 1, environment: 'prod' }, 1, false)
+      useArkmeRealtimeClientEvents({ status: 'authenticated', userId: 1, environment: 'prod' }, 1, false, { ownsMessagePreparing: true })
       return null
     }
     await act(async () => { renderer = create(<><Consumer key="persistent" /><Consumer key="footer" /></>) })
@@ -60,17 +70,46 @@ describe('preparing production wiring', () => {
     const firstPreparing = {
       type: 'message-preparing', revision: 1, sourceKey: 'chat', actorKey: 'actor',
       prepareAtMillis: now, expireAtMillis: now + 5_000, preparingState: 1,
-      stateVersion: now, eventAtMillis: now,
+      stateVersion: now, eventAtMillis: now, chatConnectionGeneration: 1, chatRevision: 1,
     }
     const arrived = {
       type: 'message-arrived', revision: 2, sourceKey: 'chat', actorKey: 'actor', eventAtMillis: now,
+      chatConnectionGeneration: 1, chatRevision: 2,
     }
     emit(0, firstPreparing); emit(1, firstPreparing); emit(0, arrived)
-    emit(0, { ...firstPreparing, revision: 3, stateVersion: now + 1,
+    emit(0, { ...firstPreparing, revision: 3, chatRevision: 3, stateVersion: now + 1,
       prepareAtMillis: now + 1, eventAtMillis: now + 1 })
     expect(arkmeMessagePreparing.get('chat', 'prod:1').map(item => item.stateVersion)).toEqual([now + 1])
     emit(1, arrived)
     expect(arkmeMessagePreparing.get('chat', 'prod:1').map(item => item.stateVersion)).toEqual([now + 1])
+  })
+  it('does not grant preparing ownership to a directory-refreshing consumer by default', async () => {
+    const connections: FakeEventSource[] = []
+    class FakeEventSource {
+      onmessage: ((event: MessageEvent<string>) => void) | null = null
+      constructor() { connections.push(this) }
+      close() {}
+    }
+    vi.stubGlobal('EventSource', FakeEventSource)
+    vi.spyOn(arkmeAuthStore, 'refresh').mockResolvedValue()
+    vi.spyOn(arkmeChatDirectory, 'refreshRoot').mockResolvedValue([])
+    function Consumer() {
+      useArkmeRealtimeClientEvents({ status: 'authenticated', userId: 1, environment: 'prod' }, 1, true)
+      return null
+    }
+    arkmeMessagePreparing.activateAccount('prod:1')
+    await act(async () => { renderer = create(<Consumer />) })
+    const hint = { type: 'message-preparing' as const, revision: 1, sourceKey: 'chat', actorKey: 'actor',
+      prepareAtMillis: Date.now(), expireAtMillis: Date.now() + 5000, preparingState: 1 as const,
+      stateVersion: Date.now(), eventAtMillis: Date.now(), chatConnectionGeneration: 1, chatRevision: 1 }
+    act(() => { connections[0]!.onmessage?.({ data: JSON.stringify(hint) } as MessageEvent<string>) })
+    expect(arkmeMessagePreparing.get('chat', 'prod:1')).toHaveLength(0)
+    act(() => { arkmeMessagePreparing.apply(hint) })
+    act(() => { connections[0]!.onmessage?.({ data: JSON.stringify({
+      type: 'message-arrived', revision: 2, sourceKey: 'chat', actorKey: 'actor', eventAtMillis: Date.now(),
+      chatConnectionGeneration: 1, chatRevision: 2,
+    }) } as MessageEvent<string>) })
+    expect(arkmeMessagePreparing.get('chat', 'prod:1')).toHaveLength(1)
   })
   it('routes transient events without refreshing chat facts and fences disconnected accounts', async () => {
     const connections: FakeEventSource[] = []
@@ -86,27 +125,30 @@ describe('preparing production wiring', () => {
     const refresh = vi.spyOn(arkmeChatDirectory, 'refreshRoot').mockResolvedValue([])
     const invalidate = vi.spyOn(arkmeInterwovenInvalidation, 'invalidate')
     function Harness({ userId = 1 }: { userId?: number }) {
-      useArkmeRealtimeClientEvents({ status: 'authenticated', revision: 1, userId, environment: 'prod' }, 1, false)
+      useArkmeRealtimeClientEvents({ status: 'authenticated', revision: 1, userId, environment: 'prod' }, 1, false, { ownsMessagePreparing: true })
       return null
     }
     await act(async () => { renderer = create(<Harness />) })
     let revision = 0
+    let chatConnectionGeneration = 1
     const hint = () => ({ type: 'message-preparing', revision: ++revision, sourceKey: 'chat', actorKey: 'actor',
       prepareAtMillis: Date.now(), expireAtMillis: Date.now() + 5000, preparingState: 1,
-      stateVersion: Date.now(), eventAtMillis: Date.now() })
+      stateVersion: Date.now(), eventAtMillis: Date.now(), chatConnectionGeneration, chatRevision: revision })
     const emit = (frame: object, connection = connections[0]!) => act(() => {
       connection.onmessage?.({ data: JSON.stringify(frame) } as MessageEvent<string>)
     })
     emit(hint())
     expect(arkmeMessagePreparing.get('chat', 'prod:1')).toHaveLength(1)
     expect(refresh).not.toHaveBeenCalled(); expect(invalidate).not.toHaveBeenCalled()
-    emit({ type: 'message-arrived', revision: ++revision, sourceKey: 'chat', actorKey: 'actor', eventAtMillis: Date.now() })
+    emit({ type: 'message-arrived', revision: ++revision, sourceKey: 'chat', actorKey: 'actor', eventAtMillis: Date.now(),
+      chatConnectionGeneration, chatRevision: revision })
     expect(arkmeMessagePreparing.get('chat')).toHaveLength(0)
     expect(refresh).not.toHaveBeenCalled(); expect(invalidate).not.toHaveBeenCalled()
     act(() => { connections[0]!.onerror?.() })
     emit(hint())
     expect(arkmeMessagePreparing.get('chat')).toHaveLength(1)
     emit({ type: 'reconcile', revision: ++revision, connected: true, connectionGeneration: 2, refresh: 'none' })
+    chatConnectionGeneration = 2
     expect(arkmeMessagePreparing.get('chat')).toHaveLength(0)
     emit(hint())
     act(() => { connections[0]!.onerror?.() })

@@ -6952,8 +6952,7 @@ export function ArkmeSurface({
             </ul>}
             <div ref={newerSentinelRef} style={styles.sentinel} />
             <div ref={endAccessoryRef} style={{ flexShrink: 0, ...(displayRows.length === 0 ? { marginTop: 'auto' } : {}) }}>
-              {activeConversation && activeSelectMode === undefined && !newerHasMore
-                && timelineStateKey === conversationKey && timelineLoadingKey !== conversationKey && error === ''
+              {activeConversation && activeSelectMode === undefined
                 && (source?.kind === 'private_chat' || source?.kind === 'group_chat')
                 && source.sourceKey !== undefined && authenticatedAccountKey !== undefined
                 && <ArkmeMessagePreparingIndicator sourceKey={source.sourceKey} accountScope={authenticatedAccountKey} />}

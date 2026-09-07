@@ -9,7 +9,13 @@ interface Entry {
   version: number
   eventAt: number
   retainUntil: number
+  messageArrivedOrder?: ChatStreamOrder
   hint?: PreparingHint
+}
+
+interface ChatStreamOrder {
+  generation: number
+  revision: number
 }
 
 const MAX_ENTRIES = 256
@@ -51,9 +57,12 @@ export class ArkmeMessagePreparingStore {
         .every(value => Number.isSafeInteger(value) && value > 0)
       || (hint.preparingState !== 1 && hint.preparingState !== 2)
       || hint.expireAtMillis < hint.prepareAtMillis
-      || hint.eventAtMillis > this.now() + MAX_ACTIVE_MS) return
+      || hint.eventAtMillis > this.now() + MAX_ACTIVE_MS
+      || !validChatStreamOrder(hint)) return
     const key = identity(hint)
     const previous = this.entries.get(key)
+    if (previous?.messageArrivedOrder !== undefined
+      && compareChatStreamOrder(chatStreamOrder(hint), previous.messageArrivedOrder) <= 0) return
     const canceled = hint.preparingState === 2
     if (previous !== undefined && (hint.stateVersion < previous.version
       || (hint.stateVersion === previous.version
@@ -64,6 +73,7 @@ export class ArkmeMessagePreparingStore {
     this.put(key, {
       sourceKey: hint.sourceKey, actorKey: hint.actorKey, version: hint.stateVersion, eventAt: hint.eventAtMillis,
       retainUntil: (canceled ? this.now() : expireAt) + MARKER_TTL_MS,
+      ...(previous?.messageArrivedOrder === undefined ? {} : { messageArrivedOrder: previous.messageArrivedOrder }),
       ...(canceled ? {} : { hint: { ...hint, expireAtMillis: expireAt } }),
     })
   }
@@ -71,18 +81,25 @@ export class ArkmeMessagePreparingStore {
   messageArrived(event: MessageArrived): void {
     if (this.accountScope === undefined || !validIdentity(event)
       || !Number.isSafeInteger(event.revision) || event.revision < 0
-      || !Number.isSafeInteger(event.eventAtMillis) || event.eventAtMillis <= 0) return
+      || !Number.isSafeInteger(event.eventAtMillis) || event.eventAtMillis <= 0
+      || !validChatStreamOrder(event)) return
     const key = identity(event)
     const previous = this.entries.get(key)
-    // t17 event_at can be a client-supplied send/attach time, not a preparing
-    // version or a server ordering clock. Clear like the native client, retaining
-    // only a version we actually observed. Unknown later hints rely on their TTL.
-    // Consumers share this store: a lagging duplicate must not clear a newer Host delivery.
-    if (previous === undefined || previous.hint === undefined
-      || previous.hint.revision > event.revision) return
+    const arrivedOrder = chatStreamOrder(event)
+    if (previous?.messageArrivedOrder !== undefined
+      && compareChatStreamOrder(arrivedOrder, previous.messageArrivedOrder) <= 0) return
+    // t17 event_at is not a preparing version. The Chat SSE order only fences
+    // asynchronous Host projection: an older arrival cannot clear newer input,
+    // while a delayed older input cannot revive after an observed message.
+    if (previous?.hint !== undefined
+      && compareChatStreamOrder(arrivedOrder, chatStreamOrder(previous.hint)) < 0) {
+      this.put(key, { ...previous, messageArrivedOrder: arrivedOrder })
+      return
+    }
     this.put(key, {
       sourceKey: event.sourceKey, actorKey: event.actorKey,
-      version: previous.version, eventAt: previous.eventAt, retainUntil: this.now() + MARKER_TTL_MS,
+      version: previous?.version ?? 0, eventAt: previous?.eventAt ?? event.eventAtMillis,
+      retainUntil: this.now() + MARKER_TTL_MS, messageArrivedOrder: arrivedOrder,
     })
   }
 
@@ -130,6 +147,19 @@ function validIdentity(value: { sourceKey: string; actorKey: string }): boolean 
 
 function identity(value: { sourceKey: string; actorKey: string }): string {
   return JSON.stringify([value.sourceKey, value.actorKey])
+}
+
+function validChatStreamOrder(value: { chatConnectionGeneration: number; chatRevision: number }): boolean {
+  return Number.isSafeInteger(value.chatConnectionGeneration) && value.chatConnectionGeneration > 0
+    && Number.isSafeInteger(value.chatRevision) && value.chatRevision > 0
+}
+
+function chatStreamOrder(value: { chatConnectionGeneration: number; chatRevision: number }): ChatStreamOrder {
+  return { generation: value.chatConnectionGeneration, revision: value.chatRevision }
+}
+
+function compareChatStreamOrder(left: ChatStreamOrder, right: ChatStreamOrder): number {
+  return left.generation - right.generation || left.revision - right.revision
 }
 
 export const arkmeMessagePreparing = new ArkmeMessagePreparingStore()

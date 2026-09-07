@@ -847,7 +847,8 @@ describe('conversation send directory projection', () => {
     await act(async () => {
       arkmeMessagePreparing.activateAccount('test:42')
       arkmeMessagePreparing.apply({ type: 'message-preparing', revision: 1, sourceKey: chat.sourceKey!, actorKey: 'peer',
-        prepareAtMillis: 48, expireAtMillis: 5048, preparingState: 1, stateVersion: 48, eventAtMillis: 48 })
+        prepareAtMillis: 48, expireAtMillis: 5048, preparingState: 1, stateVersion: 48, eventAtMillis: 48,
+        chatConnectionGeneration: 1, chatRevision: 1 })
     })
     const indicator = body.findByProps({ 'data-arkme-message-preparing': true })
     const accessory = indicator.parent!.parent!
@@ -864,7 +865,8 @@ describe('conversation send directory projection', () => {
     await act(async () => {
       arkmeMessagePreparing.activateAccount('test:42')
       arkmeMessagePreparing.apply({ type: 'message-preparing', revision: 1, sourceKey: target.sourceKey!, actorKey: 'peer',
-        prepareAtMillis: 48, expireAtMillis: 5048, preparingState: 1, stateVersion: 48, eventAtMillis: 48 })
+        prepareAtMillis: 48, expireAtMillis: 5048, preparingState: 1, stateVersion: 48, eventAtMillis: 48,
+        chatConnectionGeneration: 1, chatRevision: 1 })
     })
     const body = renderer!.root.findByProps({ className: 'arkme-conversation-body' })
     expect(body.props.style).toMatchObject({ display: 'flex', flexDirection: 'column' })
@@ -875,7 +877,10 @@ describe('conversation send directory projection', () => {
     expect(renderer!.root.findAllByProps({ 'data-arkme-message-preparing': true })).toHaveLength(0)
   })
 
-  it('does not show preparing while the initial timeline is still loading', async () => {
+  it.each([target, group])('keeps $kind preparing visible while the initial timeline is still loading', async chat => {
+    activeSource = chat
+    arkmeChatDirectory.publish([chat])
+    arkmeUi.selectSource(chat)
     const pending = deferred<unknown>()
     const baseCall = mocks.callArkme.getMockImplementation()!
     mocks.callArkme.mockImplementation(async (operation: string, params?: unknown, signal?: AbortSignal) =>
@@ -883,11 +888,36 @@ describe('conversation send directory projection', () => {
     await act(async () => { renderer = create(<ArkmeSurface productChrome={false} productNavigation={false} />) })
     await act(async () => {
       arkmeMessagePreparing.activateAccount('test:42')
-      arkmeMessagePreparing.apply({ type: 'message-preparing', revision: 1, sourceKey: target.sourceKey!, actorKey: 'peer',
-        prepareAtMillis: 48, expireAtMillis: 5048, preparingState: 1, stateVersion: 48, eventAtMillis: 48 })
+      arkmeMessagePreparing.apply({ type: 'message-preparing', revision: 1, sourceKey: chat.sourceKey!, actorKey: 'peer',
+        prepareAtMillis: 48, expireAtMillis: 5048, preparingState: 1, stateVersion: 48, eventAtMillis: 48,
+        chatConnectionGeneration: 1, chatRevision: 1 })
     })
-    expect(renderer!.root.findAllByProps({ 'data-arkme-message-preparing': true })).toHaveLength(0)
-    await act(async () => { pending.resolve({ source: target, items: [], hasMore: false }); await pending.promise })
+    try {
+      expect(renderer!.root.findAllByProps({ 'data-arkme-message-preparing': true })).toHaveLength(1)
+    } finally {
+      await act(async () => { pending.resolve({ source: chat, items: [], hasMore: false }); await pending.promise })
+    }
+    expect(renderer!.root.findAllByProps({ 'data-arkme-message-preparing': true })).toHaveLength(1)
+  })
+
+  it.each([target, { ...group, displayName: '测试'.repeat(30) }])('keeps $kind preparing independent of member refresh errors', async chat => {
+    activeSource = chat
+    arkmeChatDirectory.publish([chat])
+    arkmeUi.selectSource(chat)
+    const baseCall = mocks.callArkme.getMockImplementation()!
+    mocks.callArkme.mockImplementation(async (operation: string, params?: unknown, signal?: AbortSignal) => {
+      if (operation === 'source.members') throw new Error('成员刷新失败')
+      return await baseCall(operation, params, signal)
+    })
+    await act(async () => { renderer = create(<ArkmeSurface productChrome={false} productNavigation={false} />) })
+    await act(async () => {
+      arkmeMessagePreparing.activateAccount('test:42')
+      arkmeMessagePreparing.apply({ type: 'message-preparing', revision: 1, sourceKey: chat.sourceKey!, actorKey: 'peer',
+        prepareAtMillis: 48, expireAtMillis: 5048, preparingState: 1, stateVersion: 48, eventAtMillis: 48,
+        chatConnectionGeneration: 1, chatRevision: 1 })
+    })
+    expect(renderer!.root.findAll(node => node.type === 'div' && node.children.includes('成员刷新失败'))).not.toHaveLength(0)
+    expect(renderer!.root.findByType(ArkmeRichComposerInput).props.disabled).toBe(false)
     expect(renderer!.root.findAllByProps({ 'data-arkme-message-preparing': true })).toHaveLength(1)
   })
 
@@ -1176,7 +1206,8 @@ describe('conversation send directory projection', () => {
     await act(async () => {
       arkmeMessagePreparing.activateAccount('test:42')
       arkmeMessagePreparing.apply({ type: 'message-preparing', revision: 1, sourceKey: target.sourceKey!, actorKey: 'peer',
-        prepareAtMillis: 48, expireAtMillis: 5048, preparingState: 1, stateVersion: 48, eventAtMillis: 48 })
+        prepareAtMillis: 48, expireAtMillis: 5048, preparingState: 1, stateVersion: 48, eventAtMillis: 48,
+        chatConnectionGeneration: 1, chatRevision: 1 })
     })
     expect(renderer!.root.findAllByProps({ 'data-arkme-message-preparing': true })).toHaveLength(0)
   })
@@ -3767,9 +3798,10 @@ describe('conversation send directory projection', () => {
     await act(async () => {
       arkmeMessagePreparing.activateAccount('test:42')
       arkmeMessagePreparing.apply({ type: 'message-preparing', revision: 1, sourceKey: target.sourceKey!, actorKey: 'peer',
-        prepareAtMillis: 48, expireAtMillis: 5048, preparingState: 1, stateVersion: 48, eventAtMillis: 48 })
+        prepareAtMillis: 48, expireAtMillis: 5048, preparingState: 1, stateVersion: 48, eventAtMillis: 48,
+        chatConnectionGeneration: 1, chatRevision: 1 })
     })
-    expect(renderer!.root.findAllByProps({ 'data-arkme-message-preparing': true })).toHaveLength(0)
+    expect(renderer!.root.findAllByProps({ 'data-arkme-message-preparing': true })).toHaveLength(1)
 
     act(() => {
       olderObservers.at(-1)!([{ isIntersecting: true } as IntersectionObserverEntry], {} as IntersectionObserver)

@@ -248,11 +248,15 @@ export class ChatRealtimeService {
           prepareAtMillis: preparing.prepareAtMillis, expireAtMillis: preparing.expireAtMillis,
           preparingState: preparing.preparingState, stateVersion: preparing.stateVersion,
           eventAtMillis: preparing.eventAtMillis,
+          chatConnectionGeneration: notice.state.connectionGeneration,
+          chatRevision: notice.state.revision,
         })
       } else {
         this.emitChatClientEvent({
           type: 'message-arrived', revision: this.nextChatClientRevision(), sourceKey,
           actorKey: presentation.actorKey, eventAtMillis: hint.eventAtMillis,
+          chatConnectionGeneration: notice.state.connectionGeneration,
+          chatRevision: notice.state.revision,
         })
       }
     } catch {

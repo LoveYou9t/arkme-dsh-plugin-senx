@@ -3091,12 +3091,18 @@ export type ArkmeChatClientEvent = {
   preparingState: 1 | 2
   stateVersion: number
   eventAtMillis: number
+  /** Chat SSE connection identity; distinct from the Browser delivery revision. */
+  chatConnectionGeneration: number
+  /** Ordered observation within the Chat SSE runtime; not a preparing state version. */
+  chatRevision: number
 } | {
   type: 'message-arrived'
   revision: number
   sourceKey: string
   actorKey: string
   eventAtMillis: number
+  chatConnectionGeneration: number
+  chatRevision: number
 } | {
   type: 'attention-summary'
   revision: number

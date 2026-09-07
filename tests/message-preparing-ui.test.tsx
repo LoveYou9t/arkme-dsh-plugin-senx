@@ -25,7 +25,8 @@ afterEach(() => {
 function publish(actorKey = 'actor') {
   arkmeMessagePreparing.apply({ type: 'message-preparing', revision: 1, sourceKey: 'source-key', actorKey,
     avatarRef: `image-${actorKey}`, prepareAtMillis: 100_000, expireAtMillis: 105_000,
-    preparingState: 1, stateVersion: 100_000, eventAtMillis: 100_000 })
+    preparingState: 1, stateVersion: 100_000, eventAtMillis: 100_000,
+    chatConnectionGeneration: 1, chatRevision: 1 })
 }
 
 describe('preparing UI and lifecycle integration', () => {
