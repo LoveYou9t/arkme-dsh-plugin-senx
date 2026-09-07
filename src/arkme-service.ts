@@ -363,6 +363,7 @@ export class ArkmeService {
       files: async () => await this.filesOwner().files(),
       readLocal: async ref => ({ file: (await this.filesOwner().readLocal(ref)).file }),
       uploadRefs: async refs => await this.filesOwner().uploadRefs(refs),
+      withReferences: async (refs, userId, persist) => await this.filesOwner().withReferences(refs, userId, persist),
     }, async () => { await this.realtime.invalidateRecordProjection() })
     this.search = new SearchService(this.runtime, this.record, this.media, this.source, this.privacy)
     this.bot = new BotService(this.runtime, this.source)
@@ -476,7 +477,7 @@ export class ArkmeService {
   fileCapabilities() { return this.filesOwner().capabilities() }
   async fileSearch(options: { query?: string; limit: number; cursor?: string; signal?: AbortSignal }) { return await this.search.searchFiles(options) }
   async fileSessionUser() { return (await this.runtime.requireSession()).userId }
-  async fileStage(path: string, metadata: Pick<ArkmeLocalFile, 'fileName' | 'mimeType' | 'size'>, expectedUserId?: number) { return await this.filesOwner().stage(path, metadata, expectedUserId) }
+  async fileStage(path: string, metadata: Pick<ArkmeLocalFile, 'fileName' | 'mimeType' | 'size'>, expectedUserId?: number, retention?: 'references') { return await this.filesOwner().stage(path, metadata, expectedUserId, retention) }
   async fileList() { return await this.filesOwner().files() }
   async fileReadLocal(ref: string) { return await this.filesOwner().readLocal(ref) }
   attachLocalFileOpener(openPath: (path: string, signal: AbortSignal) => Promise<void>) { this.localFileOpener = openPath }

@@ -290,10 +290,9 @@ function normalizedRecordCaptureContext(input: ArkmeRecordCaptureContext | undef
 }
 
 export class RecordService {
-  private readonly reeditBaselines = new Map<string, RecordReeditOwnerSnapshot>()
-  private readonly reeditViews = new Map<string, ArkmeRecordReeditEditorSnapshot>()
+  private readonly reeditEditors = new Map<string, { owner: RecordReeditOwnerSnapshot; view: ArkmeRecordReeditEditorSnapshot }>()
   private readonly submissions: RecordReeditSubmissions
-  private reeditAdmission: Promise<unknown> = Promise.resolve()
+  private readonly reeditAdmissions = new Map<string, Promise<unknown>>()
   private readonly activeRecordCommits = new Set<string>()
   private closed = false
   constructor(
@@ -308,7 +307,13 @@ export class RecordService {
       list: userId => this.runtime.stateStore.listRecordReeditSubmissions(userId),
       put: (userId, job, expectedId) => {
         this.assertReeditActive()
-        return this.runtime.stateStore.putRecordReeditSubmission(userId, job, expectedId)
+        const persist = async () => {
+          this.assertReeditActive()
+          await this.runtime.stateStore.putRecordReeditSubmission(userId, job, expectedId)
+        }
+        const refs = job.draft.attachments?.flatMap(item => item.fileRef === undefined ? [] : [item.fileRef]) ?? []
+        return expectedId !== job.submissionId && refs.length > 0
+          ? this.recordReeditFiles().withReferences(refs, userId, persist) : persist()
       },
       committed: async userId => {
         if ((await this.runtime.requireSession()).userId === userId && !this.closed) await onReeditCommitted?.()
@@ -354,8 +359,7 @@ export class RecordService {
   dispose(): void {
     this.closed = true
     this.submissions.dispose()
-    this.reeditBaselines.clear()
-    this.reeditViews.clear()
+    this.reeditEditors.clear()
   }
 
   private assertReeditActive(): void {
@@ -363,13 +367,18 @@ export class RecordService {
   }
 
   async saveRecordReeditDraft(input: ArkmeRecordReeditPrepareInput) {
-    return await this.prepareLocalRecordReedit(input, true)
+    return (await this.prepareLocalRecordReedit(input, true)).context
   }
 
   async submitRecordReedit(input: ArkmeRecordReeditPrepareInput) {
-    const work = this.reeditAdmission.catch(() => undefined).then(() => this.acceptRecordReedit(input))
-    this.reeditAdmission = work
-    return await work
+    const session = await this.runtime.requireSession()
+    // Source capabilities can differ while addressing the same owned Record.
+    const key = JSON.stringify([session.userId, input.itemUid.trim()])
+    const work = (this.reeditAdmissions.get(key) ?? Promise.resolve()).catch(() => undefined)
+      .then(() => this.acceptRecordReedit(input))
+    this.reeditAdmissions.set(key, work)
+    try { return await work }
+    finally { if (this.reeditAdmissions.get(key) === work) this.reeditAdmissions.delete(key) }
   }
 
   private async acceptRecordReedit(input: ArkmeRecordReeditPrepareInput) {
@@ -390,18 +399,15 @@ export class RecordService {
     if (this.activeRecordCommits.has(JSON.stringify([session.userId, identity, input.itemUid]))) {
       throw new ArkmePluginError('record-reedit-in-progress', '该快记正在提交，请稍后重新确认', false, 409)
     }
-    const context = await this.prepareLocalRecordReedit(input, false)
+    const { context, owner, view } = await this.prepareLocalRecordReedit(input, false)
     const draft = await this.runtime.stateStore.getRecordReeditDraft(context.expectedUserId, context.sourceIdentityKey, context.itemUid)
     if (!draft || draft.draftRevision !== context.draftRevision) throw new ArkmeRecordReeditDraftConflict('草稿已变化，请重新读取')
-    const key = this.reeditBaselineKey(context.expectedUserId, context.sourceRef, context.itemUid)
-    const owner = this.reeditBaselines.get(key)!
-    const view = this.reeditViews.get(key)!
     const selections = draft.attachments ?? view.attachments.map(item => item.selection)
     const attachments = await this.recordReeditAttachmentViews(owner, selections, view.attachments.flatMap(item => item.block ? [item.block] : []))
     if ((await this.runtime.requireSession()).userId !== context.expectedUserId) throw new ArkmePluginError('record-reedit-account-changed', '账号已切换，请重新打开', false, 409)
     const voiceFileAssetUid = stringValue(objectValue(owner.contentPayload?.voice).source_file_asset_uid)
     return await this.submissions.accept({ context, draft, attachments,
-      ...(voiceFileAssetUid ? { voiceFileAssetUid } : {}) })
+      ...(voiceFileAssetUid ? { voiceFileAssetUid } : {}), ...(view.voiceBlock ? { voiceBlock: view.voiceBlock } : {}) })
   }
 
   async recordReeditSubmissions(sourceRef: string) {
@@ -444,14 +450,24 @@ export class RecordService {
     }, owner, session, options.draftOnly === true)
   }
 
-  private async prepareLocalRecordReedit(input: ArkmeRecordReeditPrepareInput, draftOnly: boolean): Promise<ArkmeRecordReeditPreparedContext> {
+  private async prepareLocalRecordReedit(input: ArkmeRecordReeditPrepareInput, draftOnly: boolean) {
+    this.assertReeditActive()
     const session = await this.runtime.requireSession()
     const sourceRef = input.sourceRef.trim()
     const itemUid = input.itemUid.trim()
-    const owner = this.reeditBaselines.get(this.reeditBaselineKey(session.userId, sourceRef, itemUid))
-    if (!owner) throw new ArkmePluginError('record-reedit-context-expired', '编辑上下文已失效，草稿已保留，请重新打开', false, 409)
+    let editor = this.reeditEditors.get(this.reeditBaselineKey(session.userId, sourceRef, itemUid))
+    if (!editor) {
+      if (!Number.isSafeInteger(input.expectedVersion) || (input.expectedVersion ?? 0) <= 0) {
+        throw new ArkmePluginError('record-reedit-version-invalid', '恢复编辑上下文需要原快记版本，请重新读取后确认', false, 409)
+      }
+      editor = await this.loadRecordReeditEditor(sourceRef, itemUid, session)
+    }
+    if (input.expectedVersion !== undefined && editor.owner.version !== input.expectedVersion) {
+      throw new ArkmePluginError('record-reedit-conflict', '快记已在其他位置更新，草稿已保留，请检查后重新确认', false, 409)
+    }
     await this.source.openSourceRef(sourceRef, session.userId)
-    return await this.prepareRecordReeditCandidate({ ...input, sourceRef, itemUid }, owner, session, draftOnly)
+    const context = await this.prepareRecordReeditCandidate({ ...input, sourceRef, itemUid }, editor.owner, session, draftOnly)
+    return { context, ...editor }
   }
 
   private async prepareRecordReeditCandidate(
@@ -546,8 +562,11 @@ export class RecordService {
 
   async recordReeditEditor(sourceRefInput: string, itemUidInput: string): Promise<ArkmeRecordReeditEditorSnapshot> {
     const session = await this.runtime.requireSession()
-    const sourceRef = sourceRefInput.trim()
-    const itemUid = itemUidInput.trim()
+    return (await this.loadRecordReeditEditor(sourceRefInput.trim(), itemUidInput.trim(), session)).view
+  }
+
+  private async loadRecordReeditEditor(sourceRef: string, itemUid: string, session: ArkmeSessionCredentials) {
+    this.assertReeditActive()
     if (sourceRef === '' || itemUid === '') {
       throw new ArkmePluginError('record-reedit-target-invalid', '重新编辑目标无效', false)
     }
@@ -562,9 +581,9 @@ export class RecordService {
       if (failed) draft = await this.putRecordReeditDraft(session.userId, { ...failed.draft, lastSourceRef: sourceRef }, 0)
     }
     const selections = recordReeditMediaGroups(owner.contentPayload).map(group => ({ fileAssetUid: group.fileAssetUid }))
-    const hydration = selections.length === 0 ? undefined : await this.media.hydrateRecordMediaPage([owner.attachmentData], session)
-    const blocks = selections.length === 0 ? []
-      : this.media.richContentBlocks(owner.attachmentData, session.userId, hydration?.displayItemsByRecordUid.get(itemUid) ?? [])
+    const blocks = await this.recordReeditMediaBlocks(owner, session)
+    const voiceFileAssetUid = stringValue(objectValue(owner.contentPayload?.voice).source_file_asset_uid)
+    const voiceBlock = blocks.find(block => block.kind === 'audio' && block.fileAssetUid === voiceFileAssetUid)
     const attachments = await this.recordReeditAttachmentViews(owner, selections, blocks)
     const draftAttachments = draft?.attachments === undefined ? undefined
       : await this.recordReeditAttachmentViews(owner, draft.attachments, blocks)
@@ -583,7 +602,8 @@ export class RecordService {
       maxTextLength: owner.displayKind === 1 ? 40_000 : this.runtime.config.maxTextLength,
       preservesAttachments: recordReeditHasAttachments(owner.contentPayload),
       attachments,
-      hasVoice: stringValue(objectValue(owner.contentPayload?.voice).source_file_asset_uid) !== '',
+      hasVoice: voiceFileAssetUid !== '',
+      ...(voiceBlock ? { voiceBlock } : {}),
       maxAttachments: owner.displayKind === 1 ? 0 : 9,
       ...(draft === undefined ? {} : { draft: {
         title: draft.title,
@@ -595,13 +615,14 @@ export class RecordService {
       } }),
     }
     // Bounded editor contexts, never treated as authoritative at remote commit.
-    if (this.reeditBaselines.size >= 100) {
-      const oldest = this.reeditBaselines.keys().next().value!
-      this.reeditBaselines.delete(oldest); this.reeditViews.delete(oldest)
+    this.assertReeditActive()
+    const editor = { owner, view: snapshot }
+    this.reeditEditors.delete(baselineKey)
+    if (this.reeditEditors.size >= 100) {
+      this.reeditEditors.delete(this.reeditEditors.keys().next().value!)
     }
-    this.reeditBaselines.set(baselineKey, owner)
-    this.reeditViews.set(baselineKey, snapshot)
-    return snapshot
+    this.reeditEditors.set(baselineKey, editor)
+    return editor
   }
 
   async commitRecordReedit(context: ArkmeRecordReeditPreparedContext): Promise<ArkmeRecordReeditCommitResult> {
@@ -616,13 +637,15 @@ export class RecordService {
     const command = structuredClone({ context, draft })
     return await this.executeRecordReeditCommand(command, async (fingerprint, owner, write) => {
       const selections = draft.attachments ?? recordReeditMediaGroups(owner.contentPayload).map(group => ({ fileAssetUid: group.fileAssetUid }))
-      const attachments = await this.recordReeditAttachmentViews(owner, selections, [])
+      const blocks = await this.recordReeditMediaBlocks(owner, session)
+      const attachments = await this.recordReeditAttachmentViews(owner, selections, blocks)
       const voiceFileAssetUid = stringValue(objectValue(owner.contentPayload?.voice).source_file_asset_uid)
+      const voiceBlock = blocks.find(block => block.kind === 'audio' && block.fileAssetUid === voiceFileAssetUid)
       const latest = await this.runtime.stateStore.getRecordReeditDraft(session.userId, context.sourceIdentityKey, context.itemUid)
       if (latest?.draftRevision !== draft.draftRevision) throw new ArkmePluginError('record-reedit-draft-changed', '重新编辑草稿已变化，请重新确认', false, 409)
       let failure: unknown
       const outcome = await this.submissions.writeConfirmed({ ...command, attachments,
-        ...(voiceFileAssetUid ? { voiceFileAssetUid } : {}) }, fingerprint, async () => {
+        ...(voiceFileAssetUid ? { voiceFileAssetUid } : {}), ...(voiceBlock ? { voiceBlock } : {}) }, fingerprint, async () => {
         try {
           const current = await this.runtime.stateStore.getRecordReeditDraft(session.userId, context.sourceIdentityKey, context.itemUid)
           if (current?.draftRevision !== draft.draftRevision) throw new ArkmePluginError('record-reedit-draft-changed', '重新编辑草稿已变化，请重新确认', false, 409)
@@ -933,7 +956,12 @@ export class RecordService {
   private async putRecordReeditDraft(userId: number, draft: Omit<ArkmeRecordReeditDraft, 'draftRevision'>, expectedRevision: number): Promise<ArkmeRecordReeditDraft> {
     try {
       this.assertReeditActive()
-      return await this.runtime.stateStore.putRecordReeditDraft(userId, draft, expectedRevision)
+      const persist = async () => {
+        this.assertReeditActive()
+        return await this.runtime.stateStore.putRecordReeditDraft(userId, draft, expectedRevision)
+      }
+      const refs = draft.attachments?.flatMap(item => item.fileRef === undefined ? [] : [item.fileRef]) ?? []
+      return refs.length === 0 ? await persist() : await this.recordReeditFiles().withReferences(refs, userId, persist)
     } catch (error) {
       if (error instanceof ArkmeRecordReeditDraftConflict) {
         throw new ArkmePluginError('record-reedit-draft-changed', '重新编辑草稿已变化，请重新确认', false, 409)
@@ -1025,6 +1053,12 @@ export class RecordService {
   private recordReeditFiles(): ArkmeRecordReeditFiles {
     if (this.reeditFiles === undefined) throw new ArkmePluginError('file-flow-unavailable', '当前宿主不支持本地文件流程，请升级插件', false, 501)
     return this.reeditFiles
+  }
+
+  private async recordReeditMediaBlocks(owner: RecordReeditOwnerSnapshot, session: ArkmeSessionCredentials): Promise<ArkmeContentBlock[]> {
+    if (!recordReeditHasAttachments(owner.contentPayload)) return []
+    const hydration = await this.media.hydrateRecordMediaPage([owner.attachmentData], session)
+    return this.media.richContentBlocks(owner.attachmentData, session.userId, hydration.displayItemsByRecordUid.get(owner.itemUid) ?? [])
   }
 
   private async recordReeditAttachmentViews(
@@ -1669,6 +1703,7 @@ export class RecordService {
     const core = objectValue(item.record_core)
     const extensionProjection = this.recordExtensionProjection(raw, userId)
     const forwardRecords = projectRecordRecordingForward(item.content_payload ?? core.content_payload)
+    const contentBlocks = this.media.richContentBlocks(raw, userId, options.displayItems)
     return {
       itemUid: stringValue(item.record_uid ?? core.record_uid).trim(),
       senderName: stringValue(item.nickname).trim() || '我',
@@ -1683,11 +1718,11 @@ export class RecordService {
       updateAtMillis: numberValue(item.update_at ?? core.update_at),
       recordDurationMillis: numberValue(item.record_duration_millis ?? core.record_duration_millis),
       editDurationMillis: numberValue(item.edit_duration_millis ?? core.edit_duration_millis),
-      contentBlocks: this.media.richContentBlocks(raw, userId, options.displayItems),
+      contentBlocks,
       ...(forwardRecords === undefined ? {} : { forwardRecords }),
       ...(extensionProjection === undefined ? {} : extensionProjection),
       ...(options.selfTopic === undefined ? {} : { selfTopic: options.selfTopic }),
-      ...(options.mediaUnavailable === true ? { mediaUnavailable: true } : {}),
+      ...(options.mediaUnavailable === true || this.media.recordMediaUnavailable(raw, contentBlocks) ? { mediaUnavailable: true } : {}),
     }
   }
 
@@ -1702,6 +1737,7 @@ export class RecordService {
     if (recordUid === '') return undefined
     const extensionProjection = userId === undefined ? undefined : this.recordExtensionProjection(raw, userId)
     const forwardRecords = projectRecordRecordingForward(item.content_payload ?? core.content_payload)
+    const contentBlocks = userId === undefined ? undefined : this.media.richContentBlocks(raw, userId, options.displayItems)
     return {
       recordUid,
       sendAtMillis: numberValue(item.send_at ?? core.send_at),
@@ -1713,9 +1749,9 @@ export class RecordService {
       creationSource: recordCreationSource(raw),
       displayKind: numberValue(item.display_kind ?? core.display_kind),
       ...(forwardRecords === undefined ? {} : { forwardRecords }),
-      ...(userId === undefined ? {} : { contentBlocks: this.media.richContentBlocks(raw, userId, options.displayItems) }),
+      ...(contentBlocks === undefined ? {} : { contentBlocks }),
       ...(extensionProjection === undefined ? {} : extensionProjection),
-      ...(options.mediaUnavailable === true ? { mediaUnavailable: true } : {}),
+      ...(options.mediaUnavailable === true || (contentBlocks !== undefined && this.media.recordMediaUnavailable(raw, contentBlocks)) ? { mediaUnavailable: true } : {}),
     }
   }
 

@@ -17,6 +17,27 @@ const config: ArkmeServiceConfig = {
 }
 
 describe('MediaService', () => {
+  it('marks partially resolved media by asset identity, not just by count', () => {
+    const runtime = { config: {} } as ServiceRuntime
+    const media = new MediaService(runtime, {} as never, {} as never, { recordUid() { return 'r' } })
+    const refs = ['a', 'b'].map((file_asset_uid, sort_order) => ({ file_asset_uid, sort_order,
+      file_name: `${file_asset_uid}.png`, mime_type: 'image/png', file_kind: 1 }))
+    const raw = { record: { version: 8, payload: { content_payload: { media_refs: refs } } },
+      media_display_items: [{ ...refs[0], preview_url: 'https://example.test/a' }] }
+    const blocks = media.richContentBlocks(raw, 42)
+    expect(blocks).toHaveLength(1)
+    expect(media.recordMediaUnavailable(raw, blocks)).toBe(true)
+    expect(media.recordMediaUnavailable(raw, [blocks[0]!, { ...blocks[0]!, fileAssetUid: 'wrong' }])).toBe(true)
+    expect(media.recordMediaUnavailable(raw, [blocks[0]!, { ...blocks[0]!, fileAssetUid: 'b' }])).toBe(false)
+    expect(media.recordMediaUnavailable({ content_payload: { media_refs: [] } }, [])).toBe(false)
+    expect(media.recordMediaUnavailable({ content_payload: { media_refs: [
+      { file_asset_uid: 'background', content_file_role: 4 },
+    ] } }, [])).toBe(false)
+    expect(media.recordMediaUnavailable({ content_payload: { voice: { source_file_asset_uid: 'voice' } } }, [])).toBe(true)
+    runtime.config.richMediaRenderEnabled = false
+    expect(media.recordMediaUnavailable(raw, [])).toBe(false)
+  })
+
   it('logs the final profile image failure once with its upstream status and no signed URL', async () => {
     const session = { userId: 42, accessToken: 'SECRET_ACCESS', refreshToken: 'SECRET_REFRESH' }
     const sessions: ArkmeSessionStore = { async read() { return session }, async write() {}, async delete() {} }

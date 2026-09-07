@@ -81,6 +81,7 @@ export interface ArkmeRecordReeditSubmissionView {
   textContent: string
   attachments: ArkmeRecordReeditAttachmentView[]
   voiceFileAssetUid?: string
+  voiceBlock?: ArkmeContentBlock
   result?: ArkmeRecordReeditCommitResult
   error?: string
 }
@@ -95,6 +96,7 @@ export interface ArkmeRecordReeditCommand {
 export interface ArkmeRecordReeditSubmissionCandidate extends ArkmeRecordReeditCommand {
   attachments: ArkmeRecordReeditAttachmentView[]
   voiceFileAssetUid?: string
+  voiceBlock?: ArkmeContentBlock
 }
 
 /** Host recovery facts are independent of the browser projection. */
@@ -118,6 +120,7 @@ export interface ArkmeRecordReeditEditorSnapshot {
   preservesAttachments: boolean
   attachments: ArkmeRecordReeditAttachmentView[]
   hasVoice: boolean
+  voiceBlock?: ArkmeContentBlock
   maxAttachments: number
   draft?: {
     title: string

@@ -15,11 +15,12 @@ interface SubmissionPorts {
 }
 
 export function recordReeditSubmissionView(job: ArkmeRecordReeditSubmission): ArkmeRecordReeditSubmissionView {
-  const { submissionId, state, attachments, voiceFileAssetUid, result, error } = job
+  const { submissionId, state, attachments, voiceFileAssetUid, voiceBlock, result, error } = job
   const { itemUid, baseVersion } = job.context
   const { title, textContent } = job.draft
   return structuredClone({ submissionId, baseVersion, itemUid, state, title, textContent, attachments,
-    ...(voiceFileAssetUid ? { voiceFileAssetUid } : {}), ...(result ? { result } : {}), ...(error ? { error } : {}) })
+    ...(voiceFileAssetUid ? { voiceFileAssetUid } : {}), ...(voiceBlock ? { voiceBlock } : {}),
+    ...(result ? { result } : {}), ...(error ? { error } : {}) })
 }
 
 /** Owns only delivery of an existing Record edit, not new-message outbox semantics. */
@@ -101,8 +102,8 @@ export class RecordReeditSubmissions {
 
   private async run(initial: ArkmeRecordReeditSubmission, reconcile: boolean): Promise<void> {
     let job = initial
-    const { context, draft, attachments, voiceFileAssetUid, submissionId } = initial
-    const candidate = { context, draft, attachments, submissionId, ...(voiceFileAssetUid ? { voiceFileAssetUid } : {}) }
+    const { context, draft, attachments, voiceFileAssetUid, voiceBlock, submissionId } = initial
+    const candidate = { context, draft, attachments, submissionId, ...(voiceFileAssetUid ? { voiceFileAssetUid } : {}), ...(voiceBlock ? { voiceBlock } : {}) }
     const save = () => this.ports.put(job.context.expectedUserId, job, job.submissionId)
     const outcome = reconcile
         ? await this.ports.reconcile(job)
@@ -116,8 +117,8 @@ export class RecordReeditSubmissions {
   }
 
   private async finish(initial: ArkmeRecordReeditSubmission, outcome: RecordReeditExecutionOutcome): Promise<void> {
-    const { context, draft, attachments, voiceFileAssetUid, submissionId } = initial
-    const candidate = { context, draft, attachments, submissionId, ...(voiceFileAssetUid ? { voiceFileAssetUid } : {}) }
+    const { context, draft, attachments, voiceFileAssetUid, voiceBlock, submissionId } = initial
+    const candidate = { context, draft, attachments, submissionId, ...(voiceFileAssetUid ? { voiceFileAssetUid } : {}), ...(voiceBlock ? { voiceBlock } : {}) }
     const checkpoint = initial.expectedCommittedFingerprint
     let job: ArkmeRecordReeditSubmission
     if (outcome.kind === 'committed') {

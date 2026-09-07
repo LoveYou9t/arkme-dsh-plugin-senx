@@ -81,6 +81,26 @@ async function chatTimelineItemKeyForTest(
 }
 
 describe('ChatService', () => {
+  it.each(['private_chat', 'group_chat'] as const)('carries partial media evidence through %s page and realtime projections', async kind => {
+    const session = { userId: 42, accessToken: 'fixture', refreshToken: 'fixture' }
+    const raw = { relation: { record_uid: 'r', sender_user_id: 42 }, record: { version: 8, status: 1,
+      payload: { content_payload: { media_refs: [{ file_asset_uid: 'a' }, { file_asset_uid: 'b' }] },
+        media_display_items: [{ file_asset_uid: 'a', file_name: 'a.png', file_kind: 1, preview_url: 'https://example.test/a' }],
+      } } }
+    const runtime = { config, stateStore: { uniqueCode: async () => 'fixture-signing-key' },
+      requireSession: async () => session, authenticatedChatPost: async () => ({ items: [raw] }) }
+    const media = new MediaService(runtime as never, {} as never, {} as never, { recordUid() { return 'r' } })
+    const profile = { sealProfileImageRef: async () => 'avatar', publicProfilesByUserIds: async () => new Map() }
+    const chat = new ChatService(runtime as never,
+      { openSourceRef: async () => ({ kind, ownerRef: 'chat' }), sourceItem: async () => ({ kind }) } as never,
+      profile as never, media, {} as never, {} as never,
+      { currentUserAgentSourceFallback: () => undefined } as never,
+      { timelineAiPolish: () => undefined } as never, {} as never)
+    const expected = { recordVersion: 8, mediaUnavailable: true, contentBlocks: [{ fileAssetUid: 'a' }] }
+    expect((await chat.readSource('source', { cursor: { beforeSequence: 1 } })).items[0]).toMatchObject(expected)
+    expect((await chat.chatTimelineItems({ items: [raw] }, session, 'chat', kind))[0]).toMatchObject(expected)
+  })
+
   it('projects a private-chat extension child with the desktop parent preview contract', async () => {
     const session = { userId: 42, accessToken: 'access', refreshToken: 'refresh' }
     const sourceItem = {
@@ -128,7 +148,7 @@ describe('ChatService', () => {
     }
     const media = {
       recordContentPayload: vi.fn(() => ({})),
-      richContentBlocks: vi.fn((raw: unknown) => {
+      recordMediaUnavailable: () => false, richContentBlocks: vi.fn((raw: unknown) => {
         const relation = (raw as { relation?: { record_uid?: string } }).relation
         return relation?.record_uid === 'record-parent' ? [{
           kind: 'image', mediaRef: 'parent-image-ref', fileName: 'parent.png', mimeType: 'image/png', size: 12, sortOrder: 0,
@@ -191,7 +211,7 @@ describe('ChatService', () => {
     const chat = new ChatService(
       runtime as never, source as never,
       { publicProfilesByUserIds: vi.fn(async () => new Map()), sealProfileImageRef: vi.fn(async () => 'avatar-ref') } as never,
-      { richContentBlocks: vi.fn(() => []), recordContentPayload: vi.fn(() => ({})) } as never, {} as never, {} as never,
+      { recordMediaUnavailable: () => false, richContentBlocks: vi.fn(() => []), recordContentPayload: vi.fn(() => ({})) } as never, {} as never, {} as never,
       { currentUserAgentSourceFallback: vi.fn(() => undefined) } as never,
       { timelineAiPolish: vi.fn(() => undefined) } as never, {} as never,
     )
@@ -233,7 +253,7 @@ describe('ChatService', () => {
     const chat = new ChatService(
       runtime as never, source as never,
       { publicProfilesByUserIds: vi.fn(async () => new Map()), sealProfileImageRef: vi.fn(async () => 'avatar-ref') } as never,
-      { richContentBlocks: vi.fn(() => []), recordContentPayload: vi.fn(() => ({})) } as never,
+      { recordMediaUnavailable: () => false, richContentBlocks: vi.fn(() => []), recordContentPayload: vi.fn(() => ({})) } as never,
       {} as never, {} as never,
       { currentUserAgentSourceFallback: vi.fn(() => undefined) } as never,
       { timelineAiPolish: vi.fn(() => undefined) } as never, {} as never,
@@ -995,7 +1015,7 @@ describe('ChatService', () => {
       chatTimelineItemKey: vi.fn(async () => 'timeline-item-key'),
     }
     const profile = { sealProfileImageRef: vi.fn(async () => 'avatar-ref') }
-    const media = { richContentBlocks: vi.fn(() => []), recordContentPayload: vi.fn(() => ({})) }
+    const media = { recordMediaUnavailable: () => false, richContentBlocks: vi.fn(() => []), recordContentPayload: vi.fn(() => ({})) }
     const chat = new ChatService(
       runtime as never, source as never, profile as never, media as never, {} as never, {} as never,
       { currentUserAgentSourceFallback: vi.fn((_userId: number, agentSource: unknown) => agentSource) } as never,
@@ -1054,7 +1074,7 @@ describe('ChatService', () => {
       }),
     }
     const profile = { publicProfilesByUserIds: vi.fn(), sealProfileImageRef: vi.fn() }
-    const media = { richContentBlocks: vi.fn((item: unknown) => {
+    const media = { recordMediaUnavailable: () => false, richContentBlocks: vi.fn((item: unknown) => {
       const recordUid = String(((item as { relation?: { record_uid?: string } }).relation?.record_uid ?? ''))
       return recordUid === 'record-2' ? [{
         kind: 'file', mediaRef: 'secret-media-ref', fileName: 'report.pdf', mimeType: 'application/pdf', size: 10, sortOrder: 0,
@@ -1110,7 +1130,7 @@ describe('ChatService', () => {
       })),
     }
     const chat = new ChatService(
-      runtime as never, {} as never, {} as never, { richContentBlocks: vi.fn(() => []) } as never, {} as never,
+      runtime as never, {} as never, {} as never, { recordMediaUnavailable: () => false, richContentBlocks: vi.fn(() => []) } as never, {} as never,
       {} as never, {} as never, {} as never, {} as never,
     )
 
@@ -1134,7 +1154,7 @@ describe('ChatService', () => {
       }] })),
     }
     const chat = new ChatService(
-      runtime as never, {} as never, {} as never, { richContentBlocks: vi.fn(() => []) } as never, {} as never,
+      runtime as never, {} as never, {} as never, { recordMediaUnavailable: () => false, richContentBlocks: vi.fn(() => []) } as never, {} as never,
       {} as never, {} as never, {} as never, {} as never,
     )
 
@@ -1151,7 +1171,7 @@ describe('ChatService', () => {
       }] })),
     }
     const chat = new ChatService(
-      runtime as never, {} as never, {} as never, { richContentBlocks: vi.fn(() => []) } as never, {} as never,
+      runtime as never, {} as never, {} as never, { recordMediaUnavailable: () => false, richContentBlocks: vi.fn(() => []) } as never, {} as never,
       {} as never, {} as never, {} as never, {} as never,
     )
 
@@ -1175,7 +1195,7 @@ describe('ChatService', () => {
     const profile = { sealProfileImageRef: vi.fn(async () => 'opaque-avatar') }
     const media = {
       recordContentPayload: vi.fn(() => ({})),
-      richContentBlocks: vi.fn(() => []),
+      recordMediaUnavailable: () => false, richContentBlocks: vi.fn(() => []),
     }
     const arko = { currentUserAgentSourceFallback: vi.fn(() => undefined) }
     const aiPolish = { timelineAiPolish: vi.fn(() => undefined) }
@@ -1269,7 +1289,7 @@ describe('ChatService', () => {
         ]]]),
         unavailableRecordUids: new Set<string>(),
       })),
-      richContentBlocks: vi.fn((_raw: unknown, _viewerUserId: number, displayItems: unknown[] = []) => displayItems.length === 0 ? [] : contentBlocks),
+      recordMediaUnavailable: () => false, richContentBlocks: vi.fn((_raw: unknown, _viewerUserId: number, displayItems: unknown[] = []) => displayItems.length === 0 ? [] : contentBlocks),
     }
     const chat = new ChatService(
       runtime as never, source as never, {} as never, media as never, {} as never,
@@ -1348,7 +1368,7 @@ describe('ChatService', () => {
       { kind: 'image', mediaRef: 'sent-image-ref', originalRef: 'sent-image-original-ref', fileAssetUid: 'asset-image-1234', fileName: 'photo.png', mimeType: 'image/png', size: 12, sortOrder: 0 },
       { kind: 'file', mediaRef: 'sent-file-ref', originalRef: 'sent-file-original-ref', fileAssetUid: 'asset-file-12345', fileName: 'brief.pdf', mimeType: 'application/pdf', size: 34, sortOrder: 1 },
     ]
-    const media = { richContentBlocks: vi.fn(() => contentBlocks) }
+    const media = { recordMediaUnavailable: () => false, richContentBlocks: vi.fn(() => contentBlocks) }
     const realtime = {
       nextChatClientRevision: vi.fn(() => 6),
       emitChatClientEvent: vi.fn(),
@@ -2346,7 +2366,7 @@ describe('ChatService', () => {
         const nested = payload.content_payload ?? payload.contentPayload
         return nested !== null && typeof nested === 'object' ? nested as Record<string, unknown> : {}
       },
-      richContentBlocks: vi.fn(() => []),
+      recordMediaUnavailable: () => false, richContentBlocks: vi.fn(() => []),
     }
     const profile = { sealProfileImageRef: vi.fn(async () => 'avatar-ref') }
     const chat = new ChatService(

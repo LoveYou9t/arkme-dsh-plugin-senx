@@ -9,7 +9,7 @@ import { ARKME_TOOL_FILE_MAX_BYTES } from '../file-transfer-contract.js'
 import { arkmeFileBackgroundSound, assertArkmeBackgroundSoundLocalFiles } from '../record-background-sound.js'
 
 type Metadata = Pick<ArkmeLocalFile, 'fileName' | 'mimeType' | 'size'>
-interface StoredFile extends ArkmeLocalFile { sha256: string; createdAtMillis: number; asset?: ArkmeUploadedAsset }
+interface StoredFile extends ArkmeLocalFile { sha256: string; createdAtMillis: number; asset?: ArkmeUploadedAsset; retention?: 'references' }
 interface FileState { version: 1; files: Record<string, StoredFile>; tasks: ArkmeFileSendTask[]; originals: Record<string, string> }
 export type FileTransferSendOutcome =
   | { kind: 'owner_accepted'; result: ArkmeSourceSendResult }
@@ -151,7 +151,7 @@ export class FileTransfers {
     }
   }
 
-  async stage(temporaryPath: string, metadata: Metadata, expectedUserId?: number): Promise<ArkmeLocalFile> {
+  async stage(temporaryPath: string, metadata: Metadata, expectedUserId?: number, retention?: 'references'): Promise<ArkmeLocalFile> {
     const userId = await this.ports.currentUser()
     if (expectedUserId !== undefined && expectedUserId !== userId) throw fail('file-account-changed', '账号已切换，本次文件导入已取消')
     const normalizedMetadata = { ...metadata, mimeType: arkmeNormalizedFileMimeType(metadata.mimeType, metadata.fileName) }
@@ -169,7 +169,7 @@ export class FileTransfers {
       for await (const chunk of createReadStream(temporaryPath)) hash.update(chunk)
       await this.assertUser(userId)
       const ref = `arkme-file-v1.${randomUUID()}`
-      const file: StoredFile = { ...normalizedMetadata, fileRef: ref, fileKind: arkmePickedFileKind(normalizedMetadata.mimeType, normalizedMetadata.fileName), sha256: hash.digest('hex'), createdAtMillis: Date.now() }
+      const file: StoredFile = { ...normalizedMetadata, fileRef: ref, fileKind: arkmePickedFileKind(normalizedMetadata.mimeType, normalizedMetadata.fileName), sha256: hash.digest('hex'), createdAtMillis: Date.now(), ...(retention ? { retention } : {}) }
       await copyFile(temporaryPath, this.path(userId, ref))
       await chmod(this.path(userId, ref), 0o600)
       state.files[ref] = file
@@ -187,16 +187,35 @@ export class FileTransfers {
     catch { return }
     for (const ref of editRefs) retained.add(ref)
     const completed = new Set(state.tasks.filter(task => task.state === 'sent').flatMap(task => task.fileRefs))
-    for (const file of Object.values(state.files)) {
+    const expired = Object.values(state.files).filter(file => {
       if (Date.now() - file.createdAtMillis < 7 * 24 * 3600_000 || retained.has(file.fileRef)
-        || this.uploadingRefs.has(`${userId}:${file.fileRef}`) || !completed.has(file.fileRef)) continue
-      // Unsent drafts are never evicted by cache cleanup.
-      delete state.files[file.fileRef]
+        || this.uploadingRefs.has(`${userId}:${file.fileRef}`)) return false
+      return file.retention === 'references' ? this.ports.retainedFileRefs !== undefined : completed.has(file.fileRef)
+    })
+    const expiredRefs = new Set(expired.map(file => file.fileRef))
+    const tasks = state.tasks.filter(task => task.state !== 'sent' || Date.now() - task.createdAtMillis < 7 * 24 * 3600_000
+      || task.fileRefs.some(ref => state.files[ref] !== undefined && !expiredRefs.has(ref)))
+    if (expired.length === 0 && tasks.length === state.tasks.length) return
+    const previous = { files: state.files, tasks: state.tasks }
+    state.files = Object.fromEntries(Object.entries(state.files).filter(([ref]) => !expiredRefs.has(ref)))
+    state.tasks = tasks
+    try { await this.save(userId, state) }
+    catch (error) { Object.assign(state, previous); throw error }
+    for (const file of expired) {
       await unlink(this.path(userId, file.fileRef)).catch(() => {})
       await rm(this.openDirectory(userId, file.fileRef), { recursive: true, force: true })
     }
-    state.tasks = state.tasks.filter(task => task.state !== 'sent' || Date.now() - task.createdAtMillis < 7 * 24 * 3600_000
-      || task.fileRefs.some(ref => state.files[ref] !== undefined))
+  }
+  /** Validate new references and persist their owner without a cleanup/removal gap. Local I/O only. */
+  async withReferences<T>(refs: readonly string[], userId: number, persist: () => Promise<T>): Promise<T> {
+    return this.exclusive(async () => {
+      await this.assertUser(userId)
+      const retained = new Set(await this.ports.retainedFileRefs?.(userId) ?? [])
+      // Existing unavailable attachments must not prevent saving/removing their draft.
+      for (const ref of new Set(refs)) if (!retained.has(ref)) await this.readLocal(ref)
+      await this.assertUser(userId)
+      return await persist()
+    })
   }
   async readLocal(ref: string): Promise<{ path: string; file: ArkmeLocalFile }> {
     const userId = await this.ports.currentUser()

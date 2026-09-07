@@ -20,7 +20,7 @@ const recording = () => ({
     }],
   } },
 })
-const service = () => new RecordService({} as never, { richContentBlocks: vi.fn(() => []) } as never, {} as never)
+const service = () => new RecordService({} as never, { recordMediaUnavailable: () => false, richContentBlocks: vi.fn(() => []) } as never, {} as never)
 
 describe('forwarded recording reads from the Record owner', () => {
   it.each(['send_to_self', 'topic'] as const)('rejects ordinary re-edit of a %s recording snapshot before creating a draft', async kind => {
@@ -54,7 +54,7 @@ describe('forwarded recording reads from the Record owner', () => {
       openSourceRef: async () => ({ kind, userId: 42, ownerRef: 'destination' }),
       sourceItem: async () => ({ kind, sourceRef: 'target', displayName: '目标', unreadCount: 0, activeAtMillis: 0 }),
     }
-    const media = { richContentBlocks: () => [], hydrateRecordMediaPage: async () => ({ displayItemsByRecordUid: new Map(), unavailableRecordUids: new Set() }) }
+    const media = { recordMediaUnavailable: () => false, richContentBlocks: () => [], hydrateRecordMediaPage: async () => ({ displayItemsByRecordUid: new Map(), unavailableRecordUids: new Set() }) }
     const record = new RecordService(runtime as never, media as never, source as never)
     const chat = new ChatService(runtime as never, source as never, {} as never, media as never, record, {} as never, {} as never, {} as never, {} as never, { lockedRecordUids: async () => new Set() } as never)
     const page = await chat.readSource('target')

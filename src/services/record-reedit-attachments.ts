@@ -11,6 +11,7 @@ export interface ArkmeRecordReeditFiles {
   files(): Promise<ArkmeLocalFile[]>
   readLocal(fileRef: string): Promise<{ file: ArkmeLocalFile }>
   uploadRefs(fileRefs: readonly string[]): Promise<ArkmeUploadedAsset[]>
+  withReferences<T>(fileRefs: readonly string[], userId: number, persist: () => Promise<T>): Promise<T>
 }
 
 const invalid = () => new ArkmePluginError('record-reedit-attachment-invalid', '附件引用无效或不属于这条快记，请重新读取后选择', false, 409)

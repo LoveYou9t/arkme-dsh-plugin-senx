@@ -28,6 +28,7 @@ import {
 } from '../src/client/ArkmeSidebar.js'
 import { ArkmeClientError } from '../src/client/api.js'
 import { ArkmeRichComposerInput } from '../src/client/ArkmeRichComposerInput.js'
+import { ArkmeEmojiPicker } from '../src/client/ArkmeEmojiPicker.js'
 import { ArkmeMemberProfileCard } from '../src/client/ArkmeChatMemberActions.js'
 import { arkmeAuthStore } from '../src/client/auth-store.js'
 import { arkmeChatDirectory, arkmeChatTimelineDelta } from '../src/client/chat-directory-store.js'
@@ -266,7 +267,7 @@ describe('conversation send directory projection', () => {
     })
   })
 
-  it('persists the first candidate before switching re-edit to another record', async () => {
+  it('persists the first candidate independently when switching re-edit to another record', async () => {
     timeline = [
       {
         itemUid: 'record-reedit-first', messageActionRef: 'opaque-action-first', senderName: '我', isMe: true,
@@ -316,11 +317,12 @@ describe('conversation send directory projection', () => {
     act(() => { renderer!.root.findByType(ArkmeRichComposerInput).props.onTextChange('第一条候选') })
     await chooseReedit(bubbles[1]!)
 
-    expect(operations).toEqual([
+    expect(operations).toHaveLength(3)
+    expect(operations).toEqual(expect.arrayContaining([
       'detail:record-reedit-first',
-      'draft:record-reedit-first:第一条候选',
       'detail:record-reedit-second',
-    ])
+      'draft:record-reedit-first:第一条候选',
+    ]))
     expect(renderer!.root.findByType(ArkmeRichComposerInput).props.value).toBe('第二条原文')
   })
 
@@ -3564,6 +3566,115 @@ describe('conversation send directory projection', () => {
     expect(pendingBackgroundCalls).toBe(0)
     expect(renderer!.root.findByProps({ 'data-arkme-message-item-uid': 'extension-parent-old' })).toBeDefined()
     expect(renderer!.root.findAllByProps({ 'data-arkme-message-item-uid': latestExtension.itemUid })).toHaveLength(0)
+  })
+
+  it.each(['around', 'latest'] as const)('replays a timeline invalidation after a pending %s navigation without replacing its window', async navigation => {
+    const latestExtension: ArkmeTimelineItem = {
+      itemUid: 'extension-child-latest', timelineItemKey: 'timeline-latest', senderName: '我', isMe: true,
+      sendAtMillis: 50, title: '', textContent: '当前延展旧正文', status: 1, sequence: 50, recordVersion: 3,
+      extensionParentRecordUid: 'extension-parent-old',
+      extensionParent: {
+        itemUid: 'extension-parent-old', senderName: '同事', title: '', textContent: '历史旧正文',
+        recordOwnerUserId: 7, sequence: 11, sendAtMillis: 11,
+      },
+    }
+    const historicalItems: ArkmeTimelineItem[] = [10, 11, 12].map(sequence => ({
+      itemUid: sequence === 11 ? 'extension-parent-old' : `history-${sequence}`,
+      timelineItemKey: `timeline-${sequence}`, senderName: '同事', isMe: false,
+      sendAtMillis: sequence, title: '', textContent: sequence === 11 ? '历史旧正文' : `相邻消息${sequence}`,
+      status: 1, sequence, recordVersion: 3,
+    }))
+    const sentItem: ArkmeTimelineItem = {
+      itemUid: 'sent-sticker', senderName: '我', isMe: true, sendAtMillis: 51,
+      title: '', textContent: '刚发送的表情', status: 1, sequence: 51,
+    }
+    timeline = [latestExtension]
+    aroundTimeline = historicalItems
+    const conversationBody = {
+      scrollTop: 0, scrollHeight: 1_500, clientHeight: 600, scrollTo: vi.fn(),
+      querySelectorAll: vi.fn(() => renderer?.root.findAllByProps({
+        'data-arkme-message-item-uid': 'extension-parent-old',
+      }).length === 1 ? [{
+          dataset: { arkmeMessageItemUid: 'extension-parent-old' },
+          getBoundingClientRect: () => ({ left: 0, top: 300, right: 600, bottom: 380, width: 600, height: 80 }),
+        }] : []),
+      getBoundingClientRect: () => ({ left: 0, top: 0, right: 600, bottom: 600, width: 600, height: 600 }),
+    }
+    await act(async () => {
+      renderer = create(<ArkmeSurface productChrome={false} productNavigation={false} />, {
+        createNodeMock: element => element.props.className === 'arkme-conversation-body'
+          ? conversationBody
+          : element.props.className === 'arkme-conversation-panel'
+            ? { getBoundingClientRect: () => ({ left: 0, top: 0, width: 960, height: 720 }) }
+            : null,
+      })
+      await Promise.resolve(); await Promise.resolve()
+    })
+    const pendingNavigation = deferred<unknown>()
+    let navigationResolved = false
+    let navigationSignal: AbortSignal | undefined
+    let latestNavigation: Promise<void> | undefined
+    const refreshReads: { sourceRef: string; limit: number; cursor?: { beforeSequence?: number } }[] = []
+    const previousImplementation = mocks.callArkme.getMockImplementation()!
+    mocks.callArkme.mockImplementation(async (operation, params, signal) => {
+      if (operation === (navigation === 'around' ? 'source.timeline-around' : 'source.timeline')
+        && !navigationResolved) {
+        navigationSignal ??= signal
+        return await pendingNavigation.promise
+      }
+      if (operation === 'source.timeline' && navigationResolved) {
+        refreshReads.push(params)
+        const refreshed = navigation === 'around'
+          ? historicalItems.map(item => item.sequence === 11
+            ? { ...item, recordVersion: 4, textContent: '历史更新后的正文' } : item)
+          : [{ ...latestExtension, recordVersion: 4, textContent: '最新更新后的正文' }, sentItem]
+        return { source: target, items: refreshed, hasMore: false }
+      }
+      return await previousImplementation(operation, params, signal)
+    })
+    await act(async () => {
+      renderer!.root.findByProps({ 'data-arkme-extension-parent-preview': 'extension-parent-old' }).props.onClick()
+      await Promise.resolve(); await Promise.resolve(); await Promise.resolve()
+    })
+    if (navigation === 'latest') {
+      expect(renderer!.root.findByProps({ 'data-arkme-message-item-uid': 'extension-parent-old' })).toBeDefined()
+      await act(async () => {
+        latestNavigation = renderer!.root.findByType(ArkmeEmojiPicker).props.onStickerSent()
+        await Promise.resolve(); await Promise.resolve()
+      })
+    }
+    expect(navigationSignal).toBeDefined()
+    await act(async () => {
+      arkmeChatTimelineDelta.applyTimelineChange({
+        sourceKey: target.sourceKey!, timelineItemKey: navigation === 'around' ? 'timeline-11' : 'timeline-latest',
+        changeKind: 'reedited', changeVersion: 4, relationTerminal: false,
+        throughSequence: navigation === 'around' ? 11 : 50,
+      })
+      await Promise.resolve(); await Promise.resolve()
+    })
+    expect(navigationSignal!.aborted).toBe(false)
+    await act(async () => {
+      navigationResolved = true
+      pendingNavigation.resolve(navigation === 'around' ? {
+        source: target, items: historicalItems,
+        anchorItemUid: 'extension-parent-old', anchorSequence: 11, anchorIndex: 1,
+        olderHasMore: false, newerHasMore: false,
+      } : { source: target, items: [latestExtension, sentItem], hasMore: false })
+      await pendingNavigation.promise
+      if (latestNavigation !== undefined) await latestNavigation
+      await Promise.resolve(); await Promise.resolve(); await Promise.resolve()
+    })
+    expect(refreshReads).toEqual([{
+      sourceRef: target.sourceRef, limit: 100,
+      ...(navigation === 'around' ? { cursor: { beforeSequence: 13 } } : {}),
+    }])
+    const visibleItemUids = renderer!.root
+      .findAll(node => typeof node.props['data-arkme-message-item-uid'] === 'string')
+      .map(node => node.props['data-arkme-message-item-uid'])
+    expect(visibleItemUids).toEqual(navigation === 'around'
+      ? ['history-10', 'extension-parent-old', 'history-12']
+      : ['extension-child-latest', 'sent-sticker'])
+    expect(JSON.stringify(renderer!.toJSON())).toContain(navigation === 'around' ? '历史更新后的正文' : '最新更新后的正文')
   })
 
   it('merges simultaneous older and newer around pages without cancelling either direction', async () => {

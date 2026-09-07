@@ -1,4 +1,4 @@
-import { mkdtemp, rename, mkdir } from 'node:fs/promises'
+import { mkdtemp, rename, mkdir, writeFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
@@ -7,6 +7,7 @@ import { RecordService } from '../../src/services/record-service.js'
 import { ArkmeService } from '../../src/arkme-service.js'
 import { MediaService } from '../../src/services/media-service.js'
 import { ArkmePluginError } from '../../src/services/service.js'
+import { FileTransfers, type FileTransferPorts } from '../../src/services/file-transfers.js'
 
 const fileRef = 'arkme-file-v1.11111111-1111-4111-8111-111111111111'
 const localFile = { fileRef, fileName: 'new.png', mimeType: 'image/png', size: 12, fileKind: 1 as const }
@@ -47,6 +48,10 @@ async function setup(overrides: Record<string, unknown> = {}, onCommitted?: () =
     files: vi.fn(async () => [localFile]),
     readLocal: vi.fn(async () => ({ file: localFile })),
     uploadRefs: vi.fn(async () => [asset]),
+    async withReferences<T>(refs: readonly string[], _userId: number, persist: () => Promise<T>): Promise<T> {
+      for (const _ref of refs) await files.readLocal()
+      return await persist()
+    },
   }
   const mediaService = new MediaService(runtime as never, {} as never, {} as never, { recordUid: raw => (raw as any).record_core?.record_uid ?? '' })
   const restart = (freshState = false) => new RecordService((freshState ? { ...runtime, stateStore: new ArkmeStateStore(root) } : runtime) as never, mediaService, {
@@ -58,6 +63,269 @@ async function setup(overrides: Record<string, unknown> = {}, onCommitted?: () =
 const target = { sourceRef: 'source', itemUid: 'r1' }
 
 describe('Record attachment re-edit', () => {
+  it.each([false, true])('does not block another Record while rebuilding an editor (rebuild fails: %s)', async fails => {
+    const x = await setup()
+    const owners = new Map(['r1', 'r2'].map(record_uid => [record_uid, { ...structuredClone(x.core), record_uid } as Record<string, unknown>]))
+    let enter!: () => void
+    let release!: () => void
+    const entered = new Promise<void>(resolve => { enter = resolve })
+    const gate = new Promise<void>(resolve => { release = resolve })
+    const read = x.runtime.authenticatedPost.bind(x.runtime)
+    vi.spyOn(x.runtime, 'authenticatedPost').mockImplementation(async (path, body) => {
+      if (path === '/api/v1/records/detail') {
+        if (body.record_uid === 'r1') { enter(); await gate; if (fails) throw new Error('detail unavailable') }
+        return { record_core: structuredClone(owners.get(String(body.record_uid))) }
+      }
+      if (path === '/api/v1/records/update') {
+        const owner = owners.get(String(body.record_uid))!
+        x.writes.push(structuredClone(body))
+        Object.assign(owner, body, { version: Number(owner.version) + 1 })
+        return { record_core: structuredClone(owner), revision_uid: 'revision' }
+      }
+      return read(path, body)
+    })
+    await x.service.recordReeditEditor('source', 'r2')
+    const input = { sourceRef: 'source', expectedVersion: 7, newText: '修改', attachments: [] }
+    const first = x.service.submitRecordReedit({ ...input, itemUid: 'r1' }).catch(error => error)
+    await entered
+    let secondItemUid: string | undefined
+    const second = x.service.submitRecordReedit({ ...input, itemUid: 'r2' }).then(value => { secondItemUid = value.itemUid; return value })
+    try {
+      await vi.waitFor(() => expect(secondItemUid).toBe('r2'), { timeout: 500 })
+      expect(x.writes.filter(body => body.record_uid === 'r1')).toHaveLength(0)
+    } finally {
+      release()
+      await Promise.allSettled([first, second])
+      x.service.dispose()
+    }
+  })
+
+  it('rebuilds an evicted editor and keeps its saved baseline for later submission', async () => {
+    const x = await setup()
+    await x.service.recordReeditEditor('source', 'r1')
+    const old = await x.service.saveRecordReeditDraft({ ...target, newText: '淘汰前的草稿', expectedVersion: 7, attachments: [] })
+    for (let index = 0; index < 100; index++) await x.service.recordReeditEditor('source-' + index, 'r1')
+    const reads = vi.spyOn(x.runtime, 'authenticatedPost')
+    try {
+      const saved = await x.service.saveRecordReeditDraft({ ...target, newText: '淘汰后继续修改', expectedVersion: 7,
+        expectedDraftRevision: old.draftRevision, attachments: [{ fileAssetUid: 'b' }] })
+      expect(reads.mock.calls.filter(([path]) => path === '/api/v1/records/detail')).toHaveLength(1)
+      await x.service.saveRecordReeditDraft({ ...target, newText: '淘汰后继续修改', expectedVersion: 7,
+        expectedDraftRevision: saved.draftRevision, attachments: [{ fileAssetUid: 'b' }] })
+      expect(reads.mock.calls.filter(([path]) => path === '/api/v1/records/detail')).toHaveLength(1)
+      expect(x.writes).toHaveLength(0)
+    } finally { x.service.dispose() }
+  })
+
+  it.each(['permission', 'account'] as const)('rejects a rebuilt editor after its %s changes', async changed => {
+    const x = await setup()
+    await x.service.recordReeditEditor('source', 'r1')
+    const old = await x.service.saveRecordReeditDraft({ ...target, newText: '不得丢失的旧草稿', expectedVersion: 7, attachments: [] })
+    x.service.dispose()
+    const read = x.runtime.authenticatedPost.bind(x.runtime)
+    vi.spyOn(x.runtime, 'authenticatedPost').mockImplementation(async (path, body) => {
+      const value = await read(path, body)
+      if (path === '/api/v1/records/detail' && changed === 'account') x.switchAccount()
+      return value
+    })
+    if (changed === 'permission') x.core.owner_user_id = 99
+    const restarted = x.restart(true)
+    try {
+      await expect(restarted.saveRecordReeditDraft({ ...target, newText: '禁止写入', expectedVersion: 7, expectedDraftRevision: old.draftRevision,
+        attachments: [] })).rejects.toMatchObject({ code: changed === 'permission' ? 'record-reedit-not-editable' : 'record-reedit-account-changed' })
+      expect((await new ArkmeStateStore(x.root).getRecordReeditDraft(42, old.sourceIdentityKey, 'r1'))?.textContent).toBe('不得丢失的旧草稿')
+      expect(x.writes).toHaveLength(0)
+    } finally { restarted.dispose() }
+  })
+
+  it.each(['save', 'submit'] as const)('rebuilds an expired editor context for %s without losing its candidate', async action => {
+    const x = await setup()
+    await x.service.recordReeditEditor('source', 'r1')
+    const old = await x.service.saveRecordReeditDraft({ ...target, newText: '旧草稿', expectedVersion: 7, attachments: [{ fileAssetUid: 'a' }] })
+    x.service.dispose()
+    const restarted = x.restart(true)
+    try {
+      const input = { ...target, newText: '恢复后的新候选', expectedVersion: 7, expectedDraftRevision: old.draftRevision,
+        attachments: [{ fileAssetUid: 'b' }, { fileRef }] }
+      if (action === 'save') {
+        const saved = await restarted.saveRecordReeditDraft(input)
+        const draft = await new ArkmeStateStore(x.root).getRecordReeditDraft(42, saved.sourceIdentityKey, 'r1')
+        expect(draft).toMatchObject({ textContent: input.newText, attachments: input.attachments, baseVersion: 7 })
+        expect(x.writes).toHaveLength(0)
+      } else {
+        const accepted = await restarted.submitRecordReedit(input)
+        expect(accepted.textContent).toBe(input.newText)
+        expect(accepted.attachments).toHaveLength(2)
+        await vi.waitFor(async () => expect((await restarted.recordReeditSubmissions('source'))[0]?.state).toBe('committed'))
+        expect(x.writes).toHaveLength(1)
+        expect((x.writes[0]!.content_payload as any).media_refs.map((entry: any) => entry.file_asset_uid)).toEqual(['b', 'new-asset'])
+      }
+    } finally { restarted.dispose() }
+  })
+
+  it.each(['record', 'draft', 'version-missing'] as const)('does not rebase a recovered editor when its %s evidence changed', async changed => {
+    const x = await setup()
+    await x.service.recordReeditEditor('source', 'r1')
+    const old = await x.service.saveRecordReeditDraft({ ...target, newText: '保留的旧草稿', expectedVersion: 7, attachments: [] })
+    if (changed === 'record') x.core.version = 8
+    if (changed === 'draft') await x.service.saveRecordReeditDraft({ ...target, newText: '其他入口的新草稿', expectedVersion: 7, expectedDraftRevision: old.draftRevision, attachments: [] })
+    x.service.dispose()
+    const restarted = x.restart(true)
+    try {
+      await expect(restarted.saveRecordReeditDraft({ ...target, newText: '不得覆盖', expectedDraftRevision: old.draftRevision,
+        ...(changed === 'version-missing' ? {} : { expectedVersion: 7 }) }))
+        .rejects.toMatchObject({ code: changed === 'record' ? 'record-reedit-conflict'
+          : changed === 'draft' ? 'record-reedit-draft-changed' : 'record-reedit-version-invalid' })
+      const draft = await new ArkmeStateStore(x.root).getRecordReeditDraft(42, old.sourceIdentityKey, 'r1')
+      expect(draft?.textContent).toBe(changed === 'draft' ? '其他入口的新草稿' : '保留的旧草稿')
+      expect(x.writes).toHaveLength(0)
+    } finally { restarted.dispose() }
+  })
+
+  it.each([undefined, 'references'] as const)('hands local attachment ownership through real draft, commit, acknowledgement and restart: %s', async retention => {
+    const x = await setup()
+    const ports: FileTransferPorts = {
+      currentUser: async () => 42,
+      retainedFileRefs: userId => x.stateStore.recordReeditFileRefs(userId),
+      validateSource: async () => {},
+      upload: async () => asset,
+      send: async () => { throw new Error('editing must not send a new message') },
+      fetchMedia: async () => { throw new Error('unexpected media download') },
+    }
+    const directory = join(x.root, 'files')
+    const owner = new FileTransfers(directory, ports, 1000)
+    Object.assign(x.files, { files: owner.files.bind(owner), readLocal: owner.readLocal.bind(owner), uploadRefs: owner.uploadRefs.bind(owner), withReferences: owner.withReferences.bind(owner) })
+    const path = join(x.root, 'new.png')
+    await writeFile(path, 'image')
+    const file = await owner.stage(path, { fileName: 'new.png', mimeType: 'image/png', size: 5 }, 42, retention)
+    await x.service.recordReeditEditor('source', 'r1')
+    await x.service.submitRecordReedit({ ...target, newText: '新增附件', expectedVersion: 7, attachments: [{ fileRef: file.fileRef }] })
+    await vi.waitFor(async () => expect((await x.service.recordReeditSubmissions('source'))[0]?.state).toBe('committed'))
+    const job = (await x.service.recordReeditSubmissions('source'))[0]!
+    expect(await x.stateStore.recordReeditFileRefs(42)).toContain(file.fileRef)
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 30 * 24 * 3600_000)
+    try {
+      await owner.stageBytes('YQ==', { fileName: 'before.pdf', mimeType: 'application/pdf' })
+      await expect(owner.readLocal(file.fileRef)).resolves.toMatchObject({ file })
+      await x.service.acknowledgeRecordReeditSubmission('source', job.submissionId, job.result!.version)
+      expect(await x.stateStore.recordReeditFileRefs(42)).toEqual([])
+      const restarted = new FileTransfers(directory, ports, 1000)
+      await restarted.stageBytes('Yg==', { fileName: 'after.pdf', mimeType: 'application/pdf' })
+      if (retention === 'references') await expect(restarted.readLocal(file.fileRef)).rejects.toMatchObject({ code: 'file-ref-invalid' })
+      else await expect(restarted.readLocal(file.fileRef)).resolves.toMatchObject({ file })
+      expect(await restarted.tasks()).toEqual([])
+      expect(x.writes).toHaveLength(1)
+      expect(JSON.stringify(x.writes)).not.toContain(file.fileRef)
+    } finally { clock.mockRestore(); x.service.dispose(); await owner.settled() }
+  })
+
+  it('preserves missing owned files while saving text, and rejects an invalid new file without overwriting that draft', async () => {
+    const x = await setup()
+    const owner = new FileTransfers(join(x.root, 'files'), {
+      currentUser: async () => 42, retainedFileRefs: userId => x.stateStore.recordReeditFileRefs(userId),
+      validateSource: async () => {}, upload: async () => asset,
+      send: async () => { throw new Error('unexpected send') }, fetchMedia: async () => { throw new Error('unexpected download') },
+    }, 1000)
+    Object.assign(x.files, { files: owner.files.bind(owner), readLocal: owner.readLocal.bind(owner), uploadRefs: owner.uploadRefs.bind(owner), withReferences: owner.withReferences.bind(owner) })
+    const file = await owner.stageBytes('YQ==', { fileName: 'a.pdf', mimeType: 'application/pdf' })
+    await x.service.recordReeditEditor('source', 'r1')
+    const prepared = await x.service.saveRecordReeditDraft({ ...target, expectedVersion: 7, attachments: [{ fileRef: file.fileRef }] })
+    await rm((await owner.readLocal(file.fileRef)).path)
+    await x.service.saveRecordReeditDraft({ ...target, newText: '保留我的正文', expectedDraftRevision: prepared.draftRevision })
+    await expect(x.service.saveRecordReeditDraft({ ...target, newText: '不能覆盖', expectedVersion: 7, attachments: [{ fileRef }] })).rejects.toMatchObject({ code: 'file-ref-invalid' })
+    const draft = await x.stateStore.getRecordReeditDraft(42, prepared.sourceIdentityKey, 'r1')
+    expect(draft?.textContent).toBe('保留我的正文')
+    expect(draft?.attachments).toEqual([{ fileRef: file.fileRef }])
+    expect(x.writes).toEqual([])
+    x.service.dispose()
+  })
+
+  it('does not register a submission referencing a file removed after draft preparation', async () => {
+    const x = await setup()
+    const owner = new FileTransfers(join(x.root, 'files'), {
+      currentUser: async () => 42, retainedFileRefs: userId => x.stateStore.recordReeditFileRefs(userId),
+      validateSource: async () => {}, upload: async () => asset,
+      send: async () => { throw new Error('unexpected send') }, fetchMedia: async () => { throw new Error('unexpected download') },
+    }, 1000)
+    Object.assign(x.files, { files: owner.files.bind(owner), readLocal: owner.readLocal.bind(owner), uploadRefs: owner.uploadRefs.bind(owner), withReferences: owner.withReferences.bind(owner) })
+    const file = await owner.stageBytes('YQ==', { fileName: 'a.pdf', mimeType: 'application/pdf' })
+    await x.service.recordReeditEditor('source', 'r1')
+    const prepared = await x.service.saveRecordReeditDraft({ ...target, expectedVersion: 7, attachments: [{ fileRef: file.fileRef }] })
+    x.files.files = vi.fn(async () => {
+      const files = await owner.files()
+      const draft = await x.stateStore.getRecordReeditDraft(42, prepared.sourceIdentityKey, 'r1')
+      expect(await x.stateStore.discardRecordReeditCandidate(42, prepared.sourceIdentityKey, 'r1', draft!.draftRevision)).toBe(true)
+      await owner.remove(file.fileRef)
+      return files as typeof localFile[]
+    })
+    await expect(x.service.submitRecordReedit({ ...target, expectedVersion: 7, attachments: [{ fileRef: file.fileRef }] })).rejects.toMatchObject({ code: 'file-ref-invalid' })
+    expect(await x.stateStore.listRecordReeditSubmissions(42)).toEqual([])
+    expect(x.writes).toEqual([])
+    x.service.dispose()
+  })
+  it.each(['ui', 'tool'].flatMap(entry => [false, true].map(withImage => ({ entry, withImage }))))('retains main voice across $entry submission and state reload, with image: $withImage', async ({ entry, withImage }) => {
+    const voice = { source_file_asset_uid: 'voice', duration_millis: 1200, transcription_state: 2 }
+    const kind = withImage ? 4 : 3
+    const x = await setup({ template_kind: kind, content_payload: { payload_kind: kind, schema_version: 1, text_state: 2, voice, media_refs: withImage ? [media('a')] : [] } })
+    x.readMedia.mockResolvedValue({ items: [{ record_uid: 'r1', items: [
+      { file_asset_uid: 'voice', file_name: 'voice.m4a', file_kind: 3, mime_type: 'audio/mp4', size: 20,
+        preview_url: 'https://example.com/voice.m4a', download_url: 'https://example.com/voice.m4a' },
+      ...(withImage ? [{ file_asset_uid: 'a', file_name: 'a.png', file_kind: 1, mime_type: 'image/png', size: 20,
+        preview_url: 'https://example.com/a.png', download_url: 'https://example.com/a.png' }] : []),
+    ] }] })
+    if (entry === 'ui') {
+      const editor = await x.service.recordReeditEditor('source', 'r1')
+      expect(editor.attachments.map(attachment => attachment.selection.fileAssetUid)).toEqual(withImage ? ['a'] : [])
+      expect(editor).toMatchObject({ hasVoice: true, voiceBlock: { kind: 'audio', fileAssetUid: 'voice' } })
+      const accepted = await x.service.submitRecordReedit({ ...target, newText: '语音文字修正', expectedVersion: 7 })
+      expect(accepted).toMatchObject({ voiceBlock: { kind: 'audio', fileAssetUid: 'voice' } })
+    } else {
+      const context = await x.service.prepareRecordReedit({ ...target, newText: '语音文字修正' })
+      await x.service.commitRecordReedit(context)
+    }
+    await vi.waitFor(async () => expect((await x.service.recordReeditSubmissions('source'))[0]?.state).toBe('committed'))
+    x.service.dispose()
+    const restarted = x.restart(true)
+    const receipt = (await restarted.recordReeditSubmissions('source'))[0]!
+    expect(receipt).toMatchObject({ voiceFileAssetUid: 'voice', voiceBlock: { kind: 'audio', fileAssetUid: 'voice' } })
+    expect(receipt.attachments.map(attachment => attachment.selection.fileAssetUid)).toEqual(withImage ? ['a'] : [])
+    expect(x.writes).toHaveLength(1)
+    expect(x.writes[0]).toMatchObject({ content_payload: { voice } })
+    const refs = (x.writes[0]!.content_payload as { media_refs?: Array<{ file_asset_uid: string }> }).media_refs ?? []
+    expect(refs.map(ref => ref.file_asset_uid)).toEqual(withImage ? ['a'] : [])
+    expect(JSON.stringify(x.writes)).not.toContain('voiceBlock')
+    expect(JSON.stringify(x.writes)).not.toContain('https://')
+    restarted.dispose()
+  })
+
+  it.each(['ui', 'tool'] as const)('does not block %s text editing when the main voice display read fails', async entry => {
+    const voice = { source_file_asset_uid: 'voice', duration_millis: 1200, transcription_state: 2 }
+    const x = await setup({ template_kind: 3, content_payload: { payload_kind: 3, schema_version: 1, text_state: 2, voice } })
+    x.readMedia.mockRejectedValue(new Error('media temporarily unavailable'))
+    if (entry === 'ui') {
+      await x.service.recordReeditEditor('source', 'r1')
+      await x.service.submitRecordReedit({ ...target, newText: '修正文字', expectedVersion: 7 })
+    } else {
+      const context = await x.service.prepareRecordReedit({ ...target, newText: '修正文字' })
+      await x.service.commitRecordReedit(context)
+    }
+    await vi.waitFor(async () => expect((await x.service.recordReeditSubmissions('source'))[0]?.state).toBe('committed'))
+    expect(x.writes).toHaveLength(1)
+    expect(x.writes[0]).toMatchObject({ text_content: '修正文字', content_payload: { voice } })
+    expect((await x.service.recordReeditSubmissions('source'))[0]?.voiceBlock).toBeUndefined()
+    x.service.dispose()
+  })
+
+  it('does not write after the account changes during Tool display hydration', async () => {
+    const x = await setup()
+    const context = await x.service.prepareRecordReedit({ ...target, newText: '修正文字' })
+    x.readMedia.mockImplementationOnce(async () => { x.switchAccount(); return { items: [] } })
+    await expect(x.service.commitRecordReedit(context)).rejects.toMatchObject({ code: 'record-reedit-account-changed' })
+    expect(x.writes).toEqual([])
+    await expect(x.stateStore.listRecordReeditSubmissions(99)).resolves.toEqual([])
+    x.service.dispose()
+  })
+
   it('does not refresh after disposal during the completion notification account check', async () => {
     const notify = vi.fn(async () => {})
     const x = await setup({}, notify)
@@ -354,6 +622,39 @@ describe('Record attachment re-edit', () => {
     expect(await x.stateStore.listRecordReeditSubmissions(42)).toEqual([])
     expect(x.writes).toHaveLength(0)
   })
+  it('serializes concurrent admission for the same Record across renewed source capabilities', async () => {
+    const x = await setup()
+    await x.service.recordReeditEditor('source', 'r1')
+    let release!: () => void
+    const gate = new Promise<void>(resolve => { release = resolve })
+    x.files.uploadRefs.mockImplementationOnce(async () => { await gate; return [asset] })
+    const input = { ...target, newText: '同一份候选', expectedVersion: 7, expectedDraftRevision: 0, attachments: [{ fileRef }] }
+    try {
+      const receipts = await Promise.all([
+        x.service.submitRecordReedit(input),
+        x.service.submitRecordReedit({ ...input, sourceRef: 'renewed-source' }),
+      ])
+      expect(receipts[0]!.submissionId).toBe(receipts[1]!.submissionId)
+      expect(await x.stateStore.listRecordReeditSubmissions(42)).toHaveLength(1)
+      release()
+      await vi.waitFor(async () => expect((await x.service.recordReeditSubmissions('source'))[0]?.state).toBe('committed'))
+      expect(x.writes).toHaveLength(1)
+    } finally { release(); x.service.dispose() }
+  })
+
+  it('accepts a later valid candidate after the same Record admission failed', async () => {
+    const x = await setup()
+    await x.service.recordReeditEditor('source', 'r1')
+    try {
+      await expect(x.service.submitRecordReedit({ ...target, newText: '过期候选', expectedVersion: 6, attachments: [] }))
+        .rejects.toMatchObject({ code: 'record-reedit-conflict' })
+      const receipt = await x.service.submitRecordReedit({ ...target, newText: '新的候选', expectedVersion: 7, attachments: [] })
+      expect(receipt.textContent).toBe('新的候选')
+      await vi.waitFor(async () => expect((await x.service.recordReeditSubmissions('source'))[0]?.state).toBe('committed'))
+      expect(x.writes).toHaveLength(1)
+    } finally { x.service.dispose() }
+  })
+
   it('deduplicates admission and does not let another submit mutate the in-flight snapshot', async () => {
     const x = await setup()
     await x.service.recordReeditEditor('source', 'r1')

@@ -4502,6 +4502,7 @@ export class ChatService {
           ...(extensionProjection === undefined ? {} : extensionProjection),
           displayKind: numberValue(payload.display_kind),
           contentBlocks,
+          ...(this.media.recordMediaUnavailable(item, contentBlocks) ? { mediaUnavailable: true } : {}),
         })
       }
       this.hydrateTimelineExtensionParents(items)
@@ -5361,6 +5362,7 @@ export class ChatService {
         ...(captureContext === undefined ? {} : { captureContext }),
         contentBlocks,
         ...(forwardRecords === undefined ? {} : { forwardRecords }),
+        ...(this.media.recordMediaUnavailable(item, contentBlocks) ? { mediaUnavailable: true } : {}),
         ...(sharedRecording === undefined ? {} : { sharedRecording }),
         ...(extensionProjection === undefined ? {} : extensionProjection),
       }) - 1

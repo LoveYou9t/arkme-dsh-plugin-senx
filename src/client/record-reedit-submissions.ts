@@ -4,18 +4,31 @@ import type { ArkmeTimelineItem } from '../types.js'
 import { callArkme } from './api.js'
 import { localFileBlock } from './file-send-tasks.js'
 
+/** Shared by display handoff and receipt acknowledgement; newer edits always win. */
+export function recordReeditProjectionSettled(item: ArkmeTimelineItem, job: ArkmeRecordReeditSubmissionView): boolean {
+  if (!job.result || item.itemUid !== job.itemUid) return false
+  const version = item.recordVersion ?? item.version ?? 0
+  return version > job.result.version || (version === job.result.version
+    && (item.status !== 1 || item.mediaUnavailable !== true))
+}
+
 export function projectRecordReedit(item: ArkmeTimelineItem, jobs: readonly ArkmeRecordReeditSubmissionView[]): ArkmeTimelineItem {
   const job = jobs.find(value => value.itemUid === item.itemUid)
   const version = item.recordVersion ?? item.version ?? 0
-  if (!job || (job.result ? version >= job.result.version : version > job.baseVersion)) return item
+  if (!job || item.status !== 1 || (job.result ? recordReeditProjectionSettled(item, job) : version > job.baseVersion)) return item
+  const voiceBlock = job.voiceFileAssetUid
+    ? [...(item.contentBlocks ?? []), ...(job.voiceBlock ? [job.voiceBlock] : [])]
+      .find(block => block.kind === 'audio' && block.fileAssetUid === job.voiceFileAssetUid)
+    : undefined
   return {
     ...item, title: job.title, textContent: job.textContent,
     // The candidate supplies the complete media selection, including explicit removal.
-    mediaUnavailable: false,
+    mediaUnavailable: Boolean(job.voiceFileAssetUid && !voiceBlock),
     contentBlocks: [
-      ...(item.contentBlocks ?? []).filter(block => job.voiceFileAssetUid && block.fileAssetUid === job.voiceFileAssetUid),
+      ...(voiceBlock ? [voiceBlock] : []),
       ...job.attachments.flatMap((attachment, index) => {
-        const block = attachment.localFile ? localFileBlock(attachment.localFile, index) : attachment.block ?? {
+        const block = attachment.localFile ? localFileBlock(attachment.localFile, index)
+          : (item.contentBlocks ?? []).find(value => value.fileAssetUid === attachment.asset.fileAssetUid) ?? attachment.block ?? {
           kind: 'file' as const, mediaRef: '', fileName: attachment.asset.fileName,
           mimeType: attachment.asset.mimeType, size: attachment.asset.size, sortOrder: index,
         }
@@ -25,12 +38,23 @@ export function projectRecordReedit(item: ArkmeTimelineItem, jobs: readonly Arkm
   }
 }
 
-/** Activates Host recovery explicitly; subsequent polling only reads receipts. */
-export function useRecordReeditSubmissions(sourceRef: string | undefined, accountKey: string | undefined, active: boolean) {
-  const key = JSON.stringify([sourceRef, accountKey, active])
-  const scope = useRef({ key, generation: 0 })
-  if (scope.current.key !== key) scope.current = { key, generation: scope.current.generation + 1 }
-  const generation = scope.current.generation
+/** Activates Host recovery explicitly and hands receipts off to the canonical timeline. */
+export function useRecordReeditSubmissions(
+  sourceRef: string | undefined,
+  accountKey: string | undefined,
+  active: boolean,
+  items: readonly ArkmeTimelineItem[],
+  refreshCurrentWindow: () => Promise<void>,
+  sourceKey: string,
+) {
+  const key = JSON.stringify([sourceKey, accountKey, active])
+  const scope = useRef({ key, sourceRef, generation: 0, requestGeneration: 0 })
+  if (scope.current.key !== key || scope.current.sourceRef !== sourceRef) scope.current = {
+    key, sourceRef,
+    generation: scope.current.generation + (scope.current.key === key ? 0 : 1),
+    requestGeneration: scope.current.requestGeneration + 1,
+  }
+  const { generation, requestGeneration } = scope.current
   const revision = useRef(0)
   const [snapshot, setSnapshot] = useState<{ key: string; generation: number; jobs: ArkmeRecordReeditSubmissionView[] }>({ key, generation, jobs: [] })
   const refresh = useCallback(async (reconcile = false) => {
@@ -38,9 +62,10 @@ export function useRecordReeditSubmissions(sourceRef: string | undefined, accoun
     const started = revision.current
     if (reconcile) await callArkme('source.record-reedit.resume', { sourceRef, reconcile: true })
     const jobs = await callArkme<ArkmeRecordReeditSubmissionView[]>('source.record-reedit.submissions', { sourceRef })
-    if (scope.current.generation !== generation || scope.current.key !== key || started !== revision.current || !Array.isArray(jobs)) return
+    if (scope.current.requestGeneration !== requestGeneration || scope.current.generation !== generation
+      || scope.current.key !== key || started !== revision.current || !Array.isArray(jobs)) return
     setSnapshot({ key, generation, jobs })
-  }, [sourceRef, accountKey, active, key, generation])
+  }, [sourceRef, accountKey, active, key, generation, requestGeneration])
   useEffect(() => {
     let disposed = false
     let resumed = false
@@ -66,5 +91,23 @@ export function useRecordReeditSubmissions(sourceRef: string | undefined, accoun
     revision.current += 1
     setSnapshot(previous => ({ key, generation, jobs: [...(previous.key === key && previous.generation === generation ? previous.jobs : []).filter(value => value.itemUid !== job.itemUid), job] }))
   }, [key, generation])
-  return { jobs: snapshot.key === key && snapshot.generation === generation ? snapshot.jobs : [], accepted, refresh }
+  const jobs = snapshot.key === key && snapshot.generation === generation ? snapshot.jobs : []
+  const projectionWindow = useRef({ items, refreshCurrentWindow })
+  projectionWindow.current = { items, refreshCurrentWindow }
+  useEffect(() => {
+    if (!active || !sourceRef || !accountKey || scope.current.key !== key || scope.current.generation !== generation) return
+    const current = projectionWindow.current
+    for (const job of jobs) {
+      if (job.result && current.items.some(item => recordReeditProjectionSettled(item, job))) {
+        void callArkme('source.record-reedit.acknowledge', {
+          sourceRef, submissionId: job.submissionId, version: job.result.version,
+        }).catch(() => undefined)
+      }
+    }
+    const awaitingProjection = jobs.some(job => job.result && current.items.some(item => item.itemUid === job.itemUid
+      && !recordReeditProjectionSettled(item, job)))
+    if (awaitingProjection) void current.refreshCurrentWindow().catch(() => undefined)
+    // Receipt polling remains the retry cadence; window reads must not trigger more reads.
+  }, [jobs, sourceRef, accountKey, active, key, generation])
+  return { jobs, accepted, refresh }
 }

@@ -9,6 +9,7 @@ import { X } from '@phosphor-icons/react/dist/icons/X'
 import { UserMinus } from '@phosphor-icons/react/dist/csr/UserMinus'
 import { UserPlus } from '@phosphor-icons/react/dist/csr/UserPlus'
 import qrcode from 'qrcode-generator'
+import { retainPartialTimelineMedia } from './timeline-media.js'
 import type {
   ArkmeAuthSnapshot, ArkmeGroupAiPolishNotice, ArkmeGroupAiPolishSnapshot, ArkmeSourceReadResult,
   ArkmeRelatedRecordingItem, ArkmeRelatedRecordingMonthBucket, ArkmeRelatedRecordingPage,
@@ -42,6 +43,8 @@ import type {
   ArkmeRecordReeditEditorSnapshot,
 } from '../record-reedit-contract.js'
 import { projectRecordReedit, useRecordReeditSubmissions } from './record-reedit-submissions.js'
+import { useRecordReeditEditors, type ArkmeRecordReeditComposerState } from './record-reedit-editors.js'
+import { readConversationTimelineWindow } from './conversation-timeline-refresh.js'
 import { projectArkmeChatAttentionFromMuted } from '../chat-attention.js'
 import { bindSentFileTaskLocals, fileTaskShowsInlineStatus, fileTaskTimelineItem, localFileBlock, useArkmeFileSendTasks } from './file-send-tasks.js'
 import { isArkmeRequestAbort, retryArkmeRead } from './read-retry.js'
@@ -1326,8 +1329,14 @@ function mergeItems(current: ArkmeTimelineItem[], incoming: ArkmeTimelineItem[])
   const map = new Map(current.map(item => [item.itemUid, item]))
   for (const item of incoming) {
     const previous = map.get(item.itemUid)
+    const version = item.recordVersion ?? item.version ?? 0
+    const previousVersion = previous?.recordVersion ?? previous?.version ?? 0
+    // Live deltas and reads may arrive out of order. Keep the authoritative
+    // record snapshot and its matching action reference together.
+    if (previous?.status === 1 && item.status === 1 && version > 0 && previousVersion > 0
+      && previousVersion > version) continue
     map.set(item.itemUid, {
-      ...item,
+      ...retainPartialTimelineMedia(previous, item),
       ...(previous?.aiPolish !== undefined && item.aiPolish === undefined ? { aiPolish: previous.aiPolish } : {}),
       ...(previous?.recordDurationMillis !== undefined && item.recordDurationMillis === undefined
         ? { recordDurationMillis: previous.recordDurationMillis } : {}),
@@ -1342,6 +1351,22 @@ function mergeItems(current: ArkmeTimelineItem[], incoming: ArkmeTimelineItem[])
     })
   }
   return [...map.values()].sort((a, b) => a.sendAtMillis - b.sendAtMillis || a.itemUid.localeCompare(b.itemUid))
+}
+
+function reconcileTimelinePage(
+  cachedItems: ArkmeTimelineItem[],
+  delta: ArkmeChatTimelineSourceDeltaSnapshot | undefined,
+  pageItems: ArkmeTimelineItem[],
+  readStartDeltas: ReadonlyMap<string, ArkmeTimelineItem | undefined>,
+): ArkmeTimelineItem[] {
+  const removedKeys = new Set(delta?.removedItemKeys ?? [])
+  const retainedPage = pageItems.filter(item => !removedKeys.has(item.timelineItemKey ?? ''))
+  const ids = new Set(retainedPage.map(item => item.itemUid))
+  // Newer evidence may replace page content, but cannot expand its navigation range.
+  const relevant = (delta?.items ?? []).filter(item => ids.has(item.itemUid))
+  const beforeRead = relevant.filter(item => item === readStartDeltas.get(item.itemUid))
+  const duringRead = relevant.filter(item => item !== readStartDeltas.get(item.itemUid))
+  return mergeItems(mergeItems(mergeItems(cachedItems.filter(item => ids.has(item.itemUid)), beforeRead), retainedPage), duringRead)
 }
 
 function detailExtensionTimelineItem(
@@ -1480,25 +1505,6 @@ interface ArkmeComposerAsyncScope {
   sourceKey: string
   draftKey: string | undefined
   generation: number
-}
-
-interface ArkmeRecordReeditComposerState {
-  generation: number
-  accountKey: string | undefined
-  sourceKey: string
-  sourceRef: string
-  item: ArkmeTimelineItem
-  snapshot: ArkmeRecordReeditEditorSnapshot | undefined
-  title: string
-  textContent: string
-  attachments: ArkmeRecordReeditAttachmentView[]
-  // Shared by snapshots queued in this session so serialized saves consume the latest CAS revision.
-  persisted: { candidateKey: string; draftRevision: number }
-  loading: boolean
-  busy: boolean
-  error: string
-  conflict?: 'record' | 'draft' | undefined
-  recoveryConfirmation?: boolean | undefined
 }
 
 function arkmeRecordReeditFailure(caught: unknown): Pick<ArkmeRecordReeditComposerState, 'error' | 'conflict'> {
@@ -2450,34 +2456,30 @@ export function ArkmeSurface({
   const activeComposerExtensionTarget = composerExtensionTarget?.sourceRef === source?.sourceRef
     ? composerExtensionTarget
     : undefined
-  const [recordReeditComposer, setRecordReeditComposer] = useState<ArkmeRecordReeditComposerState>()
-  const reeditSubmissions = useRecordReeditSubmissions(source?.sourceRef, authenticatedAccountKey, activeConversation)
+  const { composer: recordReeditComposer, composerRef: recordReeditComposerRef, setComposer: setRecordReeditComposer,
+    updateCandidate: updateRecordReeditCandidate, activateScope: activateRecordReeditScope,
+    findCandidate: findRecordReeditCandidate } = useRecordReeditEditors()
   const seenReeditCommits = useRef(new Set<string>())
   const pendingReeditHighlights = useRef(new Set<string>())
-  const recordReeditComposerRef = useRef<ArkmeRecordReeditComposerState>()
   const recordReeditGenerationRef = useRef(0)
-  const recordReeditDraftSaveTailRef = useRef<Promise<void>>(Promise.resolve())
-  const recordReeditCommitGenerationRef = useRef<number>()
   const [recordReeditHighlightUid, setRecordReeditHighlightUid] = useState('')
   const recordReeditHighlightTimerRef = useRef<number>()
-  recordReeditComposerRef.current = recordReeditComposer
-  const activeRecordReeditComposer = recordReeditComposer?.sourceRef === source?.sourceRef
-    && recordReeditComposer?.sourceKey === conversationKey
+  const activeRecordReeditComposer = recordReeditComposer?.sourceKey === conversationKey
     && recordReeditComposer?.accountKey === authenticatedAccountKey
     ? recordReeditComposer
     : undefined
-  const persistRecordReeditDraft = useCallback(async (target: ArkmeRecordReeditComposerState, forCommit = false): Promise<void> => {
+  const persistRecordReeditDraft = useCallback(async (target: ArkmeRecordReeditComposerState, forCommit = false): Promise<boolean> => {
     const snapshot = target.snapshot
     if (snapshot === undefined || target.busy
-      || arkmeAuthenticatedAccountKey(arkmeAuthStore.getSnapshot().auth) !== target.accountKey) return
+      || arkmeAuthenticatedAccountKey(arkmeAuthStore.getSnapshot().auth) !== target.accountKey) return false
     const nextTitle = target.title.trim()
     const nextText = target.textContent.trim()
     const supportsTitle = snapshot.displayKind === 1
     const nextCandidateKey = arkmeRecordReeditCandidateKey(nextTitle, nextText, target.attachments)
     const alreadyPersisted = () => nextCandidateKey === target.persisted.candidateKey
       && (!forCommit || target.persisted.draftRevision > 0)
-    const operation = recordReeditDraftSaveTailRef.current.catch(() => undefined).then(async () => {
-      if ((!forCommit && recordReeditCommitGenerationRef.current === target.generation)
+    const operation = target.persisted.saveTail.catch(() => undefined).then(async () => {
+      if ((!forCommit && target.persisted.exclusive)
         || arkmeAuthenticatedAccountKey(arkmeAuthStore.getSnapshot().auth) !== target.accountKey
         || alreadyPersisted()) return
       const result = await callArkme<{ draftRevision: number }>('source.record-reedit.draft.put', {
@@ -2492,31 +2494,34 @@ export function ArkmeSurface({
       target.persisted.draftRevision = result.draftRevision
       target.persisted.candidateKey = nextCandidateKey
     })
-    recordReeditDraftSaveTailRef.current = operation.then(() => undefined, () => undefined)
+    target.persisted.saveTail = operation.then(() => undefined, () => undefined)
     await operation
+    return alreadyPersisted()
   }, [])
   const persistRecordReeditBeforeContextExit = useCallback((
     target: ArkmeRecordReeditComposerState,
     shouldClose: () => boolean,
   ) => {
     recordReeditGenerationRef.current += 1
-    if (target.snapshot === undefined || target.busy) {
-      setRecordReeditComposer(undefined)
+    if (target.snapshot === undefined) {
+      updateRecordReeditCandidate(target, current => sameArkmeRecordReeditSession(current, target) ? undefined : current)
       return
     }
-    void persistRecordReeditDraft(target).then(() => {
-      setRecordReeditComposer(current => sameArkmeRecordReeditSession(current, target)
+    if (target.busy) return
+    void persistRecordReeditDraft(target).then(saved => {
+      if (!saved) return
+      updateRecordReeditCandidate(target, current => sameArkmeRecordReeditSession(current, target)
         && arkmeRecordReeditCandidateKey(current.title, current.textContent, current.attachments)
           === arkmeRecordReeditCandidateKey(target.title, target.textContent, target.attachments)
         && shouldClose()
         ? undefined
         : current)
     }).catch(caught => {
-      setRecordReeditComposer(current => sameArkmeRecordReeditSession(current, target)
+      updateRecordReeditCandidate(target, current => sameArkmeRecordReeditSession(current, target)
         ? { ...current, busy: false, ...arkmeRecordReeditFailure(caught) }
         : current)
     })
-  }, [persistRecordReeditDraft])
+  }, [persistRecordReeditDraft, updateRecordReeditCandidate])
   useEffect(() => {
     if (composerExtensionTarget !== undefined && composerExtensionTarget.sourceRef !== source?.sourceRef) {
       setComposerExtensionTarget(undefined)
@@ -2529,13 +2534,13 @@ export function ArkmeSurface({
     }
     setRecordReeditHighlightUid('')
     const target = recordReeditComposerRef.current
-    if (target === undefined) return
-    if (target.accountKey !== authenticatedAccountKey) {
-      recordReeditGenerationRef.current += 1
-      setRecordReeditComposer(undefined)
+    const nextScope = { accountKey: authenticatedAccountKey, sourceKey: conversationKey, sourceRef: source?.sourceRef ?? '' }
+    if (target === undefined || target.accountKey !== authenticatedAccountKey) {
+      if (target !== undefined && target.snapshot === undefined) updateRecordReeditCandidate(target, () => undefined)
+      activateRecordReeditScope(nextScope, ++recordReeditGenerationRef.current)
       return
     }
-    if (target.sourceRef === source?.sourceRef && target.sourceKey === conversationKey) {
+    if (target.sourceKey === conversationKey) {
       if (activeConversation && target.generation !== recordReeditGenerationRef.current) {
         const generation = ++recordReeditGenerationRef.current
         setRecordReeditComposer(current => sameArkmeRecordReeditSession(current, target)
@@ -2547,10 +2552,11 @@ export function ArkmeSurface({
       target,
       () => {
         const selected = arkmeUi.getSnapshot().selectedSource
-        return selected === undefined || selected.sourceRef !== target.sourceRef || arkmeSourceIdentityKey(selected) !== target.sourceKey
+        return selected === undefined || arkmeSourceIdentityKey(selected) !== target.sourceKey
       },
     )
-  }, [activeConversation, authenticatedAccountKey, conversationKey, persistRecordReeditBeforeContextExit, source?.sourceRef])
+    activateRecordReeditScope(nextScope, ++recordReeditGenerationRef.current)
+  }, [activeConversation, authenticatedAccountKey, conversationKey, persistRecordReeditBeforeContextExit, source?.sourceRef, activateRecordReeditScope, updateRecordReeditCandidate])
   useEffect(() => {
     if (activeRecordReeditComposer?.snapshot === undefined) return
     const generation = activeRecordReeditComposer.generation
@@ -2780,7 +2786,8 @@ export function ArkmeSurface({
     && preparingKeys.has(arkmeRecordReeditPreparationKey(activeRecordReeditComposer))
   const composerFilesDisabled = activeRecordReeditComposer === undefined
     ? preparingFiles
-    : preparingReeditFiles || activeRecordReeditComposer.loading || activeRecordReeditComposer.busy
+    : activeRecordReeditComposer.snapshot === undefined || preparingReeditFiles
+      || activeRecordReeditComposer.loading || activeRecordReeditComposer.busy
   const composerFileAddingDisabled = composerFilesDisabled || activeRecordReeditComposer?.snapshot?.maxAttachments === 0
   // Transport is per message.  It must never lock the next draft while a previous
   // message waits for the server, otherwise fast keyboard input is dropped.
@@ -3121,7 +3128,8 @@ export function ArkmeSurface({
   const cacheAccountKeyRef = useRef<string>()
   const timelineGenerationRef = useRef(0)
   const timelineWindowRevisionRef = useRef(0)
-  const timelineRequestsRef = useRef(new Map<'initial' | 'older' | 'newer', {
+  const appliedTimelineInvalidationsRef = useRef(new Map<string, number>())
+  const timelineRequestsRef = useRef(new Map<'initial' | 'older' | 'newer' | 'refresh', {
     controller: AbortController
     requestKey: string
   }>())
@@ -3682,18 +3690,28 @@ export function ArkmeSurface({
     cursor?: ArkmeTimelineCursor,
     preserve = false,
     limit = 40,
-    intent: 'latest' | 'background' | 'pagination' = cursor === undefined ? 'latest' : 'pagination',
-  ) => {
+    intent: 'latest' | 'background' | 'pagination' | 'refresh' = cursor === undefined ? 'latest' : 'pagination',
+  ): Promise<void> => {
     if (source === undefined) return
     const sourceRef = source.sourceRef
     const sourceKey = arkmeSourceIdentityKey(source)
     const generation = timelineGenerationRef.current
+    const invalidationRevision = arkmeChatTimelineDelta.getSnapshotForSource(sourceKey).invalidationRevision
+    const refreshWindow = intent === 'refresh' || intent === 'background'
+      ? conversationCacheRef.current.getTimeline(sourceKey) : undefined
+    if (intent === 'refresh' && conversationTargetAbortRef.current !== undefined
+      && !conversationTargetAbortRef.current.signal.aborted) return
     if (intent === 'background'
       && (conversationCacheRef.current.getTimeline(sourceKey)?.mode === 'around'
         || conversationTargetAbortRef.current !== undefined
           && !conversationTargetAbortRef.current.signal.aborted)) return
-    const direction = cursor === undefined ? 'initial' : (cursor.afterSequence ?? 0) > 0 ? 'newer' : 'older'
-    const requestKey = `${sourceKey}:${cursor === undefined ? 'initial' : JSON.stringify(cursor)}`
+    if (refreshWindow !== undefined && timelineRequestsRef.current.get('initial')?.controller.signal.aborted === false) return
+    const direction = refreshWindow === undefined
+      ? cursor === undefined ? 'initial' : (cursor.afterSequence ?? 0) > 0 ? 'newer' : 'older'
+      : 'refresh'
+    const requestKey = refreshWindow === undefined
+      ? `${sourceKey}:${cursor === undefined ? 'initial' : JSON.stringify(cursor)}`
+      : `${sourceKey}:refresh:${invalidationRevision}`
     const activeRequest = timelineRequestsRef.current.get(direction)
     if (activeRequest !== undefined && !activeRequest.controller.signal.aborted
       && activeRequest.requestKey === requestKey) return
@@ -3708,11 +3726,21 @@ export function ArkmeSurface({
     const controller = new AbortController()
     activeRequest?.controller.abort()
     timelineRequestsRef.current.set(direction, { controller, requestKey })
+    const readStartDeltas = new Map<string, ArkmeTimelineItem | undefined>()
     let page: ArkmeTimelinePage
     try {
-      page = await retryArkmeRead(() => callArkme<ArkmeTimelinePage>('source.timeline', {
-        sourceRef, limit, ...(cursor === undefined ? {} : { cursor }),
-      }, controller.signal), { signal: controller.signal })
+      const readPage = (pageCursor?: ArkmeTimelineCursor) => retryArkmeRead(async () => {
+        const start = new Map((sourceIsChat ? arkmeChatTimelineDelta.getSnapshotForSource(sourceKey).items : [])
+          .map(item => [item.itemUid, item]))
+        const result = await callArkme<ArkmeTimelinePage>('source.timeline', {
+          sourceRef, limit: refreshWindow === undefined ? limit : 100,
+          ...(pageCursor === undefined ? {} : { cursor: pageCursor }),
+        }, controller.signal)
+        for (const item of result.items) readStartDeltas.set(item.itemUid, start.get(item.itemUid))
+        return result
+      }, { signal: controller.signal })
+      page = refreshWindow === undefined ? await readPage(cursor)
+        : await readConversationTimelineWindow(refreshWindow, readPage, controller.signal)
     } catch (caught) {
       if (isArkmeRequestAbort(caught, controller.signal)) return
       throw caught
@@ -3721,7 +3749,7 @@ export function ArkmeSurface({
         timelineRequestsRef.current.delete(direction)
       }
     }
-    if (generation !== timelineGenerationRef.current
+    if (controller.signal.aborted || generation !== timelineGenerationRef.current
       || windowRevision !== timelineWindowRevisionRef.current) return
     const cached = conversationCacheRef.current.getTimeline(sourceKey)
     const loadingNewerPage = (cursor?.afterSequence ?? 0) > 0
@@ -3738,15 +3766,32 @@ export function ArkmeSurface({
       ? (cached?.items ?? []).filter(item => item.awaitingTimelineProjection === true
         && !page.items.some(projected => projected.itemUid === item.itemUid))
       : []
-    const authoritativeItems = mergeItems(pendingProjectionItems, page.items)
-    const snapshot: ArkmeConversationTimelineSnapshot = {
+    const delta = sourceIsChat ? arkmeChatTimelineDelta.getSnapshotForSource(sourceKey) : undefined
+    const removedKeys = new Set(delta?.removedItemKeys ?? [])
+    const authoritativeItems = mergeItems(pendingProjectionItems, reconcileTimelinePage(cached?.items ?? [], delta, page.items, readStartDeltas))
+    const refreshRange = refreshWindow?.mode === 'around' ? refreshWindow.aroundSequenceRange : undefined
+    const refreshedIds = new Set(refreshWindow?.items.filter(item => item.status === 1
+      && (refreshRange === undefined
+        || (item.sequence ?? 0) >= refreshRange.minimumSequence && (item.sequence ?? 0) <= refreshRange.maximumSequence))
+      .map(item => item.itemUid))
+    const snapshot: ArkmeConversationTimelineSnapshot = refreshWindow !== undefined && cached !== undefined ? {
+      ...cached,
+      items: confirmedSendRetention.merge(sourceKey, mergeItems(cached.items.filter(item => !refreshedIds.has(item.itemUid)
+        && !removedKeys.has(item.timelineItemKey ?? '')), authoritativeItems)),
+      fetchedAtMillis: Date.now(),
+      aiPolishNotices: page.aiPolishNotices ?? cached.aiPolishNotices,
+      ...(page.aiPolishSettings === undefined ? {} : { aiPolishSettings: page.aiPolishSettings }),
+      ...(sourceIsChat
+        ? { latestSequence: Math.max(cached.latestSequence ?? 0, source.latestSequence ?? 0, ...page.items.map(item => item.sequence ?? 0)) }
+        : { recordRevision: sourceProjectionRevision }),
+    } : {
       mode: cursor === undefined
         ? 'latest'
         : loadingNewerPage && !page.hasMore ? 'latest' : cached?.mode ?? 'latest',
       ...(nextAroundSequenceRange === undefined ? {} : { aroundSequenceRange: nextAroundSequenceRange }),
       items: cursor === undefined
         ? confirmedSendRetention.merge(sourceKey, authoritativeItems)
-        : mergeItems(cached?.items ?? [], page.items),
+        : mergeItems(cached?.items ?? [], authoritativeItems),
       aiPolishNotices: cursor === undefined ? page.aiPolishNotices ?? [] : cached?.aiPolishNotices ?? [],
       hasMore: loadingNewerPage ? cached?.hasMore ?? false : page.hasMore,
       newerHasMore: loadingNewerPage ? page.hasMore : cursor === undefined ? false : cached?.newerHasMore ?? false,
@@ -3764,6 +3809,10 @@ export function ArkmeSurface({
     }
     const contentChanged = !arkmeConversationTimelineContentEqual(cached, snapshot)
     const releasedMoments = conversationCacheRef.current.storeTimeline(sourceKey, snapshot)
+    const readIds = new Set(page.items.map(item => item.itemUid))
+    conversationCacheRef.current.consumeTimelineDeltaItems(sourceKey, (delta?.items ?? []).filter(item => readIds.has(item.itemUid)))
+    if (cursor === undefined) appliedTimelineInvalidationsRef.current.set(sourceKey,
+      Math.max(appliedTimelineInvalidationsRef.current.get(sourceKey) ?? 0, invalidationRevision))
     const releasedMomentsChanged = releasedMoments !== undefined
       && JSON.stringify(releasedMoments) !== JSON.stringify(interwovenMoments)
     if (contentChanged || releasedMomentsChanged) {
@@ -3796,6 +3845,10 @@ export function ArkmeSurface({
       setTimelineSkeletonKey(current => current === sourceKey ? '' : current)
       if (!hadCachedTimeline && snapshot.items.length > 0) setTimelineRevealKey(sourceKey)
       await acknowledgeRead(snapshot.items)
+    }
+    if (generation === timelineGenerationRef.current && windowRevision === timelineWindowRevisionRef.current
+      && arkmeChatTimelineDelta.getSnapshotForSource(sourceKey).invalidationRevision > invalidationRevision) {
+      await loadTimeline(undefined, true, 40, 'refresh')
     }
   }, [acknowledgeRead, confirmedSendRetention, interwovenMoments, source, sourceIsChat, sourceProjectionRevision])
 
@@ -3891,26 +3944,33 @@ export function ArkmeSurface({
       const controller = new AbortController()
       conversationTargetAbortRef.current?.abort()
       conversationTargetAbortRef.current = controller
-      void retryArkmeRead(() => callArkme<ArkmeTimelineAroundPage>('source.timeline-around', {
-        sourceRef: source.sourceRef,
-        itemUid: target.itemUid,
-        recordOwnerUserId: target.recordOwnerUserId,
-        beforeLimit: 20,
-        afterLimit: 20,
-      }, controller.signal), { signal: controller.signal }).then(page => {
+      let readStartDeltas = new Map<string, ArkmeTimelineItem>()
+      void retryArkmeRead(() => {
+        readStartDeltas = new Map(arkmeChatTimelineDelta.getSnapshotForSource(conversationKey).items.map(item => [item.itemUid, item]))
+        return callArkme<ArkmeTimelineAroundPage>('source.timeline-around', {
+          sourceRef: source.sourceRef,
+          itemUid: target.itemUid,
+          recordOwnerUserId: target.recordOwnerUserId,
+          beforeLimit: 20,
+          afterLimit: 20,
+        }, controller.signal)
+      }, { signal: controller.signal }).then(page => {
         if (controller.signal.aborted || generation !== timelineGenerationRef.current
           || windowRevision !== timelineWindowRevisionRef.current
           || arkmeUi.getSnapshot().conversationTarget?.revision !== target.revision) return
-        if (!page.items.some(item => item.itemUid === target.itemUid)) throw new Error('未找到要定位的快记')
+        const cached = conversationCacheRef.current.getTimeline(conversationKey)
+        const delta = sourceIsChat ? arkmeChatTimelineDelta.getSnapshotForSource(conversationKey) : undefined
+        const items = reconcileTimelinePage(cached?.items ?? [],
+          delta, page.items, readStartDeltas)
+        if (!items.some(item => item.itemUid === target.itemUid)) throw new Error('未找到要定位的快记')
         timelineRequestsRef.current.get('initial')?.controller.abort()
         timelineRequestsRef.current.delete('initial')
         timelineWindowRevisionRef.current += 1
-        const cached = conversationCacheRef.current.getTimeline(conversationKey)
         const nextAroundSequenceRange = arkmeConversationTimelineSequenceRange(page.items)
         const snapshot: ArkmeConversationTimelineSnapshot = {
           mode: 'around',
           ...(nextAroundSequenceRange === undefined ? {} : { aroundSequenceRange: nextAroundSequenceRange }),
-          items: page.items,
+          items,
           aiPolishNotices: cached?.aiPolishNotices ?? [],
           hasMore: page.olderHasMore,
           newerHasMore: page.newerHasMore,
@@ -3923,6 +3983,9 @@ export function ArkmeSurface({
           ...(page.newerCursor === undefined ? {} : { newerCursor: page.newerCursor }),
         }
         conversationCacheRef.current.storeTimeline(conversationKey, snapshot)
+        const readIds = new Set(page.items.map(item => item.itemUid))
+        conversationCacheRef.current.consumeTimelineDeltaItems(conversationKey, (delta?.items ?? []).filter(item => readIds.has(item.itemUid)))
+        conversationTargetAbortRef.current = undefined
         pendingViewportRestoreRef.current = undefined
         pendingConversationTargetLocateRef.current = {
           sourceKey: conversationKey,
@@ -3941,8 +4004,14 @@ export function ArkmeSurface({
           newerCursor: snapshot.newerCursor,
           newerHasMore: snapshot.newerHasMore ?? false,
         })
+        if (arkmeChatTimelineDelta.getSnapshotForSource(conversationKey).invalidationRevision
+          > (appliedTimelineInvalidationsRef.current.get(conversationKey) ?? 0)) {
+          void loadTimeline(undefined, true, 40, 'refresh').catch(caught => { setError(errorMessage(caught)) })
+        }
       }).catch(caught => {
         if (isArkmeRequestAbort(caught, controller.signal)) return
+        if (generation !== timelineGenerationRef.current || windowRevision !== timelineWindowRevisionRef.current) return
+        conversationTargetAbortRef.current = undefined
         if (pendingConversationTargetLocateRef.current?.revision === target.revision) {
           pendingConversationTargetLocateRef.current = undefined
         }
@@ -3954,6 +4023,10 @@ export function ArkmeSurface({
           messageActionStatusTimerRef.current = undefined
         }, MESSAGE_ACTION_NOTICE_MS)
         arkmeUi.consumeConversationTarget(target.revision)
+        if (arkmeChatTimelineDelta.getSnapshotForSource(conversationKey).invalidationRevision
+          > (appliedTimelineInvalidationsRef.current.get(conversationKey) ?? 0)) {
+          void loadTimeline(undefined, true, 40, 'refresh').catch(error => { setError(errorMessage(error)) })
+        }
       }).finally(() => {
         if (conversationTargetAbortRef.current === controller) conversationTargetAbortRef.current = undefined
       })
@@ -3992,6 +4065,7 @@ export function ArkmeSurface({
     }
     if (accountChanged) {
       conversationCacheRef.current.clear()
+      appliedTimelineInvalidationsRef.current.clear()
       cacheAccountKeyRef.current = authenticatedAccountKey
     }
     const sourceKey = authenticated && conversationKey !== '' ? conversationKey : undefined
@@ -4195,8 +4269,8 @@ export function ArkmeSurface({
     return () => { window.removeEventListener('focus', refreshOnFocus) }
   }, [activeConversation, authenticated])
   useEffect(() => {
-    if (!activeConversation || !authenticated || source === undefined) return
-    const deltaItems = chatDelta.items
+    if (!activeConversation || !authenticated || source === undefined || timelineStateKey !== conversationKey) return
+    const deltaItems = conversationCacheRef.current.unappliedTimelineDeltaItems(conversationKey, chatDelta.items)
     const removedItemKeys = new Set(chatDelta.removedItemKeys)
     const retainedItems = removedItemKeys.size === 0
       ? items
@@ -4206,6 +4280,7 @@ export function ArkmeSurface({
     )
     if (applicableDeltaItems.length === 0 && retainedItems.length === items.length) return
     const nextItems = mergeItems(retainedItems, applicableDeltaItems)
+    conversationCacheRef.current.consumeTimelineDeltaItems(conversationKey, applicableDeltaItems)
     if (JSON.stringify(nextItems) === JSON.stringify(items)) return
     const body = bodyRef.current
     const viewport = body === null ? undefined : arkmeConversationViewport(body)
@@ -4226,15 +4301,13 @@ export function ArkmeSurface({
       setNewMessageCount(0)
     }
     void acknowledgeRead(applicableDeltaItems)
-  }, [acknowledgeRead, activeConversation, aroundSequenceRange, authenticated, chatDelta, conversationKey, items, source, timelineMode])
+  }, [acknowledgeRead, activeConversation, aroundSequenceRange, authenticated, chatDelta, conversationKey, items, source, timelineMode, timelineStateKey])
 
-  const appliedTimelineInvalidationsRef = useRef(new Map<string, number>())
   useEffect(() => {
     if (!activeConversation || !authenticated || source === undefined || chatDelta.invalidationRevision <= 0) return
     const applied = appliedTimelineInvalidationsRef.current.get(conversationKey) ?? 0
     if (chatDelta.invalidationRevision <= applied) return
-    appliedTimelineInvalidationsRef.current.set(conversationKey, chatDelta.invalidationRevision)
-    void loadTimeline(undefined, true).catch(caught => { setError(errorMessage(caught)) })
+    void loadTimeline(undefined, true, 40, 'refresh').catch(caught => { setError(errorMessage(caught)) })
   }, [activeConversation, authenticated, chatDelta.invalidationRevision, conversationKey, loadTimeline, source])
 
   useEffect(() => {
@@ -4504,7 +4577,8 @@ export function ArkmeSurface({
     const targetUserId = authenticatedUserId
     if (targetDraftKey === undefined || targetUserId === undefined) return
     const preparationKey = reeditTarget === undefined ? targetDraftKey : arkmeRecordReeditPreparationKey(reeditTarget)
-    if (reeditTarget !== undefined && (reeditTarget.loading || reeditTarget.busy || preparationJobs.current.has(preparationKey))) return
+    if (reeditTarget !== undefined && (reeditTarget.snapshot === undefined || reeditTarget.loading
+      || reeditTarget.busy || preparationJobs.current.has(preparationKey))) return
     const scope = captureComposerAsyncScope()
     const sameReeditTarget = () => reeditTarget !== undefined && sameComposerAsyncScope(scope)
       && recordReeditGenerationRef.current === reeditTarget.generation
@@ -4534,7 +4608,7 @@ export function ArkmeSurface({
         if (attachmentCount >= maxAttachments) { errors.push(`最多添加 ${maxAttachments} 个附件：${file.name}`); continue }
         if (file.size === 0 || file.size > limit) { errors.push(`${file.name} 为空或超过 ${Math.floor(limit / 1024 / 1024)} MiB`); continue }
         try {
-          const localFile = await sdk.stageFile(file, { signal: controller.signal, expectedUserId: targetUserId })
+          const localFile = await sdk.stageFile(file, { signal: controller.signal, expectedUserId: targetUserId, ...(reeditTarget ? { retention: 'references' as const } : {}) })
           const currentAuth = arkmeAuthStore.getSnapshot().auth
           if (currentAuth?.status !== 'authenticated' || currentAuth.userId !== targetUserId) return false
           if (reeditTarget === undefined) arkmeComposerDraftStore.appendAttachments(targetDraftKey, [{ localFile }], policy.maxAttachments)
@@ -5011,7 +5085,7 @@ export function ArkmeSurface({
 
   const updateComposerText = (text: string) => {
     if (activeRecordReeditComposer !== undefined) {
-      if (activeRecordReeditComposer.loading || activeRecordReeditComposer.busy
+      if (activeRecordReeditComposer.snapshot === undefined || activeRecordReeditComposer.loading || activeRecordReeditComposer.busy
         || preparationJobs.current.has(arkmeRecordReeditPreparationKey(activeRecordReeditComposer))) return
       setRecordReeditComposer(current => sameArkmeRecordReeditSession(current, activeRecordReeditComposer)
         ? { ...current, textContent: text, error: '' }
@@ -5530,25 +5604,25 @@ export function ArkmeSurface({
     setMomentRelatedView(relatedDrawerBackTarget(momentRelatedView))
   }
 
-  const displayItems = useMemo(() => {
+  const refreshCurrentWindow = useCallback(() => loadTimeline(undefined, true, 40, 'refresh'), [loadTimeline])
+  const reeditSubmissions = useRecordReeditSubmissions(
+    source?.sourceRef, authenticatedAccountKey, activeConversation,
+    timelineStateKey === conversationKey ? items : [], refreshCurrentWindow, conversationKey,
+  )
+  const { displayItems, reeditItems } = useMemo(() => {
     const remoteIds = new Set(items.map(item => item.itemUid))
-    const remoteItems = items.map(item => projectRecordReedit(bindSentFileTaskLocals(item, fileTasks.tasks), reeditSubmissions.jobs))
-    return [...remoteItems, ...fileTasks.tasks.filter(task => !remoteIds.has(task.result?.itemUid ?? task.recordUid)).map(fileTaskTimelineItem)]
+    const reeditItems = new Set<ArkmeTimelineItem>()
+    const remoteItems = items.map(item => {
+      const bound = bindSentFileTaskLocals(item, fileTasks.tasks)
+      const projected = projectRecordReedit(bound, reeditSubmissions.jobs)
+      if (projected !== bound) reeditItems.add(projected)
+      return projected
+    })
+    const displayItems = [...remoteItems, ...fileTasks.tasks.filter(task => !remoteIds.has(task.result?.itemUid ?? task.recordUid)).map(fileTaskTimelineItem)]
       .sort((a, b) => a.sendAtMillis - b.sendAtMillis)
+    return { displayItems, reeditItems }
   }, [items, fileTasks.tasks, reeditSubmissions.jobs])
-  const reeditProjectionRefresh = useRef({ items, loadTimeline, sourceRef: source?.sourceRef })
-  reeditProjectionRefresh.current = { items, loadTimeline, sourceRef: source?.sourceRef }
   useEffect(() => {
-    const current = reeditProjectionRefresh.current
-    for (const job of reeditSubmissions.jobs) {
-      if (job.result && current.sourceRef && current.items.some(item => item.itemUid === job.itemUid
-        && (item.recordVersion ?? item.version ?? 0) >= job.result!.version)) {
-        void callArkme('source.record-reedit.acknowledge', { sourceRef: current.sourceRef, submissionId: job.submissionId, version: job.result.version }).catch(() => undefined)
-      }
-    }
-    const awaitingProjection = reeditSubmissions.jobs.some(job => job.result && current.items.some(item => item.itemUid === job.itemUid
-      && (item.recordVersion ?? item.version ?? 0) < job.result!.version))
-    if (awaitingProjection) void current.loadTimeline(undefined, true, 40, 'background').catch(() => undefined)
     for (const job of reeditSubmissions.jobs) {
       if (job.state === 'pending' || job.state === 'committing') pendingReeditHighlights.current.add(job.submissionId)
     }
@@ -5755,24 +5829,27 @@ export function ArkmeSurface({
       ? { ...current, busy: true, error: '' }
       : current)
     try {
-      await persistRecordReeditDraft(target)
-      if (!sameArkmeRecordReeditSession(recordReeditComposerRef.current, target)) return
-      recordReeditGenerationRef.current += 1
-      setRecordReeditComposer(undefined)
-      requestAnimationFrame(() => { textareaRef.current?.focus() })
+      if (target.snapshot !== undefined && !await persistRecordReeditDraft(target)) {
+        updateRecordReeditCandidate(target, current => ({ ...current, busy: false }))
+        return
+      }
+      const active = sameArkmeRecordReeditSession(recordReeditComposerRef.current, target)
+      updateRecordReeditCandidate(target, () => undefined)
+      if (active) {
+        recordReeditGenerationRef.current += 1
+        requestAnimationFrame(() => { textareaRef.current?.focus() })
+      }
     } catch (caught) {
-      setRecordReeditComposer(current => sameArkmeRecordReeditSession(current, target)
-        ? { ...current, busy: false, ...arkmeRecordReeditFailure(caught) }
-        : current)
+      updateRecordReeditCandidate(target, current => ({ ...current, busy: false, ...arkmeRecordReeditFailure(caught) }))
     }
-  }, [persistRecordReeditDraft])
+  }, [persistRecordReeditDraft, updateRecordReeditCandidate])
   const commitRecordReedit = useCallback(async () => {
     const target = recordReeditComposerRef.current
     const targetSource = source
     if (target === undefined || target.snapshot === undefined || target.loading || target.busy || targetSource === undefined
       || preparationJobs.current.has(arkmeRecordReeditPreparationKey(target))
-      || recordReeditCommitGenerationRef.current === target.generation
-      || target.sourceRef !== targetSource.sourceRef || target.sourceKey !== arkmeSourceIdentityKey(targetSource)
+      || target.persisted.exclusive
+      || target.sourceKey !== arkmeSourceIdentityKey(targetSource)
       || target.accountKey !== arkmeAuthenticatedAccountKey(arkmeAuthStore.getSnapshot().auth)) return
     const nextTitle = target.title.trim()
     const nextText = target.textContent.trim()
@@ -5789,13 +5866,13 @@ export function ArkmeSurface({
         : current)
       return
     }
-    recordReeditCommitGenerationRef.current = target.generation
+    target.persisted.exclusive = true
     setRecordReeditComposer(current => sameArkmeRecordReeditSession(current, target)
       ? { ...current, busy: true, error: '' }
       : current)
     try {
       await persistRecordReeditDraft(target, true)
-      await recordReeditDraftSaveTailRef.current
+      await target.persisted.saveTail
       if (target.accountKey !== arkmeAuthenticatedAccountKey(arkmeAuthStore.getSnapshot().auth)) return
       const result = await callArkme<ArkmeRecordReeditSubmissionView>('source.record-reedit.submit', {
         sourceRef: target.sourceRef,
@@ -5806,42 +5883,40 @@ export function ArkmeSurface({
         attachments: target.attachments.map(attachment => attachment.selection),
         ...(supportsTitle ? { newTitle: nextTitle } : {}),
       })
-      if (!sameArkmeRecordReeditSession(recordReeditComposerRef.current, target)
-        || target.accountKey !== arkmeAuthenticatedAccountKey(arkmeAuthStore.getSnapshot().auth)
-        || recordReeditGenerationRef.current !== target.generation) return
+      const active = sameArkmeRecordReeditSession(recordReeditComposerRef.current, target)
+        && target.accountKey === arkmeAuthenticatedAccountKey(arkmeAuthStore.getSnapshot().auth)
+        && recordReeditGenerationRef.current === target.generation
       reeditSubmissions.accepted(result)
-      recordReeditGenerationRef.current += 1
-      setRecordReeditComposer(undefined)
-      requestAnimationFrame(() => { textareaRef.current?.focus() })
-    } catch (caught) {
-      setRecordReeditComposer(current => sameArkmeRecordReeditSession(current, target)
-        ? { ...current, busy: false, ...arkmeRecordReeditFailure(caught) }
-        : current)
-    } finally {
-      if (recordReeditCommitGenerationRef.current === target.generation) {
-        recordReeditCommitGenerationRef.current = undefined
+      updateRecordReeditCandidate(target, () => undefined)
+      if (active) {
+        recordReeditGenerationRef.current += 1
+        requestAnimationFrame(() => { textareaRef.current?.focus() })
       }
+    } catch (caught) {
+      updateRecordReeditCandidate(target, current => ({ ...current, busy: false, ...arkmeRecordReeditFailure(caught) }))
+    } finally {
+      target.persisted.exclusive = false
+      updateRecordReeditCandidate(target, current => current.busy ? { ...current, busy: false } : current)
     }
-  }, [persistRecordReeditDraft, source, reeditSubmissions.accepted])
+  }, [persistRecordReeditDraft, source, reeditSubmissions.accepted, updateRecordReeditCandidate])
   const recoverRecordReedit = useCallback(async () => {
     const target = recordReeditComposerRef.current
     if (target === undefined || target.busy || !target.recoveryConfirmation
       || preparationJobs.current.has(arkmeRecordReeditPreparationKey(target))
-      || recordReeditCommitGenerationRef.current === target.generation) return
+      || target.persisted.exclusive) return
     const sameTarget = () => {
       const selected = arkmeUi.getSnapshot().selectedSource
-      return selected !== undefined && selected.sourceRef === target.sourceRef
-        && arkmeSourceIdentityKey(selected) === target.sourceKey
+      return selected !== undefined && arkmeSourceIdentityKey(selected) === target.sourceKey
         && arkmeAuthenticatedAccountKey(arkmeAuthStore.getSnapshot().auth) === target.accountKey
         && sameArkmeRecordReeditSession(recordReeditComposerRef.current, target)
         && recordReeditGenerationRef.current === target.generation
     }
     if (!sameTarget()) return
-    recordReeditCommitGenerationRef.current = target.generation
+    target.persisted.exclusive = true
     setRecordReeditComposer(current => sameArkmeRecordReeditSession(current, target)
       ? { ...current, busy: true, error: '' } : current)
     try {
-      await recordReeditDraftSaveTailRef.current
+      await target.persisted.saveTail
       if (!sameTarget()) return
       let snapshot = await callArkme<ArkmeRecordReeditEditorSnapshot>('source.record-reedit.detail', {
         sourceRef: target.sourceRef, itemUid: target.item.itemUid,
@@ -5865,7 +5940,7 @@ export function ArkmeSurface({
       setRecordReeditComposer(current => sameArkmeRecordReeditSession(current, target)
         ? {
           ...current, snapshot, title, textContent, attachments,
-          persisted: { candidateKey: arkmeRecordReeditCandidateKey(title, textContent, attachments), draftRevision: snapshot.draft?.draftRevision ?? 0 },
+          persisted: { candidateKey: arkmeRecordReeditCandidateKey(title, textContent, attachments), draftRevision: snapshot.draft?.draftRevision ?? 0, saveTail: Promise.resolve() },
           busy: false, conflict: undefined, recoveryConfirmation: false,
           error: draftChanged ? '已重新载入其他入口更新的草稿，请检查后再决定是否放弃' : '',
         } : current)
@@ -5874,9 +5949,10 @@ export function ArkmeSurface({
       if (sameTarget()) setRecordReeditComposer(current => sameArkmeRecordReeditSession(current, target)
         ? { ...current, busy: false, ...arkmeRecordReeditFailure(caught) } : current)
     } finally {
-      if (recordReeditCommitGenerationRef.current === target.generation) recordReeditCommitGenerationRef.current = undefined
+      target.persisted.exclusive = false
+      updateRecordReeditCandidate(target, current => current.busy ? { ...current, busy: false } : current)
     }
-  }, [])
+  }, [updateRecordReeditCandidate])
   const openRecordReedit = useCallback(async (item: ArkmeTimelineItem) => {
     closeMessageMenu()
     if (source === undefined || !arkmeCanReeditTimelineMessage(item)) return
@@ -5887,26 +5963,17 @@ export function ArkmeSurface({
     }
     const previous = recordReeditComposerRef.current
     if (previous !== undefined) {
-      if (previous.busy || preparationJobs.current.has(arkmeRecordReeditPreparationKey(previous))) return
-      if (previous.sourceRef === source.sourceRef && previous.item.itemUid === item.itemUid) {
+      if (previous.accountKey === authenticatedAccountKey && previous.sourceKey === arkmeSourceIdentityKey(source)
+        && previous.item.itemUid === item.itemUid) {
         requestAnimationFrame(() => { textareaRef.current?.focus() })
         return
       }
-      setRecordReeditComposer(current => sameArkmeRecordReeditSession(current, previous)
-        ? { ...current, busy: true, error: '' }
-        : current)
-      try {
-        await persistRecordReeditDraft(previous)
-      } catch (caught) {
-        setRecordReeditComposer(current => sameArkmeRecordReeditSession(current, previous)
-          ? { ...current, busy: false, ...arkmeRecordReeditFailure(caught) }
-          : current)
-        return
-      }
-      if (!sameArkmeRecordReeditSession(recordReeditComposerRef.current, previous)) return
+      persistRecordReeditBeforeContextExit(previous, () => true)
     }
     const generation = ++recordReeditGenerationRef.current
-    const target: ArkmeRecordReeditComposerState = {
+    const retained = findRecordReeditCandidate({ accountKey: authenticatedAccountKey,
+      sourceKey: arkmeSourceIdentityKey(source), sourceRef: source.sourceRef }, item.itemUid)
+    const target: ArkmeRecordReeditComposerState = retained === undefined ? {
       generation,
       accountKey: authenticatedAccountKey,
       sourceKey: arkmeSourceIdentityKey(source),
@@ -5916,11 +5983,11 @@ export function ArkmeSurface({
       title: item.title,
       textContent: item.textContent,
       attachments: [],
-      persisted: { candidateKey: arkmeRecordReeditCandidateKey(item.title, item.textContent, []), draftRevision: 0 },
+      persisted: { candidateKey: arkmeRecordReeditCandidateKey(item.title, item.textContent, []), draftRevision: 0, saveTail: Promise.resolve() },
       loading: true,
       busy: false,
       error: '',
-    }
+    } : { ...retained, generation }
     setComposerExtensionTarget(undefined)
     setAddMenuOpen(false)
     setHashTagTrigger(undefined)
@@ -5930,6 +5997,10 @@ export function ArkmeSurface({
     setDraftPreview(undefined)
     setDrawer(undefined)
     setRecordReeditComposer(target)
+    if (retained !== undefined) {
+      requestAnimationFrame(() => { textareaRef.current?.focus() })
+      return
+    }
     try {
       const snapshot = await callArkme<ArkmeRecordReeditEditorSnapshot>('source.record-reedit.detail', {
         sourceRef: source.sourceRef,
@@ -5946,7 +6017,7 @@ export function ArkmeSurface({
           title,
           textContent,
           attachments,
-          persisted: { candidateKey: arkmeRecordReeditCandidateKey(title, textContent, attachments), draftRevision: snapshot.draft?.draftRevision ?? 0 },
+          persisted: { candidateKey: arkmeRecordReeditCandidateKey(title, textContent, attachments), draftRevision: snapshot.draft?.draftRevision ?? 0, saveTail: Promise.resolve() },
           loading: false,
         }
         : current)
@@ -5958,7 +6029,7 @@ export function ArkmeSurface({
         ? { ...current, loading: false, error: errorMessage(caught) }
         : current)
     }
-  }, [authenticatedAccountKey, closeMessageMenu, persistRecordReeditDraft, showMessageActionStatus, source, reeditSubmissions.jobs])
+  }, [authenticatedAccountKey, closeMessageMenu, persistRecordReeditBeforeContextExit, findRecordReeditCandidate, showMessageActionStatus, source, reeditSubmissions.jobs])
   const closeMessageSnapshot = useCallback(() => {
     snapshotRequestRef.current?.abort()
     snapshotRequestRef.current = undefined
@@ -7030,6 +7101,7 @@ export function ArkmeSurface({
                             <ArkmeMessageContent
                               key={`message-content:${conversationOverlayKey}`}
                               item={item}
+                              mediaSelectionIsExplicit={reeditItems.has(item)}
                               sourceRef={source.sourceRef}
                               highlightMentions
                               shareWebsite={shareWebsite}
@@ -7052,8 +7124,8 @@ export function ArkmeSurface({
                               }}
                             />
                             {!isSharedRecordingCard && <ArkmeTimelineAgentSourceBadge item={item} />}
-                            {reeditSubmissions.jobs.filter(job => job.itemUid === item.itemUid && job.state !== 'committed').map(job => <div key={job.submissionId} role="status" aria-label="重新编辑保存状态" style={styles.polishMeta}>
-                              {job.state === 'failed' ? `保存失败：${job.error ?? '请恢复编辑后重试'}` : job.state === 'uncertain' ? '保存结果待确认' : '保存中'}
+                            {reeditSubmissions.jobs.filter(job => job.itemUid === item.itemUid && (job.state === 'failed' || job.state === 'uncertain')).map(job => <div key={job.submissionId} role="status" aria-label="重新编辑保存状态" style={styles.polishMeta}>
+                              {job.state === 'failed' ? `保存失败：${job.error ?? '请恢复编辑后重试'}` : '保存结果待确认'}
                               {job.state === 'failed' && <button type="button" style={styles.retry} onClick={event => { event.stopPropagation(); void openRecordReedit(item) }}>恢复编辑</button>}
                               {job.state === 'uncertain' && <button type="button" style={styles.retry} onClick={event => { event.stopPropagation(); void reeditSubmissions.refresh(true).catch(caught => setError(errorMessage(caught))) }}>核对结果</button>}
                             </div>)}
