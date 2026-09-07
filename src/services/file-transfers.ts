@@ -17,6 +17,7 @@ export type FileTransferSendOutcome =
   | { kind: 'owner_outcome_unknown'; message?: string; code?: string }
 export interface FileTransferPorts {
   currentUser(): Promise<number>
+  retainedFileRefs?(userId: number): Promise<readonly string[]>
   validateSource(sourceRef: string): Promise<void>
   upload(path: string, metadata: StoredFile, progress: (value: ArkmeFileProgress) => void, userId: number, signal: AbortSignal): Promise<ArkmeUploadedAsset>
   send(
@@ -55,6 +56,8 @@ export class FileTransfers {
   private readonly states = new Map<number, Promise<FileState>>()
   private writes: Promise<void> = Promise.resolve()
   private mutations: Promise<unknown> = Promise.resolve()
+  private directUploads: Promise<unknown> = Promise.resolve()
+  private readonly uploadingRefs = new Set<string>()
   private queue: Promise<void> = Promise.resolve()
   private readonly jobs = new Set<Promise<void>>()
   private readonly controllers = new Set<AbortController>()
@@ -67,7 +70,7 @@ export class FileTransfers {
 
   capabilities(): ArkmeFilePolicy { return { ...this.policy } }
   cancelActive(): void { for (const controller of this.controllers) controller.abort(); this.receptions.clear() }
-  async settled(): Promise<void> { await this.queue; await Promise.all(this.jobs); await this.writes }
+  async settled(): Promise<void> { await this.queue; await this.directUploads.catch(() => {}); await Promise.all(this.jobs); await this.writes }
 
   private root(userId: number): string { return join(this.directory, String(userId)) }
   private path(userId: number, ref: string): string {
@@ -177,15 +180,23 @@ export class FileTransfers {
   }
   private async prune(userId: number, state: FileState): Promise<void> {
     const retained = new Set(state.tasks.filter(task => task.state !== 'sent').flatMap(task => task.fileRefs))
+    // Cleanup is optional; unavailable retention evidence must neither delete
+    // a possibly referenced file nor prevent ordinary staging and sending.
+    let editRefs: readonly string[]
+    try { editRefs = await this.ports.retainedFileRefs?.(userId) ?? [] }
+    catch { return }
+    for (const ref of editRefs) retained.add(ref)
     const completed = new Set(state.tasks.filter(task => task.state === 'sent').flatMap(task => task.fileRefs))
     for (const file of Object.values(state.files)) {
-      if (Date.now() - file.createdAtMillis < 7 * 24 * 3600_000 || retained.has(file.fileRef) || !completed.has(file.fileRef)) continue
+      if (Date.now() - file.createdAtMillis < 7 * 24 * 3600_000 || retained.has(file.fileRef)
+        || this.uploadingRefs.has(`${userId}:${file.fileRef}`) || !completed.has(file.fileRef)) continue
       // Unsent drafts are never evicted by cache cleanup.
       delete state.files[file.fileRef]
       await unlink(this.path(userId, file.fileRef)).catch(() => {})
       await rm(this.openDirectory(userId, file.fileRef), { recursive: true, force: true })
     }
-    state.tasks = state.tasks.filter(task => task.state !== 'sent' || Date.now() - task.createdAtMillis < 7 * 24 * 3600_000)
+    state.tasks = state.tasks.filter(task => task.state !== 'sent' || Date.now() - task.createdAtMillis < 7 * 24 * 3600_000
+      || task.fileRefs.some(ref => state.files[ref] !== undefined))
   }
   async readLocal(ref: string): Promise<{ path: string; file: ArkmeLocalFile }> {
     const userId = await this.ports.currentUser()
@@ -228,6 +239,8 @@ export class FileTransfers {
       const state = await this.state(userId)
       await this.assertUser(userId)
       if (state.tasks.some(task => task.fileRefs.includes(ref))) throw fail('file-in-use', '文件仍被本地发送任务引用，请先移除该任务')
+      if (this.uploadingRefs.has(`${userId}:${ref}`)) throw fail('file-in-use', '文件正在上传，请稍后移除')
+      if ((await this.ports.retainedFileRefs?.(userId))?.includes(ref)) throw fail('file-in-use', '文件仍被重新编辑草稿引用，请先从草稿移除')
       if (!state.files[ref]) return
       delete state.files[ref]; await this.save(userId, state)
       await unlink(this.path(userId, ref)).catch(() => {})
@@ -349,38 +362,51 @@ export class FileTransfers {
       || new Set(fileRefs).size !== fileRefs.length || fileRefs.some(ref => !REF.test(ref))) {
       throw fail('file-upload-invalid', '请选择 1 至 9 个有效附件')
     }
-    return await this.exclusive(async () => {
-      await this.assertUser(userId, signal)
-      const state = await this.state(userId)
-      const controller = new AbortController()
-      const abort = () => { controller.abort(signal?.reason) }
-      signal?.addEventListener('abort', abort, { once: true })
-      this.controllers.add(controller)
+    const controller = new AbortController()
+    const abort = () => { controller.abort(signal?.reason) }
+    signal?.addEventListener('abort', abort, { once: true })
+    if (signal?.aborted) abort()
+    this.controllers.add(controller)
+    // Serialize direct uploads, not local file mutations: a slow edit upload
+    // must not hold the staging/enqueue lock used by ordinary message sending.
+    const work = this.directUploads.catch(() => {}).then(async () => {
+      const state = await this.exclusive(async () => {
+        await this.assertUser(userId, controller.signal)
+        const current = await this.state(userId)
+        if (fileRefs.some(ref => !current.files[ref])) throw fail('file-local-missing', '本地附件已不存在')
+        for (const ref of fileRefs) this.uploadingRefs.add(`${userId}:${ref}`)
+        return current
+      })
       try {
         const assets: ArkmeUploadedAsset[] = []
         for (const fileRef of fileRefs) {
           await this.assertUser(userId, controller.signal)
           const stored = state.files[fileRef]
           if (stored === undefined) throw fail('file-local-missing', '本地附件已不存在')
-          let asset = stored.asset
-            ?? Object.values(state.files).find(other => other.sha256 === stored.sha256 && other.fileKind === stored.fileKind && other.asset)?.asset
+          let asset = stored.asset?.fileKind === stored.fileKind ? stored.asset
+            : Object.values(state.files).find(other => other.sha256 === stored.sha256 && other.asset?.fileKind === stored.fileKind)?.asset
           if (asset === undefined) {
             asset = await this.ports.upload(
               this.path(userId, fileRef), stored, () => {}, userId, controller.signal,
             )
           }
+          await this.assertUser(userId, controller.signal)
           asset = { ...asset, fileName: stored.fileName }
-          stored.asset = asset
-          await this.save(userId, state)
+          await this.exclusive(async () => {
+            stored.asset = asset
+            await this.save(userId, state)
+          })
           assets.push(asset)
         }
         await this.assertUser(userId, controller.signal)
         return clone(assets)
       } finally {
-        signal?.removeEventListener('abort', abort)
-        this.controllers.delete(controller)
+        for (const ref of fileRefs) this.uploadingRefs.delete(`${userId}:${ref}`)
       }
     })
+    this.directUploads = work
+    try { return await work }
+    finally { signal?.removeEventListener('abort', abort); this.controllers.delete(controller) }
   }
   async retry(taskRef: string): Promise<ArkmeFileSendTask> {
     const userId = await this.ports.currentUser()

@@ -492,8 +492,29 @@ export class ArkmeLocalDatabase {
   async putRecordReeditDraft(
     userId: number,
     draft: Omit<ArkmeRecordReeditDraft, 'draftRevision'>,
+    expectedRevision?: number,
   ): Promise<ArkmeRecordReeditDraft> {
-    return await this.operationalState.putRecordReeditDraft(userId, draft)
+    return await this.operationalState.putRecordReeditDraft(userId, draft, expectedRevision)
+  }
+
+  async recordReeditFileRefs(userId: number): Promise<string[]> {
+    return await this.operationalState.recordReeditFileRefs(userId)
+  }
+
+  async listRecordReeditSubmissions(userId: number) {
+    return await this.operationalState.listRecordReeditSubmissions(userId)
+  }
+
+  async acknowledgeRecordReeditSubmission(userId: number, identity: string, submissionId: string, version: number) {
+    return await this.operationalState.acknowledgeRecordReeditSubmission(userId, identity, submissionId, version)
+  }
+
+  async discardRecordReeditCandidate(userId: number, sourceIdentityKey: string, itemUid: string, expectedRevision: number) {
+    return await this.operationalState.discardRecordReeditCandidate(userId, sourceIdentityKey, itemUid, expectedRevision)
+  }
+
+  async putRecordReeditSubmission(userId: number, job: import('./record-reedit-contract.js').ArkmeRecordReeditSubmission, expectedId?: string) {
+    return await this.operationalState.putRecordReeditSubmission(userId, job, expectedId)
   }
 
   async removeRecordReeditDraft(
@@ -501,9 +522,10 @@ export class ArkmeLocalDatabase {
     sourceIdentityKey: string,
     itemUid: string,
     expectedRevision: number,
+    expectedCandidate?: ArkmeRecordReeditDraft,
   ): Promise<boolean> {
     return await this.operationalState.removeRecordReeditDraft(
-      userId, sourceIdentityKey, itemUid, expectedRevision,
+      userId, sourceIdentityKey, itemUid, expectedRevision, expectedCandidate,
     )
   }
 

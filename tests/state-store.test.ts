@@ -1,12 +1,233 @@
-import { mkdtemp, readFile } from 'node:fs/promises'
+import { mkdtemp, readFile, writeFile, mkdir, rename } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { ArkmeStateStore, RECORDING_IMPORT_TERMINAL_HISTORY_LIMIT } from '../src/state-store.js'
 import type { RecordingImportJob } from '../src/recording-import-contract.js'
+import type { ArkmeRecordReeditSubmission } from '../src/record-reedit-contract.js'
 import { expectPrivatePath } from './helpers/private-path.js'
 
 describe('ArkmeStateStore', () => {
+  it.each([undefined, 'b'.repeat(64)])('preserves a checkpoint with a missing or mismatched baseline fingerprint: %s', async fingerprint => {
+    const root = await mkdtemp(join(tmpdir(), 'arkme-reedit-checkpoint-baseline-'))
+    const store = new ArkmeStateStore(root)
+    const job = await reeditJob(store)
+    const checkpoint: ArkmeRecordReeditSubmission = { ...job, state: 'committing', expectedCommittedFingerprint: 'c'.repeat(64) }
+    await store.putRecordReeditSubmission(42, checkpoint)
+    const broken = { ...checkpoint, context: { ...checkpoint.context, baseContentFingerprint: fingerprint } }
+    await expect(store.putRecordReeditSubmission(42, broken as unknown as ArkmeRecordReeditSubmission, job.submissionId)).rejects.toThrow('提交状态损坏')
+    const path = join(root, 'state.json')
+    const raw = JSON.parse(await readFile(path, 'utf8'))
+    raw.recordReeditSubmissionsByUser['42']['identity\u0000r1'] = broken
+    await writeFile(path, JSON.stringify(raw))
+    const restarted = new ArkmeStateStore(root)
+    await expect(restarted.listRecordReeditSubmissions(42)).rejects.toThrow('提交状态损坏')
+    await expect(restarted.discardRecordReeditCandidate(42, 'identity', 'r1', job.draft.draftRevision)).rejects.toThrow('提交状态损坏')
+    await expect(restarted.listRecordReeditSubmissions(99)).resolves.toEqual([])
+    await expect(restarted.uniqueCode()).resolves.toBe(raw.uniqueCode)
+    expect(JSON.parse(await readFile(path, 'utf8')).recordReeditSubmissionsByUser['42']['identity\u0000r1'].state).toBe('committing')
+  })
+
+  it.each(['metadata', 'content', 'recreated'] as const)('cleans only the submitted candidate after a %s draft update', async change => {
+    const store = new ArkmeStateStore(await mkdtemp(join(tmpdir(), 'arkme-reedit-candidate-identity-')))
+    const job = await reeditJob(store)
+    await store.putRecordReeditSubmission(42, job)
+    if (change === 'recreated') await store.removeRecordReeditDraft(42, 'identity', 'r1', job.draft.draftRevision)
+    const next = await store.putRecordReeditDraft(42, {
+      ...job.draft, updatedAtMillis: 2, lastSourceRef: 'refreshed-source',
+      ...(change === 'content' ? { textContent: '新的候选' } : {}),
+    }, change === 'recreated' ? 0 : job.draft.draftRevision)
+    expect(next.draftRevision === job.draft.draftRevision).toBe(change === 'metadata')
+    await store.putRecordReeditSubmission(42, { ...job, state: 'committed', result: {
+      status: 'committed', itemUid: 'r1', version: 8, revisionUid: 'revision', projectionState: 'pending',
+    } }, job.submissionId)
+    const remaining = await store.getRecordReeditDraft(42, 'identity', 'r1')
+    expect(remaining).toEqual(change === 'metadata' ? undefined : next)
+  })
+
+  it('keeps both draft and checkpoint intact if the completion transaction cannot be written', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'arkme-reedit-completion-failure-'))
+    const store = new ArkmeStateStore(root)
+    const job = await reeditJob(store)
+    await store.putRecordReeditSubmission(42, job)
+    const path = join(root, 'state.json')
+    await rename(path, join(root, 'state.saved'))
+    await mkdir(path)
+    const committed = { ...job, state: 'committed' as const, result: {
+      status: 'committed' as const, itemUid: 'r1', version: 8, revisionUid: 'revision', projectionState: 'pending' as const,
+    } }
+    await expect(store.putRecordReeditSubmission(42, committed, job.submissionId)).rejects.toThrow()
+    expect((await store.listRecordReeditSubmissions(42))[0]?.state).toBe(job.state)
+    expect(await store.getRecordReeditDraft(42, 'identity', 'r1')).toEqual(job.draft)
+    await rename(path, join(root, 'blocked-directory'))
+    await rename(join(root, 'state.saved'), path)
+    await store.putRecordReeditSubmission(42, committed, job.submissionId)
+    const fresh = new ArkmeStateStore(root)
+    expect((await fresh.listRecordReeditSubmissions(42))[0]?.state).toBe('committed')
+    expect(await fresh.getRecordReeditDraft(42, 'identity', 'r1')).toBeUndefined()
+  })
+  it('persists the completed result and removes only its exact draft in one transaction', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'arkme-reedit-completion-'))
+    const store = new ArkmeStateStore(root)
+    const job = await reeditJob(store)
+    await store.putRecordReeditSubmission(42, job)
+    await store.putRecordReeditSubmission(42, { ...job, state: 'committed', result: {
+      status: 'committed', itemUid: 'r1', version: 8, revisionUid: 'revision', projectionState: 'pending',
+    } }, job.submissionId)
+    const raw = JSON.parse(await readFile(join(root, 'state.json'), 'utf8'))
+    expect(raw.recordReeditSubmissionsByUser['42']['identity\u0000r1'].result.version).toBe(8)
+    expect(raw.recordReeditDraftsByUser['42']?.['identity\u0000r1']).toBeUndefined()
+  })
+  it('initializes a legacy allocator from receipts as well as surviving drafts', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'arkme-reedit-legacy-revision-'))
+    const store = new ArkmeStateStore(root)
+    const job = await reeditJob(store)
+    await store.putRecordReeditSubmission(42, job)
+    const path = join(root, 'state.json')
+    const raw = JSON.parse(await readFile(path, 'utf8'))
+    delete raw.recordReeditDraftRevision
+    raw.recordReeditDraftsByUser = {}
+    raw.recordReeditSubmissionsByUser['42']['identity\u0000r1'].draft.draftRevision = 17
+    raw.recordReeditSubmissionsByUser['broken-account'] = null
+    await writeFile(path, JSON.stringify(raw))
+    const next = await new ArkmeStateStore(root).putRecordReeditDraft(42, { ...job.draft, itemUid: 'r2' }, 0)
+    expect(next.draftRevision).toBe(18)
+  })
+
+  it.each([null, 'broken', -1, Number.MAX_SAFE_INTEGER])('isolates an unusable draft allocator %s from ordinary state', async value => {
+    const root = await mkdtemp(join(tmpdir(), 'arkme-reedit-bad-revision-'))
+    const store = new ArkmeStateStore(root)
+    const job = await reeditJob(store)
+    const path = join(root, 'state.json')
+    const raw = JSON.parse(await readFile(path, 'utf8'))
+    raw.recordReeditDraftRevision = value
+    await writeFile(path, JSON.stringify(raw))
+    const restarted = new ArkmeStateStore(root)
+    await expect(restarted.putRecordReeditDraft(42, { ...job.draft, textContent: '新候选' })).rejects.toThrow('版本分配器不可用')
+    await expect(restarted.uniqueCode()).resolves.toBe(raw.uniqueCode)
+    await expect(restarted.listPending(42)).resolves.toEqual([])
+    expect(JSON.parse(await readFile(path, 'utf8')).recordReeditDraftRevision).toBe(value)
+  })
+
+  it('does not allocate below surviving draft evidence when the stored counter is stale', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'arkme-reedit-stale-revision-'))
+    const store = new ArkmeStateStore(root)
+    const job = await reeditJob(store)
+    const path = join(root, 'state.json')
+    const raw = JSON.parse(await readFile(path, 'utf8'))
+    raw.recordReeditDraftRevision = 0
+    await writeFile(path, JSON.stringify(raw))
+    const next = await new ArkmeStateStore(root).putRecordReeditDraft(42, { ...job.draft, textContent: '新候选' })
+    expect(next.draftRevision).toBeGreaterThan(job.draft.draftRevision)
+  })
+
+  it('never reuses a draft CAS revision after deletion and restart', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'arkme-reedit-revision-'))
+    const store = new ArkmeStateStore(root)
+    const first = (await reeditJob(store)).draft
+    await store.removeRecordReeditDraft(42, first.sourceIdentityKey, first.itemUid, first.draftRevision)
+    const restarted = new ArkmeStateStore(root)
+    const next = await restarted.putRecordReeditDraft(42, { ...first, textContent: '新草稿' }, 0)
+    expect(next.draftRevision).toBeGreaterThan(first.draftRevision)
+    await expect(restarted.putRecordReeditDraft(42, { ...first, textContent: '旧窗口修改' }, first.draftRevision)).rejects.toThrow('draft changed')
+  })
+  async function reeditJob(store: ArkmeStateStore): Promise<ArkmeRecordReeditSubmission> {
+    const draft = await store.putRecordReeditDraft(42, {
+      schemaVersion: 1, sourceIdentityKey: 'identity', lastSourceRef: 'source', itemUid: 'r1',
+      title: '标题', textContent: '候选', baseVersion: 7, baseContentFingerprint: 'a'.repeat(64), editDurationMillis: 0, updatedAtMillis: 1,
+    }, 0)
+    return { submissionId: 's1', state: 'pending', draft, attachments: [], context: {
+      expectedUserId: 42, sourceIdentityKey: 'identity', sourceRef: 'source', itemUid: 'r1', baseVersion: 7,
+      draftRevision: draft.draftRevision, baseContentFingerprint: draft.baseContentFingerprint,
+      sourceKind: 'send_to_self', sourceDisplayName: '自己', oldTitle: '', oldTextPreview: '原文',
+      newTitle: draft.title, newTextPreview: draft.textContent, sendAtMillis: 1, preservesAttachments: true,
+    } }
+  }
+
+  it('keeps the existing disk format while deriving its display copies from the command', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'arkme-reedit-compatibility-'))
+    const store = new ArkmeStateStore(root)
+    const job = await reeditJob(store)
+    await store.putRecordReeditSubmission(42, job)
+    const raw = JSON.parse(await readFile(join(root, 'state.json'), 'utf8')).recordReeditSubmissionsByUser['42']['identity\u0000r1']
+    expect(raw).toMatchObject({ itemUid: 'r1', baseVersion: 7, title: '标题', textContent: '候选' })
+    await expect(new ArkmeStateStore(root).listRecordReeditSubmissions(42)).resolves.toEqual([expect.objectContaining(job)])
+  })
+
+  it('cannot replace unreadable receipts with a new candidate', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'arkme-reedit-preserve-'))
+    const store = new ArkmeStateStore(root)
+    const job = await reeditJob(store)
+    const path = join(root, 'state.json')
+    const raw = JSON.parse(await readFile(path, 'utf8'))
+    const broken = { '42': { damaged: { submissionId: 'unknown-write' } } }
+    await writeFile(path, JSON.stringify({ ...raw, recordReeditSubmissionsByUser: broken }))
+    await expect(new ArkmeStateStore(root).putRecordReeditSubmission(42, job)).rejects.toThrow('提交状态损坏')
+    expect(JSON.parse(await readFile(path, 'utf8')).recordReeditSubmissionsByUser).toEqual(broken)
+  })
+
+  it.each([{ attachment: null }, { attachment: {} }, { attachment: { selection: { fileAssetUid: 'a' }, asset: {} } }])('keeps malformed display attachments out of the shared UI: $attachment', async ({ attachment }) => {
+    const root = await mkdtemp(join(tmpdir(), 'arkme-reedit-display-'))
+    const store = new ArkmeStateStore(root)
+    await store.putRecordReeditSubmission(42, await reeditJob(store))
+    const path = join(root, 'state.json')
+    const raw = JSON.parse(await readFile(path, 'utf8'))
+    raw.recordReeditSubmissionsByUser['42']['identity\u0000r1'].attachments = [attachment]
+    await writeFile(path, JSON.stringify(raw))
+    const restarted = new ArkmeStateStore(root)
+    await expect(restarted.listRecordReeditSubmissions(42)).rejects.toThrow('提交状态损坏')
+    await expect(restarted.uniqueCode()).resolves.toBe(raw.uniqueCode)
+  })
+
+  it.each(['committed', 'committing', 'uncertain'])('rejects a %s receipt without required outcome evidence at the account boundary', async state => {
+    const root = await mkdtemp(join(tmpdir(), 'arkme-reedit-evidence-'))
+    const store = new ArkmeStateStore(root)
+    await store.uniqueCode()
+    const draft = await store.putRecordReeditDraft(42, {
+      schemaVersion: 1, sourceIdentityKey: 'identity', lastSourceRef: 'source', itemUid: 'r1',
+      title: '', textContent: '候选', baseVersion: 7, baseContentFingerprint: 'a'.repeat(64), editDurationMillis: 0, updatedAtMillis: 1,
+    }, 0)
+    const path = join(root, 'state.json')
+    const raw = JSON.parse(await readFile(path, 'utf8'))
+    raw.recordReeditSubmissionsByUser = { '42': { ['identity\u0000r1']: {
+      submissionId: 's1', state, itemUid: 'r1', draft, attachments: [],
+      context: { expectedUserId: 42, sourceIdentityKey: 'identity', sourceRef: 'source', itemUid: 'r1', baseVersion: 7, draftRevision: draft.draftRevision },
+    } } }
+    await writeFile(path, JSON.stringify(raw))
+    await expect(new ArkmeStateStore(root).listRecordReeditSubmissions(42)).rejects.toThrow('提交状态损坏')
+  })
+
+  it('isolates malformed re-edit receipts without dropping their evidence on ordinary writes', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'arkme-reedit-isolation-'))
+    const store = new ArkmeStateStore(root)
+    const id = await store.uniqueCode()
+    const path = join(root, 'state.json')
+    const raw = JSON.parse(await readFile(path, 'utf8'))
+    const broken = { '43': { broken: { submissionId: 'incomplete' } } }
+    await writeFile(path, JSON.stringify({ ...raw, recordReeditSubmissionsByUser: broken }))
+    const restarted = new ArkmeStateStore(root)
+    await expect(restarted.uniqueCode()).resolves.toBe(id)
+    await expect(restarted.listRecordReeditSubmissions(42)).resolves.toEqual([])
+    await expect(restarted.listRecordReeditSubmissions(43)).rejects.toThrow('提交状态损坏')
+    await restarted.putPending(43, { recordUid: 'ordinary', textContent: '普通消息', createdAtMillis: 1, sendAtMillis: 1, attempts: 0 })
+    await expect(restarted.listPending(43)).resolves.toHaveLength(1)
+    expect(JSON.parse(await readFile(path, 'utf8')).recordReeditSubmissionsByUser).toEqual(broken)
+  })
+
+  it.each([{ broken: null }, { broken: [] }, { broken: 'broken' }])('retains a malformed receipt collection without blocking ordinary reads: $broken', async ({ broken }) => {
+    const root = await mkdtemp(join(tmpdir(), 'arkme-reedit-collection-'))
+    const store = new ArkmeStateStore(root)
+    const id = await store.uniqueCode()
+    const path = join(root, 'state.json')
+    const raw = JSON.parse(await readFile(path, 'utf8'))
+    await writeFile(path, JSON.stringify({ ...raw, recordReeditSubmissionsByUser: broken }))
+    const restarted = new ArkmeStateStore(root)
+    await expect(restarted.uniqueCode()).resolves.toBe(id)
+    await expect(restarted.listRecordReeditSubmissions(42)).rejects.toThrow('提交状态损坏')
+    await restarted.putPending(42, { recordUid: 'ordinary', textContent: '普通消息', createdAtMillis: 1, sendAtMillis: 1, attempts: 0 })
+    expect(JSON.parse(await readFile(path, 'utf8')).recordReeditSubmissionsByUser).toEqual(broken)
+  })
+
   function recordingJob(overrides: Partial<RecordingImportJob> = {}): RecordingImportJob {
     return {
       jobId: 'job-1', userId: 10001, revision: 1, phase: 'prepared',
@@ -88,7 +309,7 @@ describe('ArkmeStateStore', () => {
       updatedAtMillis: 200,
     })
     expect(resumed).toMatchObject({
-      draftRevision: 1,
+      draftRevision: 2,
       lastSourceRef: 'source-ref-new',
       baseVersion: 3,
     })
@@ -98,7 +319,7 @@ describe('ArkmeStateStore', () => {
       textContent: '改口后的候选正文',
       updatedAtMillis: 300,
     })
-    expect(changed.draftRevision).toBe(2)
+    expect(changed.draftRevision).toBe(3)
 
     const reloaded = new ArkmeStateStore(root)
     await expect(reloaded.getRecordReeditDraft(10001, 'stable-source-a', 'record-1')).resolves.toEqual(changed)
@@ -108,11 +329,11 @@ describe('ArkmeStateStore', () => {
 
     await expect(reloaded.removeRecordReeditDraft(10001, 'stable-source-a', 'record-1', 1)).resolves.toBe(false)
     await expect(reloaded.getRecordReeditDraft(10001, 'stable-source-a', 'record-1')).resolves.toMatchObject({
-      draftRevision: 2,
+      draftRevision: 3,
       updatedAtMillis: 300,
     })
 
-    await expect(reloaded.removeRecordReeditDraft(10001, 'stable-source-a', 'record-1', 2)).resolves.toBe(true)
+    await expect(reloaded.removeRecordReeditDraft(10001, 'stable-source-a', 'record-1', 3)).resolves.toBe(true)
     await expect(reloaded.getRecordReeditDraft(10001, 'stable-source-a', 'record-1')).resolves.toBeUndefined()
   })
 

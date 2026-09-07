@@ -73,6 +73,10 @@ function fakeService() {
     putLongArticleDraft: vi.fn(async () => undefined),
     removeLongArticleDraft: vi.fn(async () => undefined),
     recordReeditEditor: vi.fn(async (sourceRef: string, itemUid: string) => ({ sourceRef, itemUid })),
+    saveRecordReeditDraft: vi.fn(async () => ({ draftRevision: 7 })),
+    submitRecordReedit: vi.fn(async () => ({ state: 'pending', submissionId: 'submission' })),
+    recordReeditSubmissions: vi.fn(async () => []),
+    resumeRecordReeditSubmissions: vi.fn(async () => {}),
     prepareRecordReedit: vi.fn(async (input: unknown) => ({
       ...(input as Record<string, unknown>), expectedUserId: 42, sourceIdentityKey: 'host-only',
       draftRevision: 7, baseVersion: 3, baseContentFingerprint: 'fingerprint',
@@ -1317,10 +1321,10 @@ describe('outgoing call Host API dispatch', () => {
     })
 
     expect(service.recordReeditEditor).toHaveBeenCalledWith('source-1', 'record-1')
+    expect(service.saveRecordReeditDraft).toHaveBeenCalledWith({
+      sourceRef: 'source-1', itemUid: 'record-1', newText: '草稿正文', expectedVersion: 3,
+    })
     expect(service.prepareRecordReedit).toHaveBeenNthCalledWith(1, {
-      sourceRef: 'source-1', itemUid: 'record-1', newText: '草稿正文',
-    }, { expectedBaseVersion: 3 })
-    expect(service.prepareRecordReedit).toHaveBeenNthCalledWith(2, {
       sourceRef: 'source-1', itemUid: 'record-1', newText: '最终正文',
     }, { expectedBaseVersion: 3 })
     expect(draft).toEqual({ saved: true, draftRevision: 7 })
@@ -1328,6 +1332,41 @@ describe('outgoing call Host API dispatch', () => {
     expect(updated).toMatchObject({ status: 'committed', version: 4 })
     expect(service.prepareDiscardRecordReeditDraft).toHaveBeenCalledWith('source-1', 'record-1')
     expect(service.discardRecordReeditDraft).toHaveBeenCalledOnce()
+  })
+
+  it('separates receipt reads from explicit recovery commands', async () => {
+    const service = fakeService()
+    await dispatchArkmeHostOperation(service as never, 'source.record-reedit.submissions', { sourceRef: 'source-1', reconcile: true })
+    expect(service.recordReeditSubmissions).toHaveBeenCalledWith('source-1')
+    expect(service.resumeRecordReeditSubmissions).not.toHaveBeenCalled()
+    await dispatchArkmeHostOperation(service as never, 'source.record-reedit.resume', { sourceRef: 'source-1', reconcile: true })
+    expect(service.resumeRecordReeditSubmissions).toHaveBeenCalledWith('source-1', true)
+  })
+
+  it('forwards explicit attachment removal and draft CAS without inventing replacement text', async () => {
+    const service = fakeService()
+    await dispatchArkmeHostOperation(service as never, 'source.record-reedit.draft.put', {
+      sourceRef: 's', itemUid: 'r', attachments: [], expectedVersion: 7, expectedDraftRevision: 4,
+    })
+    expect(service.saveRecordReeditDraft).toHaveBeenCalledWith({
+      sourceRef: 's', itemUid: 'r', attachments: [], expectedDraftRevision: 4, expectedVersion: 7,
+    })
+  })
+  it('keeps local admission distinct from committed Tool results', async () => {
+    const service = fakeService()
+    const accepted = await dispatchArkmeHostOperation(service as never, 'source.record-reedit.submit', {
+      sourceRef: 's', itemUid: 'r', attachments: [], expectedVersion: 7, expectedDraftRevision: 4, expectedUserId: 999,
+    })
+    expect(accepted).toMatchObject({ state: 'pending' })
+    expect(service.submitRecordReedit).toHaveBeenCalledWith({ sourceRef: 's', itemUid: 'r', attachments: [], expectedVersion: 7, expectedDraftRevision: 4 })
+    expect(service.commitRecordReedit).not.toHaveBeenCalled()
+  })
+  it('does not discard a newer draft than the one confirmed in the editor', async () => {
+    const service = fakeService()
+    await expect(dispatchArkmeHostOperation(service as never, 'source.record-reedit.draft.delete', {
+      sourceRef: 'source-1', itemUid: 'record-1', expectedDraftRevision: 1,
+    })).rejects.toMatchObject({ code: 'record-reedit-draft-changed' })
+    expect(service.discardRecordReeditDraft).not.toHaveBeenCalled()
   })
 
   it('dispatches built-in search lanes without forwarding caller account fields', async () => {

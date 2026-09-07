@@ -180,13 +180,13 @@ function ArkmeMessageRichText({
   return <ArkmeRichText text={text} highlightMentions={highlightMentions} linkLabelMode={linkLabelMode} renderLink={renderLink} />
 }
 
-function mediaUrl(block: ArkmeContentBlock): string {
+export function arkmeContentMediaUrl(block: ArkmeContentBlock): string {
   if (block.localFileRef !== undefined) return arkmeLocalFileUrl(block.localFileRef)
   return `${mediaRoute}?ref=${encodeURIComponent(block.mediaRef)}`
 }
 
 function mediaAttemptUrl(block: ArkmeContentBlock, attempt: number): string {
-  const url = mediaUrl(block)
+  const url = arkmeContentMediaUrl(block)
   return attempt > 0 ? `${url}${url.includes('?') ? '&' : '?'}retry=${String(attempt)}` : url
 }
 
@@ -432,7 +432,7 @@ export function ArkmeMediaPreview({ blocks, selected, onSelect, onClose, preview
   const [imageMode, setImageMode] = useState<ImagePreviewMode>('contained')
   const [imageDragging, setImageDragging] = useState(false)
   const original = useArkmeOriginal(selected, selected.kind === 'image')
-  const originalUrl = previewUrl ?? (original.localRef === undefined ? mediaUrl(selected) : arkmeLocalFileUrl(original.localRef))
+  const originalUrl = previewUrl ?? (original.localRef === undefined ? arkmeContentMediaUrl(selected) : arkmeLocalFileUrl(original.localRef))
 
   useEffect(() => {
     setImageMode('contained')

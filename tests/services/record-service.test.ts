@@ -593,7 +593,7 @@ describe('RecordService', () => {
 
     const restored = await reloadedService.prepareRecordReedit({ sourceRef: 'source-ref-new', itemUid: 'record-1' })
     expect(restored).toMatchObject({
-      draftRevision: first.draftRevision, baseVersion: 8,
+      draftRevision: first.draftRevision + 1, baseVersion: 8,
       oldTextPreview: '其他端已更新正文', newTextPreview: '未提交草稿', sourceRef: 'source-ref-new',
     })
     await expect(stateStore.getRecordReeditDraft(42, restored.sourceIdentityKey, 'record-1')).resolves.toMatchObject({

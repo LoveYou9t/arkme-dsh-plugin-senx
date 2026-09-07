@@ -31,6 +31,135 @@ async function fixture() {
 const input = (fileRefs: string[]) => ({ sourceRef: 'source', recordUid: '00000000-0000-4000-8000-000000000001', relationUid: '00000000-0000-4000-8000-000000000002', fileRefs, content: { textContent: 'hello' } })
 
 describe('account-bound file lifecycle', () => {
+  it('keeps ordinary staging and sending available when edit retention evidence is unreadable', async () => {
+    const f = await fixture()
+    const original = await f.stage('keep.pdf')
+    f.ports.retainedFileRefs = async () => { throw new Error('提交状态损坏') }
+    const next = await f.stage('next.pdf')
+    await f.owner.enqueue(input([next.fileRef]))
+    await f.owner.settled()
+    expect(f.send).toHaveBeenCalledOnce()
+    await expect(f.owner.remove(original.fileRef)).rejects.toThrow('提交状态损坏')
+    expect((await f.owner.readLocal(original.fileRef)).file.fileRef).toBe(original.fileRef)
+  })
+
+  it('deduplicates queued direct uploads of the same file', async () => {
+    const f = await fixture()
+    const file = await f.stage('edit.pdf')
+    let release!: () => void
+    f.upload.mockImplementationOnce(async (_path, metadata) => {
+      await new Promise<void>(resolve => { release = resolve })
+      return { ...metadata, fileAssetUid: 'edit-asset' }
+    })
+    const first = f.owner.uploadRefs([file.fileRef])
+    await vi.waitFor(() => expect(release).toBeTypeOf('function'))
+    const second = f.owner.uploadRefs([file.fileRef])
+    release()
+    expect(await second).toEqual(await first)
+    expect(f.upload).toHaveBeenCalledOnce()
+  })
+
+  it('does not upload a cancelled direct request after its queue predecessor finishes', async () => {
+    const f = await fixture()
+    const firstFile = await f.stage('first.pdf')
+    const nextFile = await f.stage('next.pdf')
+    let release!: () => void
+    f.upload.mockImplementationOnce(async (_path, metadata) => {
+      await new Promise<void>(resolve => { release = resolve })
+      return { ...metadata, fileAssetUid: 'first-asset' }
+    })
+    const first = f.owner.uploadRefs([firstFile.fileRef])
+    await vi.waitFor(() => expect(release).toBeTypeOf('function'))
+    const controller = new AbortController()
+    const cancelled = f.owner.uploadRefs([nextFile.fileRef], controller.signal)
+    const rejected = expect(cancelled).rejects.toThrow()
+    controller.abort()
+    release()
+    await first
+    await rejected
+    expect(f.upload).toHaveBeenCalledOnce()
+    await f.owner.remove(nextFile.fileRef)
+  })
+
+  it('keeps ordinary staging and sending responsive during a direct re-edit upload', async () => {
+    const f = await fixture()
+    const file = await f.stage('edit.pdf')
+    let release!: () => void
+    f.upload.mockImplementationOnce(async (_path, metadata) => {
+      await new Promise<void>(resolve => { release = resolve })
+      return { ...metadata, fileAssetUid: 'edit-asset' }
+    })
+    const editing = f.owner.uploadRefs([file.fileRef])
+    await vi.waitFor(() => expect(release).toBeTypeOf('function'))
+    let staged = false
+    const ordinary = f.stage('next.pdf').then(value => { staged = true; return value })
+    try {
+      await vi.waitFor(() => expect(staged).toBe(true), { timeout: 300 })
+      await f.owner.enqueue(input([(await ordinary).fileRef]))
+      await vi.waitFor(() => expect(f.send).toHaveBeenCalledOnce())
+      await expect(f.owner.remove(file.fileRef)).rejects.toMatchObject({ code: 'file-in-use' })
+    } finally {
+      release()
+      await editing
+      await ordinary
+      await f.owner.settled()
+    }
+    await f.owner.remove(file.fileRef)
+  })
+
+  it('does not reuse a background audio asset for an ordinary re-edit attachment', async () => {
+    const f = await fixture()
+    const path = join(f.directory, 'audio.m4a'); await writeFile(path, '0123456789')
+    const audio = await f.owner.stage(path, { fileName: 'audio.m4a', mimeType: 'audio/mp4', size: 10 })
+    await f.owner.enqueue({ ...input([audio.fileRef]), backgroundSound: { fileRefs: [audio.fileRef], amplitudes: [0.3] } })
+    await f.owner.settled()
+    expect(f.upload.mock.calls.map(call => call[1].fileKind)).toEqual([2])
+    const result = await f.owner.uploadRefs([audio.fileRef])
+    expect(f.upload.mock.calls.map(call => call[1].fileKind)).toEqual([2, 4])
+    expect(result[0]?.fileKind).toBe(4)
+  })
+
+  it('protects files referenced by an edit draft until that draft releases them', async () => {
+    const f = await fixture()
+    const file = await f.stage('edit.pdf')
+    f.ports.retainedFileRefs = async userId => userId === 42 ? [file.fileRef] : []
+    await expect(f.owner.remove(file.fileRef)).rejects.toMatchObject({ code: 'file-in-use' })
+    expect((await f.owner.readLocal(file.fileRef)).file).toEqual(file)
+    f.ports.retainedFileRefs = async () => []
+    await f.owner.remove(file.fileRef)
+    expect(await f.owner.files()).toEqual([])
+  })
+  it('does not prune an old sent file still selected by an edit draft', async () => {
+    const f = await fixture()
+    const file = await f.stage('keep.pdf')
+    await f.owner.enqueue(input([file.fileRef]))
+    await f.owner.settled()
+    f.ports.retainedFileRefs = async () => [file.fileRef]
+    const now = Date.now()
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(now + 8 * 24 * 3600_000)
+    try {
+      await f.stage('next.pdf')
+      expect((await f.owner.readLocal(file.fileRef)).file).toEqual(file)
+      f.ports.retainedFileRefs = async () => []
+      await f.stage('after.pdf')
+      await expect(f.owner.readLocal(file.fileRef)).rejects.toMatchObject({ code: 'file-ref-invalid' })
+    } finally { clock.mockRestore() }
+  })
+  it('resumes cleanup only after unavailable edit retention evidence recovers', async () => {
+    const f = await fixture()
+    const file = await f.stage('keep.pdf')
+    await f.owner.enqueue(input([file.fileRef]))
+    await f.owner.settled()
+    f.ports.retainedFileRefs = async () => { throw new Error('提交状态损坏') }
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 8 * 24 * 3600_000)
+    try {
+      await f.stage('during.pdf')
+      expect((await f.owner.readLocal(file.fileRef)).file).toEqual(file)
+      f.ports.retainedFileRefs = async () => []
+      await f.stage('after.pdf')
+      await expect(f.owner.readLocal(file.fileRef)).rejects.toMatchObject({ code: 'file-ref-invalid' })
+    } finally { clock.mockRestore() }
+  })
   it('stages locally without a cloud upload and rejects another account', async () => {
     const f = await fixture(); const file = await f.stage('one.pdf')
     expect(f.upload).not.toHaveBeenCalled()
@@ -169,7 +298,7 @@ describe('account-bound file lifecycle', () => {
     const owner = createArkmeFileTransfers({
       directory,
       maxUploadBytes: 1_000,
-      runtime: { requireSession: async () => ({ userId: 42 }) } as never,
+      runtime: { requireSession: async () => ({ userId: 42 }), stateStore: { recordReeditFileRefs: async () => [] } } as never,
       source: { openSourceRef: async () => ({ kind: 'private_chat' }) } as never,
       media: { uploadLocalFile: async (_path: string, metadata: { fileName: string }) => ({
         ...metadata, fileAssetUid: `asset-${metadata.fileName}`,
@@ -212,7 +341,7 @@ describe('account-bound file lifecycle', () => {
     const owner = createArkmeFileTransfers({
       directory,
       maxUploadBytes: 1_000,
-      runtime: { requireSession: async () => ({ userId: 42 }) } as never,
+      runtime: { requireSession: async () => ({ userId: 42 }), stateStore: { recordReeditFileRefs: async () => [] } } as never,
       source: { openSourceRef: async () => ({ kind: 'send_to_self' }) } as never,
       media: { uploadLocalFile: async (_path: string, metadata: { fileName: string }) => ({
         ...metadata, fileAssetUid: `asset-${metadata.fileName}`,

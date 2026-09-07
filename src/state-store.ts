@@ -15,6 +15,8 @@ import {
 } from './recording-import-contract.js'
 import { recordingImportFileNameKey } from './recording-import-shared.js'
 import { securePrivateDirectory, securePrivateFile } from './private-filesystem.js'
+import { ArkmeRecordReeditDraftConflict, parseArkmeRecordReeditAttachments } from './record-reedit-contract.js'
+import type { ArkmeRecordReeditSubmission } from './record-reedit-contract.js'
 
 interface PersistedState {
   version: 2
@@ -22,6 +24,9 @@ interface PersistedState {
   pendingByUser: Record<string, ArkmePendingWrite[]>
   longArticleDraftsByUser: Record<string, Record<string, ArkmeLongArticleDraft>>
   recordReeditDraftsByUser: Record<string, Record<string, ArkmeRecordReeditDraft>>
+  // Preserve unrecognized recovery evidence; validate only at the owning account boundary.
+  recordReeditSubmissionsByUser: unknown
+  recordReeditDraftRevision: unknown
   recordingImportJobsByUser: Record<string, Record<string, RecordingImportJob>>
 }
 
@@ -32,6 +37,8 @@ function emptyState(): PersistedState {
     pendingByUser: {},
     longArticleDraftsByUser: {},
     recordReeditDraftsByUser: {},
+    recordReeditSubmissionsByUser: {},
+    recordReeditDraftRevision: 0,
     recordingImportJobsByUser: {},
   }
 }
@@ -136,6 +143,10 @@ function normalizedRecordReeditDraft(value: unknown): ArkmeRecordReeditDraft | u
     || !Number.isSafeInteger(source.draftRevision) || (source.draftRevision as number) <= 0
     || !Number.isSafeInteger(source.baseVersion) || (source.baseVersion as number) <= 0
     || !/^[a-f0-9]{64}$/.test(fingerprint)) return undefined
+  let attachments: ArkmeRecordReeditDraft['attachments']
+  try {
+    if (source.attachments !== undefined) attachments = parseArkmeRecordReeditAttachments(source.attachments)
+  } catch { return undefined }
   return {
     schemaVersion: 1,
     draftRevision: source.draftRevision as number,
@@ -144,6 +155,7 @@ function normalizedRecordReeditDraft(value: unknown): ArkmeRecordReeditDraft | u
     itemUid,
     title: source.title.slice(0, 100),
     textContent: source.textContent.slice(0, 40000),
+    ...(attachments === undefined ? {} : { attachments }),
     baseVersion: source.baseVersion as number,
     baseContentFingerprint: fingerprint,
     editDurationMillis: typeof source.editDurationMillis === 'number' && Number.isFinite(source.editDurationMillis)
@@ -157,6 +169,18 @@ function normalizedRecordReeditDraft(value: unknown): ArkmeRecordReeditDraft | u
 
 function recordReeditDraftKey(sourceIdentityKey: string, itemUid: string): string {
   return `${sourceIdentityKey}\u0000${itemUid}`
+}
+
+function sameRecordReeditCandidate(left: Omit<ArkmeRecordReeditDraft, 'draftRevision'>, right: Omit<ArkmeRecordReeditDraft, 'draftRevision'>): boolean {
+  // Cache timestamps and refreshed source capabilities do not create new content.
+  return left.baseVersion === right.baseVersion
+    && left.baseContentFingerprint === right.baseContentFingerprint && left.title === right.title
+    && left.textContent === right.textContent
+    && JSON.stringify(left.attachments) === JSON.stringify(right.attachments)
+}
+
+function sameRecordReeditDraft(left: ArkmeRecordReeditDraft, right: ArkmeRecordReeditDraft): boolean {
+  return left.draftRevision === right.draftRevision && sameRecordReeditCandidate(left, right)
 }
 
 function normalizedCaptureContext(value: unknown): ArkmeRecordCaptureContext | undefined {
@@ -203,10 +227,28 @@ function normalizedPending(value: unknown): ArkmePendingWrite[] {
   return result
 }
 
+function legacyRecordReeditRevision(drafts: PersistedState['recordReeditDraftsByUser'], submissions: unknown): number {
+  let revision = 0
+  for (const entries of Object.values(drafts)) for (const draft of Object.values(entries)) revision = Math.max(revision, draft.draftRevision)
+  // A receipt may outlive its draft. Inspect recognizable evidence without
+  // letting another account's malformed receipt break ordinary state reads.
+  if (submissions && typeof submissions === 'object' && !Array.isArray(submissions)) {
+    for (const entries of Object.values(submissions)) {
+      if (!entries || typeof entries !== 'object' || Array.isArray(entries)) continue
+      for (const job of Object.values(entries)) {
+        const draft = normalizedRecordReeditDraft(job && typeof job === 'object' ? (job as Record<string, unknown>).draft : undefined)
+        if (draft) revision = Math.max(revision, draft.draftRevision)
+      }
+    }
+  }
+  return revision
+}
+
 function parseState(raw: string): PersistedState {
   const parsed = JSON.parse(raw) as unknown
   if (parsed === null || typeof parsed !== 'object') return emptyState()
   const source = parsed as Record<string, unknown>
+  const recordReeditSubmissionsByUser = source.recordReeditSubmissionsByUser === undefined ? {} : source.recordReeditSubmissionsByUser
   const pendingByUser: Record<string, ArkmePendingWrite[]> = {}
   if (source.pendingByUser !== null && typeof source.pendingByUser === 'object') {
     for (const [userId, pending] of Object.entries(source.pendingByUser as Record<string, unknown>)) {
@@ -259,7 +301,64 @@ function parseState(raw: string): PersistedState {
     pendingByUser,
     longArticleDraftsByUser,
     recordReeditDraftsByUser,
+    recordReeditSubmissionsByUser,
+    recordReeditDraftRevision: source.recordReeditDraftRevision === undefined
+      ? legacyRecordReeditRevision(recordReeditDraftsByUser, recordReeditSubmissionsByUser)
+      : Number.isSafeInteger(source.recordReeditDraftRevision) && (source.recordReeditDraftRevision as number) >= 0
+        ? Math.max(source.recordReeditDraftRevision as number, legacyRecordReeditRevision(recordReeditDraftsByUser, recordReeditSubmissionsByUser))
+        : source.recordReeditDraftRevision,
     recordingImportJobsByUser,
+  }
+}
+
+function recordReeditSubmissionEntries(state: PersistedState, userId: number): Record<string, ArkmeRecordReeditSubmission> {
+  const unavailable = () => new Error('本地重新编辑提交状态损坏，证据已保留，请勿重复提交')
+  const collection = state.recordReeditSubmissionsByUser
+  if (collection === null || typeof collection !== 'object' || Array.isArray(collection)) throw unavailable()
+  const entries = (collection as Record<string, unknown>)[String(userId)]
+  if (entries === undefined) return {}
+  if (entries === null || typeof entries !== 'object' || Array.isArray(entries)) throw unavailable()
+  for (const [key, raw] of Object.entries(entries)) {
+    if (!validRecordReeditSubmission(raw, userId, key)) throw unavailable()
+  }
+  return entries as Record<string, ArkmeRecordReeditSubmission>
+}
+
+function validRecordReeditSubmission(raw: unknown, userId: number, key: string): raw is ArkmeRecordReeditSubmission {
+  if (!raw || typeof raw !== 'object') return false
+  const job = raw as ArkmeRecordReeditSubmission
+  const draft = normalizedRecordReeditDraft(job.draft)
+  if (!draft || typeof job.submissionId !== 'string' || job.submissionId === '' || !job.context
+    || job.context.expectedUserId !== userId || job.context.itemUid !== draft.itemUid
+    || job.context.sourceIdentityKey !== draft.sourceIdentityKey
+    || job.context.baseVersion !== draft.baseVersion || job.context.draftRevision !== draft.draftRevision
+    || job.context.baseContentFingerprint !== draft.baseContentFingerprint
+    || key !== recordReeditDraftKey(job.context.sourceIdentityKey, job.context.itemUid)
+    || !Array.isArray(job.attachments)) return false
+  if ((job.error !== undefined && typeof job.error !== 'string')
+    || (job.voiceFileAssetUid !== undefined && typeof job.voiceFileAssetUid !== 'string')) return false
+  try {
+    parseArkmeRecordReeditAttachments(job.attachments.map(attachment => attachment.selection))
+    for (const attachment of job.attachments) {
+      const file = attachment.localFile ?? attachment.asset
+      if (!file || typeof file.fileName !== 'string' || typeof file.mimeType !== 'string'
+        || !Number.isFinite(file.size) || file.size < 0 || ![1, 2, 3, 4].includes(file.fileKind)
+        || (attachment.localFile !== undefined) === (attachment.asset !== undefined)) return false
+      if (attachment.localFile ? attachment.localFile.fileRef !== attachment.selection.fileRef
+        : attachment.asset?.fileAssetUid !== attachment.selection.fileAssetUid) return false
+      if (attachment.block !== undefined && (!attachment.block || typeof attachment.block !== 'object'
+        || Array.isArray(attachment.block) || typeof attachment.block.kind !== 'string')) return false
+    }
+  } catch { return false }
+  if (job.expectedCommittedFingerprint !== undefined && !/^[a-f0-9]{64}$/.test(job.expectedCommittedFingerprint)) return false
+  switch (job.state) {
+    case 'committed': return job.result?.status === 'committed' && job.result.itemUid === draft.itemUid
+      && job.result.version === draft.baseVersion + 1 && typeof job.result.revisionUid === 'string'
+    case 'committing':
+    case 'uncertain': return typeof job.expectedCommittedFingerprint === 'string' && job.result === undefined
+    case 'pending':
+    case 'failed': return job.result === undefined
+    default: return false
   }
 }
 
@@ -315,13 +414,14 @@ export class ArkmeStateStore {
       const draft = state.recordReeditDraftsByUser[String(userId)]?.[
         recordReeditDraftKey(sourceIdentityKey, itemUid)
       ]
-      return draft === undefined ? undefined : { ...draft }
+      return draft === undefined ? undefined : structuredClone(draft)
     })
   }
 
   async putRecordReeditDraft(
     userId: number,
     input: Omit<ArkmeRecordReeditDraft, 'draftRevision'>,
+    expectedRevision?: number,
   ): Promise<ArkmeRecordReeditDraft> {
     const normalized = normalizedRecordReeditDraft({ ...input, draftRevision: 1 })
     if (normalized === undefined) throw new Error('Record re-edit draft is invalid')
@@ -331,15 +431,80 @@ export class ArkmeStateStore {
       const drafts = state.recordReeditDraftsByUser[userKey] ?? {}
       const key = recordReeditDraftKey(normalized.sourceIdentityKey, normalized.itemUid)
       const current = drafts[key]
-      const sameCandidate = current?.title === normalized.title && current.textContent === normalized.textContent
+      if (expectedRevision !== undefined && expectedRevision !== (current?.draftRevision ?? 0)) {
+        throw new ArkmeRecordReeditDraftConflict('Record re-edit draft changed')
+      }
+      const sameCandidate = current !== undefined && sameRecordReeditCandidate(current, normalized)
+      if (!Number.isSafeInteger(state.recordReeditDraftRevision) || (state.recordReeditDraftRevision as number) < 0
+        || (state.recordReeditDraftRevision as number) >= Number.MAX_SAFE_INTEGER) throw new Error('本地编辑版本分配器不可用，草稿已保留')
+      if (!sameCandidate) state.recordReeditDraftRevision = (state.recordReeditDraftRevision as number) + 1
       stored = {
         ...normalized,
-        draftRevision: sameCandidate ? current.draftRevision : (current?.draftRevision ?? 0) + 1,
+        draftRevision: sameCandidate ? current.draftRevision : state.recordReeditDraftRevision as number,
       }
       drafts[key] = stored
       state.recordReeditDraftsByUser[userKey] = drafts
-    })
-    return { ...stored }
+    }, true)
+    return structuredClone(stored)
+  }
+
+  async recordReeditFileRefs(userId: number): Promise<string[]> {
+    return await this.read(state => [...Object.values(state.recordReeditDraftsByUser[String(userId)] ?? {}),
+      ...Object.values(recordReeditSubmissionEntries(state, userId)).map(job => job.draft)]
+      .flatMap(draft => draft.attachments?.flatMap(item => item.fileRef === undefined ? [] : [item.fileRef]) ?? []))
+  }
+
+  async listRecordReeditSubmissions(userId: number): Promise<ArkmeRecordReeditSubmission[]> {
+    return await this.read(state => structuredClone(Object.values(recordReeditSubmissionEntries(state, userId))))
+  }
+
+  async acknowledgeRecordReeditSubmission(userId: number, identity: string, submissionId: string, version: number): Promise<void> {
+    await this.update(state => {
+      const entries = recordReeditSubmissionEntries(state, userId)
+      for (const [key, job] of Object.entries(entries)) {
+        if (job.context.sourceIdentityKey === identity && job.submissionId === submissionId
+          && job.state === 'committed' && job.result && version >= job.result.version) delete entries[key]
+      }
+    }, true)
+  }
+
+  async putRecordReeditSubmission(userId: number, job: ArkmeRecordReeditSubmission, expectedId?: string): Promise<void> {
+    await this.update(state => {
+      const entries = recordReeditSubmissionEntries(state, userId)
+      const key = recordReeditDraftKey(job.context.sourceIdentityKey, job.context.itemUid)
+      if (entries[key]?.submissionId !== expectedId) throw new ArkmeRecordReeditDraftConflict('提交状态已变化，请重新读取')
+      if (!validRecordReeditSubmission(job, userId, key)) throw new Error('本地重新编辑提交状态损坏，请勿重复提交')
+      // Keep the existing on-disk shape for rollback. These copies are derived
+      // at the persistence boundary, never used as command data by this version.
+      const persisted = { ...job, itemUid: job.context.itemUid, baseVersion: job.context.baseVersion,
+        title: job.draft.title, textContent: job.draft.textContent }
+      entries[key] = structuredClone(persisted)
+      const collection = state.recordReeditSubmissionsByUser as Record<string, unknown>
+      collection[String(userId)] = entries
+      if (job.state === 'committed') {
+        const drafts = state.recordReeditDraftsByUser[String(userId)]
+        if (drafts?.[key] && sameRecordReeditDraft(drafts[key]!, job.draft)) {
+          delete drafts[key]
+          if (Object.keys(drafts).length === 0) delete state.recordReeditDraftsByUser[String(userId)]
+        }
+      }
+    }, true)
+  }
+
+  async discardRecordReeditCandidate(userId: number, sourceIdentityKey: string, itemUid: string, expectedRevision: number): Promise<boolean> {
+    let removed = false
+    await this.update(state => {
+      const key = recordReeditDraftKey(sourceIdentityKey, itemUid)
+      const drafts = state.recordReeditDraftsByUser[String(userId)]
+      if (drafts?.[key]?.draftRevision !== expectedRevision) return
+      const entries = recordReeditSubmissionEntries(state, userId)
+      const job = entries[key]
+      if (job && ['pending', 'committing', 'uncertain'].includes(job.state)) throw new ArkmeRecordReeditDraftConflict('这条快记仍在保存或核对，暂不能放弃')
+      if (job?.state === 'failed') delete entries![key]
+      delete drafts[key]
+      removed = true
+    }, true)
+    return removed
   }
 
   async removeRecordReeditDraft(
@@ -347,6 +512,7 @@ export class ArkmeStateStore {
     sourceIdentityKey: string,
     itemUid: string,
     expectedRevision: number,
+    expectedCandidate?: ArkmeRecordReeditDraft,
   ): Promise<boolean> {
     let removed = false
     await this.update(state => {
@@ -355,10 +521,12 @@ export class ArkmeStateStore {
       if (drafts === undefined) return
       const key = recordReeditDraftKey(sourceIdentityKey, itemUid)
       if (drafts[key]?.draftRevision !== expectedRevision) return
+      const current = drafts[key]!
+      if (expectedCandidate && !sameRecordReeditDraft(current, expectedCandidate)) return
       delete drafts[key]
       if (Object.keys(drafts).length === 0) delete state.recordReeditDraftsByUser[userKey]
       removed = true
-    })
+    }, true)
     return removed
   }
 
@@ -495,9 +663,10 @@ export class ArkmeStateStore {
     return result
   }
 
-  private async update(mutator: (state: PersistedState) => void): Promise<void> {
+  private async update(mutator: (state: PersistedState) => void, isolated = false): Promise<void> {
     await this.serial(async () => {
-      const state = await this.load()
+      const current = await this.load()
+      const state = isolated ? structuredClone(current) : current
       mutator(state)
       await this.write(state)
     })

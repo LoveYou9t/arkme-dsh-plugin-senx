@@ -362,6 +362,7 @@ describe('conversation send directory projection', () => {
 
     expect(mocks.callArkme).toHaveBeenCalledWith('source.record-reedit.draft.put', {
       sourceRef: 'source-harness', itemUid: 'record-reedit-close', newText: '未提交的重新编辑', expectedVersion: 3,
+      attachments: [], expectedDraftRevision: 0,
     })
     expect(renderer!.root.findAllByProps({ 'data-arkme-composer-reedit-target': 'true' })).toHaveLength(0)
     expect(renderer!.root.findByType(ArkmeRichComposerInput).props.value).toBe('普通消息草稿')
@@ -425,10 +426,10 @@ describe('conversation send directory projection', () => {
           sendAtMillis: 1, templateKind: 1, displayKind: 0, version: 3,
           attachmentCount: 0, maxTextLength: 4000,
         }
-        if (operation === 'source.record-reedit.update') return {
-          status: 'committed', itemUid: 'record-reedit-commit', version: 4,
-          revisionUid: 'revision-1', projectionState: 'pending',
-        }
+        const receipt = { submissionId: 'submission-commit', state: 'committed', itemUid: 'record-reedit-commit', title: '', textContent: '更新后的正文', attachments: [],
+          result: { status: 'committed', itemUid: 'record-reedit-commit', version: 4, revisionUid: 'revision-1', projectionState: 'pending' } }
+        if (operation === 'source.record-reedit.submissions') return mocks.callArkme.mock.calls.some(([op]) => op === 'source.record-reedit.submit') ? [receipt] : []
+        if (operation === 'source.record-reedit.submit') return { ...receipt, state: 'pending', result: undefined }
         return await baseCall(operation, params, signal)
       })
       await act(async () => {
@@ -450,12 +451,15 @@ describe('conversation send directory projection', () => {
         await Promise.resolve(); await Promise.resolve()
       })
 
-      expect(mocks.callArkme).toHaveBeenCalledWith('source.record-reedit.update', {
+      expect(mocks.callArkme).toHaveBeenCalledWith('source.record-reedit.submit', {
         sourceRef: 'source-harness', itemUid: 'record-reedit-commit', newText: '更新后的正文', expectedVersion: 3,
+        attachments: [], expectedDraftRevision: 1,
       })
       expect(renderer!.root.findAllByProps({ 'data-arkme-composer-reedit-target': 'true' })).toHaveLength(0)
       expect(renderer!.root.findAll(node => node.children.includes('更新后的正文')).length).toBeGreaterThan(0)
       expect(renderer!.root.findAll(node => node.children.includes('快记已更新'))).toHaveLength(0)
+      expect(renderer!.root.findAllByProps({ 'data-arkme-highlight-backdrop': 'true' })).toHaveLength(0)
+      await act(async () => { await vi.advanceTimersByTimeAsync(1500) })
       expect(renderer!.root.findByProps({
         'data-arkme-message-item-uid': 'record-reedit-commit',
       }).findByProps({ 'data-arkme-highlight-backdrop': 'true' })).toBeDefined()
@@ -481,13 +485,7 @@ describe('conversation send directory projection', () => {
       clearTimeout: globalThis.clearTimeout,
     })
     const draftWrite = deferred<{ saved: true; draftRevision: number }>()
-    const recordWrite = deferred<{
-      status: 'committed'
-      itemUid: string
-      version: number
-      revisionUid: string
-      projectionState: 'pending'
-    }>()
+    const recordWrite = deferred<import('../src/record-reedit-contract.js').ArkmeRecordReeditSubmissionView>()
     try {
       timeline = [{
         itemUid: 'record-reedit-serialized', messageActionRef: 'opaque-action', senderName: '我', isMe: true,
@@ -501,7 +499,7 @@ describe('conversation send directory projection', () => {
           attachmentCount: 0, maxTextLength: 4000,
         }
         if (operation === 'source.record-reedit.draft.put') return await draftWrite.promise
-        if (operation === 'source.record-reedit.update') return await recordWrite.promise
+        if (operation === 'source.record-reedit.submit') return await recordWrite.promise
         return await baseCall(operation, params, signal)
       })
       await act(async () => {
@@ -525,21 +523,20 @@ describe('conversation send directory projection', () => {
         renderer!.root.findByProps({ 'aria-label': '保存重新编辑' }).props.onClick()
         await Promise.resolve()
       })
-      expect(mocks.callArkme.mock.calls.filter(([operation]) => operation === 'source.record-reedit.update')).toHaveLength(0)
+      expect(mocks.callArkme.mock.calls.filter(([operation]) => operation === 'source.record-reedit.submit')).toHaveLength(0)
 
       await act(async () => {
         draftWrite.resolve({ saved: true, draftRevision: 1 })
         await Promise.resolve(); await Promise.resolve()
       })
-      expect(mocks.callArkme.mock.calls.filter(([operation]) => operation === 'source.record-reedit.update')).toHaveLength(1)
+      expect(mocks.callArkme.mock.calls.filter(([operation]) => operation === 'source.record-reedit.submit')).toHaveLength(1)
 
       act(() => { vi.advanceTimersByTime(10_000) })
       expect(mocks.callArkme.mock.calls.filter(([operation]) => operation === 'source.record-reedit.draft.put')).toHaveLength(1)
 
       await act(async () => {
         recordWrite.resolve({
-          status: 'committed', itemUid: 'record-reedit-serialized', version: 4,
-          revisionUid: 'revision-serialized', projectionState: 'pending',
+          submissionId: 'serialized', state: 'pending', itemUid: 'record-reedit-serialized', title: '', textContent: '最终正文', attachments: [],
         })
         await Promise.resolve(); await Promise.resolve()
       })
@@ -560,7 +557,7 @@ describe('conversation send directory projection', () => {
         sendAtMillis: 1, templateKind: 1, displayKind: 0, version: 3,
         attachmentCount: 0, maxTextLength: 4000,
       }
-      if (operation === 'source.record-reedit.update') throw new ArkmeClientError({
+      if (operation === 'source.record-reedit.submit') throw new ArkmeClientError({
         code: 'record-reedit-conflict', message: '快记已在其他位置更新，草稿已保留', retryable: false,
       })
       return await baseCall(operation, params, signal)
@@ -687,6 +684,7 @@ describe('conversation send directory projection', () => {
         cachedAtMillis: 1,
         revision: 1,
       }
+      if (operation === 'source.record-reedit.draft.put') return { saved: true, draftRevision: 1 }
       if (operation === 'source.members') return { source: activeSource, items: [], total: 0, activeCount: 0 }
       if (operation === 'source.timeline') {
         const beforeSequence = params?.cursor?.beforeSequence
