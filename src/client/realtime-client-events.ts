@@ -1,4 +1,6 @@
 import { useEffect } from 'react'
+import { publishMemberEventHint } from './member-event-hints.js'
+import { arkmeMemberEvents } from './member-event-cache.js'
 import type { ArkmeAuthSnapshot, ArkmeBotSummary, ArkmeChatClientEvent } from '../types.js'
 import { arkmeAuthStore } from './auth-store.js'
 import { arkmeCalendarInvalidations } from './calendar-invalidation-store.js'
@@ -64,6 +66,7 @@ export function useArkmeRealtimeClientEvents(
 
   useEffect(() => {
     if (auth?.status !== 'authenticated' || auth.userId === undefined) {
+      arkmeMemberEvents.activateAccount(undefined)
       arkmeChatDirectory.activateAccount(undefined)
       arkmeChatTimelineDelta.activateAccount(undefined)
       arkmeInterwovenInvalidation.activateAccount(undefined)
@@ -74,6 +77,7 @@ export function useArkmeRealtimeClientEvents(
     }
     const authenticatedUserId = auth.userId
     const authenticatedAccountScope = `${auth.environment}:${String(authenticatedUserId)}`
+    arkmeMemberEvents.activateAccount(authenticatedAccountScope)
     arkmeChatDirectory.activateAccount(authenticatedAccountScope)
     arkmeChatTimelineDelta.activateAccount(authenticatedAccountScope)
     arkmeInterwovenInvalidation.activateAccount(authenticatedAccountScope)
@@ -126,6 +130,11 @@ export function useArkmeRealtimeClientEvents(
         if (!Number.isSafeInteger(update.revision) || update.revision < 0
           || (observedRevision !== undefined && update.revision <= observedRevision)) return
         observedRevision = update.revision
+        if (update.type === 'member-events-invalidated') {
+          publishMemberEventHint({ account:authenticatedAccountScope, sourceKey:update.sourceKey,
+            eventId:update.eventId, occurredAtMillis:update.occurredAtMillis })
+          return
+        }
         if (update.type === 'message-preparing') {
           if (ownsMessagePreparing) arkmeMessagePreparing.apply(update)
           return
