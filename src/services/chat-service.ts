@@ -1,4 +1,5 @@
 import { createHash, createHmac, randomUUID, timingSafeEqual } from 'node:crypto'
+import { arkmeEmojiTokenSafePrefix } from '../arkme-emoji-text.js'
 import { MemberEventService } from './member-event-service.js'
 import { projectForwardRecordingSegment } from '../recording-forward-presentation.js'
 import type { ArkmeSessionCredentials } from '../keychain-store.js'
@@ -5648,8 +5649,8 @@ export class ChatService {
       recordUid: input.recordUid,
       senderUserId: Math.trunc(input.senderUserId),
       senderName: input.senderName.trim() || 'Arkme用户',
-      title: input.title.slice(0, 500),
-      textContent: input.textContent.slice(0, this.runtime.config.maxTextLength),
+      title: arkmeEmojiTokenSafePrefix(input.title, 500, 'codeUnits'),
+      textContent: arkmeEmojiTokenSafePrefix(input.textContent, this.runtime.config.maxTextLength, 'codeUnits'),
       sendAtMillis: Math.trunc(input.sendAtMillis),
       sourceSequence: Math.max(0, Math.trunc(numberValue(input.sourceSequence))),
       templateKind: Math.trunc(input.templateKind),
@@ -5855,7 +5856,7 @@ export class ChatService {
       send_at: reference.sendAtMillis,
       title: reference.title,
       text: reference.textContent,
-      text_preview: reference.textContent.trim().slice(0, 500),
+      text_preview: arkmeEmojiTokenSafePrefix(reference.textContent.trim(), 500, 'codeUnits'),
       template_kind: reference.templateKind,
       display_kind: reference.displayKind,
       image_count: reference.imageCount,
