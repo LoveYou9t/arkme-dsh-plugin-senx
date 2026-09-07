@@ -852,7 +852,9 @@ describe('ArkmeService Bot owner adapter', () => {
             last_active_at: 1788100000123,
             last_seq: 9,
           },
-          private_supplement: { counterpart_name_snapshot: '缓存 Bot' },
+          bot_participants: [{
+            bot_uid: 'cached-chat-bot', display_name_snapshot: '缓存 Bot', binding_state: 1, status: 1,
+          }],
           latest_preview: { record: { payload: { text_content: '保留这条消息' } } },
           unread_snapshot: { unread_count: 3, session_last_seq: 9 },
           current_policy: { mute_state: 1, notify_state: 1 },
@@ -872,6 +874,7 @@ describe('ArkmeService Bot owner adapter', () => {
 
     expect(opened).toEqual(cached)
     expect(opened).toMatchObject({
+      displayName: '缓存 Bot',
       latestPreview: '保留这条消息',
       activeAtMillis: 1788100000123,
       unreadCount: 3,

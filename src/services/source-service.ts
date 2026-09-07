@@ -82,6 +82,18 @@ function integerIdentifierValue(value: unknown): number {
 function booleanValue(value: unknown): boolean { return value === true }
 function listValue(value: unknown): unknown[] { return Array.isArray(value) ? value : [] }
 
+function chatBotDisplayName(bundle: Record<string, unknown>): string | undefined {
+  if (numberValue(objectValue(bundle.session).session_kind) !== 1
+    || integerIdentifierValue(objectValue(bundle.private_counterpart).user_id) > 0) return undefined
+  const participants = listValue(bundle.bot_participants)
+  if (participants.length !== 1) return undefined
+  const participant = objectValue(participants[0])
+  if (stringValue(participant.bot_uid).trim() === ''
+    || numberValue(participant.binding_state) !== 1
+    || numberValue(participant.status) !== 1) return undefined
+  return stringValue(participant.display_name_snapshot).trim() || undefined
+}
+
 function integerLikeValue(value: unknown): number {
   if (typeof value === 'number' && Number.isFinite(value)) return Math.trunc(value)
   if (typeof value === 'string' && value.trim() !== '') {
@@ -1360,12 +1372,12 @@ export class SourceService {
         ? 'group_chat'
         : sessionKind === 1 || sessionKind === 3 ? 'private_chat' : undefined
       if (uid === '' || kind === undefined) continue
-      const displayName = (kind === 'private_chat'
+      const displayName = chatBotDisplayName(bundle) ?? ((kind === 'private_chat'
         ? stringValue(
           supplement.remark ?? supplement.counterpart_name_snapshot ?? counterpart.display_name_snapshot
           ?? supplement.pending_name ?? counterpart.visible_phone,
         )
-        : stringValue(chatSession.title)).trim() || '未命名会话'
+        : stringValue(chatSession.title)).trim() || '未命名会话')
       const preview = arkmeChatConversationPreview(latestPayload)
       const unreadCount = Math.max(0, Math.trunc(numberValue(unread.unread_count)))
       const latestRelation = objectValue(latestPreview.relation)
@@ -1712,12 +1724,12 @@ export class SourceService {
       ? 'group_chat'
       : sessionKind === 1 || sessionKind === 3 ? 'private_chat' : undefined
     if (uid === '' || kind === undefined) throw new Error('invalid chat display snapshot')
-    const displayName = (kind === 'private_chat'
+    const displayName = chatBotDisplayName(bundle) ?? ((kind === 'private_chat'
       ? stringValue(
         supplement.remark ?? supplement.counterpart_name_snapshot ?? counterpart.display_name_snapshot
         ?? supplement.pending_name ?? counterpart.visible_phone,
       )
-      : stringValue(chatSession.title)).trim() || cached?.displayName || '未命名会话'
+      : stringValue(chatSession.title)).trim() || cached?.displayName || '未命名会话')
     const latestItem = [...timelineItems].sort((left, right) => (right.sequence ?? 0) - (left.sequence ?? 0))[0]
     const latestPreview = latestItem === undefined
       ? cached?.latestPreview
