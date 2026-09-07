@@ -3325,6 +3325,9 @@ describe('conversation send directory projection', () => {
 
     expect(mocks.callArkme).toHaveBeenCalledWith('source.message-extension.extend', {
       sourceRef: 'source-harness',
+      humanMentions: [],
+      botMentions: [],
+      textFormat: undefined,
       messageActionRef: 'opaque-extension-action',
       textContent: '我的补充',
       recordUid: 'record-new',
@@ -4338,7 +4341,7 @@ describe('conversation send directory projection', () => {
     })
     expect(renderer!.root.findAllByProps({ 'data-arkme-note-detail': 'true' })).toHaveLength(1)
     act(() => {
-      renderer!.root.findByProps({ 'aria-label': '延展此快记' }).props.onChange({ target: { value: '抽屉发送的新延展' } })
+      renderer!.root.findAllByType(ArkmeRichComposerInput).find(input => input.props.ariaLabel === '延展此快记')!.props.onTextChange('抽屉发送的新延展')
     })
     await act(async () => {
       renderer!.root.findByProps({ 'aria-label': '发送延展' }).props.onClick()
