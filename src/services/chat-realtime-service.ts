@@ -11,8 +11,9 @@ import type {
   ArkmeSourceItem,
   ArkmeTimelineItem,
 } from '../types.js'
-import { SourceService } from './source-service.js'
+import { arkmeTimelineConversationPreview, SourceService } from './source-service.js'
 import { ArkmePluginError, ServiceRuntime, objectValue, stringValue } from './service.js'
+import { arkmeEmojiPlainText, arkmeEmojiTokenSafePrefix } from '../arkme-emoji-text.js'
 import {
   ArkmeDesktopAttentionBridge,
   type ArkmeDesktopNotificationDispatchResult,
@@ -49,11 +50,51 @@ export interface PendingChatProjection {
   notificationHints: PendingChatNotificationHint[]
 }
 
+interface ArkmeTimelineNotificationIdentity {
+  relationUid: string
+  itemUid: string
+  sequence: number
+  senderUserId: number
+}
+
 function numberValue(value: unknown): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : 0
 }
 
 function listValue(value: unknown): unknown[] { return Array.isArray(value) ? value : [] }
+
+function timelineNotificationIdentities(data: Record<string, unknown>): ArkmeTimelineNotificationIdentity[] {
+  return listValue(data.items).flatMap(raw => {
+    const item = objectValue(raw)
+    const relation = objectValue(item.relation)
+    const payload = objectValue(objectValue(item.record).payload)
+    const identity = {
+      relationUid: stringValue(relation.rel_uid ?? relation.relUid).trim(),
+      itemUid: stringValue(relation.record_uid ?? relation.recordUid ?? payload.record_uid ?? payload.recordUid).trim(),
+      sequence: numberValue(relation.seq ?? relation.sequence),
+      senderUserId: numberValue(relation.sender_user_id ?? relation.senderUserId),
+    }
+    return identity.itemUid !== '' && Number.isSafeInteger(identity.sequence) && identity.sequence > 0
+      && Number.isSafeInteger(identity.senderUserId) && identity.senderUserId > 0
+      ? [identity] : []
+  })
+}
+
+function notificationTimelineItem(
+  items: readonly ArkmeTimelineItem[],
+  identities: readonly ArkmeTimelineNotificationIdentity[],
+  hint: ArkmeChatReceiveHint,
+): ArkmeTimelineItem | undefined {
+  const relationUid = hint.relationUid.trim()
+  const exact = relationUid === '' ? undefined : identities.find(candidate =>
+    candidate.relationUid === relationUid && candidate.senderUserId === hint.senderUserId)
+  const identity = exact ?? identities.find(candidate =>
+    (relationUid === '' || candidate.relationUid === '')
+      && candidate.sequence === hint.latestSequence
+      && candidate.senderUserId === hint.senderUserId)
+  return identity === undefined ? undefined : items.find(item => item.itemUid === identity.itemUid
+    && item.sequence === identity.sequence && !item.isMe)
+}
 
 function safeFailureMessage(error: unknown): string {
   if (error instanceof ArkmePluginError) return error.message
@@ -652,7 +693,10 @@ export class ChatRealtimeService {
       const bundle = objectValue(raw)
       return [stringValue(objectValue(bundle.session).chat_session_uid).trim(), bundle] as const
     }).filter(([uid]) => uid !== ''))
-    const tailItemsByUid = new Map<string, ArkmeTimelineItem[]>()
+    const tailItemsByUid = new Map<string, {
+      items: ArkmeTimelineItem[]
+      notificationIdentities: ArkmeTimelineNotificationIdentity[]
+    }>()
     const failedUids = new Set<string>()
     for (let offset = 0; offset < pending.length; offset += 3) {
       const chunk = pending.slice(offset, offset + 3)
@@ -678,12 +722,15 @@ export class ChatRealtimeService {
         )
         const sessionKind = numberValue(objectValue(bundles.get(uid)).session_kind
           ?? objectValue(objectValue(bundles.get(uid)).session).session_kind)
-        return [uid, await this.projectionReader.chatTimelineItems(
-          data,
-          session,
-          uid,
-          sessionKind === 2 ? 'group_chat' : sessionKind === 1 || sessionKind === 3 ? 'private_chat' : undefined,
-        )] as const
+        return [uid, {
+          items: await this.projectionReader.chatTimelineItems(
+            data,
+            session,
+            uid,
+            sessionKind === 2 ? 'group_chat' : sessionKind === 1 || sessionKind === 3 ? 'private_chat' : undefined,
+          ),
+          notificationIdentities: timelineNotificationIdentities(data),
+        }] as const
       }))
       results.forEach((result, index) => {
         const uid = chunk[index]?.[0]
@@ -702,7 +749,8 @@ export class ChatRealtimeService {
         continue
       }
       const cacheKey = `${String(session.userId)}:${uid}`
-      const timelineItems = tailItemsByUid.get(uid) ?? []
+      const timelineProjection = tailItemsByUid.get(uid)
+      const timelineItems = timelineProjection?.items ?? []
       try {
         const source = await this.source.chatSourceFromBundle(bundle, session, this.source.cachedChatSourceByKey(cacheKey), timelineItems)
         if (ownerGeneration !== this.attentionOwnerGeneration) return []
@@ -727,7 +775,11 @@ export class ChatRealtimeService {
               || candidate.hint.senderUserId === session.userId
               || source.notificationAllowed !== true
             ) continue
-            const message = timelineItems.find(item => item.sequence === candidate.hint.latestSequence && !item.isMe)
+            const message = notificationTimelineItem(
+              timelineItems,
+              timelineProjection?.notificationIdentities ?? [],
+              candidate.hint,
+            )
             if (message === undefined) {
               if (candidate.attempts < 4) {
                 this.mergePendingChatProjection(uid, {
@@ -739,14 +791,18 @@ export class ChatRealtimeService {
               }
               continue
             }
-            const preview = message.textContent.trim() || '非文本内容'
+            const richPreview = arkmeTimelineConversationPreview(message)
+            const body = arkmeEmojiPlainText(arkmeEmojiTokenSafePrefix(
+              source.kind === 'group_chat' ? `${message.senderName}：${richPreview}` : richPreview,
+              120,
+            ))
             notifications.push({
               eventUid: candidate.hint.eventUid,
               sourceRef: source.sourceRef,
               sourceKey,
               sourceKind: source.kind,
               title: source.displayName,
-              body: source.kind === 'group_chat' ? `${message.senderName}：${preview}` : preview,
+              body,
               eventAtMillis: candidate.hint.eventAtMillis,
             })
           }

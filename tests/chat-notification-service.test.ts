@@ -106,21 +106,28 @@ describe('Arkme Chat message notification projection', () => {
         return json({ items: [
           {
             relation: {
-              record_uid: 'record-9', sender_user_id: 20002,
+              record_uid: 'record-9', rel_uid: 'relation-9', sender_user_id: 20002,
               display_name_snapshot: '小林', attach_at: 1_700_000_000_009, seq: 9,
             },
             record: { status: 1, payload: { text_content: '第一条消息' } },
           },
           {
             relation: {
-              record_uid: 'record-10', sender_user_id: 20002,
+              record_uid: 'record-10', rel_uid: 'wrong-relation-10', sender_user_id: 30003,
+              display_name_snapshot: '错误发送者', attach_at: 1_700_000_000_009, seq: 9,
+            },
+            record: { status: 1, payload: { text_content: '不能借用的同记录消息' } },
+          },
+          {
+            relation: {
+              record_uid: 'record-10', rel_uid: 'relation-10', sender_user_id: 20002,
               display_name_snapshot: '小林', attach_at: 1_700_000_000_010, seq: 10,
             },
             record: { status: 1, payload: { text_content: '第二条消息' } },
           },
           {
             relation: {
-              record_uid: 'record-11', sender_user_id: 20002,
+              record_uid: 'record-11', rel_uid: 'relation-11', sender_user_id: 20002,
               display_name_snapshot: '小林', attach_at: 1_700_000_000_011, seq: 11,
             },
             record: { status: 1, payload: { title: '附件标题', file_uid: 'file-1' } },
@@ -171,7 +178,7 @@ describe('Arkme Chat message notification projection', () => {
           sourceKey: expect.stringMatching(/^arkme-chat-source-v1\./),
         }),
         expect.objectContaining({ eventUid: 'event-10', title: '林溪', body: '第二条消息' }),
-        expect.objectContaining({ eventUid: 'event-11', title: '林溪', body: '非文本内容' }),
+        expect.objectContaining({ eventUid: 'event-11', title: '林溪', body: '附件标题' }),
       ])
     expect(requestBodies.find(request => request.url.endsWith('/api/v1/chat/timeline/tail'))?.body)
       .toMatchObject({ chat_session_uid: 'chat-private-1', after_seq: 8, limit: 50 })

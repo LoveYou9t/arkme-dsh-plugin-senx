@@ -78,6 +78,7 @@ import { arkmeMentionMetadataMentionsViewer } from '../mention-metadata.js'
 import { arkmeRichBackgroundSound } from '../record-background-sound.js'
 import { arkmeHashTagContentPayload, arkmeHashTagPayload } from '../hashtag.js'
 import {
+  arkmeChatConversationPreview,
   SourceService,
   type ArkmePrivateChatViewerLabel,
   type ArkmeSourceRefPayload,
@@ -4510,6 +4511,7 @@ export class ChatService {
           : rawAgentSource
         const contentBlocks = this.media.richContentBlocks(item, session.userId)
         const extensionProjection = this.timelineExtensionProjection(item, session.userId)
+        const conversationPreview = arkmeChatConversationPreview(item)
         const senderName = stringValue(relation.display_name_snapshot).trim() || 'Arkme用户'
         const mentionsViewer = senderUserId !== session.userId
           && arkmeMentionMetadataMentionsViewer(record, payload, session.userId)
@@ -4553,6 +4555,7 @@ export class ChatService {
           sendAtMillis,
           title: stringValue(payload.title),
           textContent: stringValue(payload.text_content),
+          ...(conversationPreview === '' ? {} : { conversationPreview }),
           status: numberValue(record.status),
           sequence: numberValue(relation.seq),
           ...(numberValue(record.version ?? payload.version) > 0 ? { recordVersion: numberValue(record.version ?? payload.version) } : {}),

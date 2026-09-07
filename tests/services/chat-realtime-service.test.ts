@@ -249,10 +249,25 @@ describe('ChatRealtimeService', () => {
       current_policy: { mute_state: 1, notify_state: 1 },
       unread_snapshot: { unread_count: notificationsPerSession, session_last_seq: notificationsPerSession },
     }))
-    const fetchImpl = vi.fn<typeof fetch>(async input => {
+    const fetchImpl = vi.fn<typeof fetch>(async (input, init) => {
       const url = String(input)
       if (url.endsWith('/api/v1/chats/display-snapshots')) return new Response(JSON.stringify({ code: 200, data: { items: bundles } }))
-      if (url.endsWith('/api/v1/chat/timeline/tail')) return new Response(JSON.stringify({ code: 200, data: { items: [] } }))
+      if (url.endsWith('/api/v1/chat/timeline/tail')) {
+        const body = JSON.parse(String(init?.body ?? '{}')) as { chat_session_uid?: string }
+        const sessionIndex = Number(body.chat_session_uid?.split('-').at(-1))
+        return new Response(JSON.stringify({ code: 200, data: { items: Array.from(
+          { length: notificationsPerSession },
+          (_, index) => {
+            const notificationIndex = sessionIndex * notificationsPerSession + index
+            return { relation: {
+              record_uid: `message-${String(sessionIndex)}-${String(index)}`,
+              rel_uid: `relation-${String(notificationIndex)}`,
+              sender_user_id: 20002,
+              seq: index + 1,
+            } }
+          },
+        ) } }))
+      }
       throw new Error(`unexpected URL ${url}`)
     })
     const runtime = new ServiceRuntime(config, sessions, {
@@ -269,6 +284,11 @@ describe('ChatRealtimeService', () => {
         senderName: '发送者', isMe: false,
         sendAtMillis: 1_700_000_000_000 + sessionIndex * notificationsPerSession + index,
         title: '', textContent: `消息 ${String(sessionIndex)}-${String(index)}`,
+        ...(sessionIndex === 0 && index === 1
+          ? { conversationPreview: '[图片]消息 0-1[jm_emoji:red_angry_face]' }
+          : sessionIndex === 0 && index === 2
+            ? { conversationPreview: '😠'.repeat(130) }
+          : {}),
         status: 1, sequence: index + 1,
       })),
     ]))
@@ -276,11 +296,13 @@ describe('ChatRealtimeService', () => {
     let maxActive = 0
     let releaseScheduled = false
     const startedKeys: string[] = []
+    const nativeBodies = new Map<string, string>()
     const pendingResolvers: Array<() => void> = []
     const nativeAttention: ArkmeNativeAttentionDispatcher = {
       async showNotification(payload) {
         const index = Number(payload.idempotencyKey.slice('event-'.length))
         startedKeys.push(payload.idempotencyKey)
+        nativeBodies.set(payload.idempotencyKey, payload.presentation.body)
         active += 1
         maxActive = Math.max(maxActive, active)
         await new Promise<void>(resolve => {
@@ -318,7 +340,7 @@ describe('ChatRealtimeService', () => {
     vi.spyOn(internals.chatRealtime, 'state').mockReturnValue({
       revision: 1, connected: true, connectionGeneration: 7,
     })
-    const events: Array<{ type: string; notification?: { eventUid: string } }> = []
+    const events: Array<{ type: string; notification?: { eventUid: string; body: string } }> = []
     service.subscribeChatRealtime(event => { events.push(event as typeof events[number]) })
     const pending: Array<[string, PendingChatProjection]> = bundles.map((bundle, sessionIndex) => [
       bundle.session.chat_session_uid,
@@ -351,6 +373,10 @@ describe('ChatRealtimeService', () => {
       .toEqual(Array.from({ length: notificationCount }, (_, index) => index)
         .filter(index => index % 4 === 1 && index !== 5)
         .map(index => `event-${String(index)}`))
+    expect(nativeBodies.get('event-1')).toBe('[图片]消息 0-1😠')
+    expect(events.find(event => event.notification?.eventUid === 'event-1')?.notification?.body)
+      .toBe(nativeBodies.get('event-1'))
+    expect(nativeBodies.get('event-2')).toBe('😠'.repeat(120))
     service.dispose()
   })
 
