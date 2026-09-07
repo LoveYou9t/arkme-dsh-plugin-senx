@@ -56,7 +56,12 @@ export function useRecordReeditSubmissions(
   }
   const { generation, requestGeneration } = scope.current
   const revision = useRef(0)
-  const [snapshot, setSnapshot] = useState<{ key: string; generation: number; jobs: ArkmeRecordReeditSubmissionView[] }>({ key, generation, jobs: [] })
+  const resumedGeneration = useRef(-1)
+  const [snapshot, setSnapshot] = useState<{ key: string; generation: number; requestGeneration: number; jobs: ArkmeRecordReeditSubmissionView[] }>({ key, generation, requestGeneration: -1, jobs: [] })
+  const jobs = snapshot.key === key && snapshot.generation === generation ? snapshot.jobs : []
+  const needsDiscovery = snapshot.key !== key || snapshot.generation !== generation || snapshot.requestGeneration !== requestGeneration
+  const needsPolling = needsDiscovery || jobs.some(job => job.state === 'pending' || job.state === 'committing' || job.state === 'uncertain'
+      || job.result && items.some(item => item.itemUid === job.itemUid))
   const refresh = useCallback(async (reconcile = false) => {
     if (!sourceRef || !accountKey || !active) return
     const started = revision.current
@@ -64,17 +69,16 @@ export function useRecordReeditSubmissions(
     const jobs = await callArkme<ArkmeRecordReeditSubmissionView[]>('source.record-reedit.submissions', { sourceRef })
     if (scope.current.requestGeneration !== requestGeneration || scope.current.generation !== generation
       || scope.current.key !== key || started !== revision.current || !Array.isArray(jobs)) return
-    setSnapshot({ key, generation, jobs })
+    setSnapshot({ key, generation, requestGeneration, jobs })
   }, [sourceRef, accountKey, active, key, generation, requestGeneration])
   useEffect(() => {
     let disposed = false
-    let resumed = false
     let timer: ReturnType<typeof setTimeout>
     const poll = async () => {
-      if (!resumed) {
+      if (resumedGeneration.current !== requestGeneration) {
         try {
           await callArkme('source.record-reedit.resume', { sourceRef })
-          resumed = true
+          if (!disposed) resumedGeneration.current = requestGeneration
         } catch { /* Retry activation without hiding already available receipts. */ }
       }
       if (disposed) return
@@ -83,15 +87,17 @@ export function useRecordReeditSubmissions(
       } catch { /* Retain known receipts when the read is temporarily unavailable. */ }
       if (!disposed) timer = setTimeout(() => { void poll() }, 1500)
     }
-    if (active && sourceRef && accountKey) void poll()
+    if (active && sourceRef && accountKey && needsPolling) {
+      if (needsDiscovery) void poll()
+      else timer = setTimeout(() => { void poll() }, 1500)
+    }
     return () => { disposed = true; clearTimeout(timer) }
-  }, [refresh, active, sourceRef, accountKey])
+  }, [refresh, active, sourceRef, accountKey, needsPolling, needsDiscovery, requestGeneration])
   const accepted = useCallback((job: ArkmeRecordReeditSubmissionView) => {
     if (scope.current.key !== key || scope.current.generation !== generation) return
     revision.current += 1
-    setSnapshot(previous => ({ key, generation, jobs: [...(previous.key === key && previous.generation === generation ? previous.jobs : []).filter(value => value.itemUid !== job.itemUid), job] }))
+    setSnapshot(previous => ({ ...previous, key, generation, jobs: [...(previous.key === key && previous.generation === generation ? previous.jobs : []).filter(value => value.itemUid !== job.itemUid), job] }))
   }, [key, generation])
-  const jobs = snapshot.key === key && snapshot.generation === generation ? snapshot.jobs : []
   const projectionWindow = useRef({ items, refreshCurrentWindow })
   projectionWindow.current = { items, refreshCurrentWindow }
   useEffect(() => {

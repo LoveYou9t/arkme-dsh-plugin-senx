@@ -42,6 +42,7 @@ describe('record re-edit submission hook owns canonical handoff', () => {
     await act(async () => { renderer!.update(<Probe {...props} />); await flush() })
   }
   const acknowledgeCalls = () => mocks.callArkme.mock.calls.filter(([operation]) => operation === 'source.record-reedit.acknowledge')
+  const readCalls = () => mocks.callArkme.mock.calls.filter(([operation]) => operation === 'source.record-reedit.submissions')
 
   beforeEach(() => {
     vi.useFakeTimers()
@@ -53,6 +54,79 @@ describe('record re-edit submission hook owns canonical handoff', () => {
   afterEach(() => {
     act(() => renderer?.unmount())
     vi.useRealTimers()
+  })
+
+  it.each(['empty', 'failed', 'outside-window'] as const)('stops polling after discovering %s receipts', async kind => {
+    receipts = kind === 'empty' ? [] : kind === 'outside-window' ? [committed]
+      : [{ ...committed, state: kind, result: undefined } as ArkmeRecordReeditSubmissionView]
+    await mount({ items: kind === 'outside-window' ? [] : [original] })
+    expect(readCalls()).toHaveLength(1)
+    await act(async () => { await vi.advanceTimersByTimeAsync(6000) })
+    expect(readCalls()).toHaveLength(1)
+    expect(state.jobs).toEqual(receipts)
+  })
+
+  it('restarts polling for a newly accepted edit and stops after canonical acknowledgement', async () => {
+    receipts = []
+    await mount({ items: [original] })
+    const pending = { ...committed, state: 'pending', result: undefined } as ArkmeRecordReeditSubmissionView
+    receipts = [pending]
+    await act(async () => { state.accepted(pending); await flush() })
+    const readsAfterAccept = readCalls().length
+    await act(async () => { await vi.advanceTimersByTimeAsync(1500) })
+    expect(readCalls().length).toBeGreaterThan(readsAfterAccept)
+    expect(state.jobs).toEqual([pending])
+    receipts = [committed]
+    await update({ items: [{ ...original, recordVersion: 4, mediaUnavailable: false }] })
+    mocks.callArkme.mockImplementation(async operation => {
+      if (operation === 'source.record-reedit.acknowledge') receipts = []
+      return operation === 'source.record-reedit.submissions' ? [...receipts] : {}
+    })
+    await act(async () => { await vi.advanceTimersByTimeAsync(1500) })
+    await act(async () => { await vi.advanceTimersByTimeAsync(1500) })
+    expect(acknowledgeCalls()).toHaveLength(1)
+    expect(state.jobs).toEqual([])
+    const settledReads = readCalls().length
+    await act(async () => { await vi.advanceTimersByTimeAsync(6000) })
+    expect(readCalls()).toHaveLength(settledReads)
+  })
+
+  it('retries failed discovery without treating it as an empty queue', async () => {
+    receipts = []
+    let failRead = true
+    mocks.callArkme.mockImplementation(async operation => {
+      if (operation === 'source.record-reedit.submissions') {
+        if (failRead) throw new Error('read unavailable')
+        return [...receipts]
+      }
+      return {}
+    })
+    await mount({ items: [original] })
+    failRead = false
+    await act(async () => { await vi.advanceTimersByTimeAsync(1500) })
+    expect(readCalls()).toHaveLength(2)
+    await act(async () => { await vi.advanceTimersByTimeAsync(6000) })
+    expect(readCalls()).toHaveLength(2)
+  })
+
+  it('discovers restored work with renewed credentials after idle polling stopped', async () => {
+    receipts = []
+    await mount({ sourceKey: 'stable-source', items: [original] })
+    receipts = [committed]
+    await update({ sourceKey: 'stable-source', sourceRef: 'renewed-ref', items: [original] })
+    expect(state.jobs).toEqual([committed])
+    expect(refreshCurrentWindow).toHaveBeenCalledExactlyOnceWith()
+  })
+
+  it('keeps following an unknown outcome until an explicit asynchronous reconciliation completes', async () => {
+    receipts = [{ ...committed, state: 'uncertain', result: undefined } as ArkmeRecordReeditSubmissionView]
+    await mount({ items: [original] })
+    await act(async () => { await state.refresh(true) })
+    expect(state.jobs[0]?.state).toBe('uncertain')
+    receipts = [committed]
+    await act(async () => { await vi.advanceTimersByTimeAsync(1500) })
+    expect(state.jobs).toEqual([committed])
+    expect(refreshCurrentWindow).toHaveBeenCalledExactlyOnceWith()
   })
 
   it.each([
@@ -96,6 +170,7 @@ describe('record re-edit submission hook owns canonical handoff', () => {
     expect(refreshCurrentWindow).not.toHaveBeenCalled()
 
     await update({ items: [original] })
+    expect(refreshCurrentWindow).not.toHaveBeenCalled()
     await act(async () => { await vi.advanceTimersByTimeAsync(1500) })
     expect(refreshCurrentWindow).toHaveBeenCalledExactlyOnceWith()
   })
