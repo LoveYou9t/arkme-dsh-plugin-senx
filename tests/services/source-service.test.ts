@@ -15,6 +15,74 @@ const config: ArkmeServiceConfig = {
 }
 
 describe('SourceService', () => {
+  const botSession = {
+    session: { chat_session_uid: 'bot-chat', session_kind: 1, title: '旧会话标题', last_seq: 4 },
+    bot_participants: [{ bot_uid: 'bot-1', display_name_snapshot: 'Test', binding_state: 1, status: 1 }],
+    unread_snapshot: { unread_count: 2, session_last_seq: 4 },
+  }
+
+  it('keeps the Chat Bot name through directory hydration, opening and a renamed snapshot', async () => {
+    const session = { userId: 42, accessToken: 'access', refreshToken: 'refresh' }
+    const sessions: ArkmeSessionStore = {
+      async read() { return session }, async write() {}, async delete() {},
+    }
+    const fetchImpl = vi.fn(async input => {
+      expect(new URL(String(input)).pathname).toBe('/api/v1/chats/list')
+      return new Response(JSON.stringify({ code: 200, data: { items: [botSession], has_more: false } }))
+    }) as typeof fetch
+    const runtime = new ServiceRuntime(config, sessions, {
+      async uniqueCode() { return 'device-secret' },
+    } as StateStore, fetchImpl)
+    const service = new SourceService(runtime, new ProfileService(runtime), {
+      async summary() { return { recordCount: 0, wordsCount: 0, totalSec: 0 } },
+      recordItem() { return undefined },
+    })
+
+    const source = (await service.listSources('root', { refresh: true })).items[0]!
+    expect(source).toMatchObject({ displayName: 'Test', isBotChat: true, unreadCount: 2, latestSequence: 4 })
+    expect(source.peerUserId).toBeUndefined()
+    const opened = await service.chatSourceFromBundle(botSession, session, source, [])
+    expect(opened).toMatchObject({ displayName: 'Test', isBotChat: true, sourceKey: source.sourceKey })
+    expect(await service.sourceItem(await service.openSourceRef(source.sourceRef, session.userId)))
+      .toMatchObject({ isBotChat: true })
+    const renamed = await service.chatSourceFromBundle({
+      ...botSession,
+      bot_participants: [{ ...botSession.bot_participants[0], display_name_snapshot: 'Test 改名' }],
+    }, session, source, [])
+    expect(renamed).toMatchObject({ displayName: 'Test 改名', sourceKey: source.sourceKey })
+    expect((await service.openSourceRef(renamed.sourceRef, session.userId)).displayName).toBe('Test 改名')
+    expect(fetchImpl).toHaveBeenCalledOnce()
+  })
+
+  it.each([
+    ['valid Bot', {}, 'Test'],
+    ['group with a Bot', { session: { ...botSession.session, session_kind: 2, title: '项目群' } }, '项目群'],
+    ['human counterpart', { private_counterpart: { user_id: 88, display_name_snapshot: '联系人' } }, '联系人'],
+    ['human private remark', {
+      private_counterpart: { user_id: 88, display_name_snapshot: '联系人' },
+      private_supplement: { remark: '我的备注' },
+    }, '我的备注'],
+    ['pending private chat', { session: { ...botSession.session, session_kind: 3 } }, '未命名会话'],
+    ['multiple Bots', { bot_participants: [botSession.bot_participants[0], { ...botSession.bot_participants[0], bot_uid: 'bot-2' }] }, '未命名会话'],
+    ['disabled Bot', { bot_participants: [{ ...botSession.bot_participants[0], status: 2 }] }, '未命名会话'],
+    ['unbound Bot', { bot_participants: [{ ...botSession.bot_participants[0], binding_state: 2 }] }, '未命名会话'],
+    ['missing Bot identity', { bot_participants: [{ ...botSession.bot_participants[0], bot_uid: '' }] }, '未命名会话'],
+    ['empty Bot name', { bot_participants: [{ ...botSession.bot_participants[0], display_name_snapshot: '  ' }] }, '未命名会话'],
+    ['no Bot', { bot_participants: [] }, '未命名会话'],
+  ])('projects %s without mixing participant identities', async (_name, overrides, expectedName) => {
+    const runtime = {
+      stateStore: { async uniqueCode() { return 'device-secret' } },
+    } as ServiceRuntime
+    const service = new SourceService(runtime, {} as ProfileService, {} as never)
+    const source = await service.chatSourceFromBundle(
+      { ...botSession, ...overrides },
+      { userId: 42, accessToken: 'access', refreshToken: 'refresh' },
+      undefined, [],
+    )
+    expect(source.displayName).toBe(expectedName)
+    expect(source.isBotChat === true).toBe(['valid Bot', 'disabled Bot', 'unbound Bot', 'empty Bot name'].includes(_name))
+  })
+
   it('logs private avatar sealing failure without dropping the last good presentation', async () => {
     const runtime = { config } as ServiceRuntime
     const profile = {

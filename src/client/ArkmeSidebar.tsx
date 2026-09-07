@@ -94,6 +94,7 @@ import type { ArkmeEmoji } from './arkme-emoji.js'
 import { ArkmeSearchSurface } from './ArkmeSearchSurface.js'
 import { ArkmeContactAddSurface } from './ArkmeContactAddSurface.js'
 import { ArkmeBotConversationSurface } from './ArkmeBotConversationSurface.js'
+import { ArkmeChatBotControls } from './ArkmeChatBotControls.js'
 import { ARKME_DEFAULT_SHARE_WEBSITE } from '../types.js'
 import { ArkmeMarketplace } from './ArkmeMarketplace.js'
 import {
@@ -6581,7 +6582,17 @@ export function ArkmeSurface({
             {authenticated && conversationBackdropVisible && isArkmeSelfWorkspaceSource(selectedSource)
               && source?.isMuted === true && <span style={styles.titleMuteIcon}><ArkmeMuteIcon size={16} /></span>}
           </div>
-          {authenticated && conversationBackdropVisible && source?.kind === 'private_chat' && <ArkmePrivateCallMenu
+          {authenticated && conversationBackdropVisible && source?.isBotChat === true && <ArkmeChatBotControls
+            key={`bot-controls:${authenticatedUserId}:${source.sourceKey ?? source.sourceRef}`}
+            source={source}
+            onUpdated={updated => {
+              const { avatarRef: _previousAvatar, ...currentSource } = source
+              arkmeUi.selectSource({ ...currentSource, displayName: updated.name, ...(updated.avatarRef === undefined ? {} : { avatarRef: updated.avatarRef }) })
+              arkmeUi.chatChanged()
+            }}
+            onDeleted={() => { arkmeUi.showHarness(); arkmeUi.chatChanged() }}
+          />}
+          {authenticated && conversationBackdropVisible && source?.kind === 'private_chat' && source.isBotChat !== true && <ArkmePrivateCallMenu
             key={`private-call:${conversationOverlayKey}`}
             sourceRef={source.sourceRef}
             displayName={source.displayName}
@@ -6604,7 +6615,7 @@ export function ArkmeSurface({
             onStatus={showMessageActionStatus}
             onError={setError}
           />}
-          {shouldShowPrivateChatActions(authenticated, source?.kind) && <div style={{
+          {source?.isBotChat !== true && shouldShowPrivateChatActions(authenticated, source?.kind) && <div style={{
             ...ARKME_CONVERSATION_HEADER_ACTIONS_STYLE,
             visibility: relatedPanelOpen ? 'hidden' : 'visible',
           }}>
@@ -6616,7 +6627,7 @@ export function ArkmeSurface({
               onClick={toggleRelatedMenu}
             ><ArkmeConversationMoreIcon /></ArkmeConversationHeaderIconButton>
           </div>}
-          {activeConversation && shouldShowPrivateChatActions(authenticated, source?.kind) && relatedMenuOpen && conversationOverlayHost !== null && createPortal(
+          {activeConversation && source?.isBotChat !== true && shouldShowPrivateChatActions(authenticated, source?.kind) && relatedMenuOpen && conversationOverlayHost !== null && createPortal(
             <div style={ARKME_CONVERSATION_SETTINGS_MENU_SCRIM_STYLE} role="presentation" onMouseDown={event => {
               if (event.target === event.currentTarget) setRelatedMenuOpen(false)
             }}>

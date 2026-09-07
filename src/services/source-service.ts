@@ -33,6 +33,7 @@ import { arkmeEmojiTokenSafePrefix, arkmeHasKnownEmojiToken } from '../arkme-emo
 
 export interface ArkmeSourceRefPayload {
   version: 1
+  isBotChat?: boolean
   userId: number
   kind: ArkmeSourceKind
   ownerRef: string
@@ -96,6 +97,22 @@ function integerIdentifierValue(value: unknown): number {
 
 function booleanValue(value: unknown): boolean { return value === true }
 function listValue(value: unknown): unknown[] { return Array.isArray(value) ? value : [] }
+
+function chatBotParticipant(bundle: Record<string, unknown>): Record<string, unknown> | undefined {
+  if (numberValue(objectValue(bundle.session).session_kind) !== 1
+    || integerIdentifierValue(objectValue(bundle.private_counterpart).user_id) > 0) return undefined
+  const participants = listValue(bundle.bot_participants)
+  if (participants.length !== 1) return undefined
+  const participant = objectValue(participants[0])
+  return stringValue(participant.bot_uid).trim() === '' ? undefined : participant
+}
+
+function chatBotDisplayName(bundle: Record<string, unknown>): string | undefined {
+  const participant = chatBotParticipant(bundle)
+  if (participant === undefined || numberValue(participant.binding_state) !== 1
+    || numberValue(participant.status) !== 1) return undefined
+  return stringValue(participant.display_name_snapshot).trim() || undefined
+}
 
 function integerLikeValue(value: unknown): number {
   if (typeof value === 'number' && Number.isFinite(value)) return Math.trunc(value)
@@ -1536,12 +1553,13 @@ export class SourceService {
         ? 'group_chat'
         : sessionKind === 1 || sessionKind === 3 ? 'private_chat' : undefined
       if (uid === '' || kind === undefined) continue
-      const displayName = (kind === 'private_chat'
+      const botName = chatBotDisplayName(bundle)
+      const displayName = botName ?? ((kind === 'private_chat'
         ? stringValue(
           supplement.remark ?? supplement.counterpart_name_snapshot ?? counterpart.display_name_snapshot
           ?? supplement.pending_name ?? counterpart.visible_phone,
         )
-        : stringValue(chatSession.title)).trim() || '未命名会话'
+        : stringValue(chatSession.title)).trim() || '未命名会话')
       const preview = arkmeChatConversationPreview(latestPayload)
       const unreadCount = attention.unreadCount
       const latestRelation = objectValue(latestPreview.relation)
@@ -1568,9 +1586,11 @@ export class SourceService {
           {
             ...(botGroupTarget === undefined ? {} : { botGroupTarget }),
             chatDirectoryMetadata,
+            ...(chatBotParticipant(bundle) === undefined ? {} : { isBotChat: true }),
           },
         ),
         sourceKey: await this.chatDirectorySourceKey(session.userId, uid),
+        ...(chatBotParticipant(bundle) === undefined ? {} : { isBotChat: true }),
         kind,
         displayName,
         ...(kind === 'private_chat' && cached?.avatarRef !== undefined
@@ -1857,6 +1877,7 @@ export class SourceService {
     ownerRef: string,
     displayName: string,
     options: {
+      isBotChat?: boolean
       botGroupTarget?: ArkmeGroupBotBindingTarget
       chatDirectoryMetadata?: ArkmeChatDirectoryMetadata
     } = {},
@@ -1871,6 +1892,7 @@ export class SourceService {
       kind,
       ownerRef,
       displayName,
+      ...(kind === 'private_chat' && options.isBotChat === true ? { isBotChat: true } : {}),
       ...(botGroupTarget === undefined ? {} : { botGroupTarget }),
       ...(chatDirectoryMetadata === undefined ? {} : {
         ...(chatDirectoryMetadata.subjectUid === undefined ? {} : {
@@ -1907,6 +1929,7 @@ export class SourceService {
       userId: numberValue(parsed.userId),
       kind: isSourceKind(kind) ? kind : 'default_category',
       ownerRef: stringValue(parsed.ownerRef).trim(),
+      ...(kind === 'private_chat' && parsed.isBotChat === true ? { isBotChat: true } : {}),
       displayName: isSourceKind(kind) && kind === 'default_category' ? '未分类' : stringValue(parsed.displayName).trim(),
       ...(kind === 'group_chat' ? (() => {
         const botGroupTarget = sanitizeGroupBotBindingTarget(parsed.botGroupTarget)
@@ -1939,6 +1962,7 @@ export class SourceService {
         source.ownerRef,
         source.displayName,
         {
+          ...(source.isBotChat === true ? { isBotChat: true } : {}),
           ...(source.botGroupTarget === undefined ? {} : { botGroupTarget: source.botGroupTarget }),
           chatDirectoryMetadata: {
             ...(source.sidebarSubjectUid === undefined ? {} : { subjectUid: source.sidebarSubjectUid }),
@@ -1950,6 +1974,7 @@ export class SourceService {
       ...(sourceKey === undefined ? {} : { sourceKey }),
       kind: source.kind,
       displayName: source.displayName,
+      ...(source.isBotChat === true ? { isBotChat: true } : {}),
       activeAtMillis: source.conversationListActivityAtMillis ?? 0,
       unreadCount: 0,
       ...((source.conversationListLatestSequence ?? 0) > 0
@@ -1977,12 +2002,13 @@ export class SourceService {
       ? 'group_chat'
       : sessionKind === 1 || sessionKind === 3 ? 'private_chat' : undefined
     if (uid === '' || kind === undefined) throw new Error('invalid chat display snapshot')
-    const displayName = (kind === 'private_chat'
+    const botName = chatBotDisplayName(bundle)
+    const displayName = botName ?? ((kind === 'private_chat'
       ? stringValue(
         supplement.remark ?? supplement.counterpart_name_snapshot ?? counterpart.display_name_snapshot
         ?? supplement.pending_name ?? counterpart.visible_phone,
       )
-      : stringValue(chatSession.title)).trim() || cached?.displayName || '未命名会话'
+      : stringValue(chatSession.title)).trim() || cached?.displayName || '未命名会话')
     const latestItem = [...timelineItems].sort((left, right) => (right.sequence ?? 0) - (left.sequence ?? 0))[0]
     const latestPreview = latestItem === undefined
       ? cached?.latestPreview
@@ -2015,9 +2041,11 @@ export class SourceService {
         {
           ...(botGroupTarget === undefined ? {} : { botGroupTarget }),
           chatDirectoryMetadata,
+          ...(chatBotParticipant(bundle) === undefined ? {} : { isBotChat: true }),
         },
       ),
       sourceKey: await this.chatDirectorySourceKey(session.userId, uid),
+      ...(chatBotParticipant(bundle) === undefined ? {} : { isBotChat: true }),
       kind,
       displayName,
       ...(cached?.avatarRef === undefined ? {} : { avatarRef: cached.avatarRef }),

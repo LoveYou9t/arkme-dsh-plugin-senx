@@ -498,6 +498,8 @@ export interface ArkmeCreateFileAssetRecordResult {
 export type ArkmeBotProvider = 'openclaw' | 'webhook'
 export type ArkmeBotStatus = 'online' | 'offline' | 'unknown'
 export type ArkmeBotConversationProjection = 'record' | 'chat' | 'none'
+export const ARKME_CHAT_BOT_DIRECT_OWNER = 'jotmo-chat' as const
+export type ArkmeChatBotDirectOwner = typeof ARKME_CHAT_BOT_DIRECT_OWNER
 
 export interface ArkmeBotSummary {
   botRef: string
@@ -1361,6 +1363,8 @@ export interface ArkmeGroupAvatarPresentation {
 
 export interface ArkmeSourceItem {
   sourceRef: string
+  /** Chat-owned Bot participant presentation; never grants Bot management authority. */
+  isBotChat?: boolean
   /** Stable Host-projected directory identity. Consumers must treat it as opaque when present. */
   sourceKey?: string
   /** Private-chat peer identity when this source is a one-to-one chat. */
