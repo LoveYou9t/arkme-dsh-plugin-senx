@@ -232,13 +232,63 @@ describe('ChatRealtimeService', () => {
     service.dispose()
   })
 
+  it('binds the first hint from a switched account to the new owner generation', () => {
+    const sessions: ArkmeSessionStore = {
+      async read() { return { userId: 10002, accessToken: 'access', refreshToken: 'refresh' } },
+      async write() {}, async delete() {},
+    }
+    const runtime = new ServiceRuntime(config, sessions, {} as StateStore)
+    const source = new SourceService(runtime, new ProfileService(runtime), {
+      async summary() { return { recordCount: 0, wordsCount: 0, totalSec: 0 } }, recordItem() { return undefined },
+    })
+    const service = new ChatRealtimeService(runtime, source, { async chatTimelineItems() { return [] } })
+    vi.spyOn(service as unknown as {
+      reconcileChatNotificationBaseline(generation: number, userId?: number): Promise<void>
+    }, 'reconcileChatNotificationBaseline').mockResolvedValue()
+    vi.spyOn(service, 'refreshAttentionSummary').mockResolvedValue()
+    vi.spyOn(service, 'invalidateRecordProjection').mockResolvedValue()
+    const internals = service as unknown as {
+      attentionOwnerUserId: number | undefined
+      attentionOwnerGeneration: number
+      pendingChatProjections: Map<string, PendingChatProjection>
+    }
+    internals.attentionOwnerUserId = 10001
+    const connection = new AbortController()
+    const connectionStartedAtMillis = Date.now()
+
+    service.handleChatRealtimeNotice({
+      cause: 'reconcile',
+      state: { revision: 1, connected: true, connectionGeneration: 2 },
+      connectionUserId: 10002,
+      connectionSignal: connection.signal,
+      connectionStartedAtMillis,
+    })
+    service.handleChatRealtimeNotice({
+      cause: 'chat-hint',
+      state: { revision: 2, connected: true, connectionGeneration: 2 },
+      connectionUserId: 10002,
+      connectionSignal: connection.signal,
+      connectionStartedAtMillis,
+      hint: {
+        eventUid: 'new-account-event', chatSessionUid: 'new-account-chat', relationUid: 'new-account-relation',
+        latestSequence: 1, senderUserId: 20002, eventAtMillis: connectionStartedAtMillis + 1,
+      },
+    })
+
+    const candidate = internals.pendingChatProjections.get('new-account-chat')?.notificationHints[0]
+    expect(internals.attentionOwnerUserId).toBe(10002)
+    expect(internals.attentionOwnerGeneration).toBe(1)
+    expect(candidate).toMatchObject({ accountUserId: 10002, accountOwnerGeneration: 1, baselinePassed: true })
+    service.dispose()
+  })
+
   it('bounds native notification delivery at three while preserving ordered Browser fallbacks', async () => {
     const sessions: ArkmeSessionStore = {
       async read() { return { userId: 10001, accessToken: 'access', refreshToken: 'refresh' } },
       async write() {}, async delete() {},
     }
     const chatSessionCount = 10
-    const notificationsPerSession = 250
+    const notificationsPerSession = 50
     const notificationCount = chatSessionCount * notificationsPerSession
     const bundles = Array.from({ length: chatSessionCount }, (_, index) => ({
       session: {
@@ -334,9 +384,13 @@ describe('ChatRealtimeService', () => {
     vi.spyOn(service, 'refreshAttentionSummary').mockResolvedValue()
     const internals = service as unknown as {
       notificationBaselineGeneration: number
+      notificationBaselineUserId: number | undefined
+      notificationBaselineOwnerGeneration: number
       chatRealtime: { state(): { revision: number; connected: boolean; connectionGeneration: number } }
     }
     internals.notificationBaselineGeneration = 7
+    internals.notificationBaselineUserId = 10001
+    internals.notificationBaselineOwnerGeneration = 0
     vi.spyOn(internals.chatRealtime, 'state').mockReturnValue({
       revision: 1, connected: true, connectionGeneration: 7,
     })
@@ -377,6 +431,114 @@ describe('ChatRealtimeService', () => {
     expect(events.find(event => event.notification?.eventUid === 'event-1')?.notification?.body)
       .toBe(nativeBodies.get('event-1'))
     expect(nativeBodies.get('event-2')).toBe('😠'.repeat(120))
+    service.dispose()
+  })
+
+  it('retries one resolved native notification without refetching its source or timeline', async () => {
+    const sessions: ArkmeSessionStore = {
+      async read() { return { userId: 10001, accessToken: 'access', refreshToken: 'refresh' } },
+      async write() {}, async delete() {},
+    }
+    let displayRequests = 0
+    let tailRequests = 0
+    const fetchImpl = vi.fn<typeof fetch>(async input => {
+      const url = String(input)
+      if (url.endsWith('/api/v1/chats/display-snapshots')) {
+        displayRequests += 1
+        return new Response(JSON.stringify({ code: 200, data: { items: [{
+          session: { chat_session_uid: 'chat-1', session_kind: 1, last_seq: 1, last_active_at: Date.now() },
+          private_counterpart: { display_name_snapshot: '小林' },
+          current_policy: { mute_state: 1, notify_state: 1 },
+          unread_snapshot: { unread_count: 1, session_last_seq: 1 },
+        }] } }))
+      }
+      if (url.endsWith('/api/v1/chat/timeline/tail')) {
+        tailRequests += 1
+        return new Response(JSON.stringify({ code: 200, data: { items: [{ relation: {
+          record_uid: 'message-1', rel_uid: 'relation-1', sender_user_id: 20002, seq: 1,
+        } }] } }))
+      }
+      throw new Error(`unexpected URL ${url}`)
+    })
+    const runtime = new ServiceRuntime(config, sessions, {
+      async uniqueCode() { return 'device-secret' },
+    } as StateStore, fetchImpl)
+    const source = new SourceService(runtime, new ProfileService(runtime), {
+      async summary() { return { recordCount: 0, wordsCount: 0, totalSec: 0 } }, recordItem() { return undefined },
+    })
+    const nativeAttempts: string[] = []
+    const nativeAttention: ArkmeNativeAttentionDispatcher = {
+      async showNotification(payload) {
+        nativeAttempts.push(payload.idempotencyKey)
+        return nativeAttempts.length === 1
+          ? { fallbackToBrowser: false, outcome: 'rate-limited' }
+          : { fallbackToBrowser: false, outcome: 'accepted' }
+      },
+      async applyBadgeSummary() { return true },
+    }
+    const service = new ChatRealtimeService(runtime, source, {
+      async chatTimelineItems() {
+        return [{
+          itemUid: 'message-1', senderName: '小林', isMe: false, sendAtMillis: Date.now(),
+          title: '', textContent: '重试通知', status: 1, sequence: 1,
+        }]
+      },
+    }, nativeAttention)
+    vi.spyOn(service, 'refreshAttentionSummary').mockResolvedValue()
+    const now = Date.now()
+    service.scheduleChatSessionProjection('chat-1', 1, {
+      hint: {
+        eventUid: 'event-native-retry', chatSessionUid: 'chat-1', relationUid: 'relation-1',
+        latestSequence: 1, senderUserId: 20002, eventAtMillis: now,
+      },
+      connectionGeneration: 1,
+      attempts: 0,
+      receivedAtMillis: now,
+      accountUserId: 10001,
+      accountOwnerGeneration: 0,
+      baselinePassed: true,
+    })
+
+    await vi.waitFor(() => { expect(nativeAttempts).toHaveLength(2) }, { timeout: 2_000 })
+    expect(nativeAttempts).toEqual(['event-native-retry', 'event-native-retry'])
+    expect(displayRequests).toBe(1)
+    expect(tailRequests).toBe(1)
+    service.dispose()
+  })
+
+  it('limits one session to fifty unresolved notification hints per timeline read', async () => {
+    const sessions: ArkmeSessionStore = {
+      async read() { return { userId: 10001, accessToken: 'access', refreshToken: 'refresh' } },
+      async write() {}, async delete() {},
+    }
+    const runtime = new ServiceRuntime(config, sessions, {} as StateStore)
+    const source = new SourceService(runtime, new ProfileService(runtime), {
+      async summary() { return { recordCount: 0, wordsCount: 0, totalSec: 0 } }, recordItem() { return undefined },
+    })
+    const service = new ChatRealtimeService(runtime, source, { async chatTimelineItems() { return [] } })
+    const batchSizes: number[] = []
+    vi.spyOn(service, 'refreshChatSessionProjectionBatch').mockImplementation(async pending => {
+      batchSizes.push(pending[0]?.[1].notificationHints.length ?? 0)
+      return []
+    })
+    const now = Date.now()
+    for (let sequence = 1; sequence <= 51; sequence += 1) {
+      service.scheduleChatSessionProjection('chat-1', sequence, {
+        hint: {
+          eventUid: `event-${String(sequence)}`, chatSessionUid: 'chat-1', relationUid: `relation-${String(sequence)}`,
+          latestSequence: sequence, senderUserId: 20002, eventAtMillis: now,
+        },
+        connectionGeneration: 1,
+        attempts: 0,
+        receivedAtMillis: now,
+        accountUserId: 10001,
+        accountOwnerGeneration: 0,
+        baselinePassed: true,
+      })
+    }
+
+    await vi.waitFor(() => { expect(batchSizes).toHaveLength(2) }, { timeout: 2_000 })
+    expect(batchSizes).toEqual([50, 1])
     service.dispose()
   })
 
