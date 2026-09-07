@@ -1,3 +1,5 @@
+import { arkmeMarkdownPlainText } from '../markdown.js'
+import { ArkmeMarkdownBody } from './ArkmeMarkdownBody.js'
 import { useEffect, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from 'react'
 import { createPortal } from 'react-dom'
 import { ArkmeFileIcon } from './ArkmeFileIcon.js'
@@ -156,12 +158,18 @@ function ArkmeMessageCopyLink({
 
 function ArkmeMessageRichText({
   text,
+  textFormat,
+  textStyle,
+  collapse = false,
   highlightMentions,
   linkLabelMode,
   shareWebsite,
   onMessageCopyLinkOpen,
 }: {
   text: string
+  textFormat?: 'plain' | 'markdown'
+  textStyle?: Pick<CSSProperties, 'fontSize' | 'lineHeight'> | undefined
+  collapse?: boolean
   highlightMentions: boolean
   linkLabelMode: ArkmeLinkLabelMode
   shareWebsite?: string
@@ -178,6 +186,7 @@ function ArkmeMessageRichText({
       {...(onMessageCopyLinkOpen === undefined ? {} : { onMessageCopyLinkOpen })}
     />
   }
+  if (textFormat === 'markdown') return <ArkmeMarkdownBody text={text} textStyle={textStyle} highlightMentions={highlightMentions} collapse={collapse} renderLink={renderLink} />
   return <ArkmeRichText text={text} highlightMentions={highlightMentions} linkLabelMode={linkLabelMode} renderLink={renderLink} />
 }
 
@@ -222,6 +231,7 @@ function shouldCollapseText(value: string): boolean {
 
 function LongText({
   text,
+  textFormat,
   highlightMentions = false,
   collapseText = true,
   expanded = false,
@@ -230,6 +240,7 @@ function LongText({
   onMessageCopyLinkOpen,
 }: {
   text: string
+  textFormat?: 'plain' | 'markdown'
   highlightMentions?: boolean
   collapseText?: boolean
   expanded?: boolean
@@ -241,11 +252,15 @@ function LongText({
   const [collapsed, setCollapsed] = useState(collapsible)
   const content = <ArkmeMessageRichText
     text={text}
+    textStyle={{ fontSize: styles.text?.fontSize, lineHeight: expanded ? 1.7 : styles.text?.lineHeight }}
+    {...(textFormat === undefined ? {} : { textFormat })}
+    collapse={collapseText && !expanded}
     highlightMentions={highlightMentions}
     linkLabelMode={linkLabelMode}
     {...(shareWebsite === undefined ? {} : { shareWebsite })}
     {...(onMessageCopyLinkOpen === undefined ? {} : { onMessageCopyLinkOpen })}
   />
+  if (textFormat === 'markdown') return content
   if (!collapsible) return <p style={{ ...styles.text, ...(expanded ? { width: '100%', lineHeight: 1.7 } : {}) }}>{content}</p>
   return <div style={styles.textFrame} data-arkme-text-collapsible="true">
     <p style={{ ...styles.text, ...(collapsed ? styles.collapsedText : {}) }}>{content}</p>
@@ -710,7 +725,7 @@ export function ArkmeMessageContent({ item, sourceRef, onLongArticleUpdated, hig
   if (item.forwardRecords !== undefined) {
     const itemLines = item.forwardRecords.items.flatMap(value => {
       if (value.segments?.length) return value.segments.map(segment => `${segment.speakerName}：${segment.textContent || '语音片段'}`)
-      const summary = value.textContent || value.title || value.contentLabel || value.contentBlocks?.[0]?.fileName || '非文本内容'
+      const summary = (value.textFormat === 'markdown' ? arkmeMarkdownPlainText(value.textContent) : value.textContent) || value.title || value.contentLabel || value.contentBlocks?.[0]?.fileName || '非文本内容'
       return [`${value.senderName}：${summary}`]
     })
     const previewLines = (itemLines.length > 0 ? itemLines : item.forwardRecords.summaryLines).slice(0, 3)
@@ -770,6 +785,7 @@ export function ArkmeMessageContent({ item, sourceRef, onLongArticleUpdated, hig
     collapsible={withTranscript && presentation !== 'detail' && collapseText && shouldCollapseText(text)}
   >{withTranscript && text !== '' ? <ArkmeMessageRichText
       text={text}
+      {...(item.textFormat === undefined ? {} : { textFormat: item.textFormat })}
       highlightMentions={highlightMentions}
       linkLabelMode={linkLabelMode}
       {...(shareWebsite === undefined ? {} : { shareWebsite })}
@@ -804,6 +820,7 @@ export function ArkmeMessageContent({ item, sourceRef, onLongArticleUpdated, hig
         {isArticle && presentation === 'bubble' ? <ArticleCard title={item.title} text={item.textContent} onOpen={() => { setArticleOpen(true) }} /> : <>
           {isArticle && item.title && <h3 style={{ margin: 0, fontSize: 14, lineHeight: 1.7 }}><ArkmeRichText text={item.title} presentation="preview" /></h3>}
           {text !== '' && <LongText
+            textFormat={item.textFormat ?? 'plain'}
             text={text}
             highlightMentions={highlightMentions}
             collapseText={collapseText}
@@ -849,6 +866,7 @@ export function ArkmeRecordDetailContent({ item, sourceRef, showOriginal = false
   if (item.contentBlocks?.some(block => block.kind === 'audio') === true) {
     return <ArkmeMessageContent item={{ ...item, textContent: text }} {...(sourceRef === undefined ? {} : { sourceRef })} collapseText={false} presentation="detail" highlightMentions />
   }
+  if (item.textFormat === 'markdown') return <ArkmeMarkdownBody text={text} textStyle={{ fontSize: 16, lineHeight: '26px' }} />
   return <p style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontSize: 16, lineHeight: '26px' }}><ArkmeRichText text={text || item.title || '非文本内容'} highlightMentions linkLabelMode="raw" /></p>
 }
 

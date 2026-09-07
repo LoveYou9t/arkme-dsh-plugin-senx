@@ -377,6 +377,7 @@ export interface ArkmeSelfRecordItem {
   sendAtMillis: number
   title: string
   textContent: string
+  textFormat?: 'plain' | 'markdown'
   templateKind: number
   status: number
   version: number
@@ -437,6 +438,7 @@ export interface ArkmeCalendarRecordItem {
   accessState: ArkmeCalendarContentAccessState
   title: string
   textContent: string
+  textFormat?: 'plain' | 'markdown'
   preview: string
   topicTitle?: string
   sourceKind: 'self' | 'topic' | 'chat' | 'unknown'
@@ -462,6 +464,7 @@ export interface ArkmeCalendarDayRecordPage {
 export interface ArkmePendingWrite {
   recordUid: string
   textContent: string
+  textFormat?: 'plain' | 'markdown'
   createdAtMillis: number
   sendAtMillis: number
   attempts: number
@@ -635,6 +638,7 @@ export interface ArkmeWorldRecordItem {
   authorName: string
   headline: string
   textContent: string
+  textFormat?: 'plain' | 'markdown'
   tags: string[]
   templateKind: number
   createdAtMillis: number
@@ -688,6 +692,7 @@ export interface ArkmeWorldFeedItem {
   avatarFallback?: ArkmeWorldAvatarFallback
   headline: string
   textContent: string
+  textFormat?: 'plain' | 'markdown'
   tags: string[]
   templateKind: number
   createdAtMillis: number
@@ -771,6 +776,7 @@ export interface ArkmeWorldInteractionItem {
   avatarRef?: string
   avatarFallback?: ArkmeWorldAvatarFallback
   textContent: string
+  textFormat?: 'plain' | 'markdown'
   createdAtMillis: number
   publishedAtMillis: number
   imageCount: number
@@ -902,6 +908,7 @@ export interface ArkmeWorldPublishFileAsset {
 export interface ArkmeWorldPublishTextInput {
   clientMutationId: string
   textContent: string
+  textFormat?: 'plain' | 'markdown'
 }
 
 export interface ArkmeWorldPublishFileAssetsInput extends ArkmeWorldPublishTextInput {
@@ -984,6 +991,7 @@ export interface ArkmeSearchRecordItem {
   sendAtMillis: number
   title: string
   textContent: string
+  textFormat?: 'plain' | 'markdown'
   snippet: string
   nickname?: string
   templateKind?: number
@@ -1172,6 +1180,7 @@ export interface ArkmeProviderCapabilities {
     userBanManagement?: true
     /** Group owners can withdraw peer messages, remove members, and manage future join restrictions. */
     groupOwnerGovernance?: true
+    markdownQuickNotes?: true
     richContentRead: boolean
     richContentSend: boolean
     /** Explicit text background-sound descriptors are supported by direct and durable rich sends. */
@@ -1513,6 +1522,7 @@ export interface ArkmeMessageSnapshotBackgroundSoundPlayback {
 export interface ArkmeMessageSnapshotDetail {
   itemUid: string
   textContent: string
+  textFormat?: 'plain' | 'markdown'
   recordDurationMillis?: number
   editDurationMillis?: number
   viewTimes?: number
@@ -1554,6 +1564,7 @@ export interface ArkmeTimelineItem {
   sendAtMillis: number
   title: string
   textContent: string
+  textFormat?: 'plain' | 'markdown'
   /** Safe rich preview retained from raw Chat metadata even when media delivery URLs are unavailable. */
   conversationPreview?: string
   status: number
@@ -1592,6 +1603,7 @@ export interface ArkmeTimelineExtensionParent {
   senderName: string
   title: string
   textContent: string
+  textFormat?: 'plain' | 'markdown'
   /** Authoritative record owner required by Chat's exact around lookup. */
   recordOwnerUserId?: number
   sequence?: number
@@ -1627,6 +1639,7 @@ export interface ArkmeRelatedQuickNoteDetail {
   sendAtMillis: number
   title: string
   textContent: string
+  textFormat?: 'plain' | 'markdown'
   status: number
   recordVersion?: number
   aiPolish?: ArkmeTimelineAiPolish
@@ -1699,6 +1712,7 @@ export interface ArkmeForwardTranscriptSegment {
   speakerNumber?: number
   speakerName: string
   textContent: string
+  textFormat?: 'plain' | 'markdown'
   /** Offsets in the forwarded recording, not wall-clock timestamps. */
   startMillis: number
   endMillis: number
@@ -1713,6 +1727,7 @@ export interface ArkmeForwardRecordPreviewItem {
   sendAtMillis: number
   title: string
   textContent: string
+  textFormat?: 'plain' | 'markdown'
   contentLabel?: string
   sourceType?: 'record' | 'chat_record' | 'long_recording_segments' | 'agent' | 'ai_letter' | 'unknown'
   segments?: ArkmeForwardTranscriptSegment[]
@@ -1891,6 +1906,7 @@ export type ArkmeFavoriteStickerManageAction = 'move-to-front' | 'delete'
 export interface ArkmeRichSendInput {
   title?: string
   textContent?: string
+  textFormat?: 'plain' | 'markdown'
   displayKind?: 0 | 1
   thinkingDurationMillis?: number
   /** Time spent composing this record before it was sent. */
@@ -1923,6 +1939,7 @@ export interface ArkmeLongArticleDetail {
   itemUid: string
   title: string
   textContent: string
+  textFormat?: 'plain' | 'markdown'
   sendAtMillis: number
   updateAtMillis: number
   recordDurationMillis: number
@@ -1937,6 +1954,7 @@ export interface ArkmeLongArticleDraft {
   itemUid?: string
   title: string
   textContent: string
+  textFormat?: 'plain' | 'markdown'
   durationMillis: number
   updatedAtMillis: number
 }
@@ -2020,6 +2038,7 @@ export interface ArkmeMessageCopyLinkSnapshotItem {
   senderAvatarUrl?: string
   title: string
   textContent: string
+  textFormat?: 'plain' | 'markdown'
   sendAtMillis: number
   templateKind: number
   displayKind: number
@@ -2130,6 +2149,7 @@ export interface ArkmeInterwovenDetail {
   occurredAtMillis: number
   title: string
   textContent: string
+  textFormat?: 'plain' | 'markdown'
   status: number
   degraded: boolean
 }

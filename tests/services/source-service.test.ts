@@ -328,6 +328,37 @@ describe('SourceService', () => {
     expect(arkmeChatConversationPreview({ text_content: `${prefix}😠尾` })).toBe(`${prefix}😠`)
   })
 
+  it('combines Markdown plain-text summaries with rich media preview markers', () => {
+    expect(arkmeChatConversationPreview({
+      text_content: '## 发布\n\n**正文**',
+      content_payload: {
+        text_format: 'markdown',
+        media_refs: [{ file_type: 1, file_name: 'photo.png' }],
+      },
+    })).toBe('[图片]发布 正文')
+    expect(arkmeChatConversationPreview({
+      record: {
+        summary: '旧摘要',
+        payload: {
+          text_content: '**新的**\n\n- 内容', text_format: 'markdown',
+          media_refs: [{ file_type: 6, file_name: 'contract.pdf' }],
+        },
+      },
+    })).toBe('[文件]新的 内容')
+  })
+
+  it('keeps Markdown summaries in legacy timeline media previews', () => {
+    expect(arkmeTimelineConversationPreview({
+      itemUid: 'markdown-image', title: '', textContent: '# 标题\n\n**正文**', textFormat: 'markdown',
+      sendAtMillis: 1, senderName: '我', isMe: true, status: 1, displayKind: 0,
+      contentBlocks: [{ kind: 'image', mediaRef: 'image-ref', sortOrder: 0 }],
+    })).toBe('[图片]标题 正文')
+  })
+
+  it('does not interpret plain-text preview punctuation as Markdown', () => {
+    expect(arkmeChatConversationPreview({ text_content: '**原文**', text_format: 'plain' })).toBe('**原文**')
+  })
+
   it('keeps hydrated and legacy timeline preview paths on the shared owner', () => {
     expect(arkmeTimelineConversationPreview({
       itemUid: 'rich-item', title: '', textContent: '正文', sendAtMillis: 1, senderName: '我', isMe: true,

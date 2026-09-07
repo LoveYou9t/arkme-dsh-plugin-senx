@@ -12,7 +12,7 @@ export interface ArkmeVisibleTextRun {
   text: string
 }
 
-export function arkmeVisibleMentionRuns(text: string): ArkmeVisibleTextRun[] {
+export function arkmeVisibleMentionRuns(text: string, highlightTags = true): ArkmeVisibleTextRun[] {
   const runs: ArkmeVisibleTextRun[] = []
   const pattern = /(^|[\s([{（【])(@[^\s@,，.。;；:：!！?？、)\]}）】]+)/gmu
   let cursor = 0
@@ -27,7 +27,7 @@ export function arkmeVisibleMentionRuns(text: string): ArkmeVisibleTextRun[] {
   if (cursor < text.length) runs.push({ kind: 'text', text: text.slice(cursor) })
   const mentionRuns = runs.length === 0 && text !== '' ? [{ kind: 'text' as const, text }] : runs
   return mentionRuns.flatMap(run => {
-    if (run.kind !== 'text') return [run]
+    if (run.kind !== 'text' || !highlightTags) return [run]
     const tagRuns: ArkmeVisibleTextRun[] = []
     let tagCursor = 0
     for (const tag of arkmeHashTagRanges(run.text)) {
@@ -44,12 +44,13 @@ const mentionStyle: CSSProperties = { color: 'var(--dsw-alias-state-business-pri
 const tagStyle: CSSProperties = { ...mentionStyle, fontWeight: 500 }
 const clickableTagStyle: CSSProperties = { ...tagStyle, cursor: 'pointer' }
 
-function ArkmeMentionText({ text, interactive = true, onTagClick = tagText => { arkmeUi.showTagSearch(tagText) } }: {
+export function ArkmeMentionText({ text, interactive = true, highlightTags = true, onTagClick = tagText => { arkmeUi.showTagSearch(tagText) } }: {
   text: string
   interactive?: boolean
+  highlightTags?: boolean
   onTagClick?: (tagText: string) => void
 }) {
-  return <>{arkmeVisibleMentionRuns(text).map((run, index) => run.kind === 'tag' && interactive
+  return <>{arkmeVisibleMentionRuns(text, highlightTags).map((run, index) => run.kind === 'tag' && interactive
     ? <span
       key={`${String(index)}:${run.kind}:${run.text}`}
       role="link"
@@ -104,10 +105,11 @@ function copyRichText(event: ClipboardEvent<HTMLSpanElement>) {
   event.preventDefault()
 }
 
-export function ArkmeRichText({ text, presentation = 'body', highlightMentions = false, renderLink, emojiSize, linkLabelMode = 'resolved', onTagClick }: {
+export function ArkmeRichText({ text, presentation = 'body', highlightMentions = false, highlightTags = true, renderLink, emojiSize, linkLabelMode = 'resolved', onTagClick }: {
   text: string
   presentation?: 'body' | 'preview'
   highlightMentions?: boolean
+  highlightTags?: boolean
   renderLink?: ArkmeLinkRenderer
   emojiSize?: number
   linkLabelMode?: ArkmeLinkLabelMode
@@ -120,7 +122,7 @@ export function ArkmeRichText({ text, presentation = 'body', highlightMentions =
       size={emojiSize ?? (presentation === 'preview' ? '1.25em' : 22)}
     />
     : <Fragment key={`${String(index)}:text`}>{highlightMentions
-      ? <ArkmeMentionText text={run.text} interactive={presentation === 'body'} {...(onTagClick === undefined ? {} : { onTagClick })} />
+      ? <ArkmeMentionText text={run.text} highlightTags={highlightTags} interactive={presentation === 'body'} {...(onTagClick === undefined ? {} : { onTagClick })} />
       : run.text}</Fragment>)
   return <span onCopy={copyRichText}><ArkmeLinkText
     text={text}

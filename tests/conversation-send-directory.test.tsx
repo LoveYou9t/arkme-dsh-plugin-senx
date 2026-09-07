@@ -24,12 +24,20 @@ vi.mock('react-dom', () => ({
   createPortal: (children: unknown) => children,
 }))
 
+// React test renderer has no editor DOM. Keep Sidebar/store transitions real;
+// the Markdown composer DOM suite exercises Tiptap itself.
+vi.mock('@tiptap/react', async importOriginal => {
+  const actual = await importOriginal<typeof import('@tiptap/react')>()
+  return { ...actual, useEditor: () => null }
+})
+
 import {
   ArkmeConfirmedSendRetentionOwner, ArkmeSurface, ArkmeTimelineMessageHeader, arkmeBackgroundSoundCaptureFailureFeedback,
   arkmeCanReeditTimelineMessage, arkmeGroupMentionCandidates, arkmeRealtimeDeltaCoversTimelineGap,
 } from '../src/client/ArkmeSidebar.js'
 import { ArkmeClientError } from '../src/client/api.js'
 import { ArkmeRichComposerInput } from '../src/client/ArkmeRichComposerInput.js'
+import { ArkmeMarkdownComposerInput } from '../src/client/ArkmeMarkdownComposerInput.js'
 import { ArkmeMemberProfileCard } from '../src/client/ArkmeChatMemberActions.js'
 import { arkmeAuthStore } from '../src/client/auth-store.js'
 import { arkmeChatDirectory, arkmeChatTimelineDelta } from '../src/client/chat-directory-store.js'
@@ -328,15 +336,16 @@ describe('conversation send directory projection', () => {
     expect(renderer!.root.findByType(ArkmeRichComposerInput).props.value).toBe('第二条原文')
   })
 
-  it('saves a changed re-edit draft on close and restores the normal composer draft', async () => {
+  it.each(['plain', 'markdown'] as const)('saves a changed %s re-edit draft on close and restores the normal composer draft', async textFormat => {
+    const nextText = textFormat === 'markdown' ? '    原正文\n' : '未提交的重新编辑'
     timeline = [{
       itemUid: 'record-reedit-close', messageActionRef: 'opaque-action', senderName: '我', isMe: true,
-      sendAtMillis: 1, title: '', textContent: '原正文', status: 1, templateKind: 1, version: 3,
+      sendAtMillis: 1, title: '', textContent: '原正文', textFormat, status: 1, templateKind: 1, version: 3,
     }]
     const baseCall = mocks.callArkme.getMockImplementation()!
     mocks.callArkme.mockImplementation(async (operation: string, params?: Record<string, unknown>, signal?: AbortSignal) => {
       if (operation === 'source.record-reedit.detail') return {
-        sourceRef: 'source-harness', itemUid: 'record-reedit-close', title: '', textContent: '原正文',
+        sourceRef: 'source-harness', itemUid: 'record-reedit-close', title: '', textContent: '原正文', textFormat,
         sendAtMillis: 1, templateKind: 1, displayKind: 0, version: 3,
         attachmentCount: 0, maxTextLength: 4000,
       }
@@ -344,7 +353,11 @@ describe('conversation send directory projection', () => {
       return await baseCall(operation, params, signal)
     })
     const normalDraftKey = arkmeSourceComposerDraftKey(42, target)
-    arkmeComposerDraftStore.setText(normalDraftKey, '普通消息草稿')
+    const normalMarkdown = {
+      document: { type: 'doc', content: [{ type: 'heading', attrs: { level: 1 }, content: [{ type: 'text', text: '普通消息草稿' }] }] },
+      source: '# 普通消息草稿', mentions: [],
+    }
+    arkmeComposerDraftStore.setMarkdown(normalDraftKey, normalMarkdown, '普通消息草稿', [], [])
     await act(async () => {
       renderer = create(<ArkmeSurface productChrome={false} productNavigation={false} />, {
         createNodeMock: element => element.props.className === 'arkme-conversation-panel'
@@ -358,17 +371,20 @@ describe('conversation send directory projection', () => {
     const reedit = renderer!.root.findByProps({ 'aria-label': '消息操作' }).findAllByProps({ role: 'menuitem' })
       .find(button => button.findAllByType('span').some(span => span.children.includes('重新编辑')))!
     await act(async () => { reedit.props.onClick(); await Promise.resolve(); await Promise.resolve() })
-    act(() => { renderer!.root.findByType(ArkmeRichComposerInput).props.onTextChange('未提交的重新编辑') })
+    expect(renderer!.root.findByProps({ 'data-arkme-primary-composer': 'true' }).findAllByType(ArkmeMarkdownComposerInput)).toHaveLength(0)
+    act(() => { renderer!.root.findByType(ArkmeRichComposerInput).props.onTextChange(nextText) })
     await act(async () => {
       renderer!.root.findByProps({ 'aria-label': '关闭重新编辑' }).props.onClick()
       await Promise.resolve(); await Promise.resolve()
     })
 
     expect(mocks.callArkme).toHaveBeenCalledWith('source.record-reedit.draft.put', {
-      sourceRef: 'source-harness', itemUid: 'record-reedit-close', newText: '未提交的重新编辑', expectedVersion: 3,
+      sourceRef: 'source-harness', itemUid: 'record-reedit-close', newText: nextText, expectedVersion: 3,
     })
     expect(renderer!.root.findAllByProps({ 'data-arkme-composer-reedit-target': 'true' })).toHaveLength(0)
     expect(renderer!.root.findByType(ArkmeRichComposerInput).props.value).toBe('普通消息草稿')
+    expect(renderer!.root.findByProps({ 'data-arkme-primary-composer': 'true' }).findByType(ArkmeMarkdownComposerInput)).toBeDefined()
+    expect(arkmeComposerDraftStore.get(normalDraftKey).markdown).toEqual(normalMarkdown)
   })
 
   it('keeps an unsaved re-edit candidate in memory when saving during a source switch fails', async () => {
@@ -411,7 +427,8 @@ describe('conversation send directory projection', () => {
     expect(renderer!.root.findByProps({ role: 'alert' }).children.join('')).toContain('草稿保存失败')
   })
 
-  it('commits re-edit through the existing send button and highlights the updated row for three seconds', async () => {
+  it.each(['plain', 'markdown'] as const)('commits %s re-edit through the existing send button and highlights the updated row for three seconds', async textFormat => {
+    const nextText = textFormat === 'markdown' ? '    更新后的正文\n' : '更新后的正文'
     vi.useFakeTimers()
     Object.assign(window, {
       setTimeout: globalThis.setTimeout,
@@ -420,12 +437,12 @@ describe('conversation send directory projection', () => {
     try {
       timeline = [{
         itemUid: 'record-reedit-commit', messageActionRef: 'opaque-action', senderName: '我', isMe: true,
-        sendAtMillis: 1, title: '', textContent: '原正文', status: 1, templateKind: 1, version: 3,
+        sendAtMillis: 1, title: '', textContent: '原正文', textFormat, status: 1, templateKind: 1, version: 3,
       }]
       const baseCall = mocks.callArkme.getMockImplementation()!
       mocks.callArkme.mockImplementation(async (operation: string, params?: Record<string, unknown>, signal?: AbortSignal) => {
         if (operation === 'source.record-reedit.detail') return {
-          sourceRef: 'source-harness', itemUid: 'record-reedit-commit', title: '', textContent: '原正文',
+          sourceRef: 'source-harness', itemUid: 'record-reedit-commit', title: '', textContent: '原正文', textFormat,
           sendAtMillis: 1, templateKind: 1, displayKind: 0, version: 3,
           attachmentCount: 0, maxTextLength: 4000,
         }
@@ -448,17 +465,17 @@ describe('conversation send directory projection', () => {
       const reedit = renderer!.root.findByProps({ 'aria-label': '消息操作' }).findAllByProps({ role: 'menuitem' })
         .find(button => button.findAllByType('span').some(span => span.children.includes('重新编辑')))!
       await act(async () => { reedit.props.onClick(); await Promise.resolve(); await Promise.resolve() })
-      act(() => { renderer!.root.findByType(ArkmeRichComposerInput).props.onTextChange('更新后的正文') })
+      act(() => { renderer!.root.findByType(ArkmeRichComposerInput).props.onTextChange(nextText) })
       await act(async () => {
         renderer!.root.findByProps({ 'aria-label': '保存重新编辑' }).props.onClick()
         await Promise.resolve(); await Promise.resolve()
       })
 
       expect(mocks.callArkme).toHaveBeenCalledWith('source.record-reedit.update', {
-        sourceRef: 'source-harness', itemUid: 'record-reedit-commit', newText: '更新后的正文', expectedVersion: 3,
+        sourceRef: 'source-harness', itemUid: 'record-reedit-commit', newText: nextText, expectedVersion: 3,
       })
       expect(renderer!.root.findAllByProps({ 'data-arkme-composer-reedit-target': 'true' })).toHaveLength(0)
-      expect(renderer!.root.findAll(node => node.children.includes('更新后的正文')).length).toBeGreaterThan(0)
+      expect(renderer!.root.findAll(node => node.children.some(child => typeof child === 'string' && child.includes('更新后的正文'))).length).toBeGreaterThan(0)
       expect(renderer!.root.findAll(node => node.children.includes('快记已更新'))).toHaveLength(0)
       expect(renderer!.root.findByProps({
         'data-arkme-message-item-uid': 'record-reedit-commit',
