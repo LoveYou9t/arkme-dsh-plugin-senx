@@ -1,3 +1,4 @@
+import { arkmeRecordTextFormat, arkmeMarkdownPlainText } from '../markdown.js'
 import { createHmac, timingSafeEqual } from 'node:crypto'
 import { logArkmeAvatarDiagnostic } from '../avatar-diagnostics.js'
 import type { ArkmeSessionCredentials } from '../keychain-store.js'
@@ -253,7 +254,8 @@ function normalizedConversationText(values: readonly Record<string, unknown>[]):
   ]) {
     for (const value of values) {
       for (const key of keys) {
-        const text = stringValue(value[key]).replace(/\s+/gu, ' ').trim()
+        const source = stringValue(value[key])
+        const text = (arkmeRecordTextFormat(value) === 'markdown' ? arkmeMarkdownPlainText(source) : source).replace(/\s+/gu, ' ').trim()
         if (text !== '') return text
       }
     }
@@ -315,7 +317,7 @@ export function arkmeChatConversationPreview(raw: Record<string, unknown>): stri
 export function arkmeTimelineConversationPreview(item: ArkmeTimelineItem): string {
   const projected = item.conversationPreview?.trim()
   if (projected !== undefined && projected !== '') return projected
-  const text = (item.textContent.trim() || item.title.trim()).replace(/\s+/gu, ' ')
+  const text = ((item.textFormat === 'markdown' ? arkmeMarkdownPlainText(item.textContent) : item.textContent.trim()) || item.title.trim()).replace(/\s+/gu, ' ')
   const blocks = item.contentBlocks ?? []
   const kinds = new Set(blocks.filter(block => block.renderRole !== 3).map(block => block.kind))
   let marker = kinds.has('file') ? '[文件]'
