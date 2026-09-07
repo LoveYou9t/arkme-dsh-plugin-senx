@@ -497,8 +497,9 @@ export class BotService {
     const cached = this.source.cachedChatSourceByKey(cacheKey)
     if (cached !== undefined) return cached
     const source: ArkmeSourceItem = {
-      sourceRef: await this.source.sealSourceRef(session.userId, 'private_chat', chatSessionUid, bot.name),
+      sourceRef: await this.source.sealSourceRef(session.userId, 'private_chat', chatSessionUid, bot.name, { isBotChat: true }),
       sourceKey: await this.source.chatDirectorySourceKey(session.userId, chatSessionUid),
+      isBotChat: true,
       kind: 'private_chat',
       displayName: bot.name,
       activeAtMillis: 0,

@@ -9,6 +9,16 @@ import {
 } from '../src/client/chat-directory-store.js'
 
 describe('ArkmeChatDirectoryStore', () => {
+  it('publishes Bot identity hydration even when all other conversation fields are unchanged', () => {
+    const store = new ArkmeChatDirectoryStore()
+    const source = { sourceRef: 'bot-source', kind: 'private_chat' as const, displayName: 'Test', activeAtMillis: 0, unreadCount: 0 }
+    store.publish([source])
+    const listener = vi.fn()
+    store.subscribe(listener)
+    store.upsert({ ...source, isBotChat: true })
+    expect(listener).toHaveBeenCalledOnce()
+    expect(store.getSnapshot().sources[0]?.isBotChat).toBe(true)
+  })
   it('publishes one authoritative source snapshot to every Chat surface', () => {
     const store = new ArkmeChatDirectoryStore()
     const listener = vi.fn()

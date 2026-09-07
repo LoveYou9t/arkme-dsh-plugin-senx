@@ -39,10 +39,12 @@ describe('SourceService', () => {
     })
 
     const source = (await service.listSources('root', { refresh: true })).items[0]!
-    expect(source).toMatchObject({ displayName: 'Test', unreadCount: 2, latestSequence: 4 })
+    expect(source).toMatchObject({ displayName: 'Test', isBotChat: true, unreadCount: 2, latestSequence: 4 })
     expect(source.peerUserId).toBeUndefined()
     const opened = await service.chatSourceFromBundle(botSession, session, source, [])
-    expect(opened).toMatchObject({ displayName: 'Test', sourceKey: source.sourceKey })
+    expect(opened).toMatchObject({ displayName: 'Test', isBotChat: true, sourceKey: source.sourceKey })
+    expect(await service.sourceItem(await service.openSourceRef(source.sourceRef, session.userId)))
+      .toMatchObject({ isBotChat: true })
     const renamed = await service.chatSourceFromBundle({
       ...botSession,
       bot_participants: [{ ...botSession.bot_participants[0], display_name_snapshot: 'Test 改名' }],
@@ -78,6 +80,7 @@ describe('SourceService', () => {
       undefined, [],
     )
     expect(source.displayName).toBe(expectedName)
+    expect(source.isBotChat === true).toBe(['valid Bot', 'disabled Bot', 'unbound Bot', 'empty Bot name'].includes(_name))
   })
 
   it('keeps chat directory attachment previews aligned with the real media kind', () => {
