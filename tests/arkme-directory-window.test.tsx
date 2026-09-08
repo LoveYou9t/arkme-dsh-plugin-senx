@@ -30,11 +30,28 @@ it('does not unmount keyboard focus when its chunk leaves the viewport', () => {
   let notify!: (entries: { isIntersecting: boolean }[]) => void
   vi.stubGlobal('IntersectionObserver', class { constructor(callback: typeof notify) { notify = callback } observe() {} disconnect() {} })
   let view: ReturnType<typeof create>
-  act(() => { view = create(<ArkmeDirectoryWindow>{[<button key="a">A</button>]}</ArkmeDirectoryWindow>, { createNodeMock: () => ({ closest: () => null, getBoundingClientRect: () => ({ height: 54 }) }) }) })
+  act(() => { view = create(<ArkmeDirectoryWindow>{[<button key="a">A</button>]}</ArkmeDirectoryWindow>, { createNodeMock: () => ({ closest: () => null, getClientRects: () => [{}], getBoundingClientRect: () => ({ height: 54 }) }) }) })
   const chunk = view!.root.findByProps({ 'data-arkme-directory-chunk': true })
   act(() => { chunk.props.onFocusCapture(); notify([{ isIntersecting: false }]) })
   expect(view!.root.findAllByType('button')).toHaveLength(1)
   act(() => { chunk.props.onBlurCapture({ currentTarget: { contains: () => false }, relatedTarget: null }) })
+  expect(view!.root.findAllByType('button')).toHaveLength(0)
+  act(() => { view!.unmount() })
+})
+
+
+it('retains visible rows while the entire sidebar panel is hidden', () => {
+  let notify!: (entries: { isIntersecting: boolean }[]) => void
+  let hidden = false
+  vi.stubGlobal('IntersectionObserver', class { constructor(callback: typeof notify) { notify = callback } observe() {} disconnect() {} })
+  let view: ReturnType<typeof create>
+  act(() => { view = create(<ArkmeDirectoryWindow>{[<button key="a">A</button>]}</ArkmeDirectoryWindow>, { createNodeMock: () => ({ closest: () => null, getClientRects: () => hidden ? [] : [{}], getBoundingClientRect: () => ({ height: hidden ? 0 : 54 }) }) }) })
+  const row = view!.root.findByType('button')
+  act(() => { hidden = true; notify([{ isIntersecting: false }]) })
+  expect(view!.root.findByType('button')).toBe(row)
+  act(() => { hidden = false; notify([{ isIntersecting: true }]) })
+  expect(view!.root.findByType('button')).toBe(row)
+  act(() => { notify([{ isIntersecting: false }]) })
   expect(view!.root.findAllByType('button')).toHaveLength(0)
   act(() => { view!.unmount() })
 })

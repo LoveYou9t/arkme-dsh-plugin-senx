@@ -10,7 +10,8 @@ function DirectoryChunk({ children, count, initial, selected }: { children: Reac
     const target = element.current
     if (target === null || typeof IntersectionObserver === 'undefined') return
     const observer = new IntersectionObserver(([entry]) => {
-      if (entry === undefined) return
+      if (entry === undefined || target.getClientRects().length === 0) return
+      // A hidden retained panel is not a scroll-away event; keep its visible rows mounted.
       if (entry.isIntersecting) setVisible(true)
       else {
         const measured = target.getBoundingClientRect().height

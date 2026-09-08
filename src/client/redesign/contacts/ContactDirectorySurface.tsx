@@ -37,6 +37,7 @@ export type ContactDirectoryPageLoader = (
 ) => Promise<ArkmeDirectoryPage>
 
 export interface ContactDirectorySurfaceProps {
+  active?: boolean
   accountKey: string
   initialState?: ContactDirectoryState
   cacheFresh?: boolean
@@ -145,6 +146,7 @@ export function directoryStateForAccount(
 }
 
 export function ContactDirectorySurface({
+  active = true,
   accountKey,
   initialState,
   cacheFresh = false,
@@ -205,7 +207,7 @@ export function ContactDirectorySurface({
     force = false,
   ) => {
     const snapshot = stateRef.current.sections[section]
-    if (snapshot.accountKey !== accountKey || (!force && snapshot.status === 'loading')) return
+    if (!active || snapshot.accountKey !== accountKey || (!force && snapshot.status === 'loading')) return
     if (mode === 'append' && (!snapshot.hasMore || snapshot.nextCursor === undefined)) return
     controllersRef.current[section]?.abort()
     const controller = new AbortController()
@@ -230,7 +232,7 @@ export function ContactDirectorySurface({
       if (mode === 'count') return
       commit({ type: 'load-error', section, accountKey, generation, message: errorMessage(error) })
     })
-  }, [accountKey, commit])
+  }, [active, accountKey, commit])
 
   const contactsSection = state.sections.contacts
   useEffect(() => {
@@ -250,10 +252,10 @@ export function ContactDirectorySurface({
   ])
 
   useEffect(() => {
-    if (refreshRevisionRef.current === refreshRevision) return
+    if (!active || refreshRevisionRef.current === refreshRevision) return
     refreshRevisionRef.current = refreshRevision
     load('unmarked-speakers', 'replace', true)
-  }, [load, refreshRevision])
+  }, [active, load, refreshRevision])
 
   const controlledSelectionKey = selection?.kind === 'contact'
     ? `contact:${selection.contactRef}`
@@ -293,13 +295,13 @@ export function ContactDirectorySurface({
   }, [load, state])
 
   useEffect(() => {
-    if (!refreshCachedOnMountRef.current) return
+    if (!active || !refreshCachedOnMountRef.current) return
     refreshCachedOnMountRef.current = false
     for (const section of CONTACT_DIRECTORY_SECTION_ORDER) {
       const cached = stateRef.current.sections[section]
       if (cached.expanded || cached.status === 'ready' || cached.status === 'empty') load(section, 'replace', true)
     }
-  }, [load])
+  }, [active, load])
 
   const handleToggle = (section: ArkmeDirectorySectionKind) => {
     const current = stateRef.current.sections[section]

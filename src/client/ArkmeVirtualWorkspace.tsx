@@ -76,6 +76,7 @@ import {
 import arkmeUserAddIconBase64 from '../../assets/icons/user-add-linear.svg'
 
 export interface ArkmeNavigationProps {
+  active?: boolean
   wide?: boolean
   avatarOnly?: boolean
   currentSessionId?: string | undefined
@@ -858,9 +859,11 @@ export function ArkmeSourceSortControl({
 }
 
 export function ArkmeNavigation({
-  wide = true, avatarOnly = false, currentSessionId, embeddedProductShell = false, onClose, onActivateSurface, showHarnessEntry = false,
+  active = true, wide = true, avatarOnly = false, currentSessionId, embeddedProductShell = false, onClose, onActivateSurface, showHarnessEntry = false,
   lockedDirectory = false, sendToSelfSource, directoryLead, onCreateTask, searchDshMessages, onOpenDshSession, renderSlot,
 }: ArkmeNavigationProps) {
+  const activeRef = useRef(active)
+  activeRef.current = active
   const ui = useSyncExternalStore(arkmeUi.subscribe, arkmeUi.getViewSnapshot, arkmeUi.getViewSnapshot)
   const recordRevision = useSyncExternalStore(
     arkmeUi.subscribe, arkmeUi.getRecordRevision, arkmeUi.getRecordRevision,
@@ -885,6 +888,9 @@ export function ArkmeNavigation({
   const directoryRequestAbortRef = useRef<AbortController>()
   const topicCreateRequestRef = useRef(false)
   const rootRowElementsRef = useRef(new Map<string, HTMLButtonElement>())
+  const revealedSourceIdentityRef = useRef<string>()
+  const directoryScrollRef = useRef<HTMLDivElement>(null)
+  const directoryScrollTopRef = useRef(0)
   const directoryContextMenuRef = useRef<HTMLDivElement>(null)
   const directoryContextRequestRef = useRef(0)
   const topicRowElementsRef = useRef(new Map<string, HTMLDivElement>())
@@ -968,6 +974,11 @@ export function ArkmeNavigation({
   const arkoLatestAtMillis = arkoPreviewSnapshot.userId === auth?.userId
     ? arkoPreviewSnapshot.latestAtMillis
     : undefined
+  const hasDirectoryData = sources.length > 0 || chatDirectory.sources.length > 0
+    || bots.length > 0 || (chatDirectory.projection?.bots.length ?? 0) > 0
+    || Boolean(sendToSelfSource ?? chatDirectory.projection?.sendToSelf
+      ?? arkoProfile ?? chatDirectory.projection?.arkoProfile
+      ?? arkoLatestPreview ?? chatDirectory.projection?.arkoPreview)
   const directorySources = useMemo(
     () => arkmeSelfDirectorySources(sources),
     [sources],
@@ -1073,8 +1084,25 @@ export function ArkmeNavigation({
     createdHighlightFramesRef.current = []
   }, [])
 
+  useLayoutEffect(() => {
+    if (active) {
+      if (directoryScrollRef.current !== null) directoryScrollRef.current.scrollTop = directoryScrollTopRef.current
+      if (directoryMutationAbortRef.current?.signal.aborted) directoryMutationAbortRef.current = new AbortController()
+      return
+    }
+    directoryRequestAbortRef.current?.abort()
+    directoryMutationAbortRef.current?.abort()
+    setDirectoryMutation(undefined)
+    setDirectoryContextMenu(undefined)
+    setGlobalSearchOpen(false)
+    setTopicCreateParent(undefined)
+    setQuickAddBlockingOpen(false)
+    setDirectoryActionFeedback(undefined)
+    stopCreatedHighlightAnimation()
+  }, [active, stopCreatedHighlightAnimation])
+
   useEffect(() => {
-    if (directoryContextMenu === undefined || typeof document === 'undefined') return
+    if (!active || directoryContextMenu === undefined || typeof document === 'undefined') return
     const close = () => {
       directoryContextRequestRef.current += 1
       setDirectoryContextMenu(undefined)
@@ -1097,7 +1125,7 @@ export function ArkmeNavigation({
       document.removeEventListener('visibilitychange', closeWhenHidden)
       window.removeEventListener('blur', close)
     }
-  }, [directoryContextMenu])
+  }, [active, directoryContextMenu])
   useEffect(() => {
     if (directoryActionFeedback === undefined || typeof window === 'undefined') return
     const timeout = window.setTimeout(() => { setDirectoryActionFeedback(undefined) }, 2_200)
@@ -1188,7 +1216,7 @@ export function ArkmeNavigation({
       const uiSnapshot = arkmeUi.getSnapshot()
       const selected = uiSnapshot.mode === 'source' ? uiSnapshot.selectedSource : undefined
       const cachedSelected = cacheRef.current === undefined ? undefined : cachedSelectedSource(cacheRef.current)
-      const restored = uiSnapshot.mode === 'source'
+      const restored = activeRef.current && uiSnapshot.mode === 'source'
         ? reconcileSelectedSource(selected ?? cachedSelected, loaded)
           ?? (next === 'send_to_self' ? loaded.find(source => source.kind === 'send_to_self') : undefined)
         : undefined
@@ -1222,8 +1250,10 @@ export function ArkmeNavigation({
     return () => { controller.abort() }
   }, [authenticated, auth?.environment, auth?.userId])
   useEffect(() => {
-    setBotDirectoryPreferences(readBotDirectoryPreferences(authenticated ? auth?.userId : undefined))
-    setBots([])
+    const cached = arkmeChatDirectory.getSnapshot().projection
+    const legacy = readBotDirectoryPreferences(authenticated ? auth?.userId : undefined)
+    setBotDirectoryPreferences({ pinnedKeys: [...new Set([...(cached?.botPinnedKeys ?? []), ...legacy.pinnedKeys])] })
+    setBots(sortArkmeBotsByCreatedAt(cached?.bots ?? []))
   }, [authenticated, auth?.userId])
   useEffect(() => {
     if (!authenticated || !chatDirectory.baselineReady || chatDirectory.projection !== undefined) return
@@ -1308,9 +1338,10 @@ export function ArkmeNavigation({
     return () => { controller.abort() }
   }, [authenticated, auth?.userId])
   useEffect(() => {
+    if (!active) return
     if (ui.searchTarget === undefined) return
     setGlobalSearchOpen(true)
-  }, [ui.searchTarget?.revision])
+  }, [active, ui.searchTarget?.revision])
   useEffect(() => {
     const removeDeletedBot = (event: Event) => {
       const botRef = (event as CustomEvent<{ botRef?: unknown }>).detail?.botRef
@@ -1355,17 +1386,17 @@ export function ArkmeNavigation({
   }, [authenticated, auth?.userId])
   useEffect(() => {
     const userId = authenticated ? auth?.userId : undefined
-    if (userId === undefined) return
+    if (!active || userId === undefined) return
     const sync = new ArkmeArkoConversationPreviewSync()
     return sync.start(userId)
-  }, [authenticated, auth?.userId])
+  }, [active, authenticated, auth?.userId])
   useEffect(() => {
     if (!authenticated || directory !== 'root' || chatDirectory.revision === 0) return
     const loaded = chatDirectory.sources
     setSources(loaded)
     const selected = ui.mode === 'source' ? arkmeUi.getSnapshot().selectedSource : undefined
     const cachedSelected = cacheRef.current === undefined ? undefined : cachedSelectedSource(cacheRef.current)
-    const restored = ui.mode === 'source'
+    const restored = activeRef.current && ui.mode === 'source'
       ? reconcileSelectedSource(selected ?? cachedSelected, loaded)
       : undefined
     if (restored !== undefined) arkmeUi.selectSource(restored)
@@ -1431,7 +1462,7 @@ export function ArkmeNavigation({
     officialAuthorOpening, onActivateSurface, persistCache, quickAddBlockingOpen, sources, topicCreateParent, ui.mode, ui.selectedSource,
   ])
   useEffect(() => {
-    if (!authenticated || directory !== 'send_to_self' || ui.mode !== 'source') return
+    if (!active || !authenticated || directory !== 'send_to_self' || ui.mode !== 'source') return
     const aggregateSource = sources.find(source => source.kind === 'send_to_self')
     if (aggregateSource !== undefined && !isArkmeSelfWorkspaceSource(ui.selectedSource)) {
       arkmeUi.selectSource(aggregateSource)
@@ -1457,10 +1488,13 @@ export function ArkmeNavigation({
     })
   }, [sources, ui.selectedSource])
   useEffect(() => {
-    if (directory !== 'root' || activeDirectoryEntryId !== undefined || ui.mode !== 'source' || ui.selectedSource === undefined
+    if (!active || directory !== 'root' || activeDirectoryEntryId !== undefined || ui.mode !== 'source' || ui.selectedSource === undefined
       || typeof window === 'undefined') return
+    const identity = arkmeSourceIdentityKey(ui.selectedSource)
+    if (revealedSourceIdentityRef.current === identity) return
     const element = rootRowElementsRef.current.get(ui.selectedSource.sourceRef)
     if (element === undefined) return
+    revealedSourceIdentityRef.current = identity
     const listElement = element.closest('[role="tree"]')
     const alreadyVisible = listElement !== null && isTopicRowFullyVisible(
       element.getBoundingClientRect(),
@@ -1472,7 +1506,7 @@ export function ArkmeNavigation({
     }
   }, [activeDirectoryEntryId, directory, rootSources, ui.mode, ui.selectedSource])
   useEffect(() => {
-    if (directory !== 'send_to_self' || pendingRevealSourceRef === undefined || typeof window === 'undefined') return
+    if (!active || directory !== 'send_to_self' || pendingRevealSourceRef === undefined || typeof window === 'undefined') return
     const element = topicRowElementsRef.current.get(pendingRevealSourceRef)
     if (element === undefined) return
     const sourceRef = pendingRevealSourceRef
@@ -1835,7 +1869,7 @@ export function ArkmeNavigation({
           }}
         />
       </label>
-      {authenticated && <ArkmeQuickAddButton
+      {active && authenticated && <ArkmeQuickAddButton
         notificationActivationRevision={ui.notificationActivationRevision ?? 0}
         onBlockingOverlayChange={setQuickAddBlockingOpen}
         onContactAdd={showContactAdd}
@@ -1864,8 +1898,11 @@ export function ArkmeNavigation({
     </button> : <>
     {directory === 'root' && embeddedProductShell && directoryLead}
     <div
+      ref={directoryScrollRef}
+      onScroll={event => { if (activeRef.current && event.currentTarget.getClientRects().length > 0) directoryScrollTopRef.current = event.currentTarget.scrollTop }}
       style={{
         ...styles.list,
+        overflowAnchor: 'none',
         ...(directory === 'send_to_self' ? styles.topicList : {}),
         ...(directory === 'send_to_self' && cardMode ? styles.topicCardList : {}),
       }}
@@ -1927,7 +1964,7 @@ export function ArkmeNavigation({
           activateEntry: activateDirectoryEntry,
           renderRow: renderArkmeDirectoryRow,
         })}
-        {(rootDirectoryState === 'error' || chatDirectory.projection?.phase === 'failed') && <>
+        {!hasDirectoryData && (rootDirectoryState === 'error' || chatDirectory.projection?.phase === 'failed') && <>
           <div style={{ ...styles.status, color: '#c2413b' }}>会话加载失败，请重试</div>
           <button type="button" style={styles.rootDirectoryRetry} onClick={() => { void loadDirectory('root', undefined, true) }}>重新加载</button>
         </>}
@@ -2059,14 +2096,14 @@ export function ArkmeNavigation({
     </div>
     {directory === 'send_to_self' && authenticated && <ArkmeTopicCreateFooter onCreate={() => { openTopicCreate(null) }} />}
     </>}
-    {topicCreateParent !== undefined && <ArkmeTopicCreateDialog
+    {active && topicCreateParent !== undefined && <ArkmeTopicCreateDialog
       key={topicCreateParent?.sourceRef ?? 'root'}
       mode={topicCreateParent === null ? 'topic' : 'child'}
       {...(topicCreateParent === null ? {} : { parentTopicPath: arkmeTopicPathNames(topicCreateParent, sources) })}
       submitting={topicCreateSubmitting} error={topicCreateError}
       onCancel={cancelTopicCreate} onConfirm={title => { void submitTopicCreate(title) }}
     />}
-    {globalSearchOpen && typeof document !== 'undefined' && createPortal(<ArkmeGlobalSearchDialog
+    {active && globalSearchOpen && typeof document !== 'undefined' && createPortal(<ArkmeGlobalSearchDialog
       {...(ui.searchTarget === undefined ? {} : {
         initialQuery: ui.searchTarget.query,
         initialQueryRevision: ui.searchTarget.revision,
@@ -2083,7 +2120,7 @@ export function ArkmeNavigation({
       }}
       onClose={closeGlobalSearch}
     />, document.body)}
-    {directoryContextMenu !== undefined && typeof document !== 'undefined' && createPortal(<div
+    {active && directoryContextMenu !== undefined && typeof document !== 'undefined' && createPortal(<div
       ref={directoryContextMenuRef}
       role="menu"
       aria-label={`${directoryContextMenuName ?? '会话'}的会话操作`}
@@ -2118,7 +2155,7 @@ export function ArkmeNavigation({
         onMouseLeave={event => { event.currentTarget.style.background = 'transparent' }}
       >移除</button>
     </div>, document.body)}
-    {directoryActionFeedback !== undefined && typeof document !== 'undefined' && createPortal(
+    {active && directoryActionFeedback !== undefined && typeof document !== 'undefined' && createPortal(
       <div role="status" style={styles.directoryActionFeedback}>{directoryActionFeedback}</div>,
       document.body,
     )}
