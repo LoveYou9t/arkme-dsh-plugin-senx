@@ -123,7 +123,7 @@ export class ArkmeMessageReadReceiptStore {
       'source.read-receipts.summary-list', { sourceRef, items }, signal,
     ))
     this.loadDetail = options.loadDetail ?? (async (sourceRef, itemUid, sequence, signal) => await callArkme(
-      'source.read-receipts.detail', { sourceRef, itemUid, sequence }, signal,
+      'source.read-receipts.detail', { sourceRef, itemUid, sequence, basicOnly: true }, signal,
     ))
     this.now = options.now ?? Date.now
   }

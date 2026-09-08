@@ -13,14 +13,14 @@ import type {
 
 const mocks = vi.hoisted(() => ({ callArkme: vi.fn() }))
 
-vi.mock('../src/client/api.js', () => ({
-  callArkme: mocks.callArkme,
+vi.mock('../src/client/api.js', async () => { const { memberPageFixture } = await import('./helpers/member-page-fixture.js'); return ({
+  callArkme: memberPageFixture(mocks.callArkme),
   ArkmeClientError: class ArkmeClientError extends Error {
     constructor(readonly body: { code: string; message: string; retryable: boolean }) {
       super(body.message)
     }
   },
-}))
+}) })
 
 vi.mock('react-dom', () => ({
   createPortal: (children: unknown) => children,

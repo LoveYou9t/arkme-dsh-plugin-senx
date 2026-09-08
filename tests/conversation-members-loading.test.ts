@@ -1,3 +1,4 @@
+import { ConversationMembersStore } from '../src/client/conversation-members-store.js'
 import { afterEach, expect, it, vi } from 'vitest'
 import { ChatService } from '../src/services/chat-service.js'
 import { ProfileService } from '../src/services/profile-service.js'
@@ -23,7 +24,12 @@ it('loads 500 members through the real Host projection and coordinator under slo
       init?.signal?.addEventListener('abort', () => { clearTimeout(timer); reject(new DOMException('aborted', 'AbortError')) }, { once: true })
     })
     let data: unknown
-    if (path.endsWith('/members/list')) data = { items: members }
+    if (path.endsWith('/members/page')) {
+      const rows = members.filter(member => member.user_id > body.after_user_id).slice(0, body.limit)
+      const last = rows.at(-1)?.user_id ?? 0
+      data = { chat_session_uid: 'group', items: rows, has_more: last > 0 && last < 500, ...(last > 0 && last < 500 ? { next_user_id: last } : {}) }
+    } else if (path.endsWith('/members/by-user-ids')) data = { chat_session_uid: 'group', items: members.filter(member => body.user_ids.includes(member.user_id)).map(member => ({ ...member, remark: `备注 ${member.user_id}` })) }
+    else if (path.endsWith('/members/list')) data = { items: members }
     else if (path.endsWith('/get-public-users-by-ids')) data = { items: body.user_ids.map((userId: number) => ({ user_id: userId, nick_name: `用户 ${userId}` })) }
     else if (path.endsWith('/chats/list')) data = { items: Array.from({ length: 50 }, () => ({ session: { session_kind: 2 } })), has_more: true, next_page_cursor: { page: (body.page_cursor?.page ?? 0) + 1 } }
     else throw new Error(`Unexpected upstream: ${path}`)
@@ -55,5 +61,30 @@ it('loads 500 members through the real Host projection and coordinator under slo
         directoryRequests: calls.filter(call => call.path.endsWith('/chats/list')).length,
       }))
     }
+    calls.length = 0
+    const started = Date.now()
+    const group = { sourceKey: 'group', sourceRef: 'ref', kind: 'group_chat' as const, displayName: '群' }
+    const store = new ConversationMembersStore(undefined, Date.now, {
+      page: (ref, cursor, signal) => chat.pageSourceMembers(ref, { ...(cursor === undefined ? {} : { cursor }), limit: 50, signal }),
+      presentation: (ref, refs, signal) => chat.sourceMembersPresentation(ref, refs, { signal }),
+      cached: async () => null,
+    })
+    store.subscribe('test:1', group, () => {})
+    const progressive = store.ensure('test:1', group)
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(store.get('test:1', group).items).toHaveLength(50)
+    expect(store.get('test:1', group).complete).toBe(false)
+    const firstPageMillis = Date.now() - started
+    await vi.runAllTimersAsync()
+    await progressive
+    expect(store.get('test:1', group).items).toHaveLength(500)
+    expect(store.get('test:1', group).complete).toBe(true)
+    expect(calls.some(call => call.path.endsWith('/chats/list') || call.path.endsWith('/contacts/list'))).toBe(false)
+    console.info('member-loading progressive', JSON.stringify({ simulatedFirstPageMillis: firstPageMillis,
+      simulatedCompleteMillis: Date.now() - started, requests: calls.length,
+      pageRequests: calls.filter(call => call.path.endsWith('/members/page')).length,
+      presentationRequests: calls.filter(call => call.path.endsWith('/members/by-user-ids')).length,
+      profileRequests: calls.filter(call => call.path.endsWith('/get-public-users-by-ids')).length }))
+    store.activateAccount(undefined)
   } finally { runtime.dispose(); source.dispose() }
 })

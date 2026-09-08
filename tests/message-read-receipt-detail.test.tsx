@@ -8,7 +8,7 @@ import { arkmeConversationMembers } from '../src/client/conversation-members-sto
 import { arkmeAuthStore } from '../src/client/auth-store.js'
 
 const { read } = vi.hoisted(() => ({ read: vi.fn() }))
-vi.mock('../src/client/api.js', () => ({ callArkme: read }))
+vi.mock('../src/client/api.js', async () => { const { memberPageFixture } = await import('./helpers/member-page-fixture.js'); return ({ callArkme: memberPageFixture(read) }) })
 vi.mock('react-dom', () => ({ createPortal: (node: ReactNode) => node }))
 const source: ArkmeSourceItem = { sourceRef: 'ref', sourceKey: 'group', kind: 'group_chat', displayName: '群' }
 const target = { sourceRef: 'ref', sourceKey: 'group', conversationKind: 'group_chat' as const, itemUid: 'message', sequence: 8 }

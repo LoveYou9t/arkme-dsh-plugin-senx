@@ -1191,6 +1191,8 @@ export interface ArkmeProviderCapabilities {
     /** Browser-safe call-history list/detail and explicit summary retry are available. */
     callHistory?: true
     groupMembers: true
+    /** Progressive member pages, explicit membership verification and advisory disk cache. */
+    memberDirectoryPaging?: true
     groupMemberAdd?: true
     userCard: true
     openPrivateChat: true
@@ -1704,6 +1706,8 @@ export interface ArkmeMessageReadReceiptMember {
 
 /** Member-level receipt detail for one current-user-sent group message. */
 export interface ArkmeMessageReadReceiptDetail extends ArkmeMessageReadReceiptQueryItem {
+  /** False means member presentation is advisory; receipt membership and read status remain authoritative. */
+  presentationComplete?: boolean
   sourceRef: string
   readCount: number
   unreadCount: number
@@ -2368,6 +2372,22 @@ export interface ArkmeConversationMemberList {
   total: number
   activeCount: number
   joinEvents?: ArkmeConversationMemberJoinEvent[]
+}
+
+export interface ArkmeConversationMemberPage {
+  source: ArkmeSourceItem
+  items: ArkmeConversationMemberItem[]
+  removedMemberRefs: string[]
+  hasMore: boolean
+  nextCursor?: string
+  joinEvents?: ArkmeConversationMemberJoinEvent[]
+  presentationComplete: boolean
+}
+
+export interface ArkmeConversationMemberCache {
+  items: ArkmeConversationMemberItem[]
+  joinEvents: ArkmeConversationMemberJoinEvent[]
+  cachedAtMillis: number
 }
 
 export interface ArkmeMemberEvent {
@@ -3321,6 +3341,9 @@ export type ArkmePluginOperation =
   | 'source.timeline'
   | 'source.timeline-around'
   | 'source.members'
+  | 'source.members.page'
+  | 'source.members.presentation'
+  | 'source.members.cached'
   | 'source.member-events'
   | 'source.member-event.profile'
   | 'source.member-event.private.open'

@@ -1,9 +1,12 @@
+import { mergeMemberPresentation, mergeMemberJoinEvents } from './member-directory.js'
 import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import type { ArkmeStateStore } from './state-store.js'
 import type {
   ArkmeCachedSnapshot,
+  ArkmeConversationMemberCache,
+  ArkmeConversationMemberPage,
   ArkmeCachedQueryResult,
   ArkmeLongArticleDraft,
   ArkmePendingWrite,
@@ -83,6 +86,13 @@ export class ArkmeLocalDatabase {
       PRAGMA journal_mode = WAL;
       PRAGMA synchronous = NORMAL;
       PRAGMA foreign_keys = ON;
+      CREATE TABLE IF NOT EXISTS conversation_member_cache (
+        user_id INTEGER NOT NULL,
+        group_key TEXT NOT NULL,
+        snapshot_json TEXT NOT NULL,
+        updated_at_millis INTEGER NOT NULL,
+        PRIMARY KEY (user_id, group_key)
+      );
       CREATE TABLE IF NOT EXISTS record_cache (
         user_id INTEGER NOT NULL,
         record_uid TEXT NOT NULL,
@@ -264,6 +274,44 @@ export class ArkmeLocalDatabase {
       cachedAtMillis: row?.updated_at_millis ?? 0,
       revision: await this.revision(userId),
     }
+  }
+
+  async cachedConversationMembers(userId: number, group: string): Promise<ArkmeConversationMemberCache | undefined> {
+    return this.readConversationMembers(userId, group)
+  }
+
+  private readConversationMembers(userId: number, group: string): ArkmeConversationMemberCache | undefined {
+    const row = this.database.prepare('SELECT snapshot_json, updated_at_millis FROM conversation_member_cache WHERE user_id = ? AND group_key = ?').get(userId, group) as { snapshot_json: string; updated_at_millis: number } | undefined
+    if (row === undefined || Date.now() - row.updated_at_millis > 14 * 24 * 60 * 60 * 1000 || Buffer.byteLength(row.snapshot_json) > 4_000_000) return undefined
+    try {
+      const data = JSON.parse(row.snapshot_json) as ArkmeConversationMemberCache
+      if (!Array.isArray(data.items) || data.items.length > 20_000 || !Array.isArray(data.joinEvents)
+        || data.items.some(item => typeof item.memberRef !== 'string' || typeof item.displayName !== 'string' || item.status !== 'active')) return undefined
+      return { items: data.items, joinEvents: data.joinEvents, cachedAtMillis: row.updated_at_millis }
+    } catch { return undefined }
+  }
+
+  async mergeConversationMembers(userId: number, group: string, page: ArkmeConversationMemberPage): Promise<void> {
+    // This read/merge/write is synchronous in one SQLite owner turn; concurrent pages cannot lose updates.
+    const previous = this.readConversationMembers(userId, group)
+    const members = new Map(previous?.items.map(item => [item.memberRef, item]))
+    for (const member of page.items) {
+      const old = members.get(member.memberRef)
+      members.set(member.memberRef, mergeMemberPresentation(old, member, page.presentationComplete))
+    }
+    for (const memberRef of page.removedMemberRefs) members.delete(memberRef)
+    const joins = mergeMemberJoinEvents(previous?.joinEvents ?? [], page.joinEvents ?? [])
+    const payload = JSON.stringify({ items: [...members.values()], joinEvents: joins })
+    if (members.size > 20_000 || Buffer.byteLength(payload) > 4_000_000) return
+    this.database.prepare('INSERT INTO conversation_member_cache (user_id, group_key, snapshot_json, updated_at_millis) VALUES (?, ?, ?, ?) ON CONFLICT(user_id, group_key) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at_millis=excluded.updated_at_millis').run(userId, group, payload, Date.now())
+    this.database.prepare('DELETE FROM conversation_member_cache WHERE updated_at_millis < ? OR rowid NOT IN (SELECT rowid FROM conversation_member_cache ORDER BY updated_at_millis DESC, rowid DESC LIMIT 100)').run(Date.now() - 14 * 24 * 60 * 60 * 1000)
+    while (Number(this.database.prepare('SELECT COALESCE(SUM(LENGTH(CAST(snapshot_json AS BLOB))), 0) AS bytes FROM conversation_member_cache').get()?.bytes) > 32 * 1024 * 1024) {
+      this.database.prepare('DELETE FROM conversation_member_cache WHERE rowid = (SELECT rowid FROM conversation_member_cache ORDER BY updated_at_millis, rowid LIMIT 1)').run()
+    }
+  }
+
+  async clearConversationMembers(userId: number, group: string): Promise<void> {
+    this.database.prepare('DELETE FROM conversation_member_cache WHERE user_id = ? AND group_key = ?').run(userId, group)
   }
 
   async cacheProfile(userId: number, profile: ArkmeUserProfile): Promise<ArkmeUserProfileSnapshot> {

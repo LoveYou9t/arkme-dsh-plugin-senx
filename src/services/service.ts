@@ -24,6 +24,9 @@ import type { ArkmeExtensionReviewOperation } from '../extensions/types.js'
 import type { RecordingImportAdmission, RecordingImportJob } from '../recording-import-contract.js'
 
 export interface StateStore {
+  cachedConversationMembers?(userId: number, group: string): Promise<import('../types.js').ArkmeConversationMemberCache | undefined>
+  mergeConversationMembers?(userId: number, group: string, page: import('../types.js').ArkmeConversationMemberPage): Promise<void>
+  clearConversationMembers?(userId: number, group: string): Promise<void>
   uniqueCode(): Promise<string>
   cachedSnapshot(userId: number): Promise<ArkmeCachedSnapshot>
   cacheSummary(userId: number, summary: ArkmeSelfSummary): Promise<void>
@@ -218,6 +221,10 @@ export function joinUrl(baseUrl: string, path: string): string {
 }
 
 export class ServiceRuntime {
+  private memberCacheRevision = 0
+  memberCacheEpoch(): number { return this.memberCacheRevision }
+  // A conservative runtime-wide fence drops old cache fills after confirmed member mutations.
+  invalidateMemberCache(): void { this.memberCacheRevision += 1 }
   readonly requestCoordinator = new ArkmeRequestCoordinator()
   private readonly refreshInFlightByUserId = new Map<number, Promise<ArkmeSessionCredentials>>()
   private readonly accountSessions: ArkmeAccountSessionOwner

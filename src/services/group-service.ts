@@ -620,6 +620,8 @@ export class GroupService {
       session,
       signal,
     )
+    this.runtime.invalidateMemberCache?.()
+    await this.runtime.stateStore.clearConversationMembers?.(session.userId, source.ownerRef).catch(() => undefined)
     this.source.invalidateSourceListCache(session.userId, 'root')
     return { status: 'ok' }
   }
@@ -636,6 +638,8 @@ export class GroupService {
       session,
       signal,
     )
+    this.runtime.invalidateMemberCache?.()
+    await this.runtime.stateStore.clearConversationMembers?.(session.userId, source.ownerRef).catch(() => undefined)
     this.source.invalidateSourceListCache(session.userId, 'root')
     return { status: 'ok' }
   }

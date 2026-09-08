@@ -6,7 +6,7 @@ import type { ArkmeGroupActionTarget, ArkmeSourceItem } from '../src/types.js'
 const mocks = vi.hoisted(() => ({ callArkme: vi.fn() }))
 
 vi.mock('react-dom', () => ({ createPortal: (node: React.ReactNode) => node }))
-vi.mock('../src/client/api.js', () => ({ callArkme: mocks.callArkme }))
+vi.mock('../src/client/api.js', async () => { const { memberPageFixture } = await import('./helpers/member-page-fixture.js'); return ({ callArkme: memberPageFixture(mocks.callArkme) }) })
 
 import { ArkmeGroupChatControls } from '../src/client/ArkmeGroupChatControls.js'
 import { arkmeSourceIdentityKey } from '../src/client/source-identity.js'

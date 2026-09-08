@@ -6,7 +6,7 @@ import { arkmeConversationMembers } from '../src/client/conversation-members-sto
 import { useConversationMembers } from '../src/client/use-conversation-members.js'
 
 const { read } = vi.hoisted(() => ({ read: vi.fn() }))
-vi.mock('../src/client/api.js', () => ({ callArkme: read }))
+vi.mock('../src/client/api.js', async () => { const { memberPageFixture } = await import('./helpers/member-page-fixture.js'); return ({ callArkme: memberPageFixture(read) }) })
 const source: ArkmeSourceItem = { sourceKey: 'group', sourceRef: 'ref', kind: 'group_chat', displayName: '群' }
 const person = (memberRef: string): ArkmeConversationMemberItem => ({
   memberRef, displayName: memberRef, role: 'member', status: 'active', isSelf: false, isOwner: false,

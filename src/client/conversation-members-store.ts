@@ -1,4 +1,5 @@
-import type { ArkmeConversationMemberItem, ArkmeConversationMemberList, ArkmeSourceItem } from '../types.js'
+import { mergeMemberPresentation, mergeMemberJoinEvents } from '../member-directory.js'
+import type { ArkmeConversationMemberItem, ArkmeConversationMemberList, ArkmeConversationMemberPage, ArkmeConversationMemberCache, ArkmeSourceItem } from '../types.js'
 import { callArkme } from './api.js'
 
 const MAX_IDLE_GROUPS = 20
@@ -6,18 +7,25 @@ const MAX_IDLE_MEMBERS = 20_000
 const MAX_AGE_MS = 30_000
 const INVALIDATION_DELAY_MS = 180
 type Source = Pick<ArkmeSourceItem, 'sourceRef' | 'sourceKey'>
+interface LoadingOptions {
+  page?: (sourceRef: string, cursor: string | undefined, signal: AbortSignal) => Promise<ArkmeConversationMemberPage>
+  presentation?: (sourceRef: string, memberRefs: string[], signal: AbortSignal) => Promise<ArkmeConversationMemberPage>
+  cached?: (sourceRef: string, signal: AbortSignal) => Promise<ArkmeConversationMemberCache | null>
+}
 type Load = (sourceRef: string, signal: AbortSignal) => Promise<ArkmeConversationMemberList>
 
 export interface ConversationMembersSnapshot {
   items: readonly ArkmeConversationMemberItem[]
   joinEvents: NonNullable<ArkmeConversationMemberList['joinEvents']>
   ready: boolean
+  complete: boolean
+  cached: boolean
   refreshing: boolean
   error: string | undefined
 }
 
 export const EMPTY_CONVERSATION_MEMBERS: ConversationMembersSnapshot = {
-  items: [], joinEvents: [], ready: false, refreshing: false, error: undefined,
+  items: [], joinEvents: [], ready: false, complete: false, cached: false, refreshing: false, error: undefined,
 }
 
 interface Entry {
@@ -35,6 +43,12 @@ interface Entry {
 
 function key(source: Source): string { return source.sourceKey ?? source.sourceRef }
 
+function memberAccessRevoked(error: unknown): boolean {
+  const failure = error as { code?: string; body?: { code?: string } }
+  const code = failure?.body?.code ?? failure?.code
+  return code !== undefined && ['auth-http-401', 'auth-http-403', 'login-required', 'login-expired', 'source-ref-invalid', 'arkme-code-403', 'arkme-code-1004', 'chat-members-source-invalid'].includes(code)
+}
+
 function sameMember(left: ArkmeConversationMemberItem, right: ArkmeConversationMemberItem): boolean {
   const keys = new Set([...Object.keys(left), ...Object.keys(right)] as (keyof ArkmeConversationMemberItem)[])
   return [...keys].every(field => left[field] === right[field])
@@ -46,9 +60,8 @@ export class ConversationMembersStore {
   private entries = new Map<string, Entry>()
   private foreground = true
 
-  constructor(private readonly load: Load = (sourceRef, signal) => callArkme('source.members', {
-    sourceRef, activeOnly: true,
-  }, signal), private readonly now = Date.now) {}
+  constructor(private readonly load?: Load, private readonly now = Date.now, private readonly loading: LoadingOptions = {}) {}
+
 
   activateAccount(account: string | undefined): void {
     if (account === this.account) return
@@ -126,8 +139,11 @@ export class ConversationMembersStore {
     entry.controller = controller
     entry.stale = false
     this.publish(entry, { refreshing: true, error: undefined })
-    entry.pending = Promise.resolve().then(() => this.load(source.sourceRef, controller.signal))
+    entry.pending = Promise.resolve().then(() => this.load !== undefined
+      ? this.load(source.sourceRef, controller.signal)
+      : this.loadPages(account, entry, revision, controller))
       .then(result => {
+        if (result === undefined) return
         if (controller.signal.aborted || this.entries.get(key(source)) !== entry || account !== this.account) return
         if (revision !== entry.revision) return
         // Only a complete, matching baseline may remove absent members. Never trim a partial page.
@@ -160,15 +176,14 @@ export class ConversationMembersStore {
         this.publish(entry, {
           items: unchanged ? entry.snapshot.items : items,
           joinEvents: JSON.stringify(joinEvents) === JSON.stringify(entry.snapshot.joinEvents) ? entry.snapshot.joinEvents : joinEvents,
-          ready: true, error: undefined,
+          ready: true, complete: true, cached: false, error: undefined,
         })
       })
       .catch(error => {
         if (controller.signal.aborted || account !== this.account || this.entries.get(key(source)) !== entry) return
         if (revision !== entry.revision) return
-        const failure = error as { code?: string; body?: { code?: string } }
-        const code = failure?.body?.code ?? failure?.code
-        if (code !== undefined && ['auth-http-401', 'auth-http-403', 'login-expired', 'arkme-code-403', 'chat-members-source-invalid'].includes(code)) {
+        if (memberAccessRevoked(error)) {
+          controller.abort()
           entry.members.clear()
           this.publish(entry, EMPTY_CONVERSATION_MEMBERS)
         }
@@ -183,6 +198,109 @@ export class ConversationMembersStore {
         if (revision !== entry.revision) this.schedule(entry)
       })
     await entry.pending
+  }
+
+  private async loadPages(account: string, entry: Entry, revision: number, controller: AbortController): Promise<ArkmeConversationMemberList | undefined> {
+    const current = () => !controller.signal.aborted && this.account === account && this.entries.get(key(entry.source)) === entry && revision === entry.revision
+    let remoteProgress = false
+    const sourceRef = entry.source.sourceRef
+    const cached = this.loading.cached ?? ((ref, signal) => callArkme<ArkmeConversationMemberCache | null>('source.members.cached', { sourceRef: ref }, signal))
+    if (!entry.snapshot.ready) void cached(sourceRef, controller.signal).then(value => {
+      if (!current() || remoteProgress || value === null || value === undefined) return
+      if (!Array.isArray(value.items) || value.items.length > MAX_IDLE_MEMBERS || value.items.some(member => !member.memberRef || member.status !== 'active')) return
+      this.applyPage(entry, { source: { ...entry.source } as ArkmeSourceItem, items: value.items, removedMemberRefs: [],
+        hasMore: false, presentationComplete: true, joinEvents: value.joinEvents })
+      this.publish(entry, { cached: true, complete: false })
+    }).catch(() => undefined)
+    const loadPage = this.loading.page ?? ((ref, cursor, signal) => callArkme<ArkmeConversationMemberPage>('source.members.page', {
+      sourceRef: ref, limit: 50, ...(cursor === undefined ? {} : { cursor }),
+    }, signal))
+    const loadPresentation = this.loading.presentation ?? ((ref, memberRefs, signal) => callArkme<ArkmeConversationMemberPage>('source.members.presentation', {
+      sourceRef: ref, memberRefs,
+    }, signal))
+    const seen = new Set<string>()
+    const cursors = new Set<string>()
+    const pending = new Set<Promise<void>>()
+    let presentationFailed = false
+    const enrich = (refs: string[]) => {
+      const work = loadPresentation(sourceRef, refs, controller.signal).then(page => {
+        if (!current()) return
+        this.applyPage(entry, page)
+        if (!page.presentationComplete) presentationFailed = true
+      }).catch(error => {
+        if (!current()) return
+        if (memberAccessRevoked(error)) {
+          this.clear(account, entry.source)
+          this.publish(entry, { error: error instanceof Error ? error.message : '群成员访问权限已失效' })
+        } else presentationFailed = true
+      }).finally(() => { pending.delete(work) })
+      pending.add(work)
+    }
+    let cursor: string | undefined
+    try {
+      for (let index = 0; index < 200; index++) {
+        if (!current()) return
+        let page: ArkmeConversationMemberPage
+        try { page = await loadPage(sourceRef, cursor, controller.signal) }
+        catch (error) {
+          if (index === 0 && (error as { body?: { code?: string } }).body?.code === 'member-pagination-unavailable') {
+            return await callArkme('source.members', { sourceRef, activeOnly: true }, controller.signal)
+          }
+          throw error
+        }
+        if (!current()) return
+        remoteProgress = true
+        this.applyPage(entry, page)
+        this.publish(entry, { cached: false })
+        for (const member of page.items) seen.add(member.memberRef)
+        for (const ref of page.removedMemberRefs) seen.add(ref)
+        if (!page.presentationComplete) {
+          for (let start = 0; start < page.items.length; start += 50) {
+            enrich(page.items.slice(start, start + 50).map(member => member.memberRef))
+            if (pending.size >= 2) await Promise.race(pending)
+          }
+        }
+        if (!page.hasMore) {
+          // Paged live traversal is not an atomic snapshot. Verify missing cached members explicitly.
+          const missing = [...entry.members.keys()].filter(ref => !seen.has(ref))
+          for (let start = 0; start < missing.length; start += 50) {
+            if (!current()) return
+            enrich(missing.slice(start, start + 50))
+            if (pending.size >= 2) await Promise.race(pending)
+          }
+          await Promise.all(pending)
+          if (!current()) return
+          entry.refreshedAt = this.now()
+          entry.stale = presentationFailed
+          this.publish(entry, { complete: true, cached: false, error: presentationFailed ? '部分成员资料未更新，请重试' : undefined })
+          return
+        }
+        if (!page.nextCursor || cursors.has(page.nextCursor)) throw new Error('成员分页游标重复或缺失，请重试')
+        cursors.add(page.nextCursor)
+        cursor = page.nextCursor
+      }
+      throw new Error('成员分页超过本次加载上限，已保留当前列表，请重试')
+    } finally { await Promise.all(pending) }
+  }
+
+  private applyPage(entry: Entry, page: ArkmeConversationMemberPage): void {
+    if (key(page.source) !== key(entry.source) || !Array.isArray(page.items) || !Array.isArray(page.removedMemberRefs)
+      || new Set(page.items.map(member => member.memberRef)).size !== page.items.length
+      || page.items.some(member => !member.memberRef || member.status !== 'active')) throw new Error('成员分页响应无效')
+    let changed = false
+    for (const incoming of page.items) {
+      const previous = entry.members.get(incoming.memberRef)
+      const member = mergeMemberPresentation(previous, incoming, page.presentationComplete)
+      if (previous !== undefined && sameMember(previous, member)) continue
+      entry.members.set(incoming.memberRef, member)
+      changed = true
+    }
+    for (const ref of page.removedMemberRefs) if (entry.members.delete(ref)) changed = true
+    const rank = (role: string) => role === 'owner' ? 0 : role === 'admin' ? 1 : role === 'member' ? 2 : 3
+    const items = changed ? [...entry.members.values()].sort((left, right) => rank(left.role) - rank(right.role)
+      || left.joinedAtMillis - right.joinedAtMillis || left.displayName.localeCompare(right.displayName)) : entry.snapshot.items
+    const joins = mergeMemberJoinEvents(entry.snapshot.joinEvents, page.joinEvents ?? [])
+    this.publish(entry, { items, ready: true, joinEvents: JSON.stringify(joins) === JSON.stringify(entry.snapshot.joinEvents) ? entry.snapshot.joinEvents : joins })
   }
 
   invalidate(account: string | undefined, source: Source): void {
