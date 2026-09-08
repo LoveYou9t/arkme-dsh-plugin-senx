@@ -13,7 +13,7 @@ import type {} from '@deepseek-ai/dsh-host-webserver'
 import { registerDSHAgentInputRecordSync } from './dsh-agent-input-sync.js'
 import { createArkmeHostApi } from './host-api.js'
 import { openDshHostPath } from './dsh-host-capabilities.js'
-import { ARKME_HARNESS_EMBED_PATH } from './harness-embed-contract.js'
+import { ARKME_HARNESS_EMBED_PATH, ARKME_HARNESS_MODEL_CLIENT_PATH } from './harness-embed-contract.js'
 import {
   createHarnessEmbedRouteHandler,
   dshRootDocumentHeaders,
@@ -633,7 +633,15 @@ export function apply(ctx: Context, config: Config): void {
     expectedPort: ctx.webServer.port,
     allowNonLoopback: config.allowNonLoopback,
   })
+  const harnessModelClient = readFileSync(new URL('../lib/harness-model-client.js', import.meta.url))
   const harnessEmbedHandler = createHarnessEmbedRouteHandler({
+    modelClient: {
+      id: '@senguoyun/dsh-arkme/harness-model',
+      url: ARKME_HARNESS_MODEL_CLIENT_PATH,
+      rev: createHash('sha256').update(harnessModelClient).digest('hex'),
+      inject: ['@deepseek-ai/dsh-client-ui-model-selection'],
+      external: ['react', 'react-dom', 'react/jsx-runtime'],
+    },
     getGraph: () => clientModules.graph(),
     installedPackageNames: () => extensionStore.list().flatMap(item =>
       item.profilePackageName === undefined ? [] : [item.profilePackageName]),
@@ -688,6 +696,21 @@ export function apply(ctx: Context, config: Config): void {
     path: ARKME_HARNESS_EMBED_PATH,
     handler: harnessEmbedHandler,
   }), 'dsh-arkme: core-only DeepSeek Harness iframe route')
+  ctx.effect(() => ctx.webServer.register({
+    kind: 'exact', path: ARKME_HARNESS_MODEL_CLIENT_PATH,
+    handler: (request, response) => {
+      if (request.method !== 'GET' && request.method !== 'HEAD') {
+        response.writeHead(405, { Allow: 'GET, HEAD' }).end()
+        return
+      }
+      response.writeHead(200, {
+        'Content-Type': 'text/javascript; charset=utf-8',
+        'Content-Length': harnessModelClient.byteLength,
+        'Cache-Control': 'no-cache',
+        'X-Content-Type-Options': 'nosniff',
+      }).end(request.method === 'HEAD' ? undefined : harnessModelClient)
+    },
+  }), 'dsh-arkme: Harness model selector browser asset')
   ctx.effect(() => ctx.webServer.register({
     kind: 'prefix',
     path: `${config.routePath}/call`,

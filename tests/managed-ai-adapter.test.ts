@@ -73,7 +73,7 @@ describe('Arkme managed model adapter', () => {
 
     expect(adapter.providerInfo('arkme-managed')).toEqual({
       id: 'arkme-managed',
-      name: 'Arkme · 余额计费',
+      name: 'Arkme',
     })
     await expect(adapter.listModels('arkme-managed')).resolves.toEqual([
       {
@@ -560,7 +560,7 @@ describe('Arkme managed model adapter', () => {
       })
       expect(ctx.llm.listProviders()).toContainEqual({
         id: ARKME_MANAGED_PROVIDER,
-        name: 'Arkme · 余额计费',
+        name: 'Arkme',
       })
       const models = await ctx.llm.listModels(ARKME_MANAGED_PROVIDER)
       expect(models.map(model => [model.id, model.name])).toEqual([

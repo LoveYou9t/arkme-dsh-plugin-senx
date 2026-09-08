@@ -18,7 +18,7 @@ import type { SecretValue } from '../secret-value.js'
 export const ARKME_MANAGED_PROVIDER = 'arkme-managed'
 export const ARKME_MANAGED_MODEL = 'deepseek-v4-flash'
 
-const ARKME_MANAGED_PROVIDER_NAME = 'Arkme · 余额计费'
+const ARKME_MANAGED_PROVIDER_NAME = 'Arkme'
 const ARKME_MANAGED_CATALOG_TTL_MS = 60_000
 const ARKME_MANAGED_CATALOG_TIMEOUT_MS = 10_000
 const ARKME_INSUFFICIENT_BALANCE_MESSAGE = 'Arkme AI 余额不足，请前往 Arkme 设置中的余额充值后重试'
