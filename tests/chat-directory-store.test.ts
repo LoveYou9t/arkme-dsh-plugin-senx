@@ -1,14 +1,83 @@
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { ArkmeClientError } from '../src/sdk/index.js'
 
 const { callArkmeMock } = vi.hoisted(() => ({ callArkmeMock: vi.fn() }))
 
-vi.mock('../src/client/api.js', () => ({ callArkme: callArkmeMock }))
+vi.mock('../src/client/api.js', async importOriginal => ({
+  ...await importOriginal<typeof import('../src/client/api.js')>(), callArkme: callArkmeMock,
+}))
 
 import {
   ArkmeChatDirectoryStore, ArkmeChatTimelineDeltaStore, ArkmeInterwovenInvalidationStore,
 } from '../src/client/chat-directory-store.js'
 
 describe('ArkmeChatDirectoryStore', () => {
+  afterEach(() => { vi.useRealTimers() })
+
+  it('recovers a transient policy read in the shared silent refresh without losing visible rows', async () => {
+    vi.useFakeTimers()
+    const row = { sourceRef: 'group', kind: 'group_chat' as const, displayName: '群聊', activeAtMillis: 1, unreadCount: 3, isPinned: false }
+    const busy = new ArkmeClientError({ code: 'arkme-code-1002', message: '服务器繁忙', retryable: true })
+    const loadPage = vi.fn().mockRejectedValueOnce(busy)
+      .mockResolvedValue({ directory: 'root', items: [{ ...row, isPinned: true }], hasMore: false })
+    const store = new ArkmeChatDirectoryStore({ loadPage })
+    store.publish([row])
+    store.invalidateRoot()
+    const first = store.refreshRoot({ force: true, silent: true })
+    const joined = store.refreshRoot({ force: true, silent: true })
+    await vi.advanceTimersByTimeAsync(1999)
+    expect(loadPage).toHaveBeenCalledTimes(1)
+    expect(store.getSnapshot()).toMatchObject({ sources: [row], isRefreshing: false })
+    await vi.advanceTimersByTimeAsync(1)
+    await expect(first).resolves.toEqual([{ ...row, isPinned: true }])
+    await expect(joined).resolves.toEqual([{ ...row, isPinned: true }])
+    expect(loadPage).toHaveBeenCalledTimes(2)
+  })
+
+  it.each(['account', 'invalidation'] as const)('stops pending recovery after a new %s generation', async change => {
+    vi.useFakeTimers()
+    const loadPage = vi.fn().mockRejectedValue(new ArkmeClientError({ code: 'busy', message: 'busy', retryable: true }))
+    const store = new ArkmeChatDirectoryStore({ loadPage })
+    store.activateAccount('test:1')
+    const pending = store.refreshRoot({ force: true })
+    await vi.advanceTimersByTimeAsync(0)
+    if (change === 'account') store.activateAccount('test:2')
+    else store.invalidateRoot()
+    await vi.runAllTimersAsync()
+    await expect(pending).resolves.toEqual([])
+    expect(loadPage).toHaveBeenCalledTimes(1)
+    expect(store.getSnapshot().isRefreshing).toBe(false)
+  })
+
+  it('bounds failed recovery and permits a later refresh without publishing partial pages', async () => {
+    vi.useFakeTimers()
+    const row = { sourceRef: 'old', kind: 'group_chat' as const, displayName: '原会话', activeAtMillis: 1, unreadCount: 3 }
+    const busy = new ArkmeClientError({ code: 'busy', message: 'busy', retryable: true })
+    const loadPage = vi.fn().mockResolvedValueOnce({ directory: 'root', items: [], hasMore: true, nextCursor: 'page-2' })
+      .mockRejectedValue(busy)
+    const store = new ArkmeChatDirectoryStore({ loadPage })
+    store.publish([row])
+    const pending = store.refreshRoot({ force: true })
+    const rejection = expect(pending).rejects.toBe(busy)
+    await vi.runAllTimersAsync()
+    await rejection
+    expect(loadPage.mock.calls).toEqual([[undefined, true], ['page-2', true], ['page-2', true], ['page-2', true]])
+    expect(store.getSnapshot()).toMatchObject({ sources: [row], isRefreshing: false })
+    loadPage.mockResolvedValue({ directory: 'root', items: [row], hasMore: false })
+    await expect(store.refreshRoot({ force: true })).resolves.toEqual([row])
+  })
+
+  it.each([new Error('unknown'), new ArkmeClientError({ code: 'denied', message: 'denied', retryable: false })])(
+    'does not retry a failure without a retryable contract: %s', async error => {
+      vi.useFakeTimers()
+      const loadPage = vi.fn().mockRejectedValue(error)
+      const store = new ArkmeChatDirectoryStore({ loadPage })
+      await expect(store.refreshRoot({ force: true })).rejects.toBe(error)
+      expect(loadPage).toHaveBeenCalledTimes(1)
+      expect(vi.getTimerCount()).toBe(0)
+    },
+  )
+
   it('reconciles only existing chat pins in one publication without touching messages or refreshing', () => {
     const loadPage = vi.fn()
     const store = new ArkmeChatDirectoryStore({ loadPage })

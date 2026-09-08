@@ -1,12 +1,14 @@
 import type { ArkmeChatPinProjection, ArkmeSourceItem, ArkmeSourceList } from '../types.js'
 import { retainNewerArkmeChatPin } from '../chat-pin-projection.js'
 import { arkmeBadgeUnreadCount, projectArkmeChatAttentionFromMuted } from '../chat-attention.js'
-import { callArkme } from './api.js'
+import { ArkmeClientError, callArkme } from './api.js'
 import { arkmeChatSourceIdentityKey, arkmeSourceIdentityKey } from './source-identity.js'
 
 const DEFAULT_ROOT_CACHE_MAX_AGE_MS = 30_000
 const ROOT_DIRECTORY_PAGE_LIMIT = 20
 const MAX_ROOT_PAGES = 10
+// The first retry follows the Host directory read's two-second failure cooldown.
+const ROOT_READ_RETRY_DELAYS_MS = [2_000, 4_000] as const
 
 export type ArkmeClientAccountScope = number | string | undefined
 
@@ -403,8 +405,9 @@ export class ArkmeChatDirectoryStore {
       const seen = new Set<string>()
       let cursor: string | undefined
       for (let pageIndex = 0; pageIndex < MAX_ROOT_PAGES; pageIndex += 1) {
-        const page = await this.loadPage(cursor, options.force === true)
+        const page = await this.loadRootPage(cursor, options.force === true, generation)
         if (generation !== this.generation) return [...this.snapshot.sources]
+        if (page === undefined) return [...this.snapshot.sources]
         for (const source of page.items) {
           const identity = arkmeSourceIdentityKey(source)
           if (seen.has(identity)) continue
@@ -425,6 +428,20 @@ export class ArkmeChatDirectoryStore {
       if (this.refreshInFlight === pending) {
         this.refreshInFlight = undefined
         this.setRefreshing(false)
+      }
+    }
+  }
+
+  private async loadRootPage(cursor: string | undefined, force: boolean, generation: number): Promise<ArkmeSourceList | undefined> {
+    for (let attempt = 0; ; attempt += 1) {
+      if (generation !== this.generation) return undefined
+      try {
+        return await this.loadPage(cursor, force)
+      } catch (error) {
+        if (generation !== this.generation) return undefined
+        const delay = ROOT_READ_RETRY_DELAYS_MS[attempt]
+        if (!(error instanceof ArkmeClientError) || !error.body.retryable || delay === undefined) throw error
+        await new Promise<void>(resolve => { setTimeout(resolve, delay) })
       }
     }
   }

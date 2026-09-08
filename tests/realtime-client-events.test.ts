@@ -1,4 +1,5 @@
-import { createElement } from 'react'
+import { createElement, useSyncExternalStore } from 'react'
+import * as clientApi from '../src/client/api.js'
 import { act, create, type ReactTestRenderer } from 'react-test-renderer'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { arkmeAuthStore } from '../src/client/auth-store.js'
@@ -86,6 +87,48 @@ describe('Chat-owned Bot realtime invalidation', () => {
 })
 
 describe('realtime reconcile routing', () => {
+  it('updates a mounted directory after a policy notification read fails transiently, without another event or focus', async () => {
+    vi.useFakeTimers()
+    let channel!: FakeEventSource
+    class FakeEventSource {
+      onopen: (() => void) | null = null
+      onmessage: ((event: MessageEvent<string>) => void) | null = null
+      constructor() { channel = this }
+      close() {}
+    }
+    vi.stubGlobal('EventSource', FakeEventSource)
+    vi.spyOn(arkmeAuthStore, 'refresh').mockResolvedValue()
+    const row = { sourceKey: 'group', sourceRef: 'group-ref', kind: 'group_chat' as const,
+      displayName: '群聊', activeAtMillis: 1, unreadCount: 3, latestPreview: '消息保持',
+      isPinned: false, chatPolicyUpdatedAtMillis: 1000 }
+    const read = vi.spyOn(clientApi, 'callArkme')
+      .mockRejectedValueOnce(new clientApi.ArkmeClientError({ code: 'arkme-code-1002', message: '服务器繁忙', retryable: true }))
+      .mockResolvedValue({ directory: 'root', items: [{ ...row, isPinned: true, chatPolicyUpdatedAtMillis: 2000 }], hasMore: false })
+    const auth: ArkmeAuthSnapshot = { status: 'authenticated', userId: 42, environment: 'test' }
+    function Harness() {
+      useArkmeRealtimeClientEvents(auth, 1, false)
+      const snapshot = useSyncExternalStore(arkmeChatDirectory.subscribe, arkmeChatDirectory.getSnapshot)
+      return createElement('div', null, snapshot.isRefreshing ? '刷新中' : snapshot.sources[0]?.isPinned ? '已置顶' : '未置顶')
+    }
+    let renderer!: ReactTestRenderer
+    try {
+      await act(async () => { renderer = create(createElement(Harness)) })
+      await act(async () => { arkmeChatDirectory.publish([row]) })
+      await act(async () => {
+        channel.onmessage?.({ data: JSON.stringify({ type: 'chat-policy-invalidated', revision: 1 }) } as MessageEvent<string>)
+      })
+      expect(renderer.toJSON()).toMatchObject({ children: ['未置顶'] })
+      await act(async () => { await vi.advanceTimersByTimeAsync(2000) })
+      expect(renderer.toJSON()).toMatchObject({ children: ['已置顶'] })
+      expect(read).toHaveBeenCalledTimes(2)
+      expect(read.mock.calls.every(([operation]) => operation === 'sources.list')).toBe(true)
+      expect(arkmeChatDirectory.getSnapshot().sources[0]).toMatchObject({ latestPreview: '消息保持', unreadCount: 3 })
+    } finally {
+      if (renderer !== undefined) await act(async () => { renderer.unmount() })
+      vi.useRealTimers()
+    }
+  })
+
   it('applies reconnect pins without triggering directory, message, receipt or notification refreshes', async () => {
     let channel!: FakeEventSource
     class FakeEventSource {
@@ -150,7 +193,7 @@ describe('realtime reconcile routing', () => {
       source.onmessage?.(event)
     })
     expect(invalidate).toHaveBeenCalledOnce()
-    expect(refresh).toHaveBeenCalledExactlyOnceWith({ force: true })
+    expect(refresh).toHaveBeenCalledExactlyOnceWith({ force: true, silent: true })
     expect(invalidate.mock.invocationCallOrder[0]).toBeLessThan(refresh.mock.invocationCallOrder[0]!)
     expect(receipts).not.toHaveBeenCalled()
     expect(interwoven).not.toHaveBeenCalled()
