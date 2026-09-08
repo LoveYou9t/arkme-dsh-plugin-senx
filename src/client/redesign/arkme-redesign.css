@@ -353,10 +353,13 @@ button.arkme-update-rail.is-error { background: #fff0ee !important; color: #b548
   box-shadow: 0 8px 30px rgba(28, 31, 39, .045) !important;
 }
 .arkme-redesign-route-chats .arkme-conversation-composer-inner[data-arkme-primary-composer="true"] {
+  --arkme-primary-composer-idle: #f6f6f6;
+  --arkme-primary-composer-focused: #ffffff;
+  background: var(--arkme-primary-composer-idle, #f6f6f6) !important;
   box-shadow: none !important;
 }
 .arkme-redesign-route-chats .arkme-conversation-composer-inner[data-arkme-primary-composer="true"][data-arkme-composer-focused="true"] {
-  background: color-mix(in srgb, var(--dsw-alias-bg-base, #ffffff) 97%, #000000) !important;
+  background: var(--arkme-primary-composer-focused, #ffffff) !important;
 }
 .arkme-redesign-route-chats .arkme-conversation-composer textarea { min-height: 38px !important; padding: 0 !important; font-size: 14px !important; line-height: 22px !important; }
 .arkme-redesign-task-conversation { font-size: 15px; }
@@ -1385,10 +1388,13 @@ body[data-ds-dark-theme] .arkme-redesign-search-page .arkme-search-box {
   box-shadow: var(--dsw-shadow-lv2) !important;
 }
 body[data-ds-dark-theme] .arkme-redesign-route-chats .arkme-conversation-composer-inner[data-arkme-primary-composer="true"] {
+  --arkme-primary-composer-idle: #151515;
+  --arkme-primary-composer-focused: #000000;
+  background: var(--arkme-primary-composer-idle, #f6f6f6) !important;
   box-shadow: none !important;
 }
 body[data-ds-dark-theme] .arkme-redesign-route-chats .arkme-conversation-composer-inner[data-arkme-primary-composer="true"][data-arkme-composer-focused="true"] {
-  background: color-mix(in srgb, var(--dsw-alias-bg-base, #ffffff) 97%, #000000) !important;
+  background: var(--arkme-primary-composer-focused, #ffffff) !important;
 }
 body[data-ds-dark-theme] .arkme-redesign-task-greeting img {
   filter: invert(1) hue-rotate(180deg);
