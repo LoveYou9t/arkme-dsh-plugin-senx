@@ -50,6 +50,36 @@ export function mergeConversationRows(
     || left.id.localeCompare(right.id))
 }
 
+/** Match the desktop prelude policy while preserving each card's identity. */
+export function projectInterwovenWindow(
+  messages: readonly ArkmeTimelineItem[],
+  moments: readonly ArkmeInterwovenMention[],
+  hasMoreMessages: boolean,
+): { prelude: ArkmeInterwovenMention[]; inline: ArkmeInterwovenMention[] } {
+  const sorted = [...new Map(moments.map(moment => [moment.momentId, moment])).values()]
+    .sort((a, b) => a.occurredAtMillis - b.occurredAtMillis || a.momentId.localeCompare(b.momentId))
+  const oldest = messages.length === 0 ? Infinity : Math.min(...messages.map(message => message.sendAtMillis))
+  const prelude = sorted.filter(moment => moment.occurredAtMillis <= oldest)
+  const inline = sorted.filter(moment => moment.occurredAtMillis > oldest)
+  return { prelude: hasMoreMessages && inline.length > 0 ? [] : prelude, inline }
+}
+
+export function ArkmeInterwovenPrelude({ moments, onOpen }: {
+  moments: readonly ArkmeInterwovenMention[]
+  onOpen: (moment: ArkmeInterwovenMention) => void
+}) {
+  const [expanded, setExpanded] = useState(false)
+  const hiddenCount = Math.max(0, moments.length - 2)
+  return <ul data-arkme-interwoven-prelude style={{ listStyle: 'none', margin: 0, padding: 0, display: 'flex', flexDirection: 'column', gap: 8 }}>
+    {!expanded && hiddenCount > 0 && <li style={styles.momentRow}>
+      <button type="button" data-arkme-interwoven-expand aria-expanded={false}
+        style={styles.card} onClick={() => { setExpanded(true) }}>展开另外{hiddenCount}条更早互动</button>
+    </li>}
+    {(expanded ? moments : moments.slice(-2)).map(moment => <ArkmeInterwovenMentionCard
+      key={moment.momentId} moment={moment} rowId={`moment:${moment.momentId}`} onOpen={onOpen} />)}
+  </ul>
+}
+
 export function interwovenTimeLabel(value: number, now = Date.now()): string {
   const date = new Date(value)
   const current = new Date(now)
