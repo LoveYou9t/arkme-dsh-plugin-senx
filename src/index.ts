@@ -4,6 +4,7 @@ import { createHash, createHmac, randomUUID } from 'node:crypto'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { Context } from '@deepseek-ai/cordis'
+import type {} from '@deepseek-ai/dsh-attachment'
 import type {} from '@deepseek-ai/dsh-llm'
 import Schema from '@deepseek-ai/schemastery'
 
@@ -412,6 +413,7 @@ export function apply(ctx: Context, config: Config): void {
     registerManagedAiProvider(modelCtx, {
       intelligentBaseUrl: config.intelligentBaseUrl,
       credentialOwner: service,
+      resolveAttachmentReader: () => modelCtx.get('attachments'),
     })
   })
   registerDSHAgentInputRecordSync(ctx, service)
