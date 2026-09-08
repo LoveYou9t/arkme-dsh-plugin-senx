@@ -122,7 +122,11 @@ export const ArkmeMarkdownComposerInput = forwardRef<ArkmeRichComposerHandle, Ar
     getCaretGeometry() {
       if (!editor) return undefined
       const rect = editor.view.coordsAtPos(editor.state.selection.head)
-      return { ...rect, width: rect.right - rect.left, height: rect.bottom - rect.top }
+      // Native DOMRect coordinates are prototype getters, so spreading drops them.
+      return {
+        left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom,
+        width: rect.right - rect.left, height: rect.bottom - rect.top,
+      }
     },
     getEditorGeometry() { return editor?.view.dom.getBoundingClientRect() },
   }), [editor])
