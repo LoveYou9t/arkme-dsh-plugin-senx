@@ -36,6 +36,7 @@ import {
 } from './link-metadata.js'
 import type { ArkmeFileBackgroundSoundInput } from './file-transfer-contract.js'
 import { arkmeFileBackgroundSound, arkmeRichBackgroundSound } from './record-background-sound.js'
+import { parseArkmeRecordReeditAttachments } from './record-reedit-contract.js'
 import type { ManagedOpenApiMcpController } from './openapi-mcp/controller.js'
 import type { TeamServicePort } from './services/team-service.js'
 
@@ -2023,22 +2024,37 @@ export async function dispatchArkmeHostOperation(
       stringParam(params, 'itemUid'),
     )
     case 'source.record-reedit.draft.put': {
-      const prepared = await service.prepareRecordReedit({
+      const prepared = await service.saveRecordReeditDraft({
         sourceRef: stringParam(params, 'sourceRef'),
         itemUid: stringParam(params, 'itemUid'),
-        newText: stringParam(params, 'newText'),
+        ...(params.newText === undefined ? {} : { newText: stringParam(params, 'newText') }),
         ...(params.newTitle === undefined ? {} : { newTitle: stringParam(params, 'newTitle') }),
-      }, { expectedBaseVersion: Math.trunc(numberParam(params, 'expectedVersion', 0)) })
+        ...(params.attachments === undefined ? {} : { attachments: parseArkmeRecordReeditAttachments(params.attachments) }),
+        ...(params.expectedDraftRevision === undefined ? {} : { expectedDraftRevision: numberParam(params, 'expectedDraftRevision', -1) }),
+        expectedVersion: Math.trunc(numberParam(params, 'expectedVersion', 0)),
+      })
       return { saved: true, draftRevision: prepared.draftRevision }
     }
+    case 'source.record-reedit.submissions': return await service.recordReeditSubmissions(stringParam(params, 'sourceRef'))
+    case 'source.record-reedit.resume':
+      await service.resumeRecordReeditSubmissions(stringParam(params, 'sourceRef'), params.reconcile === true)
+      return { resumed: true }
+    case 'source.record-reedit.acknowledge': {
+      await service.acknowledgeRecordReeditSubmission(stringParam(params, 'sourceRef'), stringParam(params, 'submissionId'), numberParam(params, 'version', 0))
+      return { acknowledged: true }
+    }
+    case 'source.record-reedit.submit':
     case 'source.record-reedit.update': {
       const input = {
         sourceRef: stringParam(params, 'sourceRef'),
         itemUid: stringParam(params, 'itemUid'),
-        newText: stringParam(params, 'newText'),
+        ...(params.newText === undefined ? {} : { newText: stringParam(params, 'newText') }),
         ...(params.newTitle === undefined ? {} : { newTitle: stringParam(params, 'newTitle') }),
+        ...(params.attachments === undefined ? {} : { attachments: parseArkmeRecordReeditAttachments(params.attachments) }),
+        ...(params.expectedDraftRevision === undefined ? {} : { expectedDraftRevision: numberParam(params, 'expectedDraftRevision', -1) }),
       }
       const expectedBaseVersion = Math.trunc(numberParam(params, 'expectedVersion', 0))
+      if (operation === 'source.record-reedit.submit') return await service.submitRecordReedit({ ...input, expectedVersion: expectedBaseVersion })
       const prepared = await service.prepareRecordReedit(input, { expectedBaseVersion })
       return await service.commitRecordReedit(prepared)
     }
@@ -2046,6 +2062,10 @@ export async function dispatchArkmeHostOperation(
       const prepared = await service.prepareDiscardRecordReeditDraft(
         stringParam(params, 'sourceRef'), stringParam(params, 'itemUid'),
       )
+      if (params.expectedDraftRevision !== undefined
+        && params.expectedDraftRevision !== prepared.draftRevision) {
+        throw new ArkmePluginError('record-reedit-draft-changed', '草稿已变化，请重新读取后再确认放弃', false, 409)
+      }
       return await service.discardRecordReeditDraft(prepared)
     }
     case 'calls.outgoing.intent.claim': return await service.claimOutgoingCallIntent()

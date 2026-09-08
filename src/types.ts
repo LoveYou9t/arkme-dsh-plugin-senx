@@ -1971,6 +1971,7 @@ export interface ArkmeRecordReeditDraft {
   itemUid: string
   title: string
   textContent: string
+  attachments?: import('./record-reedit-contract.js').ArkmeRecordReeditAttachmentSelection[]
   baseVersion: number
   baseContentFingerprint: string
   editDurationMillis: number
@@ -3378,6 +3379,10 @@ export type ArkmePluginOperation =
   | 'source.record-reedit.draft.put'
   | 'source.record-reedit.draft.delete'
   | 'source.record-reedit.update'
+  | 'source.record-reedit.submit'
+  | 'source.record-reedit.submissions'
+  | 'source.record-reedit.resume'
+  | 'source.record-reedit.acknowledge'
   | 'calls.outgoing.intent.claim'
   | 'calls.outgoing.intent.resolve'
   | 'calls.outgoing.prepare'

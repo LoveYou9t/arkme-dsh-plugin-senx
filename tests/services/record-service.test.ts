@@ -20,6 +20,21 @@ const config: ArkmeServiceConfig = {
 }
 
 describe('RecordService', () => {
+  it.each(['timeline', 'record-list'] as const)('carries partial media evidence through the %s projection', path => {
+    const media = new MediaService({ config } as ServiceRuntime, {} as never, {} as never, { recordUid() { return 'r' } })
+    const service = new RecordService({} as ServiceRuntime, media, {} as never)
+    const raw = { record_uid: 'r', record_core: { record_uid: 'r', version: 8, status: 1,
+      content_payload: { media_refs: [{ file_asset_uid: 'a' }, { file_asset_uid: 'b' }] } } }
+    const displays = ['a', 'b'].map(file_asset_uid => ({ file_asset_uid, file_kind: 1,
+      file_name: `${file_asset_uid}.png`, preview_url: `https://example.test/${file_asset_uid}` }))
+    const project = (displayItems: unknown[]) => path === 'timeline'
+      ? service.recordTimelineItemFromRaw(raw, 42, { displayItems })
+      : service.recordTimelineItem(service.recordItem(raw, 42, { displayItems })!)
+    expect(project(displays.slice(0, 1))).toMatchObject({ version: 8, mediaUnavailable: true, contentBlocks: [{ fileAssetUid: 'a' }] })
+    expect(project(displays).contentBlocks).toHaveLength(2)
+    expect(project(displays).mediaUnavailable).not.toBe(true)
+  })
+
   it('preserves the Flutter battery contract including an explicit zero percent', () => {
     expect(arkmeRecordCaptureContextPayload({ electric: 0, charge: 2 })).toEqual({ electric: 0, charge: 2 })
     expect(arkmeRecordCaptureContextPayload({ electric: 100, charge: 1 })).toEqual({ electric: 100, charge: 1 })
@@ -109,7 +124,10 @@ describe('RecordService', () => {
         throw new Error(`unexpected path: ${path}`)
       },
     }
-    const service = new RecordService(runtime as never, {} as MediaService, {
+    const service = new RecordService(runtime as never, {
+      async hydrateRecordMediaPage() { return { displayItemsByRecordUid: new Map(), unavailableRecordUids: new Set() } },
+      richContentBlocks() { return [] },
+    } as unknown as MediaService, {
       async openSourceRef() {
         return { version: 1 as const, userId: 42, kind: 'group_chat' as const, ownerRef: 'group-1', displayName: '研发群' }
       },
@@ -638,7 +656,7 @@ describe('RecordService', () => {
 
     const restored = await reloadedService.prepareRecordReedit({ sourceRef: 'source-ref-new', itemUid: 'record-1' })
     expect(restored).toMatchObject({
-      draftRevision: first.draftRevision, baseVersion: 8,
+      draftRevision: first.draftRevision + 1, baseVersion: 8,
       oldTextPreview: '其他端已更新正文', newTextPreview: '未提交草稿', sourceRef: 'source-ref-new',
     })
     await expect(stateStore.getRecordReeditDraft(42, restored.sourceIdentityKey, 'record-1')).resolves.toMatchObject({
@@ -705,7 +723,7 @@ describe('RecordService', () => {
 
   it('restores a record extension parent preview from the durable home-feed contract', () => {
     const media = {
-      richContentBlocks: vi.fn((raw: unknown) => {
+      recordMediaUnavailable: () => false, richContentBlocks: vi.fn((raw: unknown) => {
         const core = (raw as { record_core?: { record_uid?: string } }).record_core
         return core?.record_uid === 'record-parent' ? [{
           kind: 'image', mediaRef: 'parent-image-ref', fileName: 'parent.png', mimeType: 'image/png', size: 12, sortOrder: 0,

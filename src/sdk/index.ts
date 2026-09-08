@@ -1871,10 +1871,10 @@ export class ArkmeSdk {
     return `${this.route}/files/local?ref=${encodeURIComponent(fileRef)}${download ? '&download=1' : ''}`
   }
 
-  /** Stage locally only. Cloud upload starts when sendFiles accepts a task. */
-  async stageFile(file: Blob & { name?: string }, options: { fileName?: string; expectedUserId?: number; signal?: AbortSignal } = {}): Promise<ArkmeLocalFile> {
+  /** Stage locally. Reference-managed files require a Host-persisted draft or task to retain them beyond seven days. */
+  async stageFile(file: Blob & { name?: string }, options: { fileName?: string; expectedUserId?: number; signal?: AbortSignal; retention?: 'references' } = {}): Promise<ArkmeLocalFile> {
     const response = await this.fetchImpl(`${this.route}/files/stage`, {
-      method: 'POST', headers: { 'Content-Type': file.type || 'application/octet-stream', 'X-Arkme-File-Name': encodeURIComponent(options.fileName ?? file.name ?? 'attachment'), ...expectedUserIdHeaders(options.expectedUserId) },
+      method: 'POST', headers: { 'Content-Type': file.type || 'application/octet-stream', 'X-Arkme-File-Name': encodeURIComponent(options.fileName ?? file.name ?? 'attachment'), ...expectedUserIdHeaders(options.expectedUserId), ...(options.retention ? { 'X-Arkme-File-Retention': options.retention } : {}) },
       body: file, ...(options.signal === undefined ? {} : { signal: options.signal }),
     })
     const payload = await response.json() as ArkmePluginResponse<ArkmeLocalFile>

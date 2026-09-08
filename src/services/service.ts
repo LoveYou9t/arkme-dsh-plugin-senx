@@ -59,12 +59,19 @@ export interface StateStore {
   putRecordReeditDraft(
     userId: number,
     draft: Omit<ArkmeRecordReeditDraft, 'draftRevision'>,
+    expectedRevision?: number,
   ): Promise<ArkmeRecordReeditDraft>
+  recordReeditFileRefs(userId: number): Promise<string[]>
+  listRecordReeditSubmissions(userId: number): Promise<import('../record-reedit-contract.js').ArkmeRecordReeditSubmission[]>
+  acknowledgeRecordReeditSubmission(userId: number, identity: string, submissionId: string, version: number): Promise<void>
+  discardRecordReeditCandidate(userId: number, sourceIdentityKey: string, itemUid: string, expectedRevision: number): Promise<boolean>
+  putRecordReeditSubmission(userId: number, job: import('../record-reedit-contract.js').ArkmeRecordReeditSubmission, expectedId?: string): Promise<void>
   removeRecordReeditDraft(
     userId: number,
     sourceIdentityKey: string,
     itemUid: string,
     expectedRevision: number,
+    expectedCandidate?: ArkmeRecordReeditDraft,
   ): Promise<boolean>
   listRecordingImportJobs(userId: number): Promise<RecordingImportJob[]>
   listAllRecordingImportJobs(): Promise<RecordingImportJob[]>

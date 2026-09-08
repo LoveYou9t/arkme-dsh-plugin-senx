@@ -18,6 +18,7 @@ import { createArkmeSdk } from '../sdk/index.js'
 import { ArkmeRichText } from './ArkmeRichText.js'
 import { arkmeEmojiPlainText } from './arkme-emoji.js'
 import type { ArkmeLinkLabelMode, ArkmeLinkRenderer } from './ArkmeLinkText.js'
+import { retainPartialTimelineMedia } from './timeline-media.js'
 
 const mediaRoute = '/arkme-self/api/media'
 const textCollapseCharacterThreshold = 300
@@ -190,13 +191,13 @@ function ArkmeMessageRichText({
   return <ArkmeRichText text={text} highlightMentions={highlightMentions} linkLabelMode={linkLabelMode} renderLink={renderLink} />
 }
 
-function mediaUrl(block: ArkmeContentBlock): string {
+export function arkmeContentMediaUrl(block: ArkmeContentBlock): string {
   if (block.localFileRef !== undefined) return arkmeLocalFileUrl(block.localFileRef)
   return `${mediaRoute}?ref=${encodeURIComponent(block.mediaRef)}`
 }
 
 function mediaAttemptUrl(block: ArkmeContentBlock, attempt: number): string {
-  const url = mediaUrl(block)
+  const url = arkmeContentMediaUrl(block)
   return attempt > 0 ? `${url}${url.includes('?') ? '&' : '?'}retry=${String(attempt)}` : url
 }
 
@@ -448,7 +449,7 @@ export function ArkmeMediaPreview({ blocks, selected, onSelect, onClose, preview
   const [imageMode, setImageMode] = useState<ImagePreviewMode>('contained')
   const [imageDragging, setImageDragging] = useState(false)
   const original = useArkmeOriginal(selected, selected.kind === 'image')
-  const originalUrl = previewUrl ?? (original.localRef === undefined ? mediaUrl(selected) : arkmeLocalFileUrl(original.localRef))
+  const originalUrl = previewUrl ?? (original.localRef === undefined ? arkmeContentMediaUrl(selected) : arkmeLocalFileUrl(original.localRef))
 
   useEffect(() => {
     setImageMode('contained')
@@ -686,7 +687,7 @@ export function arkmeRelatedRecordingItemFromSharedRecording(item: ArkmeTimeline
     : arkmeRelatedRecordingItemFromSharedRecordingPreview(item.sharedRecording, item)
 }
 
-export function ArkmeMessageContent({ item, sourceRef, onLongArticleUpdated, highlightMentions = false, collapseText = true, presentation = 'bubble', shareWebsite, onMessageCopyLinkOpen }: {
+export function ArkmeMessageContent({ item, sourceRef, onLongArticleUpdated, highlightMentions = false, collapseText = true, presentation = 'bubble', shareWebsite, onMessageCopyLinkOpen, mediaSelectionIsExplicit = false }: {
   item: ArkmeTimelineItem
   presentation?: 'bubble' | 'detail'
   sourceRef?: string
@@ -695,23 +696,17 @@ export function ArkmeMessageContent({ item, sourceRef, onLongArticleUpdated, hig
   collapseText?: boolean
   shareWebsite?: string
   onMessageCopyLinkOpen?: (sid: string) => void
+  mediaSelectionIsExplicit?: boolean
 }) {
   const lastMedia = useRef<{ sourceRef: string | undefined; item: ArkmeTimelineItem }>()
   const snapshot = lastMedia.current
   const previous = snapshot !== undefined && snapshot.sourceRef === sourceRef ? snapshot.item : undefined
   const version = item.recordVersion ?? item.version
-  const sameRevision = version !== undefined && version > 0
-    && version === (previous?.recordVersion ?? previous?.version)
-  // A failed media lookup is not an authoritative attachment deletion. Keep only
-  // this mounted record's same-version display until a complete response arrives.
-  const retained = item.mediaUnavailable === true && sameRevision && item.status === 1
-    && previous?.status === 1 && previous.itemUid === item.itemUid
-    && (item.contentBlocks?.length ?? 0) === 0 ? previous.contentBlocks : undefined
-  const displayBlocks = retained ?? item.contentBlocks
+  const display = mediaSelectionIsExplicit ? item : retainPartialTimelineMedia(previous, item)
   useEffect(() => {
-    lastMedia.current = { sourceRef, item: { ...item, ...(displayBlocks === undefined ? {} : { contentBlocks: displayBlocks }) } }
-  }, [item, sourceRef, displayBlocks])
-  const blocks = [...(displayBlocks ?? [])].sort((left, right) => left.sortOrder - right.sortOrder)
+    lastMedia.current = { sourceRef, item: display }
+  }, [display, sourceRef])
+  const blocks = [...(display.contentBlocks ?? [])].sort((left, right) => left.sortOrder - right.sortOrder)
   const visualBlocks = blocks.filter(block => block.kind !== 'audio')
   const [preview, setPreview] = useState<{ block: ArkmeContentBlock; forceDownload?: boolean }>()
   const [articleOpen, setArticleOpen] = useState(false)
