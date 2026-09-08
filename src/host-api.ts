@@ -1570,8 +1570,11 @@ export async function dispatchArkmeHostOperation(
         limit: numberParam(params, 'limit', 30),
         ...(stringParam(params, 'cursor') === '' ? {} : { cursor: stringParam(params, 'cursor') }),
         refresh: booleanParam(params, 'refresh'),
+        localFirst: booleanParam(params, 'localFirst'),
+        ...(requestSignal === undefined ? {} : { signal: requestSignal }),
       },
     )
+    case 'conversation.directory.bot-pin': return await service.setBotDirectoryPin(stringParam(params, 'botRef'), booleanParam(params, 'pinned'))
     case 'conversation.directory.visibility.query': return await service.conversationDirectoryVisibilitySnapshot(
       stringListParam(params, 'sourceRefs').map(value => value.trim()).filter(value => value !== ''),
       stringListParam(params, 'botRefs').map(value => value.trim()).filter(value => value !== ''),

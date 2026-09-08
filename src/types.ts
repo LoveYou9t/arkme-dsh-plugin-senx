@@ -1168,6 +1168,7 @@ export interface ArkmeProviderCapabilities {
     /** Authorized image-library listing with opaque, account-bound media references is available. */
     imageLibrary?: true
     sourceDirectory: true
+    localFirstDirectory?: true
     sourceTimeline: true
     /** Forward snapshots include typed transcripts and account-bound attachment references. */
     forwardContent?: true
@@ -1412,6 +1413,8 @@ export interface ArkmeSourceItem {
   /** Chat policy.update_at for ordering pin projections; independent of message sequence. */
   chatPolicyUpdatedAtMillis?: number
   latestSequence?: number
+  /** Current viewer's confirmed Chat read cursor; distinct from the last message sequence. */
+  readSequence?: number
   recordCount?: number
 }
 
@@ -1440,7 +1443,25 @@ export interface ArkmeConversationDirectoryVisibility {
   items: ArkmeConversationDirectoryVisibilityItem[]
 }
 
+/** Account-scoped directory progress. Cache availability never proves remote completeness. */
+export interface ArkmeDirectoryProjection {
+  removedSourceKeys?: string[]
+  removedBotRefs?: string[]
+  botPinnedKeys?: string[]
+  sendToSelf?: ArkmeSourceItem
+  arkoProfile?: ArkmeArkoProfile
+  arkoPreview?: { text: string; createdAtMillis: number }
+  avatarRefs?: string[]
+  revision: number
+  phase: 'cached' | 'loading' | 'syncing' | 'complete' | 'failed'
+  cachedAtMillis: number
+  visibility: ArkmeConversationDirectoryVisibilityItem[]
+  bots: ArkmeBotSummary[]
+  error?: string
+}
+
 export interface ArkmeSourceList {
+  projection?: ArkmeDirectoryProjection
   directory: ArkmeSourceDirectory
   items: ArkmeSourceItem[]
   total?: number
@@ -3160,6 +3181,10 @@ export interface ArkmeChatAttentionSummary {
 }
 
 export type ArkmeChatClientEvent = {
+  type: 'directory-update'
+  revision: number
+  page: ArkmeSourceList
+} | {
   type: 'reconcile'
   revision: number
   connected: boolean
@@ -3359,6 +3384,7 @@ export type ArkmePluginOperation =
   | 'extensions.reviews.create'
   | 'extensions.audit.check'
   | 'sources.list'
+  | 'conversation.directory.bot-pin'
   | 'conversation.directory.visibility.query'
   | 'conversation.directory.visibility.set'
   | 'source.directory.policy.set'

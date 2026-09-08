@@ -1,6 +1,6 @@
 import {
   useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore,
-  type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent,
+  type ReactNode, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent,
 } from 'react'
 import type { PropsLocale, PropsRenderSlots, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type { SessionSearchResultItem } from '@deepseek-ai/dsh-client-runtime/client'
@@ -146,12 +146,25 @@ export type ArkmePersistentSidebarProps = PropsRuntime<'sidebar'>
     openDshSession?(sessionId: string): void
   }
 
-/** Arkme permanently owns the DSH sidebar seat so navigation stays stable across Arkme and Harness conversations. */
+/** Only the two directory panels are retained; account keys delimit their lifetime. */
+function PersistentDirectoryPanel({ active, mode, children }: { active: boolean; mode: 'contacts' | 'conversations'; children: ReactNode }) {
+  const [visited, setVisited] = useState(active)
+  useEffect(() => { if (active) setVisited(true) }, [active])
+  if (!active && !visited) return null
+  return <div hidden={!active} aria-hidden={!active || undefined}
+    style={{ ...styles.taskDirectory, ...(active ? {} : { display: 'none' }) }}
+    data-arkme-directory-mode={active ? mode : undefined} data-arkme-retained-directory={mode}>
+    {children}
+  </div>
+}
+
+/** Arkme permanently owns the DSH sidebar seat. */
 export function ArkmePersistentSidebar({
   collapsed, width, useSessions, renderSlot, closeDetails,
   searchDshMessages = async () => ({ items: [], hasMore: false }), openDshSession = () => undefined,
 }: ArkmePersistentSidebarProps) {
   const sessionState = useSessions(state => state)
+  const directorySnapshot = useSyncExternalStore(arkmeChatDirectory.subscribe, arkmeChatDirectory.getSnapshot, arkmeChatDirectory.getSnapshot)
   const ui = useSyncExternalStore(arkmeUi.subscribe, arkmeUi.getViewSnapshot, arkmeUi.getViewSnapshot)
   const recordRevision = useSyncExternalStore(
     arkmeUi.subscribe, arkmeUi.getRecordRevision, arkmeUi.getRecordRevision,
@@ -210,7 +223,7 @@ export function ArkmePersistentSidebar({
   }, [authenticatedUserId, recordRevision])
   const sendToSelfSource = sendToSelfState !== undefined && sendToSelfState.userId === authenticatedUserId
     ? sendToSelfState.source
-    : undefined
+    : directorySnapshot.projection?.sendToSelf
   const searchDsh = useCallback(async (query: string, signal: AbortSignal): Promise<ArkmeDshMessageSearchResult> => {
     const result = await searchDshMessages(query, signal)
     return {
@@ -375,8 +388,8 @@ export function ArkmePersistentSidebar({
       taskExpanded
       currentSessionId={sessionState.current}
     />
-    {directoryVisible && <div style={styles.taskDirectory} data-arkme-directory-mode={contactsMode ? 'contacts' : 'conversations'}>
-      {contactsMode ? <ContactDirectorySurface
+    <PersistentDirectoryPanel key={`${contactsAccountKey}:contacts`} active={directoryVisible && contactsMode} mode="contacts">
+      <ContactDirectorySurface active={directoryVisible && contactsMode}
         accountKey={contactsAccountKey ?? ''} selection={scopedContacts.selection} refreshRevision={scopedContacts.refreshRevision}
         expandedSections={scopedContacts.expandedSections}
         {...(contactsDirectoryCache === undefined ? {} : {
@@ -414,7 +427,11 @@ export function ArkmePersistentSidebar({
           }).catch(() => undefined)
           arkmeUi.openBotConversation(bot)
         }}
-      /> : <ArkmeNavigation
+      />
+    </PersistentDirectoryPanel>
+    <PersistentDirectoryPanel key={`${contactsAccountKey}:conversations`} active={directoryVisible && !contactsMode} mode="conversations">
+      <ArkmeNavigation
+        active={directoryVisible && !contactsMode}
         wide
         avatarOnly={avatarOnly}
         embeddedProductShell
@@ -424,8 +441,8 @@ export function ArkmePersistentSidebar({
         searchDshMessages={searchDsh}
         onOpenDshSession={sessionId => { openDshSession(sessionId); arkmeUi.showHarness() }}
         {...(sendToSelfSource === undefined ? {} : { sendToSelfSource })}
-      />}
-    </div>}
+      />
+    </PersistentDirectoryPanel>
     {directoryVisible && !contactsMode && sidebarResizeHandle}
   </aside>
 }

@@ -11,12 +11,13 @@ import type {
 } from '../../types.js'
 
 export interface ArkmeConversationToolPort {
+  setBotDirectoryPin(botRef: string, pinned: boolean): Promise<void>
   cachedSourceMembers(sourceRef: string, signal?: AbortSignal): Promise<ArkmeConversationMemberCache | undefined>
   pageSourceMembers(sourceRef: string, options?: { cursor?: string; limit?: number; signal?: AbortSignal }): Promise<ArkmeConversationMemberPage>
   sourceMembersPresentation(sourceRef: string, memberRefs: readonly string[], options?: { signal?: AbortSignal }): Promise<ArkmeConversationMemberPresentation>
   listSources(
     directory: ArkmeSourceDirectory,
-    options?: { limit?: number; cursor?: string; signal?: AbortSignal },
+    options?: { limit?: number; cursor?: string; signal?: AbortSignal; localFirst?: boolean },
   ): Promise<ArkmeSourceList>
   readSource(
     sourceRef: string,

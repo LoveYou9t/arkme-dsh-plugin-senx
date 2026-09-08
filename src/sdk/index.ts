@@ -1302,13 +1302,21 @@ export class ArkmeSdk {
 
   async listSources(
     directory: ArkmeSourceDirectory,
-    options: { limit?: number; cursor?: string; signal?: AbortSignal } = {},
+    options: { limit?: number; cursor?: string; signal?: AbortSignal; localFirst?: boolean; refresh?: boolean } = {},
   ): Promise<ArkmeSourceList> {
+    if (options.localFirst === true && (await this.capabilities(options.signal)).features.localFirstDirectory !== true) throw new Error('当前 Provider 不支持本地会话目录')
     return await this.call<ArkmeSourceList>('sources.list', {
       directory,
+      ...(options.localFirst === undefined ? {} : { localFirst: options.localFirst }),
+      ...(options.refresh === undefined ? {} : { refresh: options.refresh }),
       ...(options.limit === undefined ? {} : { limit: options.limit }),
       ...(options.cursor === undefined ? {} : { cursor: options.cursor }),
     }, options.signal)
+  }
+
+  async setBotDirectoryPin(botRef: string, pinned: boolean, signal?: AbortSignal): Promise<void> {
+    if ((await this.capabilities(signal)).features.localFirstDirectory !== true) throw new Error('当前 Provider 不支持本地会话目录')
+    await this.call('conversation.directory.bot-pin', { botRef, pinned }, signal)
   }
 
   async listGroupMembers(sourceRef: string, signal?: AbortSignal): Promise<ArkmeGroupMemberList> {

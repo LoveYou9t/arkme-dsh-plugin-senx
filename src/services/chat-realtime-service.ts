@@ -131,6 +131,7 @@ function safeFailureMessage(error: unknown): string {
 }
 
 export class ChatRealtimeService {
+  directoryBaseline?: () => Promise<import('../types.js').ArkmeSourceList>
   private disposed = false
   private readonly chatRealtime: ArkmeChatRealtimeRuntime
   private readonly chatClientListeners = new Set<(event: ArkmeChatClientEvent) => void>()
@@ -685,13 +686,12 @@ export class ChatRealtimeService {
       this.notificationBaselineSequences.clear()
       const sequences = new Map<string, number>()
       const pins: ArkmeChatPinProjection[] = []
-      this.source.invalidateSourceListCache(session.userId, 'root')
+      const shared = this.directoryBaseline === undefined ? undefined : await this.directoryBaseline()
       let cursor: string | undefined
-      for (let pageIndex = 0; pageIndex < 10; pageIndex += 1) {
-        const page = await this.source.listSources('root', {
-          limit: 50,
-          refresh: true,
-          ...(cursor === undefined ? {} : { cursor }),
+      const visited = new Set<string>()
+      while (true) {
+        const page = shared ?? await this.source.listSources('root', {
+          limit: 20, refresh: true, ...(cursor === undefined ? {} : { cursor }),
         })
         const activeSession = await this.runtime.sessionStore.read()
         const state = this.chatRealtime.state()
@@ -706,8 +706,10 @@ export class ChatRealtimeService {
             pins.push({ sourceKey: item.sourceKey, pinned: item.isPinned, policyUpdatedAtMillis: item.chatPolicyUpdatedAtMillis })
           }
         }
-        if (!page.hasMore || page.nextCursor === undefined) break
+        if (shared !== undefined || !page.hasMore) break
+        if (page.nextCursor === undefined || visited.has(page.nextCursor)) throw new Error('Notification directory cursor is invalid')
         cursor = page.nextCursor
+        visited.add(cursor)
       }
       const activeSession = await this.runtime.sessionStore.read()
       const state = this.chatRealtime.state()
