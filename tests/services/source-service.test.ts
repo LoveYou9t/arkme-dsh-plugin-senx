@@ -209,28 +209,171 @@ describe('SourceService', () => {
     expect(service.cachedChatSource(42, 'group-1')).not.toHaveProperty('groupAvatar')
   })
 
-  it('keeps chat directory attachment previews aligned with the real media kind', () => {
-    expect(arkmeChatConversationPreview({
-      content_payload: { media_refs: [{ file_asset_uid: 'pdf-asset', file_name: '方案.pdf', file_kind: 4, mime_type: 'application/pdf' }] },
-    })).toBe('[文件]')
-    expect(arkmeChatConversationPreview({
-      content_payload: { media_refs: [{ file_asset_uid: 'video-asset', file_name: '演示.mp4', file_kind: 3, mime_type: 'video/mp4' }] },
-    })).toBe('[视频]')
-    expect(arkmeChatConversationPreview({
-      content_payload: { media_refs: [{ file_asset_uid: 'image-asset' }] },
-      media_display_items: [{ file_asset_uid: 'image-asset', file_name: '截图.jpg', file_kind: 1, mime_type: 'image/jpeg' }],
-    })).toBe('[图片]')
-    expect(arkmeChatConversationPreview({
-      content_payload: { media_refs: [{ file_asset_uid: 'legacy-file', file_name: '归档.zip' }] },
-    })).toBe('[文件]')
-    expect(arkmeTimelineConversationPreview({
-      itemUid: 'file-item', title: '', textContent: '', sendAtMillis: 1, senderName: '我', isMe: true,
-      status: 1, displayKind: 0,
-      contentBlocks: [{ kind: 'file', mediaRef: 'file-ref', fileName: '方案.pdf', mimeType: 'application/pdf', size: 1, sortOrder: 0 }],
-    })).toBe('[文件]')
+  it('builds Jotmo-compatible conversation previews from text and safe media metadata', () => {
+    const cases: Array<{ name: string; raw: Record<string, unknown>; expected: string }> = [
+      {
+        name: 'image',
+        raw: { content_payload: { media_refs: [{ file_type: 1, file_name: 'photo.png' }] } },
+        expected: '[图片]',
+      },
+      {
+        name: 'file',
+        raw: { content_payload: { media_refs: [{ file_type: 6, file_name: 'contract.pdf' }] } },
+        expected: '[文件]',
+      },
+      {
+        name: 'video',
+        raw: { content_payload: { media_refs: [{ file_type: 3, file_name: 'clip.mp4' }] } },
+        expected: '[视频]',
+      },
+      {
+        name: 'voice',
+        raw: { content_payload: { voice: { source_file_asset_uid: 'voice-1' } } },
+        expected: '[语音]',
+      },
+      {
+        name: 'image and text',
+        raw: {
+          text_content: '  图文\n正文  ',
+          content_payload: { media_refs: [{ file_type: 1, file_name: 'photo.png' }] },
+        },
+        expected: '[图片]图文 正文',
+      },
+      {
+        name: 'media and rich emoji token',
+        raw: {
+          text_content: '说明[jm_emoji:red_angry_face]',
+          content_payload: { media_refs: [{ file_type: 1, file_name: 'photo.png' }] },
+        },
+        expected: '[图片]说明[jm_emoji:red_angry_face]',
+      },
+      {
+        name: 'media priority ignores payload order',
+        raw: {
+          text_content: '混合',
+          content_payload: { media_refs: [
+            { file_type: 2, file_name: 'voice.m4a' },
+            { file_type: 1, file_name: 'photo.png' },
+            { file_type: 3, file_name: 'clip.mp4' },
+            { file_type: 6, file_name: 'contract.pdf' },
+          ] },
+        },
+        expected: '[文件]混合',
+      },
+      {
+        name: 'business file type wins over misleading MIME',
+        raw: {
+          content_payload: { media_refs: [{ file_type: 6, file_name: 'photo.png', mime_type: 'image/png' }] },
+        },
+        expected: '[文件]',
+      },
+      {
+        name: 'MIME corrects a stale file kind',
+        raw: {
+          content_payload: { media_refs: [{ file_kind: 4, file_name: 'photo.png', mime_type: 'image/png' }] },
+        },
+        expected: '[图片]',
+      },
+      {
+        name: 'nested current text outranks an outer stale summary',
+        raw: {
+          record: { summary: '旧摘要', payload: { text_content: '真实正文' } },
+        },
+        expected: '真实正文',
+      },
+      {
+        name: 'background sound is not a visible attachment',
+        raw: {
+          text_content: '快记',
+          content_payload: { media_refs: [{ file_type: 2, content_file_role: 4, file_name: 'ambient.m4a' }] },
+        },
+        expected: '快记',
+      },
+      {
+        name: 'sticker render role',
+        raw: { content_payload: { media_refs: [{ render_role: 3, file_type: 1, file_name: 'sticker.webp' }] } },
+        expected: '[表情]',
+      },
+      {
+        name: 'legacy sticker render kind',
+        raw: { content_payload: { render_kind: 'sticker' } },
+        expected: '[表情]',
+      },
+      {
+        name: 'known inline emoji already represents the sticker',
+        raw: {
+          text_content: '[jm_emoji:heart_eyes]',
+          content_payload: { media_refs: [{ render_role: 3, file_type: 1, file_name: 'sticker.webp' }] },
+        },
+        expected: '[jm_emoji:heart_eyes]',
+      },
+      {
+        name: 'unknown inline emoji remains visible',
+        raw: {
+          text_content: '[jm_emoji:not_exists]',
+          content_payload: { media_refs: [{ render_role: 3, file_type: 1, file_name: 'sticker.webp' }] },
+        },
+        expected: '[表情][jm_emoji:not_exists]',
+      },
+    ]
+
+    for (const testCase of cases) {
+      expect(arkmeChatConversationPreview(testCase.raw), testCase.name).toBe(testCase.expected)
+    }
   })
 
-  it('updates a pin in the chat policy and the cloud topic pin policy', async () => {
+  it('truncates previews by code point without splitting rich emoji tokens', () => {
+    const prefix = '字'.repeat(299)
+    expect(arkmeChatConversationPreview({ text_content: `${prefix}[jm_emoji:heart_eyes]尾` })).toBe(prefix)
+    expect(arkmeChatConversationPreview({ text_content: `${prefix}😠尾` })).toBe(`${prefix}😠`)
+  })
+
+  it('combines Markdown plain-text summaries with rich media preview markers', () => {
+    expect(arkmeChatConversationPreview({
+      text_content: '## 发布\n\n**正文**',
+      content_payload: {
+        text_format: 'markdown',
+        media_refs: [{ file_type: 1, file_name: 'photo.png' }],
+      },
+    })).toBe('[图片]发布 正文')
+    expect(arkmeChatConversationPreview({
+      record: {
+        summary: '旧摘要',
+        payload: {
+          text_content: '**新的**\n\n- 内容', text_format: 'markdown',
+          media_refs: [{ file_type: 6, file_name: 'contract.pdf' }],
+        },
+      },
+    })).toBe('[文件]新的 内容')
+  })
+
+  it('keeps Markdown summaries in legacy timeline media previews', () => {
+    expect(arkmeTimelineConversationPreview({
+      itemUid: 'markdown-image', title: '', textContent: '# 标题\n\n**正文**', textFormat: 'markdown',
+      sendAtMillis: 1, senderName: '我', isMe: true, status: 1, displayKind: 0,
+      contentBlocks: [{ kind: 'image', mediaRef: 'image-ref', sortOrder: 0 }],
+    })).toBe('[图片]标题 正文')
+  })
+
+  it('does not interpret plain-text preview punctuation as Markdown', () => {
+    expect(arkmeChatConversationPreview({ text_content: '**原文**', text_format: 'plain' })).toBe('**原文**')
+  })
+
+  it('keeps hydrated and legacy timeline preview paths on the shared owner', () => {
+    expect(arkmeTimelineConversationPreview({
+      itemUid: 'rich-item', title: '', textContent: '正文', sendAtMillis: 1, senderName: '我', isMe: true,
+      status: 1, displayKind: 0,
+      conversationPreview: '[图片]正文',
+      contentBlocks: [],
+    })).toBe('[图片]正文')
+    expect(arkmeTimelineConversationPreview({
+      itemUid: 'legacy-file-item', title: '', textContent: '正文', sendAtMillis: 1, senderName: '我', isMe: true,
+      status: 1, displayKind: 0,
+      contentBlocks: [{ kind: 'file', mediaRef: 'file-ref', fileName: '方案.pdf', mimeType: 'application/pdf', size: 1, sortOrder: 0 }],
+    })).toBe('[文件]正文')
+  })
+
+  it('updates only the chat pin while preserving unrelated policy fields', async () => {
     const sessions: ArkmeSessionStore = {
       async read() { return { userId: 42, accessToken: 'access', refreshToken: 'refresh' } },
       async write() {}, async delete() {},
@@ -247,8 +390,8 @@ describe('SourceService', () => {
           show_in_home_state: 1, privacy_state: 2, mute_state: 2, pin_state: 1, notify_state: 2, status: 3,
         } }), { status: 200 })
       }
-      if (path === '/api/v1/chats/policy/update') return new Response(JSON.stringify({ code: 200, data: {} }), { status: 200 })
-      if (path === '/api/v1/topics/pin/set') return new Response(JSON.stringify({ code: 0, data: {} }), { status: 200 })
+      if (path === '/api/v1/chats/policy/update') return new Response(JSON.stringify({ code: 200, data: { chat_session_uid: body.chat_session_uid, pin_state: body.pin_state, update_at: body.update_at } }), { status: 200 })
+      if (path === '/api/v1/topics/pin/set') return new Response(JSON.stringify({ code: 400, message: 'topic is not found' }), { status: 200 })
       throw new Error(`unexpected path: ${path}`)
     }) as typeof fetch)
     const service = new SourceService(runtime, new ProfileService(runtime), {
@@ -262,9 +405,9 @@ describe('SourceService', () => {
     })
 
     await expect(service.setChatDirectoryPin(source.sourceRef, true)).resolves.toEqual({
-      sourceRef: source.sourceRef, pinned: true,
+      sourceRef: source.sourceRef, pinned: true, policyUpdatedAtMillis: expect.any(Number),
     })
-    expect(requests).toHaveLength(3)
+    expect(requests).toHaveLength(2)
     expect(requests[1]).toMatchObject({
       path: '/api/v1/chats/policy/update',
       body: {
@@ -272,10 +415,7 @@ describe('SourceService', () => {
         pin_state: 2, notify_state: 2, status: 3,
       },
     })
-    expect(requests[2]).toMatchObject({
-      path: '/api/v1/topics/pin/set',
-      body: { topic_uid: 'topic-chat-1', pin_state: 1, pinned_at: expect.any(Number) },
-    })
+    expect(requests.every(request => request.path.startsWith('/api/v1/chats/'))).toBe(true)
   })
 
   it('resolves Chat preference identity and activity without changing policy state', async () => {
@@ -793,5 +933,238 @@ describe('SourceService', () => {
     expect(child?.parentSourceRef).toBeUndefined()
     expect(child?.parentTopicHierarchyKey).toEqual(expect.any(String))
     expect(parent?.topicHierarchyKey).toBe(child?.parentTopicHierarchyKey)
+  })
+})
+
+
+describe('Chat directory pin owner boundary', () => {
+  function fixture(options: { failure?: 'get' | 'update'; userId?: number; getReply?: Record<string, unknown>; updateReply?: Record<string, unknown> } = {}) {
+    const requests: Array<{ origin: string; path: string; body: Record<string, unknown> }> = []
+    const policy = { show_in_home_state: 2, privacy_state: 2, mute_state: 2, pin_state: 1, notify_state: 2, status: 3 }
+    const sessions: ArkmeSessionStore = {
+      async read() { return { userId: options.userId ?? 42, accessToken: 'access', refreshToken: 'refresh' } },
+      async write() {}, async delete() {},
+    }
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input))
+      const body = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>
+      requests.push({ origin: url.origin, path: url.pathname, body })
+      if (url.origin !== config.chatBaseUrl) throw new Error('Chat pin must not access Record or Subject')
+      if (url.pathname === `/api/v1/chats/policy/${options.failure}`) {
+        return new Response(JSON.stringify({ code: 400, message: 'policy denied' }), { status: 200 })
+      }
+      if (url.pathname === '/api/v1/chats/list') {
+        return new Response(JSON.stringify({ code: 200, data: { has_more: false, items: [{
+          session: { chat_session_uid: 'chat-1', session_kind: 1 },
+          current_policy: policy,
+          private_supplement: { remark: '会话' },
+        }] } }), { status: 200 })
+      }
+      if (url.pathname === '/api/v1/chats/policy/get') {
+        return new Response(JSON.stringify({ code: 200, data: options.getReply ?? policy }), { status: 200 })
+      }
+      if (url.pathname === '/api/v1/chats/policy/update') {
+        Object.assign(policy, body)
+        return new Response(JSON.stringify({ code: 200, data: options.updateReply ?? policy }), { status: 200 })
+      }
+      throw new Error(`Unexpected Chat endpoint: ${url.pathname}`)
+    })
+    const runtime = new ServiceRuntime(config, sessions, {
+      async uniqueCode() { return 'device-secret' },
+    } as StateStore, fetchImpl)
+    const service = new SourceService(runtime, new ProfileService(runtime), {
+      async summary() { return { recordCount: 0, wordsCount: 0, totalSec: 0 } },
+      recordItem() { return undefined },
+    })
+    return { service, requests, policy, runtime, fetchImpl }
+  }
+
+  for (const kind of ['private_chat', 'group_chat'] as const) {
+    for (const pinned of [true, false]) {
+      it.each([undefined, 'unrelated-personal-topic'])(`${kind} pinned=${pinned} ignores subject metadata %s`, async sidebarSubjectUid => {
+        const { service, requests } = fixture()
+        const source = await service.sourceItem({
+          version: 1, userId: 42, kind, ownerRef: 'chat-1', displayName: '会话',
+          ...(sidebarSubjectUid === undefined ? {} : { sidebarSubjectUid }),
+        })
+        const cached = { ...source, isPinned: !pinned, unreadCount: 7, isMuted: true }
+        service.setChatSource(42, 'chat-1', cached)
+        service.setChatSource(43, 'chat-1', { ...cached, displayName: '其他账号' })
+        const before = service.cachedChatSource(42, 'chat-1')
+        const otherAccountBefore = service.cachedChatSource(43, 'chat-1')
+
+        await expect(service.setChatDirectoryPin(source.sourceRef, pinned)).resolves.toEqual({ sourceRef: source.sourceRef, pinned, policyUpdatedAtMillis: expect.any(Number) })
+        expect(requests.map(request => request.path)).toEqual(['/api/v1/chats/policy/get', '/api/v1/chats/policy/update'])
+        expect(requests[1]?.body).toEqual({
+          chat_session_uid: 'chat-1', show_in_home_state: 2, privacy_state: 2, mute_state: 2,
+          pin_state: pinned ? 2 : 1, notify_state: 2, status: 3, update_at: expect.any(Number),
+        })
+        expect(service.cachedChatSource(42, 'chat-1')).toEqual({ ...before, isPinned: pinned, chatPolicyUpdatedAtMillis: expect.any(Number) })
+        expect(service.cachedChatSource(43, 'chat-1')).toEqual(otherAccountBefore)
+      })
+    }
+  }
+
+  it.each(['get', 'update'] as const)('preserves the cached row when Chat policy %s fails', async failure => {
+    const { service, requests } = fixture({ failure })
+    const source = await service.sourceItem({ version: 1, userId: 42, kind: 'private_chat', ownerRef: 'chat-1', displayName: '会话' })
+    const cached = { ...source, isPinned: false }
+    service.setChatSource(42, 'chat-1', cached)
+    const before = service.cachedChatSource(42, 'chat-1')
+    await expect(service.setChatDirectoryPin(source.sourceRef, true)).rejects.toThrow('policy denied')
+    expect(service.cachedChatSource(42, 'chat-1')).toEqual(before)
+    expect(requests.map(request => request.path)).toEqual(failure === 'get'
+      ? ['/api/v1/chats/policy/get']
+      : ['/api/v1/chats/policy/get', '/api/v1/chats/policy/update'])
+  })
+
+  it('keeps repeated pin requests idempotent and can subsequently unpin', async () => {
+    const { service, policy } = fixture()
+    const source = await service.sourceItem({ version: 1, userId: 42, kind: 'group_chat', ownerRef: 'chat-1', displayName: '群聊' })
+    await service.setChatDirectoryPin(source.sourceRef, true)
+    await service.setChatDirectoryPin(source.sourceRef, true)
+    expect(policy.pin_state).toBe(2)
+    await service.setChatDirectoryPin(source.sourceRef, false)
+    expect(policy).toMatchObject({ pin_state: 1, privacy_state: 2, mute_state: 2, show_in_home_state: 2 })
+  })
+
+  it('projects owner policy timestamps through directory and realtime rows without regressing newer cached pins', async () => {
+    const { service, policy } = fixture()
+    Object.assign(policy, { pin_state: 2, update_at: 3000 })
+    const first = await service.listSources('root')
+    expect(first.items[0]).toMatchObject({ isPinned: true, chatPolicyUpdatedAtMillis: 3000 })
+    const session = { userId: 42, accessToken: 'access', refreshToken: 'refresh' }
+    const stale = await service.chatSourceFromBundle({
+      session: { chat_session_uid: 'chat-1', session_kind: 1 },
+      current_policy: { ...policy, pin_state: 1, update_at: 2000 },
+      unread_snapshot: { session_last_seq: 11, unread_count: 1 },
+    }, session, first.items[0], [])
+    expect(stale).toMatchObject({ isPinned: true, chatPolicyUpdatedAtMillis: 3000, latestSequence: 11, unreadCount: 1 })
+    const fresh = await service.chatSourceFromBundle({
+      session: { chat_session_uid: 'chat-1', session_kind: 1 },
+      current_policy: { ...policy, pin_state: 1, update_at: 4000 },
+    }, session, stale, [])
+    service.setChatSource(42, 'chat-1', fresh)
+    service.setChatSource(42, 'chat-1', stale)
+    expect(service.cachedChatSource(42, 'chat-1')).toMatchObject({ isPinned: false, chatPolicyUpdatedAtMillis: 4000 })
+  })
+
+  it('invalidates the directory cache and reads pin state back from Chat after each write', async () => {
+    const { service, requests } = fixture()
+    const first = await service.listSources('root')
+    const source = first.items[0]!
+    expect(source.isPinned).toBe(false)
+    await service.listSources('root')
+    expect(requests.filter(request => request.path === '/api/v1/chats/list')).toHaveLength(1)
+    await service.setChatDirectoryPin(source.sourceRef, true)
+    expect((await service.listSources('root')).items[0]?.isPinned).toBe(true)
+    await service.setChatDirectoryPin(source.sourceRef, false)
+    expect((await service.listSources('root')).items[0]?.isPinned).toBe(false)
+    expect(requests.filter(request => request.path === '/api/v1/chats/list')).toHaveLength(3)
+  })
+
+  it('does not reuse an in-flight directory read started before pinning', async () => {
+    const { service } = fixture()
+    const source = await service.sourceItem({ version: 1, userId: 42, kind: 'private_chat', ownerRef: 'chat-1', displayName: '会话' })
+    let releaseStale = (): void => {}
+    const staleGate = new Promise<void>(resolve => { releaseStale = resolve })
+    const staleResult: ArkmeSourceList = { directory: 'root', items: [{ ...source, isPinned: false }], hasMore: false }
+    const freshResult: ArkmeSourceList = { directory: 'root', items: [{ ...source, isPinned: true }], hasMore: false }
+    const loader = service as unknown as { listSourcesUncached(): Promise<ArkmeSourceList> }
+    const read = vi.spyOn(loader, 'listSourcesUncached')
+      .mockImplementationOnce(async () => { await staleGate; return staleResult })
+      .mockResolvedValue(freshResult)
+    const staleRead = service.listSources('root', { refresh: true })
+    await vi.waitFor(() => { expect(read).toHaveBeenCalledTimes(1) })
+    await service.setChatDirectoryPin(source.sourceRef, true)
+    const freshRead = service.listSources('root', { refresh: true })
+    try {
+      await vi.waitFor(() => { expect(read).toHaveBeenCalledTimes(2) })
+      await expect(freshRead).resolves.toEqual(freshResult)
+    } finally {
+      releaseStale()
+    }
+    await staleRead
+    await expect(service.listSources('root')).resolves.toEqual(freshResult)
+  })
+
+  it.each(['pin-ack', 'policy-notice'] as const)('retires coordinated directory reads after %s', async trigger => {
+    const { service, policy, fetchImpl, runtime } = fixture()
+    const source = await service.sourceItem({ version: 1, userId: 42, kind: 'private_chat', ownerRef: 'chat-1', displayName: '会话' })
+    let releaseOld!: (response: Response) => void
+    const oldResponse = new Response(JSON.stringify({ code: 200, data: { has_more: false, items: [{
+      session: { chat_session_uid: 'chat-1', session_kind: 1 },
+      current_policy: { ...policy },
+    }] } }), { status: 200 })
+    fetchImpl.mockImplementationOnce(async () => await new Promise<Response>(resolve => { releaseOld = resolve }))
+    const oldRead = service.listSources('root', { refresh: true })
+    await vi.waitFor(() => { expect(releaseOld).toBeTypeOf('function') })
+    if (trigger === 'pin-ack') await service.setChatDirectoryPin(source.sourceRef, true)
+    else {
+      policy.pin_state = 2
+      service.invalidateSourceListCache(42, 'root')
+    }
+    const callsBeforeRefresh = fetchImpl.mock.calls.length
+    const freshRead = service.listSources('root', { refresh: true })
+    try {
+      await vi.waitFor(() => { expect(fetchImpl).toHaveBeenCalledTimes(callsBeforeRefresh + 1) })
+      await expect(freshRead).resolves.toMatchObject({ items: [{ isPinned: true }] })
+    } finally {
+      releaseOld(oldResponse)
+      await Promise.allSettled([oldRead, freshRead])
+      runtime.dispose()
+    }
+    await expect(service.listSources('root')).resolves.toMatchObject({ items: [{ isPinned: true }] })
+    expect(service.cachedChatSource(42, 'chat-1')?.isPinned).toBe(true)
+  })
+
+  it('rejects a source from another account before network I/O', async () => {
+    const { service, requests } = fixture({ userId: 43 })
+    const source = await service.sourceItem({ version: 1, userId: 42, kind: 'private_chat', ownerRef: 'chat-1', displayName: '会话' })
+    await expect(service.setChatDirectoryPin(source.sourceRef, true)).rejects.toMatchObject({ code: 'source-ref-invalid' })
+    expect(requests).toEqual([])
+  })
+
+  it.each(['topic', 'default_category'] as const)('rejects %s as a chat pin target before network I/O', async kind => {
+    const { service, requests } = fixture()
+    const source = await service.sourceItem({ version: 1, userId: 42, kind, ownerRef: 'topic-1', displayName: '主题' })
+    await expect(service.setChatDirectoryPin(source.sourceRef, true)).rejects.toMatchObject({ code: 'chat-directory-policy-invalid' })
+    expect(requests).toEqual([])
+  })
+
+  it.each([{}, { pin_state: 1 }, { show_in_home_state: 2, privacy_state: 0, mute_state: 2, pin_state: 1, notify_state: 2, status: 3 }])('does not fill missing policy fields with writable defaults: %j', async getReply => {
+    const { service, requests } = fixture({ getReply })
+    const source = await service.sourceItem({ version: 1, userId: 42, kind: 'private_chat', ownerRef: 'chat-1', displayName: '会话' })
+    await expect(service.setChatDirectoryPin(source.sourceRef, true)).rejects.toMatchObject({ code: 'chat-pin-policy-invalid' })
+    expect(requests.map(request => request.path)).toEqual(['/api/v1/chats/policy/get'])
+  })
+
+  it.each([
+    {}, { chat_session_uid: 'other-chat', pin_state: 2, update_at: 1000 },
+    { chat_session_uid: 'chat-1', pin_state: 0, update_at: 1000 },
+    ...[undefined, 0, -1, '1000'].map(update_at => ({ chat_session_uid: 'chat-1', pin_state: 2, update_at })),
+  ])('does not publish an invalid write acknowledgement: %j', async updateReply => {
+    const { service } = fixture({ updateReply })
+    const source = await service.sourceItem({ version: 1, userId: 42, kind: 'private_chat', ownerRef: 'chat-1', displayName: '会话' })
+    service.setChatSource(42, 'chat-1', { ...source, isPinned: false })
+    await expect(service.setChatDirectoryPin(source.sourceRef, true)).rejects.toMatchObject({ code: 'chat-pin-result-invalid' })
+    expect(service.cachedChatSource(42, 'chat-1')?.isPinned).toBe(false)
+  })
+
+  it('does not report success when Chat ignores a stale pin write', async () => {
+    const { service } = fixture({ updateReply: { chat_session_uid: 'chat-1', pin_state: 1, update_at: 2000 } })
+    const source = await service.sourceItem({ version: 1, userId: 42, kind: 'private_chat', ownerRef: 'chat-1', displayName: '会话' })
+    service.setChatSource(42, 'chat-1', { ...source, isPinned: false })
+    await expect(service.setChatDirectoryPin(source.sourceRef, true)).rejects.toMatchObject({ code: 'chat-pin-conflict' })
+    expect(service.cachedChatSource(42, 'chat-1')?.isPinned).toBe(false)
+  })
+
+  it('does not send an already cancelled pin request' , async () => {
+    const { service, requests } = fixture()
+    const source = await service.sourceItem({ version: 1, userId: 42, kind: 'private_chat', ownerRef: 'chat-1', displayName: '会话' })
+    const controller = new AbortController()
+    controller.abort()
+    await expect(service.setChatDirectoryPin(source.sourceRef, true, controller.signal)).rejects.toMatchObject({ name: 'AbortError' })
+    expect(requests).toEqual([])
   })
 })

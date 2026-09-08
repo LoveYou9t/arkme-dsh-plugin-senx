@@ -1,3 +1,4 @@
+import { arkmeRecordTextFormat, arkmeMarkdownPlainText } from '../markdown.js'
 import { createHmac, timingSafeEqual } from 'node:crypto'
 import { logArkmeAvatarDiagnostic } from '../avatar-diagnostics.js'
 import type { ArkmeSessionCredentials } from '../keychain-store.js'
@@ -29,6 +30,8 @@ import { ArkmePluginError, ServiceRuntime, objectValue, stringValue } from './se
 import { arkmeMentionMetadataMentionsViewer } from '../mention-metadata.js'
 import { arkmeMediaKind } from '../file-transfer-contract.js'
 import { projectArkmeChatAttention, projectArkmeChatAttentionFromMuted } from '../chat-attention.js'
+import { retainNewerArkmeChatPin } from '../chat-pin-projection.js'
+import { arkmeEmojiTokenSafePrefix, arkmeHasKnownEmojiToken } from '../arkme-emoji-text.js'
 
 export interface ArkmeSourceRefPayload {
   version: 1
@@ -210,53 +213,121 @@ function isSourceKind(value: unknown): value is ArkmeSourceKind {
 }
 
 function attachmentPreviewKind(item: Record<string, unknown>): 'image' | 'video' | 'audio' | 'file' {
+  const fileType = integerLikeValue(item.file_type ?? item.fileType)
+  if (fileType === 6) return 'file'
+  if (fileType === 3) return 'video'
+  if (fileType === 1 || fileType === 4) return 'image'
+  if (fileType === 2) return 'audio'
   const fileName = stringValue(item.file_name ?? item.fileName).trim()
   const mimeType = stringValue(item.mime_type ?? item.mimeType).trim()
   const detectedKind = arkmeMediaKind(mimeType, fileName)
   if (detectedKind !== undefined) return detectedKind
   const fileKind = integerLikeValue(item.file_kind ?? item.fileKind)
+  if (fileKind === 4) return 'file'
+  if (fileKind === 3) return 'video'
   if (fileKind === 1) return 'image'
   if (fileKind === 2) return 'audio'
-  if (fileKind === 3) return 'video'
   return 'file'
 }
 
-export function arkmeChatConversationPreview(raw: Record<string, unknown>): string {
-  const direct = stringValue(raw.text_content ?? raw.title ?? raw.summary).trim()
-  if (direct !== '') return direct.slice(0, 300)
-  const content = objectValue(raw.content_payload ?? raw.payload)
-  const nested = stringValue(content.text_content ?? content.title ?? content.summary).trim()
-  if (nested !== '') return nested.slice(0, 300)
-  if (objectValue(content.voice).duration !== undefined) return '[语音]'
-  const displayItems = listValue(raw.media_display_items ?? raw.mediaDisplayItems).map(objectValue)
+function conversationPreviewObjects(raw: Record<string, unknown>): Record<string, unknown>[] {
+  const values: Record<string, unknown>[] = []
+  const seen = new Set<Record<string, unknown>>()
+  const queue: Array<{ value: Record<string, unknown>; depth: number }> = [{ value: raw, depth: 0 }]
+  while (queue.length > 0) {
+    const next = queue.shift()!
+    if (seen.has(next.value)) continue
+    seen.add(next.value)
+    values.push(next.value)
+    if (next.depth >= 4) continue
+    for (const key of ['record', 'payload', 'record_payload', 'recordPayload', 'content_payload', 'contentPayload']) {
+      const child = objectValue(next.value[key])
+      if (Object.keys(child).length > 0) queue.push({ value: child, depth: next.depth + 1 })
+    }
+  }
+  return values
+}
+
+function normalizedConversationText(values: readonly Record<string, unknown>[]): string {
+  for (const keys of [
+    ['text_content', 'textContent', 'text', 'content'],
+    ['previewText', 'summary', 'title', 'preview'],
+  ]) {
+    for (const value of values) {
+      for (const key of keys) {
+        const source = stringValue(value[key])
+        const text = (arkmeRecordTextFormat(value) === 'markdown' ? arkmeMarkdownPlainText(source) : source).replace(/\s+/gu, ' ').trim()
+        if (text !== '') return text
+      }
+    }
+  }
+  return ''
+}
+
+function conversationMediaMarker(values: readonly Record<string, unknown>[]): string {
+  const displayItems = values.flatMap(value => [
+    ...listValue(value.media_display_items), ...listValue(value.mediaDisplayItems),
+  ]).map(objectValue)
   const displayByAsset = new Map<string, Record<string, unknown>>()
   for (const item of displayItems) {
     const fileAssetUid = stringValue(item.file_asset_uid ?? item.fileAssetUid).trim()
     if (fileAssetUid !== '') displayByAsset.set(fileAssetUid, item)
   }
-  const mediaRefs = listValue(content.media_refs ?? content.mediaRefs).map(objectValue)
-  const attachments: Record<string, unknown>[] = (mediaRefs.length > 0
+  const mediaRefs = values.flatMap(value => [
+    ...listValue(value.media_refs), ...listValue(value.mediaRefs),
+  ]).map(objectValue)
+  const attachments = (mediaRefs.length > 0
     ? mediaRefs.map(ref => ({
         ...(displayByAsset.get(stringValue(ref.file_asset_uid ?? ref.fileAssetUid).trim()) ?? {}),
         ...ref,
       }))
-    : displayItems)
-    .filter(item => integerLikeValue(item.content_file_role ?? item.contentFileRole) !== 4)
-    .sort((left, right) => integerLikeValue(left.sort_order ?? left.sortOrder) - integerLikeValue(right.sort_order ?? right.sortOrder))
-  const firstAttachment = attachments[0]
-  if (firstAttachment !== undefined) {
-    const kind = attachmentPreviewKind(firstAttachment)
-    return kind === 'image' ? '[图片]' : kind === 'video' ? '[视频]' : kind === 'audio' ? '[语音]' : '[文件]'
+    : displayItems).filter(item => integerLikeValue(item.content_file_role ?? item.contentFileRole) !== 4)
+  const kinds = new Set<'image' | 'video' | 'audio' | 'file'>()
+  let sticker = values.some(value => stringValue(value.render_kind ?? value.renderKind).trim() === 'sticker'
+    || Object.keys(objectValue(value.sticker)).length > 0)
+  for (const attachment of attachments) {
+    if (integerLikeValue(attachment.render_role ?? attachment.renderRole) === 3
+      || stringValue(attachment.render_kind ?? attachment.renderKind).trim() === 'sticker') {
+      sticker = true
+      continue
+    }
+    kinds.add(attachmentPreviewKind(attachment))
   }
-  if (Object.keys(objectValue(content.structured_anchor)).length > 0) return '[卡片]'
-  return ''
+  const hasVoice = values.some(value => {
+    const voice = value.voice
+    return voice !== null && typeof voice === 'object'
+  })
+  if (kinds.has('file')) return '[文件]'
+  if (kinds.has('video')) return '[视频]'
+  if (kinds.has('image')) return '[图片]'
+  if (kinds.has('audio') || hasVoice) return '[语音]'
+  return sticker ? '[表情]' : ''
+}
+
+export function arkmeChatConversationPreview(raw: Record<string, unknown>): string {
+  const values = conversationPreviewObjects(raw)
+  const text = normalizedConversationText(values)
+  let marker = conversationMediaMarker(values)
+  if (marker === '[表情]' && arkmeHasKnownEmojiToken(text)) marker = ''
+  const preview = `${marker}${text}`
+  if (preview !== '') return arkmeEmojiTokenSafePrefix(preview, 300)
+  return values.some(value => Object.keys(objectValue(value.structured_anchor ?? value.structuredAnchor)).length > 0)
+    ? '[卡片]' : ''
 }
 
 export function arkmeTimelineConversationPreview(item: ArkmeTimelineItem): string {
-  const text = item.textContent.trim() || item.title.trim()
-  if (text !== '') return text
-  const kind = item.contentBlocks?.[0]?.kind
-  return kind === 'image' ? '[图片]' : kind === 'video' ? '[视频]' : kind === 'audio' ? '[语音]' : kind === 'file' ? '[文件]' : '非文本内容'
+  const projected = item.conversationPreview?.trim()
+  if (projected !== undefined && projected !== '') return projected
+  const text = ((item.textFormat === 'markdown' ? arkmeMarkdownPlainText(item.textContent) : item.textContent.trim()) || item.title.trim()).replace(/\s+/gu, ' ')
+  const blocks = item.contentBlocks ?? []
+  const kinds = new Set(blocks.filter(block => block.renderRole !== 3).map(block => block.kind))
+  let marker = kinds.has('file') ? '[文件]'
+    : kinds.has('video') ? '[视频]'
+      : kinds.has('image') ? '[图片]'
+        : kinds.has('audio') ? '[语音]'
+          : blocks.some(block => block.renderRole === 3) ? '[表情]' : ''
+  if (marker === '[表情]' && arkmeHasKnownEmojiToken(text)) marker = ''
+  return `${marker}${text}` || '非文本内容'
 }
 
 function chunksOf<T>(values: readonly T[], size: number): T[][] {
@@ -356,7 +427,8 @@ export class SourceService {
   }
 
   private storeChatSourceByKey(cacheKey: string, source: ArkmeSourceItem): void {
-    this.chatSourceCache.set(cacheKey, cloneSourceItem(this.projectChatSourceAttention(source)))
+    const projected = retainNewerArkmeChatPin(this.chatSourceCache.get(cacheKey), source)
+    this.chatSourceCache.set(cacheKey, cloneSourceItem(this.projectChatSourceAttention(projected)))
   }
 
   /**
@@ -1055,7 +1127,11 @@ export class SourceService {
     if (options.refresh !== true && cached !== undefined && cached.expiresAtMillis > Date.now()) return cloneSourceList(cached.value)
     const existing = this.sourceListInFlight.get(cacheKey)
     if (existing !== undefined) return cloneSourceList(await existing)
-    const pending = this.listSourcesUncached(session, directory, { ...options, ...(cursor === '' ? {} : { cursor }) }, limit)
+    const pending = this.listSourcesUncached(session, directory, {
+      ...options,
+      ...(cursor === '' ? {} : { cursor }),
+      isCurrent: () => this.sourceListInFlight.get(cacheKey) === pending,
+    }, limit)
     this.sourceListInFlight.set(cacheKey, pending)
     try {
       const result = await pending
@@ -1080,43 +1156,47 @@ export class SourceService {
     if (source.kind !== 'private_chat' && source.kind !== 'group_chat') {
       throw new ArkmePluginError('chat-directory-policy-invalid', '仅支持更新私聊或群聊的会话列表状态', false)
     }
-    const pinTarget = await this.resolveChatPinTarget(source, session, signal)
+    if (signal?.aborted === true) throw new DOMException('The operation was aborted', 'AbortError')
     const current = await this.runtime.authenticatedChatPost<Record<string, unknown>>(
       '/api/v1/chats/policy/get', { chat_session_uid: source.ownerRef }, session, signal,
     )
-    const updatedAt = Date.now()
-    await Promise.all([
-      this.runtime.authenticatedChatPost<Record<string, unknown>>(
-        '/api/v1/chats/policy/update',
-        {
-          chat_session_uid: source.ownerRef,
-          show_in_home_state: numberValue(current.show_in_home_state) || 1,
-          privacy_state: numberValue(current.privacy_state) || 1,
-          mute_state: numberValue(current.mute_state) || 1,
-          pin_state: pinned ? 2 : 1,
-          notify_state: numberValue(current.notify_state) || 1,
-          status: numberValue(current.status) || 1,
-          update_at: updatedAt,
-        },
-        session,
-        signal,
-      ),
-      this.runtime.authenticatedPost<Record<string, unknown>>(
-        '/api/v1/topics/pin/set',
-        {
-          topic_uid: pinTarget.subjectUid,
-          pin_state: pinned ? 1 : 2,
-          ...(pinned ? { pinned_at: updatedAt } : {}),
-        },
-        session,
-        signal,
-      ),
-    ])
+    const policyFields = ['show_in_home_state', 'privacy_state', 'mute_state', 'pin_state', 'notify_state', 'status'] as const
+    if (policyFields.some(field => !Number.isSafeInteger(current[field]) || Number(current[field]) <= 0)) {
+      throw new ArkmePluginError('chat-pin-policy-invalid', '会话设置读取不完整，请重试', true, 502)
+    }
+    // Chat owns conversation pinning. A legacy subject UID is not a personal topic UID.
+    // The Chat endpoint requires a full policy, so preserve its unrelated fields.
+    const updated = await this.runtime.authenticatedChatPost<Record<string, unknown>>(
+      '/api/v1/chats/policy/update',
+      {
+        chat_session_uid: source.ownerRef,
+        show_in_home_state: current.show_in_home_state,
+        privacy_state: current.privacy_state,
+        mute_state: current.mute_state,
+        pin_state: pinned ? 2 : 1,
+        notify_state: current.notify_state,
+        status: current.status,
+        update_at: Date.now(),
+      },
+      session,
+      signal,
+    )
+    if (updated.chat_session_uid !== source.ownerRef || (updated.pin_state !== 1 && updated.pin_state !== 2)
+      || !Number.isSafeInteger(updated.update_at) || Number(updated.update_at) <= 0) {
+      throw new ArkmePluginError('chat-pin-result-invalid', '无法确认置顶结果，请刷新后重试', true, 502)
+    }
+    const effectivePinned = updated.pin_state === 2
+    const policyUpdatedAtMillis = Number(updated.update_at)
     const cacheKey = `${String(session.userId)}:${source.ownerRef}`
     const cached = this.chatSourceCache.get(cacheKey)
-    if (cached !== undefined) this.storeChatSourceByKey(cacheKey, { ...cached, isPinned: pinned })
-    this.sourceListCache.clear()
-    return { sourceRef, pinned }
+    if (cached !== undefined) this.storeChatSourceByKey(cacheKey, {
+      ...cached, isPinned: effectivePinned, chatPolicyUpdatedAtMillis: policyUpdatedAtMillis,
+    })
+    this.invalidateSourceListCache(session.userId, 'root')
+    if (effectivePinned !== pinned) {
+      throw new ArkmePluginError('chat-pin-conflict', '会话置顶状态已变化，请刷新后重试', true, 409)
+    }
+    return { sourceRef, pinned: effectivePinned, policyUpdatedAtMillis }
   }
 
   async chatConversationListPreferenceEntry(
@@ -1163,36 +1243,6 @@ export class SourceService {
     }
   }
 
-  private async resolveChatPinTarget(
-    source: ArkmeSourceRefPayload,
-    session: ArkmeSessionCredentials,
-    signal?: AbortSignal,
-  ): Promise<{ subjectUid: string }> {
-    if (source.sidebarSubjectUid !== undefined && source.sidebarSubjectUid.trim() !== '') {
-      return { subjectUid: source.sidebarSubjectUid.trim() }
-    }
-    const detail = await this.runtime.authenticatedChatPost<Record<string, unknown>>(
-      '/api/v1/chats/detail',
-      { chat_session_uid: source.ownerRef },
-      session,
-      signal,
-      { lane: 'interactive-read', key: `chat-sidebar-target:${source.ownerRef}`, failureCooldownMs: 2_000 },
-    )
-    const target = arkmeChatDirectoryMetadataFromBundle(
-      detail,
-      source.kind === 'group_chat' ? source.ownerRef : '',
-    )
-    if (target.subjectUid === undefined) {
-      throw new ArkmePluginError(
-        'chat-sidebar-target-unavailable',
-        '未能定位该会话的跨端侧边栏数据，请刷新后重试',
-        true,
-        502,
-      )
-    }
-    return { subjectUid: target.subjectUid }
-  }
-
   async listGroupSources(
     options: { limit?: number; cursor?: string; signal?: AbortSignal; refresh?: boolean } = {},
   ): Promise<ArkmeSourceList> {
@@ -1214,7 +1264,7 @@ export class SourceService {
   private async listSourcesUncached(
     session: ArkmeSessionCredentials,
     directory: ArkmeSourceDirectory,
-    options: { limit?: number; cursor?: string; signal?: AbortSignal; refresh?: boolean },
+    options: { limit?: number; cursor?: string; signal?: AbortSignal; refresh?: boolean; isCurrent?: () => boolean },
     limit: number,
     sessionKind?: number,
   ): Promise<ArkmeSourceList> {
@@ -1491,7 +1541,7 @@ export class SourceService {
       const botGroupTarget = kind === 'group_chat' ? arkmeGroupBotBindingTargetFromBundle(bundle) : undefined
       const cached = this.chatSourceCache.get(`${String(session.userId)}:${uid}`)
       const chatDirectoryMetadata = arkmeChatDirectoryMetadataFromBundle(bundle, kind === 'group_chat' ? uid : '')
-      const item: ArkmeSourceItem = {
+      const item = retainNewerArkmeChatPin(cached, {
         sourceRef: await this.sealSourceRef(
           session.userId,
           kind,
@@ -1504,6 +1554,7 @@ export class SourceService {
         ),
         sourceKey: await this.chatDirectorySourceKey(session.userId, uid),
         kind,
+        directMessageAdmissionApplicable: sessionKind === 1 && numberValue(counterpart.user_id) > 0,
         displayName,
         ...(kind === 'private_chat' && cached?.avatarRef !== undefined
           ? { avatarRef: cached.avatarRef }
@@ -1519,10 +1570,11 @@ export class SourceService {
         ...attention,
         ...(hasUnreadMention === undefined ? {} : { hasUnreadMention }),
         isPinned,
+        chatPolicyUpdatedAtMillis: numberValue(currentPolicy.update_at),
         ...((numberValue(unread.session_last_seq ?? chatSession.last_seq)) > 0
           ? { latestSequence: numberValue(unread.session_last_seq ?? chatSession.last_seq) }
           : {}),
-      }
+      })
       const itemIndex = items.push(item) - 1
       chatSessionUidByIndex.set(itemIndex, uid)
       if (kind === 'private_chat') {
@@ -1545,9 +1597,11 @@ export class SourceService {
     }
     // Cache the final hydrated projection as an owned snapshot. Realtime updates
     // must not depend on later mutation of the directory row object.
-    for (const [index, uid] of chatSessionUidByIndex) {
-      const item = items[index]
-      if (item !== undefined) this.storeChatSourceByKey(`${String(session.userId)}:${uid}`, item)
+    if (options.isCurrent?.() !== false) {
+      for (const [index, uid] of chatSessionUidByIndex) {
+        const item = items[index]
+        if (item !== undefined) this.storeChatSourceByKey(`${String(session.userId)}:${uid}`, item)
+      }
     }
     const hasMore = data.has_more === true
     const totalValue = data.total ?? data.total_count
@@ -1565,6 +1619,9 @@ export class SourceService {
   }
 
   invalidateSourceListCache(userId: number, directory?: ArkmeSourceDirectory): void {
+    if (directory === undefined || directory === 'root') {
+      this.runtime.invalidateKey(this.runtime.requestScope(userId), 'directory:root:')
+    }
     const prefix = `${String(userId)}:`
     const matches = (key: string): boolean => (
       key.startsWith(prefix)
@@ -1938,7 +1995,7 @@ export class SourceService {
           : backendMentionState === true || latestMentionsViewer
     const botGroupTarget = kind === 'group_chat' ? arkmeGroupBotBindingTargetFromBundle(bundle) : undefined
     const chatDirectoryMetadata = arkmeChatDirectoryMetadataFromBundle(bundle, kind === 'group_chat' ? uid : '')
-    return {
+    return retainNewerArkmeChatPin(cached, {
       sourceRef: await this.sealSourceRef(
         session.userId,
         kind,
@@ -1951,6 +2008,7 @@ export class SourceService {
       ),
       sourceKey: await this.chatDirectorySourceKey(session.userId, uid),
       kind,
+      directMessageAdmissionApplicable: sessionKind === 1 && numberValue(counterpart.user_id) > 0,
       displayName,
       ...(cached?.avatarRef === undefined ? {} : { avatarRef: cached.avatarRef }),
       ...(cached?.avatarRefs === undefined ? {} : { avatarRefs: cached.avatarRefs }),
@@ -1963,8 +2021,9 @@ export class SourceService {
       ...attention,
       ...(hasUnreadMention === undefined ? {} : { hasUnreadMention }),
       isPinned,
+      chatPolicyUpdatedAtMillis: numberValue(currentPolicy.update_at),
       ...(latestSequence > 0 ? { latestSequence } : {}),
-    }
+    })
   }
 
   private encodeCursor(value: Record<string, unknown>): string {

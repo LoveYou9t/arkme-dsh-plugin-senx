@@ -1,3 +1,6 @@
+import { ArkmeRichComposerInput } from './ArkmeRichComposerInput.js'
+import type { ArkmeMarkdownDraft } from './markdown-editor.js'
+import type { ArkmeProviderCapabilities } from '../types.js'
 import { useCallback, useEffect, useId, useRef, useState, type CSSProperties, type ReactNode, type Ref } from 'react'
 import { ArrowLeft } from '@phosphor-icons/react/dist/icons/ArrowLeft'
 import { XIcon as X } from '@phosphor-icons/react/dist/csr/X'
@@ -14,7 +17,7 @@ import type {
 } from '../types.js'
 import { ArkmeUserAvatar } from './ArkmeAvatar.js'
 import { ArkmeMediaPreview, ArkmeMessageContent } from './ArkmeRichContent.js'
-import { ArkmeMentionText } from './ArkmeRichText.js'
+import { ArkmeRichText } from './ArkmeRichText.js'
 import {
   ArkmeRelatedQuickNoteDetail,
   ArkmeRelatedQuickNotesCard,
@@ -60,8 +63,8 @@ const styles: Record<string, CSSProperties> = {
   extensionAttachmentPreview: { padding: '8px 16px' },
   extensionInputBar: { padding: '12px 16px', borderTop: '0.5px solid #e6e6e6' },
   extensionInputWrap: { minHeight: 44, maxHeight: 100, display: 'flex', alignItems: 'flex-end', gap: 8, padding: '8px 8px 8px 12px', boxSizing: 'border-box', border: 0, borderRadius: 12, background: '#f6f6f6' },
-  extensionInput: { flex: 1, minWidth: 0, minHeight: 28, maxHeight: 84, boxSizing: 'border-box', fieldSizing: 'content', overflowY: 'auto', resize: 'none', border: 0, outline: 0, padding: '4px 0 3px', background: 'transparent', color: arkmeTheme.text, font: 'inherit', fontSize: 14, lineHeight: '20px' },
-  extensionTool: { width: 18, height: 28, flex: 'none', display: 'grid', placeItems: 'center', padding: 0, border: 0, borderRadius: 6, background: 'transparent', color: arkmeTheme.tertiary, cursor: 'pointer' },
+  extensionInput: { flex: 1, minWidth: 0, minHeight: 28, maxHeight: 84, boxSizing: 'border-box', fieldSizing: 'content', overflowY: 'auto', resize: 'none', border: 0, outline: 0, padding: '4px 0', background: 'transparent', color: arkmeTheme.text, font: 'inherit', fontSize: 14, lineHeight: '20px' },
+  extensionTool: { width: 18, height: 28, flex: 'none', alignSelf: 'flex-start', display: 'grid', placeItems: 'center', padding: 0, border: 0, borderRadius: 6, background: 'transparent', color: arkmeTheme.tertiary, cursor: 'pointer' },
   extensionSend: { width: 28, height: 28, flex: 'none', display: 'grid', placeItems: 'center', padding: 0, border: 0, borderRadius: 999, background: arkmeTheme.text, color: arkmeTheme.base, cursor: 'pointer', fontSize: 16 },
   extensionParent: { margin: '12px 0 16px', paddingLeft: 10, borderLeftWidth: 1, borderLeftStyle: 'solid', borderLeftColor: arkmeTheme.border,
     color: arkmeTheme.tertiary, fontSize: 13, lineHeight: '20px', overflow: 'hidden' },
@@ -83,6 +86,11 @@ const styles: Record<string, CSSProperties> = {
   notice: { margin: '12px 0 0', fontSize: 12, color: arkmeTheme.tertiary, lineHeight: '20px' },
   toggle: { margin: '14px 0', border: 0, borderRadius: 8, padding: '6px 9px', background: arkmeTheme.hover, color: arkmeTheme.secondary, cursor: 'pointer', fontSize: 12 },
 }
+
+// EditorContent wraps ProseMirror, so the shared Markdown last-child rule cannot reach its final block.
+const extensionComposerStyles = `
+.arkme-detail-extension-input-shell .ProseMirror > :last-child { margin-bottom:0; }
+`
 
 function epoch(value: number): number {
   return Number.isFinite(value) && value > 0 && value < 8.64e15 ? value < 1e12 ? value * 1000 : value : 0
@@ -139,7 +147,7 @@ function NoteDetailShell({ title, label, subtitle, footer, onClose, onBack, back
     <header style={styles.header}>
       {onBack !== undefined && <button ref={backRef} type="button" style={styles.back}
         aria-label={backLabel ?? '返回'} onClick={onBack}><ArrowLeft size={18} /></button>}
-      <div style={styles.heading}><h3 id={titleId} style={styles.title}>{title}</h3>
+      <div style={styles.heading}><h3 id={titleId} style={styles.title}><ArkmeRichText text={title} presentation="preview" /></h3>
         {subtitle && <div style={styles.subtitle}>{subtitle}</div>}
       </div>
       <button ref={closeRef} type="button" style={styles.close} aria-label="关闭详情" onClick={onClose}><X size={18} /></button>
@@ -177,15 +185,24 @@ function removeDetailExtensionAttachmentsAfter(
   void pendingSend.catch(() => undefined).then(async () => { await removeDetailExtensionAttachments(attachments) })
 }
 
-function DetailExtensionComposer({ sourceRef, messageActionRef, parentRecordUid, targetKey, onSent, onError }: {
+function DetailExtensionComposer({ sourceRef, messageActionRef, parentRecordUid, targetKey, onSent, onError, messageCreationBlocked, messageCreationRestriction }: {
   sourceRef: string
   messageActionRef: string
   parentRecordUid?: string | undefined
   targetKey: string
   onSent: (result: ArkmeSourceMessageExtendResult) => void
   onError: (message: string) => void
+  messageCreationBlocked: boolean
+  messageCreationRestriction: string
 }) {
   const [text, setText] = useState('')
+  const [markdown, setMarkdown] = useState<ArkmeMarkdownDraft>()
+  const [markdownEnabled, setMarkdownEnabled] = useState(false)
+  useEffect(() => {
+    const controller = new AbortController()
+    void callArkme<ArkmeProviderCapabilities>('provider.capabilities', {}, controller.signal).then(value => { if (!controller.signal.aborted) setMarkdownEnabled(value.features.markdownQuickNotes === true) }).catch(() => {})
+    return () => controller.abort()
+  }, [sourceRef])
   const [attachments, setAttachments] = useState<ArkmeComposerAttachment[]>([])
   const [preparing, setPreparing] = useState(false)
   const [sending, setSending] = useState(false)
@@ -205,7 +222,7 @@ function DetailExtensionComposer({ sourceRef, messageActionRef, parentRecordUid,
     sendAbortRef.current = undefined
     sendPromiseRef.current = undefined
     submissionRef.current = undefined
-    setText('')
+    setText(''); setMarkdown(undefined)
     setAttachments([])
     setPreparing(false)
     setSending(false)
@@ -223,7 +240,7 @@ function DetailExtensionComposer({ sourceRef, messageActionRef, parentRecordUid,
     }
   }, [targetKey])
   const selectFiles = async (files: FileList | readonly File[] | null) => {
-    if (files === null || files.length === 0 || preparing || sending) return
+    if (messageCreationBlocked || files === null || files.length === 0 || preparing || sending) return
     const controller = new AbortController()
     stageAbortRef.current?.abort()
     stageAbortRef.current = controller
@@ -277,9 +294,9 @@ function DetailExtensionComposer({ sourceRef, messageActionRef, parentRecordUid,
     }
   }
   const send = async () => {
-    const normalizedText = text.trim()
+    const normalizedText = markdown?.source ?? text.trim()
     const fileRefs = attachments.flatMap(attachment => attachment.localFile === undefined ? [] : [attachment.localFile.fileRef])
-    if (sending || preparing || (normalizedText === '' && fileRefs.length === 0)) return
+    if (messageCreationBlocked || sending || preparing || (normalizedText === '' && fileRefs.length === 0)) return
     const fingerprint = JSON.stringify([parentRecordUid ?? '', normalizedText, fileRefs])
     const recordUid = submissionRef.current?.fingerprint === fingerprint
       ? submissionRef.current.recordUid
@@ -296,6 +313,7 @@ function DetailExtensionComposer({ sourceRef, messageActionRef, parentRecordUid,
       sourceRef,
       messageActionRef,
       textContent: normalizedText,
+      ...(markdown === undefined ? {} : { textFormat: 'markdown' }),
       recordUid,
       relationUid,
       ...(parentRecordUid === undefined ? {} : { parentRecordUid }),
@@ -308,7 +326,7 @@ function DetailExtensionComposer({ sourceRef, messageActionRef, parentRecordUid,
       submissionRef.current = undefined
       attachmentsRef.current = []
       for (const attachment of attachments) releaseArkmeComposerAttachment(attachment)
-      setText('')
+      setText(''); setMarkdown(undefined)
       setAttachments([])
       setDraftPreview(undefined)
       onSent(result)
@@ -324,11 +342,12 @@ function DetailExtensionComposer({ sourceRef, messageActionRef, parentRecordUid,
       if (generationRef.current === generation) setSending(false)
     }
   }
-  const disabled = preparing || sending
+  const disabled = messageCreationBlocked || preparing || sending
   return <div style={styles.extensionComposer}
     onDragOver={event => { if (!disabled && Array.from(event.dataTransfer.types).includes('Files')) { event.preventDefault(); event.dataTransfer.dropEffect = 'copy' } }}
     onDrop={event => { if (!disabled && event.dataTransfer.files.length > 0) { event.preventDefault(); void selectFiles(event.dataTransfer.files) } }}>
-    <input ref={fileInputRef} type="file" multiple hidden data-arkme-detail-extension-file-input="true"
+    {messageCreationBlocked && <div role="status">{messageCreationRestriction}</div>}
+    <input ref={fileInputRef} type="file" multiple hidden disabled={disabled} data-arkme-detail-extension-file-input="true"
       onChange={event => selectFiles(event.currentTarget.files)} />
     {attachments.length > 0 && <div style={styles.extensionAttachmentPreview}><ArkmeAttachmentStrip
         attachments={attachments}
@@ -348,11 +367,13 @@ function DetailExtensionComposer({ sourceRef, messageActionRef, parentRecordUid,
         onPreview={attachment => { setDraftPreview(attachment) }}
       /></div>}
     <div className="arkme-detail-extension-input-bar" style={styles.extensionInputBar}>
+      <style>{extensionComposerStyles}</style>
       <div className="arkme-detail-extension-input-shell" style={styles.extensionInputWrap}>
         <button type="button" style={{ ...styles.extensionTool, opacity: disabled ? .4 : 1 }} aria-label="添加延展附件" disabled={disabled}
           onClick={() => { fileInputRef.current?.click() }}>{preparing ? <ArkmeFilePreparingIndicator /> : <FileTextIcon size={18} />}</button>
-        <textarea rows={1} style={styles.extensionInput} aria-label="延展此快记" placeholder="延展此快记..." value={text} disabled={disabled}
-          onChange={event => { setText(event.target.value) }}
+        <ArkmeRichComposerInput style={styles.extensionInput!} ariaLabel="延展此快记" placeholder="延展此快记..." value={text} disabled={disabled}
+          mentions={[]} emojis={[]} maxLength={20000} markdownEnabled={markdownEnabled} markdown={markdown}
+          onTextChange={value => { if (!disabled) setText(value) }} onMarkdownChange={value => { if (!disabled) setMarkdown(value) }}
           onPaste={event => { const files = clipboardFiles(event.clipboardData); if (files.length > 0) { event.preventDefault(); void selectFiles(files) } }}
           onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void send() } }} />
         <button type="button" style={{ ...styles.extensionSend, opacity: normalizedSendOpacity(text, attachments.length, disabled) }}
@@ -400,6 +421,7 @@ function detailExtensionTimelineItem(item: ArkmeMessageCopyLinkExtensionItem): A
     sendAtMillis: item.sendAtMillis,
     title: item.title,
     textContent: item.textContent,
+    textFormat: item.textFormat ?? 'plain',
     status: 1,
     templateKind: item.templateKind,
     displayKind: item.displayKind,
@@ -452,7 +474,7 @@ function DetailExtensionParent({ parent }: { parent: NonNullable<ArkmeTimelineIt
   const preview = text || attachmentText
   if (preview === '') return null
   return <div style={styles.extensionParent} data-arkme-detail-extension-parent={parent.itemUid}>
-    <span style={styles.extensionParentText}><ArkmeMentionText text={preview} /></span>
+    <span style={styles.extensionParentText}><ArkmeRichText text={preview} presentation="preview" highlightMentions /></span>
   </div>
 }
 
@@ -523,6 +545,7 @@ function relatedQuickNoteReferenceExpired(error: unknown): boolean {
 
 export function ArkmeTimelineDetailDrawer({
   item, sourceRef, showOriginal, onClose, onToggleOriginal, shareWebsite, onMessageCopyLinkOpen, onExtensionSent, onToast,
+  messageCreationBlocked = false, messageCreationRestriction = '',
 }: {
   item: ArkmeTimelineItem
   sourceRef?: string | undefined
@@ -533,6 +556,8 @@ export function ArkmeTimelineDetailDrawer({
   onMessageCopyLinkOpen?: (sid: string) => void
   onExtensionSent?: (result: ArkmeSourceMessageExtendResult) => void
   onToast?: (message: string) => void
+  messageCreationBlocked?: boolean
+  messageCreationRestriction?: string
 }) {
   const [relatedView, setRelatedView] = useState<ArkmeRelatedDrawerView>('source-detail')
   const [relatedState, setRelatedState] = useState<ArkmeRelatedQuickNotesLoadState>({ kind: 'idle' })
@@ -659,6 +684,8 @@ export function ArkmeTimelineDetailDrawer({
   const extensionFooter = normalizedSourceRef === '' || messageActionRef === '' ? undefined : <DetailExtensionComposer
     sourceRef={normalizedSourceRef}
     messageActionRef={messageActionRef}
+    messageCreationBlocked={messageCreationBlocked}
+    messageCreationRestriction={messageCreationRestriction}
     {...(selectedExtensionRecordUid === undefined ? {} : { parentRecordUid: selectedExtensionRecordUid })}
     targetKey={`${normalizedSourceRef}:${item.itemUid}:${selectedExtensionRecordUid ?? item.itemUid}`}
     onError={message => { onToast?.(message) }}
@@ -774,10 +801,10 @@ export function ForwardRecordsDetail({ item, onClose }: { item: ArkmeTimelineIte
   const dates = forward.items.map(value => epoch(value.sendAtMillis)).filter(value => value > 0)
   const firstDate = dateLabel(dates.length ? Math.min(...dates) : forward.createdAtMillis)
   const lastDate = dateLabel(dates.length ? Math.max(...dates) : forward.createdAtMillis)
-  const rows: ArkmeForwardRecordPreviewItem[] = forward.items.length ? forward.items : forward.summaryLines.map(line => {
-    const separator = line.search(/[：:]/u)
-    return { senderName: separator > 0 ? line.slice(0, separator) : item.senderName, sendAtMillis: 0, title: '', textContent: separator > 0 ? line.slice(separator + 1) : line }
-  })
+  // A summary is content, not structured sender metadata (colons also occur in tokens and URLs).
+  const rows: ArkmeForwardRecordPreviewItem[] = forward.items.length ? forward.items : forward.summaryLines.map(line => ({
+    senderName: '转发摘要', sendAtMillis: 0, title: '', textContent: line,
+  }))
   const renderRecord = (value: ArkmeForwardRecordPreviewItem, index: number) => {
     const segments = value.segments ?? []
     const joinedTranscript = segments.map(segment => segment.textContent).join('').replace(/\s/gu, '')
@@ -786,6 +813,7 @@ export function ForwardRecordsDetail({ item, onClose }: { item: ArkmeTimelineIte
       itemUid: `${item.itemUid}-forward-${String(index)}`, senderName: value.senderName, isMe: false, sendAtMillis: value.sendAtMillis,
       status: 1, title: value.title,
       textContent: value.textContent || ((value.contentBlocks?.length ?? 0) === 0 ? value.contentLabel ?? '' : ''),
+      ...(value.textFormat === undefined ? {} : { textFormat: value.textFormat }),
       ...(value.contentBlocks === undefined ? {} : { contentBlocks: value.contentBlocks }),
       ...(value.mediaUnavailable === undefined ? {} : { mediaUnavailable: value.mediaUnavailable }),
     }

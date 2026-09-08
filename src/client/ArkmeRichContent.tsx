@@ -1,3 +1,5 @@
+import { arkmeMarkdownPlainText } from '../markdown.js'
+import { ArkmeMarkdownBody } from './ArkmeMarkdownBody.js'
 import { useEffect, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from 'react'
 import { createPortal } from 'react-dom'
 import { ArkmeFileIcon } from './ArkmeFileIcon.js'
@@ -13,8 +15,10 @@ import { ArkmeVoiceContent, arkmeVoiceMediaUrl } from './ArkmeVoiceContent.js'
 import { ArkmeFileViewer, ArkmeFileActions, arkmeLocalFileUrl, arkmeFileSize, useArkmeOriginal } from './ArkmeFileViewer.js'
 import { arkmeCanInlineLocalFile, arkmeVisibleUploadFraction } from '../file-transfer-contract.js'
 import { createArkmeSdk } from '../sdk/index.js'
-import { ArkmeMentionText, ArkmeRichText } from './ArkmeRichText.js'
+import { ArkmeRichText } from './ArkmeRichText.js'
+import { arkmeEmojiPlainText } from './arkme-emoji.js'
 import type { ArkmeLinkLabelMode, ArkmeLinkRenderer } from './ArkmeLinkText.js'
+import { retainPartialTimelineMedia } from './timeline-media.js'
 
 const mediaRoute = '/arkme-self/api/media'
 const textCollapseCharacterThreshold = 300
@@ -155,12 +159,18 @@ function ArkmeMessageCopyLink({
 
 function ArkmeMessageRichText({
   text,
+  textFormat,
+  textStyle,
+  collapse = false,
   highlightMentions,
   linkLabelMode,
   shareWebsite,
   onMessageCopyLinkOpen,
 }: {
   text: string
+  textFormat?: 'plain' | 'markdown'
+  textStyle?: Pick<CSSProperties, 'fontSize' | 'lineHeight'> | undefined
+  collapse?: boolean
   highlightMentions: boolean
   linkLabelMode: ArkmeLinkLabelMode
   shareWebsite?: string
@@ -177,16 +187,17 @@ function ArkmeMessageRichText({
       {...(onMessageCopyLinkOpen === undefined ? {} : { onMessageCopyLinkOpen })}
     />
   }
+  if (textFormat === 'markdown') return <ArkmeMarkdownBody text={text} textStyle={textStyle} highlightMentions={highlightMentions} collapse={collapse} renderLink={renderLink} />
   return <ArkmeRichText text={text} highlightMentions={highlightMentions} linkLabelMode={linkLabelMode} renderLink={renderLink} />
 }
 
-function mediaUrl(block: ArkmeContentBlock): string {
+export function arkmeContentMediaUrl(block: ArkmeContentBlock): string {
   if (block.localFileRef !== undefined) return arkmeLocalFileUrl(block.localFileRef)
   return `${mediaRoute}?ref=${encodeURIComponent(block.mediaRef)}`
 }
 
 function mediaAttemptUrl(block: ArkmeContentBlock, attempt: number): string {
-  const url = mediaUrl(block)
+  const url = arkmeContentMediaUrl(block)
   return attempt > 0 ? `${url}${url.includes('?') ? '&' : '?'}retry=${String(attempt)}` : url
 }
 
@@ -221,6 +232,7 @@ function shouldCollapseText(value: string): boolean {
 
 function LongText({
   text,
+  textFormat,
   highlightMentions = false,
   collapseText = true,
   expanded = false,
@@ -229,6 +241,7 @@ function LongText({
   onMessageCopyLinkOpen,
 }: {
   text: string
+  textFormat?: 'plain' | 'markdown'
   highlightMentions?: boolean
   collapseText?: boolean
   expanded?: boolean
@@ -240,11 +253,15 @@ function LongText({
   const [collapsed, setCollapsed] = useState(collapsible)
   const content = <ArkmeMessageRichText
     text={text}
+    textStyle={{ fontSize: styles.text?.fontSize, lineHeight: expanded ? 1.7 : styles.text?.lineHeight }}
+    {...(textFormat === undefined ? {} : { textFormat })}
+    collapse={collapseText && !expanded}
     highlightMentions={highlightMentions}
     linkLabelMode={linkLabelMode}
     {...(shareWebsite === undefined ? {} : { shareWebsite })}
     {...(onMessageCopyLinkOpen === undefined ? {} : { onMessageCopyLinkOpen })}
   />
+  if (textFormat === 'markdown') return content
   if (!collapsible) return <p style={{ ...styles.text, ...(expanded ? { width: '100%', lineHeight: 1.7 } : {}) }}>{content}</p>
   return <div style={styles.textFrame} data-arkme-text-collapsible="true">
     <p style={{ ...styles.text, ...(collapsed ? styles.collapsedText : {}) }}>{content}</p>
@@ -365,11 +382,11 @@ function ArticleCard({ title, text, onOpen }: { title: string; text: string; onO
   const heading = title.trim() || text.trim() || '无标题长文'
   const hasTitle = title.trim() !== ''
   const count = normalizedTextLength(text)
-  return <button type="button" style={{ ...styles.article, ...styles.articleButton }} data-arkme-long-article="preview" data-arkme-long-article-inner="true" aria-label={`查看长文 ${heading}`} onClick={onOpen}>
+  return <button type="button" style={{ ...styles.article, ...styles.articleButton }} data-arkme-long-article="preview" data-arkme-long-article-inner="true" aria-label={`查看长文 ${arkmeEmojiPlainText(heading)}`} onClick={onOpen}>
     <div style={styles.articleHeading}>
-      <h3 style={styles.articleTitle}>{heading}</h3>
+      <h3 style={styles.articleTitle}><ArkmeRichText text={heading} presentation="preview" /></h3>
     </div>
-    {hasTitle && text.trim() !== '' && <p style={{ ...styles.articlePreview, WebkitLineClamp: 2 }}>{text}</p>}
+    {hasTitle && text.trim() !== '' && <p style={{ ...styles.articlePreview, WebkitLineClamp: 2 }}><ArkmeRichText text={text} presentation="preview" /></p>}
     <span style={styles.articleMeta}><LongArticleWordCountIcon />{String(count)}字</span>
   </button>
 }
@@ -432,7 +449,7 @@ export function ArkmeMediaPreview({ blocks, selected, onSelect, onClose, preview
   const [imageMode, setImageMode] = useState<ImagePreviewMode>('contained')
   const [imageDragging, setImageDragging] = useState(false)
   const original = useArkmeOriginal(selected, selected.kind === 'image')
-  const originalUrl = previewUrl ?? (original.localRef === undefined ? mediaUrl(selected) : arkmeLocalFileUrl(original.localRef))
+  const originalUrl = previewUrl ?? (original.localRef === undefined ? arkmeContentMediaUrl(selected) : arkmeLocalFileUrl(original.localRef))
 
   useEffect(() => {
     setImageMode('contained')
@@ -670,7 +687,7 @@ export function arkmeRelatedRecordingItemFromSharedRecording(item: ArkmeTimeline
     : arkmeRelatedRecordingItemFromSharedRecordingPreview(item.sharedRecording, item)
 }
 
-export function ArkmeMessageContent({ item, sourceRef, onLongArticleUpdated, highlightMentions = false, collapseText = true, presentation = 'bubble', shareWebsite, onMessageCopyLinkOpen }: {
+export function ArkmeMessageContent({ item, sourceRef, onLongArticleUpdated, highlightMentions = false, collapseText = true, presentation = 'bubble', shareWebsite, onMessageCopyLinkOpen, mediaSelectionIsExplicit = false }: {
   item: ArkmeTimelineItem
   presentation?: 'bubble' | 'detail'
   sourceRef?: string
@@ -679,23 +696,17 @@ export function ArkmeMessageContent({ item, sourceRef, onLongArticleUpdated, hig
   collapseText?: boolean
   shareWebsite?: string
   onMessageCopyLinkOpen?: (sid: string) => void
+  mediaSelectionIsExplicit?: boolean
 }) {
   const lastMedia = useRef<{ sourceRef: string | undefined; item: ArkmeTimelineItem }>()
   const snapshot = lastMedia.current
   const previous = snapshot !== undefined && snapshot.sourceRef === sourceRef ? snapshot.item : undefined
   const version = item.recordVersion ?? item.version
-  const sameRevision = version !== undefined && version > 0
-    && version === (previous?.recordVersion ?? previous?.version)
-  // A failed media lookup is not an authoritative attachment deletion. Keep only
-  // this mounted record's same-version display until a complete response arrives.
-  const retained = item.mediaUnavailable === true && sameRevision && item.status === 1
-    && previous?.status === 1 && previous.itemUid === item.itemUid
-    && (item.contentBlocks?.length ?? 0) === 0 ? previous.contentBlocks : undefined
-  const displayBlocks = retained ?? item.contentBlocks
+  const display = mediaSelectionIsExplicit ? item : retainPartialTimelineMedia(previous, item)
   useEffect(() => {
-    lastMedia.current = { sourceRef, item: { ...item, ...(displayBlocks === undefined ? {} : { contentBlocks: displayBlocks }) } }
-  }, [item, sourceRef, displayBlocks])
-  const blocks = [...(displayBlocks ?? [])].sort((left, right) => left.sortOrder - right.sortOrder)
+    lastMedia.current = { sourceRef, item: display }
+  }, [display, sourceRef])
+  const blocks = [...(display.contentBlocks ?? [])].sort((left, right) => left.sortOrder - right.sortOrder)
   const visualBlocks = blocks.filter(block => block.kind !== 'audio')
   const [preview, setPreview] = useState<{ block: ArkmeContentBlock; forceDownload?: boolean }>()
   const [articleOpen, setArticleOpen] = useState(false)
@@ -709,17 +720,17 @@ export function ArkmeMessageContent({ item, sourceRef, onLongArticleUpdated, hig
   if (item.forwardRecords !== undefined) {
     const itemLines = item.forwardRecords.items.flatMap(value => {
       if (value.segments?.length) return value.segments.map(segment => `${segment.speakerName}：${segment.textContent || '语音片段'}`)
-      const summary = value.textContent || value.title || value.contentLabel || value.contentBlocks?.[0]?.fileName || '非文本内容'
+      const summary = (value.textFormat === 'markdown' ? arkmeMarkdownPlainText(value.textContent) : value.textContent) || value.title || value.contentLabel || value.contentBlocks?.[0]?.fileName || '非文本内容'
       return [`${value.senderName}：${summary}`]
     })
     const previewLines = (itemLines.length > 0 ? itemLines : item.forwardRecords.summaryLines).slice(0, 3)
     return <div style={styles.forwardCard} data-arkme-forward-records-card="true">
-      <p style={styles.forwardTitle} title={item.forwardRecords.title}>{item.forwardRecords.title}</p>
+      <p style={styles.forwardTitle} title={arkmeEmojiPlainText(item.forwardRecords.title)}><ArkmeRichText text={item.forwardRecords.title} presentation="preview" /></p>
       <div style={styles.forwardLines}>
         {(previewLines.length > 0 ? previewLines : ['原快记暂不可查看']).map((line, index) => <p
           key={`${String(index)}:${line}`}
           style={styles.forwardLine}
-        >{highlightMentions ? <ArkmeMentionText text={line} /> : line}</p>)}
+        ><ArkmeRichText text={line} presentation="preview" highlightMentions={highlightMentions} /></p>)}
       </div>
     </div>
   }
@@ -728,10 +739,10 @@ export function ArkmeMessageContent({ item, sourceRef, onLongArticleUpdated, hig
     const participantsText = arkmeSharedRecordingParticipantsText(item.sharedRecording)
     return <div style={styles.sharedRecordingCard} data-arkme-shared-recording-card="true">
       <div style={styles.sharedRecordingTop}>
-        <p style={styles.sharedRecordingTitle} title={item.sharedRecording.title}>{item.sharedRecording.title}</p>
+        <p style={styles.sharedRecordingTitle} title={arkmeEmojiPlainText(item.sharedRecording.title)}><ArkmeRichText text={item.sharedRecording.title} presentation="preview" /></p>
         {timeText !== '' && <span style={styles.sharedRecordingTime}>{timeText}</span>}
       </div>
-      <p style={styles.sharedRecordingSummary}>{highlightMentions ? <ArkmeMentionText text={item.sharedRecording.summary} /> : item.sharedRecording.summary}</p>
+      <p style={styles.sharedRecordingSummary}><ArkmeRichText text={item.sharedRecording.summary} presentation="preview" highlightMentions={highlightMentions} /></p>
       {participantsText !== '' && <p style={styles.sharedRecordingParticipants}>{participantsText}</p>}
     </div>
   }
@@ -769,6 +780,7 @@ export function ArkmeMessageContent({ item, sourceRef, onLongArticleUpdated, hig
     collapsible={withTranscript && presentation !== 'detail' && collapseText && shouldCollapseText(text)}
   >{withTranscript && text !== '' ? <ArkmeMessageRichText
       text={text}
+      {...(item.textFormat === undefined ? {} : { textFormat: item.textFormat })}
       highlightMentions={highlightMentions}
       linkLabelMode={linkLabelMode}
       {...(shareWebsite === undefined ? {} : { shareWebsite })}
@@ -801,8 +813,9 @@ export function ArkmeMessageContent({ item, sourceRef, onLongArticleUpdated, hig
     <div style={{ ...styles.stack, ...(presentation === 'detail' ? { width: '100%' } : {}) }} data-arkme-message-content={isArticle ? 'article' : 'message'} data-arkme-content-presentation={presentation}>
       {inlineVoice !== undefined ? renderVoice(inlineVoice, true) : <>
         {isArticle && presentation === 'bubble' ? <ArticleCard title={item.title} text={item.textContent} onOpen={() => { setArticleOpen(true) }} /> : <>
-          {isArticle && item.title && <h3 style={{ margin: 0, fontSize: 14, lineHeight: 1.7 }}>{item.title}</h3>}
+          {isArticle && item.title && <h3 style={{ margin: 0, fontSize: 14, lineHeight: 1.7 }}><ArkmeRichText text={item.title} presentation="preview" /></h3>}
           {text !== '' && <LongText
+            textFormat={item.textFormat ?? 'plain'}
             text={text}
             highlightMentions={highlightMentions}
             collapseText={collapseText}
@@ -848,6 +861,7 @@ export function ArkmeRecordDetailContent({ item, sourceRef, showOriginal = false
   if (item.contentBlocks?.some(block => block.kind === 'audio') === true) {
     return <ArkmeMessageContent item={{ ...item, textContent: text }} {...(sourceRef === undefined ? {} : { sourceRef })} collapseText={false} presentation="detail" highlightMentions />
   }
+  if (item.textFormat === 'markdown') return <ArkmeMarkdownBody text={text} textStyle={{ fontSize: 16, lineHeight: '26px' }} />
   return <p style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontSize: 16, lineHeight: '26px' }}><ArkmeRichText text={text || item.title || '非文本内容'} highlightMentions linkLabelMode="raw" /></p>
 }
 

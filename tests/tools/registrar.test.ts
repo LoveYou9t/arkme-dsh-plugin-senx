@@ -78,6 +78,41 @@ async function mountArkmeTools(
 }
 
 describe('registerArkmeTools', () => {
+  it.each(['business', 'hybrid'] as const)('keeps attachment-only re-edit instructions consistent in the %s profile', profile => {
+    const prompt = promptForArkmeToolProfile(profile)
+    expect(prompt).toContain('text, title, or attachments')
+    expect(prompt).toContain('Omit new_text to retain the draft or original text when editing attachments')
+    expect(prompt).toContain('never use arkme_files_send to edit an existing record')
+    expect(prompt).not.toContain('Omit new_text only to restore')
+  })
+
+  it('executes personal refusal through the official runtime and a later explicit confirmation', async () => {
+    const ctx = await setup()
+    const admission = { state: 'allowed', canSend: true, ownRefused: false, counterpartRefused: false, ownRevision: 0, counterpartRevision: 0 }
+    const directMessageAdmission = vi.fn(async () => admission)
+    const setDirectMessageRefusal = vi.fn(async () => ({ ...admission, state: 'refused_by_self', canSend: false, ownRefused: true, ownRevision: 1 }))
+    const registration = await mountArkmeTools(ctx, 'business', { ...ports, directMessageAdmission, setDirectMessageRefusal } as unknown as ArkmeToolPorts)
+    const events: Array<Record<string, unknown>> = [
+      { seq: 0, type: 'turn/start', data: { turn: 1 } },
+      { seq: 1, type: 'user/message', data: { content: [{ type: 'text', text: '拒收这个私聊用户的消息' }], source: { kind: 'user' } } },
+    ]
+    const agent = { id: SessionId('session-personal-refusal'), session: { get events() { return events } } } as unknown as Agent
+    const signal = new AbortController().signal
+    const read = await ctx.tools.execute({ callId: CallId('refusal-read'), name: 'arkme_direct_message_admission', arguments: { source_ref: 'opaque' }, agent, signal })
+    expect(read.isError).toBe(false)
+    expect(read.isError ? '' : read.value).toContain('allowed')
+    const args = { source_ref: 'opaque', refused: true, expected_revision: 0 }
+    const prepared = await ctx.tools.execute({ callId: CallId('refusal-prepare'), name: 'arkme_direct_message_refusal_set', arguments: args, agent, signal })
+    expect(prepared.isError ? '' : prepared.value).toContain('confirmation_required')
+    expect(setDirectMessageRefusal).not.toHaveBeenCalled()
+    events.push({ seq: 2, type: 'user/message', data: { content: [{ type: 'text', text: '确认拒收' }], source: { kind: 'user' } } })
+    const result = await ctx.tools.execute({ callId: CallId('refusal-confirm'), name: 'arkme_direct_message_refusal_set', arguments: args, agent, signal })
+    expect(result.isError).toBe(false)
+    expect(setDirectMessageRefusal).toHaveBeenCalledExactlyOnceWith('opaque', true, 0, signal)
+    expect(result.isError ? '' : result.value).toContain('refused_by_self')
+    await registration.dispose()
+    expect(ctx.tools.schemas().some(tool => tool.name === 'arkme_direct_message_refusal_set')).toBe(false)
+  })
   it('registers the core business surface and matching prompt', async () => {
     const ctx = await setup()
     await mountArkmeTools(ctx, 'business')
@@ -158,6 +193,8 @@ describe('registerArkmeTools', () => {
       'arkme_user_ban_status',
       'arkme_user_ban',
       'arkme_user_unban',
+      'arkme_direct_message_admission',
+      'arkme_direct_message_refusal_set',
       'arkme_group_ai_polish_manage',
       'arkme_favorite_stickers_list',
       'arkme_favorite_sticker_add',
@@ -383,7 +420,7 @@ describe('registerArkmeTools', () => {
     expect(userBanStatus).toHaveBeenCalledWith('arkme-source-v1.account-bound', signal)
   })
 
-  it('persists a record re-edit draft before confirmation and commits only after a later user message', async () => {
+  it.each([false, true])('persists a record re-edit draft before confirmation and commits only after a later user message (attachments=%s)', async withAttachments => {
     const ctx = await setup()
     const preparedContext = {
       expectedUserId: 42,
@@ -401,6 +438,7 @@ describe('registerArkmeTools', () => {
       newTextPreview: '修改后的正文',
       sendAtMillis: 1_756_800_000_000,
       preservesAttachments: true,
+      ...(withAttachments ? { attachmentChanges: { added: 1, removed: 2, retained: 1, reordered: true } } : {}),
     }
     const prepareRecordReedit = vi.fn(async () => preparedContext)
     const commitRecordReedit = vi.fn(async () => ({
@@ -420,7 +458,8 @@ describe('registerArkmeTools', () => {
       id: SessionId('session-record-reedit'), session: { get events() { return events } },
     } as unknown as Agent
     const signal = new AbortController().signal
-    const args = { source_ref: 'arkme-source-v1.secret', item_uid: 'record-secret-1', new_text: '修改后的正文' }
+    const args = { source_ref: 'arkme-source-v1.secret', item_uid: 'record-secret-1', new_text: '修改后的正文',
+      ...(withAttachments ? { attachments: [{ file_asset_uid: 'retained' }, { file_ref: 'arkme-file-v1.11111111-1111-4111-8111-111111111111' }], expected_version: 8 } : {}) }
 
     const prepared = await ctx.tools.execute({
       callId: CallId('record-reedit-prepare'), name: 'arkme_record_reedit', arguments: args, agent, signal,
@@ -431,7 +470,15 @@ describe('registerArkmeTools', () => {
     expect(preparedValue).toContain('研发群')
     expect(preparedValue).toContain('原来的正文')
     expect(preparedValue).toContain('修改后的正文')
-    expect(preparedValue).toContain('附件将保持不变')
+    if (withAttachments) {
+      expect(preparedValue).toContain('新增 1')
+      expect(preparedValue).toContain('移除 2')
+      expect(preparedValue).toContain('调整顺序')
+      expect(preparedValue).not.toContain('附件将保持不变')
+      expect(prepareRecordReedit).toHaveBeenCalledWith(expect.objectContaining({
+        attachments: [{ fileAssetUid: 'retained' }, { fileRef: 'arkme-file-v1.11111111-1111-4111-8111-111111111111' }], expectedVersion: 8,
+      }))
+    } else expect(preparedValue).toContain('附件将保持不变')
     expect(preparedValue).not.toContain('record-secret-1')
     expect(preparedValue).not.toContain('arkme-record-reedit-source-v1.secret')
     expect(prepareRecordReedit).toHaveBeenCalledOnce()

@@ -1,6 +1,9 @@
 import { createHmac } from 'node:crypto'
+import { readFileSync } from 'node:fs'
 import { describe, expect, it, vi } from 'vitest'
+import { parse } from 'yaml'
 import { ArkmePluginError, ArkmeService, type ArkmeServiceConfig } from '../src/arkme-service.js'
+import { Config as ConfigSchema, resolveArkmeConfig } from '../src/index.js'
 import type { ArkmeSessionCredentials } from '../src/keychain-store.js'
 import type { ArkmeLongArticleDraft, ArkmePendingWrite } from '../src/types.js'
 import type { ArkmeExtensionReviewOperation } from '../src/extensions/types.js'
@@ -24,6 +27,7 @@ class MemoryStateStore {
   readonly cached = new Map<number, ArkmeSelfRecordItem[]>()
   readonly events: string[] = []
   readonly longArticleDrafts = new Map<string, ArkmeLongArticleDraft>()
+  async getRecordReeditDraft() { return undefined }
   readonly extensionReviewOperations = new Map<number, ArkmeExtensionReviewOperation[]>()
   summary: ArkmeSelfSummary | undefined
   page: ArkmeSelfRecordList | undefined
@@ -190,6 +194,34 @@ function sourceRefFor(
 }
 
 describe('ArkmeService', () => {
+  for (const disabled of [false, true]) {
+    it(disabled
+      ? 'allows a deployment override to disable production Markdown writes'
+      : 'advertises Markdown editing from the shipped production configuration', async () => {
+      const patch = parse(readFileSync(new URL('../cordis.patch.yml', import.meta.url), 'utf8')) as Array<{
+        insert?: Array<{ id: string; config: Record<string, unknown> }>
+      }>
+      const entry = patch.flatMap(layer => layer.insert ?? []).find(item => item.id === 'arkme-self')!
+      const production = resolveArkmeConfig({ webServer: { host: '127.0.0.1' } } as never, ConfigSchema({
+        ...entry.config,
+        ...(disabled ? { markdownQuickNotesEnabled: false } : {}),
+      }))
+      const service = new ArkmeService(production, new MemorySessionStore(), new MemoryStateStore(), async () => {
+        throw new Error('This configuration check must not contact production services')
+      })
+
+      expect(service.providerCapabilities().environment).toBe('prod')
+      if (disabled) {
+        expect(service.providerCapabilities().features).not.toHaveProperty('markdownQuickNotes')
+        await expect(service.extendSourceMessage('source', 'message', '# 标题', 'record', [], {
+          textFormat: 'markdown',
+        })).rejects.toMatchObject({ code: 'markdown-send-disabled', httpStatus: 403 })
+      } else {
+        expect(service.providerCapabilities().features.markdownQuickNotes).toBe(true)
+      }
+    })
+  }
+
   it('validates the signed source message before uploading extension attachments', async () => {
     const service = new ArkmeService(config, new MemorySessionStore(), new MemoryStateStore())
     const validationError = new ArkmePluginError('message-action-ref-invalid', '消息操作凭据无效', false)
@@ -561,6 +593,28 @@ describe('ArkmeService', () => {
       start_at: lowerBound,
       tz_offset: timezoneOffset === 0 ? 0 : timezoneOffset,
     })
+  })
+
+  it('keeps emoji intact at all calendar projection limits without changing the raw source', async () => {
+    const sessions = new MemorySessionStore()
+    sessions.session = { userId: 10001, accessToken: 'access', refreshToken: 'refresh' }
+    const original = '文'.repeat(3995) + '[jm_emoji:heart_eyes]'
+    const service = new ArkmeService(config, sessions, new MemoryStateStore(), async input => {
+      if (String(input).endsWith('/api/v1/records/privacy/visibility-snapshot')) return json({ code: 0, data: { items: [], has_more: false } })
+      if (String(input).endsWith('/api/v1/calendar/records/query')) return json({ code: 200, data: {
+        items: [original, '文'.repeat(155) + '[im_emoji:thumb_up]', '文'.repeat(159) + '👨‍👩‍👧‍👦'].map((text, i) => ({
+          record_uid: `record-${i}`, send_at: 1_787_310_000_000,
+          record_core: { content_access_state: 1, title: '', text_content: text },
+        })), has_more: false,
+      } })
+      throw new Error(`unexpected ${String(input)}`)
+    })
+    const page = await service.calendarRecords({ bucketDate: '2026-08-21' })
+    expect(page.items[0]?.textContent).toBe('文'.repeat(3995) + '…[已截断]')
+    expect(page.items[1]?.textContent).toBe('文'.repeat(155) + '[im_emoji:thumb_up]')
+    expect(page.items[1]?.preview).toBe('文'.repeat(155) + '…[已截断]')
+    expect(page.items[2]?.preview).toBe('文'.repeat(159) + '…[已截断]')
+    expect(original).toBe('文'.repeat(3995) + '[jm_emoji:heart_eyes]')
   })
 
   it('reads record calendar buckets and day records from the Record origin', async () => {
@@ -5913,7 +5967,7 @@ describe('ArkmeService', () => {
       })
   })
 
-  it.each([false, true])('keeps projection pending after owner commit whether local invalidation rejects: %s', async rejects => {
+  it('forwards the owner result without a second projection invalidation', async () => {
     const sessions = new MemorySessionStore()
     sessions.session = { userId: 10001, accessToken: 'access', refreshToken: 'refresh' }
     const service = new ArkmeService(config, sessions, new MemoryStateStore(), vi.fn() as never)
@@ -5924,11 +5978,10 @@ describe('ArkmeService', () => {
     vi.spyOn((service as unknown as { record: { commitRecordReedit: () => Promise<typeof ownerResult> } }).record, 'commitRecordReedit')
       .mockResolvedValue(ownerResult)
     const invalidate = vi.spyOn((service as unknown as { realtime: { invalidateRecordProjection: () => Promise<void> } }).realtime, 'invalidateRecordProjection')
-    if (rejects) invalidate.mockRejectedValue(new Error('projection offline'))
-    else invalidate.mockResolvedValue()
+    invalidate.mockResolvedValue()
 
     await expect(service.commitRecordReedit({} as never)).resolves.toEqual(ownerResult)
-    expect(invalidate).toHaveBeenCalledOnce()
+    expect(invalidate).not.toHaveBeenCalled()
   })
 
   it('rejects forged, expired and cross-account moment refs before record detail access', async () => {

@@ -9,6 +9,7 @@ import { createHash, createHmac, randomUUID } from 'node:crypto'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { Context } from '@deepseek-ai/cordis'
+import type {} from '@deepseek-ai/dsh-attachment'
 import type {} from '@deepseek-ai/dsh-llm'
 import Schema from '@deepseek-ai/schemastery'
 
@@ -18,7 +19,7 @@ import type {} from '@deepseek-ai/dsh-host-webserver'
 import { registerDSHAgentInputRecordSync } from './dsh-agent-input-sync.js'
 import { createArkmeHostApi } from './host-api.js'
 import { openDshHostPath } from './dsh-host-capabilities.js'
-import { ARKME_HARNESS_EMBED_PATH } from './harness-embed-contract.js'
+import { ARKME_HARNESS_EMBED_PATH, ARKME_HARNESS_MODEL_CLIENT_PATH } from './harness-embed-contract.js'
 import {
   createHarnessEmbedRouteHandler,
   dshRootDocumentHeaders,
@@ -116,6 +117,7 @@ export interface Config {
   recordingWorkbenchEnabled: boolean
   chatMemberJoinEventsEnabled: boolean
   richMediaRenderEnabled: boolean
+  markdownQuickNotesEnabled: boolean
   richMediaSendEnabled: boolean
   maxUploadBytes: number
   stateDirectory: string
@@ -179,6 +181,7 @@ export const Config: Schema<Config> = Schema.object({
   updateCheckIntervalHours: Schema.number().min(1).max(168).default(12),
   updateAllowLocalInstall: Schema.boolean().default(true),
   richMediaRenderEnabled: Schema.boolean().default(true),
+  markdownQuickNotesEnabled: Schema.boolean().default(false),
   richMediaSendEnabled: Schema.boolean().default(true),
   maxUploadBytes: Schema.number().min(1024).max(1024 * 1024 * 1024).default(100 * 1024 * 1024),
   openclawProfile: Schema.string().default('dev'),
@@ -417,6 +420,7 @@ export function apply(ctx: Context, config: Config): void {
     registerManagedAiProvider(modelCtx, {
       intelligentBaseUrl: config.intelligentBaseUrl,
       credentialOwner: service,
+      resolveAttachmentReader: () => modelCtx.get('attachments'),
     })
   })
   registerDSHAgentInputRecordSync(ctx, service)
@@ -665,11 +669,19 @@ export function apply(ctx: Context, config: Config): void {
       },
     }), 'arkme: Harness session observer asset')
   }
+  const harnessModelClient = readFileSync(new URL('../lib/harness-model-client.js', import.meta.url))
   const harnessEmbedHandler = createHarnessEmbedRouteHandler({
     ...(sessionClient === undefined ? {} : { sessionClient: {
       revision: createHash('sha256').update(sessionClient.source).digest('hex').slice(0, 12),
       apiPath: sessionClient.apiPath,
     } }),
+    modelClient: {
+      id: '@senguoyun/dsh-arkme/harness-model',
+      url: ARKME_HARNESS_MODEL_CLIENT_PATH,
+      rev: createHash('sha256').update(harnessModelClient).digest('hex'),
+      inject: ['@deepseek-ai/dsh-client-ui-model-selection'],
+      external: ['react', 'react-dom', 'react/jsx-runtime'],
+    },
     getGraph: () => clientModules.graph(),
     installedPackageNames: () => extensionStore.list().flatMap(item =>
       item.profilePackageName === undefined ? [] : [item.profilePackageName]),
@@ -724,6 +736,21 @@ export function apply(ctx: Context, config: Config): void {
     path: ARKME_HARNESS_EMBED_PATH,
     handler: harnessEmbedHandler,
   }), 'dsh-arkme: core-only DeepSeek Harness iframe route')
+  ctx.effect(() => ctx.webServer.register({
+    kind: 'exact', path: ARKME_HARNESS_MODEL_CLIENT_PATH,
+    handler: (request, response) => {
+      if (request.method !== 'GET' && request.method !== 'HEAD') {
+        response.writeHead(405, { Allow: 'GET, HEAD' }).end()
+        return
+      }
+      response.writeHead(200, {
+        'Content-Type': 'text/javascript; charset=utf-8',
+        'Content-Length': harnessModelClient.byteLength,
+        'Cache-Control': 'no-cache',
+        'X-Content-Type-Options': 'nosniff',
+      }).end(request.method === 'HEAD' ? undefined : harnessModelClient)
+    },
+  }), 'dsh-arkme: Harness model selector browser asset')
   ctx.effect(() => ctx.webServer.register({
     kind: 'prefix',
     path: `${config.routePath}/call`,

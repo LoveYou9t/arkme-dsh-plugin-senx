@@ -1,11 +1,14 @@
-import type { ArkmeSourceItem, ArkmeSourceList } from '../types.js'
+import type { ArkmeChatPinProjection, ArkmeSourceItem, ArkmeSourceList } from '../types.js'
+import { retainNewerArkmeChatPin } from '../chat-pin-projection.js'
 import { arkmeBadgeUnreadCount, projectArkmeChatAttentionFromMuted } from '../chat-attention.js'
-import { callArkme } from './api.js'
+import { ArkmeClientError, callArkme } from './api.js'
 import { arkmeChatSourceIdentityKey, arkmeSourceIdentityKey } from './source-identity.js'
 
 const DEFAULT_ROOT_CACHE_MAX_AGE_MS = 30_000
 const ROOT_DIRECTORY_PAGE_LIMIT = 20
 const MAX_ROOT_PAGES = 10
+// The first retry follows the Host directory read's two-second failure cooldown.
+const ROOT_READ_RETRY_DELAYS_MS = [2_000, 4_000] as const
 
 export type ArkmeClientAccountScope = number | string | undefined
 
@@ -195,7 +198,7 @@ function mergeSourceProjection(
           }
         })(),
       }
-  return applyReadWatermark(projectSourceAttention(merged), watermarks, indexes, sourceKey)
+  return applyReadWatermark(projectSourceAttention(retainNewerArkmeChatPin(existing, merged)), watermarks, indexes, sourceKey)
 }
 
 function sourceUpdate(update: ArkmeSourceItem | ArkmeChatDirectorySourceUpdate): ArkmeChatDirectorySourceUpdate {
@@ -210,6 +213,7 @@ function directorySourceIdentity(source: ArkmeSourceItem): string {
 type DirectorySourceScalarField = Exclude<keyof ArkmeSourceItem, 'avatarRefs' | 'groupAvatar'>
 
 const DIRECTORY_SOURCE_SCALAR_FIELDS: Record<DirectorySourceScalarField, true> = {
+  directMessageAdmissionApplicable: true,
   sourceRef: true,
   sourceKey: true,
   peerUserId: true,
@@ -229,6 +233,7 @@ const DIRECTORY_SOURCE_SCALAR_FIELDS: Record<DirectorySourceScalarField, true> =
   hasUnreadMention: true,
   isMuted: true,
   isPinned: true,
+  chatPolicyUpdatedAtMillis: true,
   latestSequence: true,
   recordCount: true,
 }
@@ -272,10 +277,11 @@ function reconcileDirectorySources(
   const currentByIdentity = new Map(current.map(source => [directorySourceIdentity(source), source]))
   const reconciled = incoming.map(source => {
     const previous = currentByIdentity.get(directorySourceIdentity(source))
+    const projected = retainNewerArkmeChatPin(previous, source)
     return previous !== undefined
-      && sameDirectorySourcePresentation(previous, source)
+      && sameDirectorySourcePresentation(previous, projected)
       ? previous
-      : source
+      : projected
   })
   return reconciled.length === current.length && reconciled.every((source, index) => source === current[index])
     ? current
@@ -389,13 +395,8 @@ export class ArkmeChatDirectoryStore {
       return [...this.snapshot.sources]
     }
     if (this.refreshInFlight !== undefined) {
-      if (options.silent === true) return await this.refreshInFlight
-      this.setRefreshing(true)
-      try {
-        return await this.refreshInFlight
-      } finally {
-        this.setRefreshing(false)
-      }
+      if (options.silent !== true) this.setRefreshing(true)
+      return await this.refreshInFlight
     }
     if (options.silent !== true) this.setRefreshing(true)
     const generation = this.generation
@@ -404,7 +405,9 @@ export class ArkmeChatDirectoryStore {
       const seen = new Set<string>()
       let cursor: string | undefined
       for (let pageIndex = 0; pageIndex < MAX_ROOT_PAGES; pageIndex += 1) {
-        const page = await this.loadPage(cursor, options.force === true)
+        const page = await this.loadRootPage(cursor, options.force === true, generation)
+        if (generation !== this.generation) return [...this.snapshot.sources]
+        if (page === undefined) return [...this.snapshot.sources]
         for (const source of page.items) {
           const identity = arkmeSourceIdentityKey(source)
           if (seen.has(identity)) continue
@@ -414,7 +417,6 @@ export class ArkmeChatDirectoryStore {
         if (!page.hasMore || page.nextCursor === undefined) break
         cursor = page.nextCursor
       }
-      if (generation !== this.generation) return [...this.snapshot.sources]
       this.refreshedAtMillis = this.now()
       this.publish(loaded)
       return [...this.snapshot.sources]
@@ -425,9 +427,67 @@ export class ArkmeChatDirectoryStore {
     } finally {
       if (this.refreshInFlight === pending) {
         this.refreshInFlight = undefined
-        if (options.silent !== true) this.setRefreshing(false)
+        this.setRefreshing(false)
       }
     }
+  }
+
+  private async loadRootPage(cursor: string | undefined, force: boolean, generation: number): Promise<ArkmeSourceList | undefined> {
+    for (let attempt = 0; ; attempt += 1) {
+      if (generation !== this.generation) return undefined
+      try {
+        return await this.loadPage(cursor, force)
+      } catch (error) {
+        if (generation !== this.generation) return undefined
+        const delay = ROOT_READ_RETRY_DELAYS_MS[attempt]
+        if (!(error instanceof ArkmeClientError) || !error.body.retryable || delay === undefined) throw error
+        await new Promise<void>(resolve => { setTimeout(resolve, delay) })
+      }
+    }
+  }
+
+  /** Retain visible rows while preventing older reads from satisfying a new owner invalidation. */
+  invalidateRoot(): void {
+    this.generation += 1
+    this.refreshInFlight = undefined
+    this.refreshedAtMillis = 0
+    this.setRefreshing(false)
+  }
+
+  /** A reconnect pin projection is not a directory membership or message snapshot. */
+  reconcilePins(pins: readonly ArkmeChatPinProjection[]): void {
+    const byKey = new Map<string, ArkmeChatPinProjection>()
+    for (const pin of pins) {
+      const previous = byKey.get(pin.sourceKey)
+      if (previous === undefined || previous.policyUpdatedAtMillis < pin.policyUpdatedAtMillis) byKey.set(pin.sourceKey, pin)
+    }
+    let changed = false
+    const sources = this.snapshot.sources.map(source => {
+      if ((source.kind !== 'private_chat' && source.kind !== 'group_chat') || source.sourceKey === undefined) return source
+      const pin = byKey.get(source.sourceKey)
+      if (pin === undefined) return source
+      const projected = retainNewerArkmeChatPin(source, {
+        ...source, isPinned: pin.pinned, chatPolicyUpdatedAtMillis: pin.policyUpdatedAtMillis,
+      })
+      if (source.isPinned === projected.isPinned && source.chatPolicyUpdatedAtMillis === projected.chatPolicyUpdatedAtMillis) return source
+      changed = true
+      return projected
+    })
+    if (changed) this.commit(sources)
+  }
+
+  confirmPin(source: ArkmeSourceItem, pinned: boolean, policyUpdatedAtMillis: number): void {
+    if (source.kind !== 'private_chat' && source.kind !== 'group_chat') return
+    const targetKey = arkmeSourceIdentityKey(source)
+    const current = this.snapshot.sources.find(item => arkmeSourceIdentityKey(item) === targetKey)
+    if (current === undefined) return
+    const updated = retainNewerArkmeChatPin(current, {
+      ...current, isPinned: pinned, chatPolicyUpdatedAtMillis: policyUpdatedAtMillis,
+    })
+    if (updated.chatPolicyUpdatedAtMillis !== policyUpdatedAtMillis) return
+    this.refreshedAtMillis = 0
+    this.commit(this.snapshot.sources.map(item =>
+      arkmeSourceIdentityKey(item) === targetKey ? updated : item))
   }
 
   publish(sources: ArkmeSourceItem[]): void {

@@ -43,6 +43,7 @@ export interface DshWebBootGraph {
 }
 
 interface HarnessEmbedRouteOptions {
+  modelClient?: DshWebBootEntry
   getGraph(): DshWebBootGraph
   installedPackageNames(): readonly string[]
   readRootHtml(request: IncomingMessage): Promise<string>
@@ -168,6 +169,7 @@ function projectBootBatches(
 export function projectHarnessBootGraph(
   graph: DshWebBootGraph,
   installedPackageNames: readonly string[],
+  modelClient?: DshWebBootEntry,
 ): DshWebBootGraph {
   const requiredPackageNames = requiredBootPackages(graph.entries)
   const removedPackageNames = new Set([
@@ -185,6 +187,10 @@ export function projectHarnessBootGraph(
   }
   assertNoRemovedDependencies(entries, removedPackageNames)
   const batches = projectBootBatches(graph.batches, new Set(entries.map(entry => entry.id)))
+  if (modelClient && entries.some(entry => entry.id === '@deepseek-ai/dsh-client-ui-model-selection')) {
+    entries.push(modelClient)
+    batches?.push({ phase: 'application', url: modelClient.url, rev: modelClient.rev, entries: [modelClient.id] })
+  }
 
   return {
     rev: shortHash(JSON.stringify(batches === undefined ? entries : { entries, batches })),
@@ -231,7 +237,7 @@ export function createHarnessEmbedRouteHandler(options: HarnessEmbedRouteOptions
 
     try {
       const fullGraph = options.getGraph()
-      const projectedGraph = projectHarnessBootGraph(fullGraph, options.installedPackageNames())
+      const projectedGraph = projectHarnessBootGraph(fullGraph, options.installedPackageNames(), options.modelClient)
       if (options.sessionClient !== undefined) {
         const rev = options.sessionClient.revision
         projectedGraph.entries.push({

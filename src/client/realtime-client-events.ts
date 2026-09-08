@@ -1,4 +1,7 @@
 import { useEffect } from 'react'
+import { publishMemberEventHint } from './member-event-hints.js'
+import { arkmeMemberEvents } from './member-event-cache.js'
+import { invalidateDirectMessageAdmission } from './direct-message-admission.js'
 import type { ArkmeAuthSnapshot, ArkmeBotSummary, ArkmeChatClientEvent } from '../types.js'
 import { arkmeAuthStore } from './auth-store.js'
 import { arkmeCalendarInvalidations } from './calendar-invalidation-store.js'
@@ -64,6 +67,7 @@ export function useArkmeRealtimeClientEvents(
 
   useEffect(() => {
     if (auth?.status !== 'authenticated' || auth.userId === undefined) {
+      arkmeMemberEvents.activateAccount(undefined)
       arkmeChatDirectory.activateAccount(undefined)
       arkmeChatTimelineDelta.activateAccount(undefined)
       arkmeInterwovenInvalidation.activateAccount(undefined)
@@ -74,6 +78,7 @@ export function useArkmeRealtimeClientEvents(
     }
     const authenticatedUserId = auth.userId
     const authenticatedAccountScope = `${auth.environment}:${String(authenticatedUserId)}`
+    arkmeMemberEvents.activateAccount(authenticatedAccountScope)
     arkmeChatDirectory.activateAccount(authenticatedAccountScope)
     arkmeChatTimelineDelta.activateAccount(authenticatedAccountScope)
     arkmeInterwovenInvalidation.activateAccount(authenticatedAccountScope)
@@ -98,6 +103,7 @@ export function useArkmeRealtimeClientEvents(
       if (stopped) return
       if (ownsMessagePreparing) arkmeMessagePreparing.reset()
       reconcileReceipts()
+      invalidateDirectMessageAdmission()
       void reconcileArkmeProviderInstance()
         .then(async changed => {
           if (!changed || stopped) return
@@ -126,6 +132,11 @@ export function useArkmeRealtimeClientEvents(
         if (!Number.isSafeInteger(update.revision) || update.revision < 0
           || (observedRevision !== undefined && update.revision <= observedRevision)) return
         observedRevision = update.revision
+        if (update.type === 'member-events-invalidated') {
+          publishMemberEventHint({ account:authenticatedAccountScope, sourceKey:update.sourceKey,
+            eventId:update.eventId, occurredAtMillis:update.occurredAtMillis })
+          return
+        }
         if (update.type === 'message-preparing') {
           if (ownsMessagePreparing) arkmeMessagePreparing.apply(update)
           return
@@ -139,6 +150,7 @@ export function useArkmeRealtimeClientEvents(
           if (update.attentionSummary !== undefined) arkmeAttentionSummary.apply(update.attentionSummary)
           arkmeInterwovenInvalidation.invalidate()
           reconcileReceipts()
+          invalidateDirectMessageAdmission()
           if (update.refresh === 'none') return
           void refreshUnread(update.refresh === 'force')
             .then(() => {
@@ -167,6 +179,7 @@ export function useArkmeRealtimeClientEvents(
           return
         }
         if (update.type === 'projection-invalidated') {
+          if (update.projection === 'chat.direct_message_admission') { invalidateDirectMessageAdmission(); return }
           if (update.projection !== 'record') return
           arkmeInterwovenInvalidation.invalidate()
           arkmeCalendarInvalidations.publishAll()
@@ -181,6 +194,15 @@ export function useArkmeRealtimeClientEvents(
           arkmeChatTimelineDelta.applyTimelineChange(update)
           arkmeInterwovenInvalidation.invalidate(update.sourceKey)
           arkmeCalendarInvalidations.publishAll()
+          return
+        }
+        if (update.type === 'chat-pins-reconciled') {
+          arkmeChatDirectory.reconcilePins(update.pins)
+          return
+        }
+        if (update.type === 'chat-policy-invalidated') {
+          arkmeChatDirectory.invalidateRoot()
+          void arkmeChatDirectory.refreshRoot({ force: true, silent: true }).catch(() => undefined)
           return
         }
         if (update.type === 'conversation-list-preference-invalidated') {
