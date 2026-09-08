@@ -1149,11 +1149,16 @@ function GroupSettingsMenu(props: {
   onRestrictionsOpen: () => void
   onSourceProjectionUpdated: (source: ArkmeSourceItem) => void
   onMembershipChanged: (target: ArkmeGroupActionTarget) => void
-  onMessageDndUpdated: (target: ArkmeGroupActionTarget, messageDnd: boolean) => void
+  onMessageDndUpdated: (target: ArkmeGroupActionTarget, result: ArkmeGroupNotificationResult) => boolean
   onError: (message: string) => void
 }) {
   const [snapshot, setSnapshot] = useState<ArkmeGroupSettingsSnapshot>()
-  const [messageDnd, setMessageDnd] = useState(props.source.isMuted === true)
+  const [notification, setNotification] = useState<ArkmeGroupNotificationResult>({
+    messageDnd: props.source.isMuted === true,
+    chatNotificationPolicyUpdatedAtMillis: props.source.chatNotificationPolicyUpdatedAtMillis ?? 0,
+  })
+  const messageDnd = (props.source.chatNotificationPolicyUpdatedAtMillis ?? 0) > notification.chatNotificationPolicyUpdatedAtMillis
+    ? props.source.isMuted === true : notification.messageDnd
   const [busy, setBusy] = useState(false)
   const [localAiPolishSettings, setLocalAiPolishSettings] = useState(props.aiPolishSettings)
   const [aiPolishLoadState, setAiPolishLoadState] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle')
@@ -1163,14 +1168,14 @@ function GroupSettingsMenu(props: {
     const controller = new AbortController()
     let active = true
     setSnapshot(undefined)
-    setMessageDnd(props.source.isMuted === true)
     void callArkme<ArkmeGroupSettingsSnapshot>('group.settings', {
       sourceRef: props.source.sourceRef,
     }, controller.signal)
       .then(value => {
         if (!active) return
         setSnapshot(value)
-        setMessageDnd(value.messageDnd)
+        setNotification(current => current.chatNotificationPolicyUpdatedAtMillis > (value.chatNotificationPolicyUpdatedAtMillis ?? 0)
+          ? current : { messageDnd: value.messageDnd, chatNotificationPolicyUpdatedAtMillis: value.chatNotificationPolicyUpdatedAtMillis ?? 0 })
       })
       .catch(caught => {
         if (active && !isArkmeRequestAbort(caught, controller.signal)) props.onError(errorMessage(caught))
@@ -1184,8 +1189,11 @@ function GroupSettingsMenu(props: {
   useEffect(() => {
     if (props.open) return
     setSnapshot(undefined)
-    setMessageDnd(props.source.isMuted === true)
-  }, [props.open, props.source.isMuted])
+    setNotification({
+      messageDnd: props.source.isMuted === true,
+      chatNotificationPolicyUpdatedAtMillis: props.source.chatNotificationPolicyUpdatedAtMillis ?? 0,
+    })
+  }, [props.open, props.source.isMuted, props.source.chatNotificationPolicyUpdatedAtMillis])
 
   useEffect(() => {
     if (props.aiPolishSettings !== undefined) setLocalAiPolishSettings(props.aiPolishSettings)
@@ -1306,18 +1314,17 @@ function GroupSettingsMenu(props: {
           checked={messageDnd}
           busy={busy}
           onChange={next => {
-            const previous = messageDnd
-            setMessageDnd(next)
             setBusy(true)
             void callArkme<ArkmeGroupNotificationResult>('group.notification.set', {
               sourceRef: actionTarget.sourceRef,
               enabled: next,
             })
               .then(result => {
-                setMessageDnd(result.messageDnd)
-                props.onMessageDndUpdated(actionTarget, result.messageDnd)
+                const accepted = props.onMessageDndUpdated(actionTarget, result)
+                setNotification(current => current.chatNotificationPolicyUpdatedAtMillis > result.chatNotificationPolicyUpdatedAtMillis
+                  ? current : { ...result, messageDnd: accepted })
               })
-              .catch(caught => { setMessageDnd(previous); props.onError(errorMessage(caught)) })
+              .catch(caught => { props.onError(errorMessage(caught)) })
               .finally(() => { setBusy(false) })
           }}
         />
@@ -1595,7 +1602,7 @@ export function ArkmeGroupChatControls(props: {
   overlayHostRef: RefObject<HTMLElement>
   onSourceProjectionUpdated: (source: ArkmeSourceItem) => void
   onMembershipChanged: (target: ArkmeGroupActionTarget) => void
-  onMessageDndUpdated: (target: ArkmeGroupActionTarget, messageDnd: boolean) => void
+  onMessageDndUpdated: (target: ArkmeGroupActionTarget, result: ArkmeGroupNotificationResult) => boolean
   onMemberOpen: (member: ArkmeConversationMemberItem) => void
   onMemberContextMenu: (member: ArkmeConversationMemberItem, anchorRect: DOMRect) => void
   aiPolishSettings?: ArkmeGroupAiPolishSnapshot | undefined

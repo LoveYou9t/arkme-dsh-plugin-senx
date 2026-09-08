@@ -31,7 +31,7 @@ function controls(currentSource: ArkmeSourceItem, options: {
   componentKey?: string
   onSourceProjectionUpdated?: (next: ArkmeSourceItem) => void
   onMembershipChanged?: (target: ArkmeGroupActionTarget) => void
-  onMessageDndUpdated?: (target: ArkmeGroupActionTarget, messageDnd: boolean) => void
+  onMessageDndUpdated?: (target: ArkmeGroupActionTarget, result: { messageDnd: boolean; chatNotificationPolicyUpdatedAtMillis: number }) => boolean
   onStatus?: (message: string) => void
   onError?: (message: string) => void
 } = {}) {
@@ -44,7 +44,7 @@ function controls(currentSource: ArkmeSourceItem, options: {
     onAiPolishSettingsChanged={() => {}}
     onSourceProjectionUpdated={options.onSourceProjectionUpdated ?? (() => {})}
     onMembershipChanged={options.onMembershipChanged ?? (() => {})}
-    onMessageDndUpdated={options.onMessageDndUpdated ?? (() => {})}
+    onMessageDndUpdated={options.onMessageDndUpdated ?? ((_target, result) => result.messageDnd)}
     onMemberOpen={() => {}}
     onMemberContextMenu={() => {}}
     onStatus={options.onStatus}
@@ -537,9 +537,72 @@ describe('group settings menu', () => {
     expect(leaveButton?.props.disabled).toBe(true)
   })
 
+  it('updates an open notification switch when the source carries newer policy evidence', async () => {
+    await act(async () => { renderer = create(controls({ ...source, isMuted: false, chatNotificationPolicyUpdatedAtMillis: 1000 })) })
+    await act(async () => {
+      renderer!.root.findByProps({ 'aria-label': '群聊设置' }).props.onClick()
+      await Promise.resolve()
+    })
+    await act(async () => {
+      renderer!.update(controls({ ...source, isMuted: true, chatNotificationPolicyUpdatedAtMillis: 2000 }))
+      await Promise.resolve()
+    })
+    expect(renderer!.root.findByProps({ 'aria-label': '消息免打扰' }).props['aria-checked']).toBe(true)
+  })
+
+  it('keeps a successful notification result when an earlier settings read arrives late', async () => {
+    let resolveSettings!: (value: unknown) => void
+    const settings = new Promise(resolve => { resolveSettings = resolve })
+    mocks.callArkme.mockImplementation(async (operation: string) => {
+      if (operation === 'group.settings') return await settings
+      if (operation === 'source.ai-polish.settings') return aiSettings
+      if (operation === 'group.notification.set') return { messageDnd: true, chatNotificationPolicyUpdatedAtMillis: 2000 }
+      throw new Error(`unexpected ${operation}`)
+    })
+    await act(async () => { renderer = create(controls({ ...source, isMuted: false, chatNotificationPolicyUpdatedAtMillis: 1000 })) })
+    await act(async () => {
+      renderer!.root.findByProps({ 'aria-label': '群聊设置' }).props.onClick()
+      await Promise.resolve()
+    })
+    await act(async () => {
+      renderer!.root.findByProps({ 'aria-label': '消息免打扰' }).props.onClick({ stopPropagation: vi.fn() })
+      await Promise.resolve()
+    })
+    expect(renderer!.root.findByProps({ 'aria-label': '消息免打扰' }).props['aria-checked']).toBe(true)
+    await act(async () => {
+      resolveSettings({ target: source, selfRole: 'member', selfStatus: 'active', canRename: false,
+        canDissolve: false, canLeave: true, messageDnd: false, chatNotificationPolicyUpdatedAtMillis: 1000 })
+      await settings
+    })
+    expect(renderer!.root.findByProps({ 'aria-label': '消息免打扰' }).props['aria-checked']).toBe(true)
+  })
+
+  it('keeps newer source evidence when the local notification write fails', async () => {
+    let rejectWrite!: (reason: Error) => void
+    const write = new Promise((_resolve, reject) => { rejectWrite = reject })
+    const baseCall = mocks.callArkme.getMockImplementation()!
+    mocks.callArkme.mockImplementation(async (operation: string) => operation === 'group.notification.set'
+      ? await write : await baseCall(operation))
+    await act(async () => { renderer = create(controls({ ...source, isMuted: false, chatNotificationPolicyUpdatedAtMillis: 1000 })) })
+    await act(async () => {
+      renderer!.root.findByProps({ 'aria-label': '群聊设置' }).props.onClick()
+      await Promise.resolve()
+    })
+    await act(async () => {
+      renderer!.root.findByProps({ 'aria-label': '消息免打扰' }).props.onClick({ stopPropagation: vi.fn() })
+      await Promise.resolve()
+    })
+    await act(async () => {
+      renderer!.update(controls({ ...source, isMuted: true, chatNotificationPolicyUpdatedAtMillis: 2000 }))
+      await Promise.resolve()
+    })
+    await act(async () => { rejectWrite(new Error('设置失败')); await write.catch(() => undefined) })
+    expect(renderer!.root.findByProps({ 'aria-label': '消息免打扰' }).props['aria-checked']).toBe(true)
+  })
+
   it('publishes only the message DND field after the mutation succeeds', async () => {
     const onSourceProjectionUpdated = vi.fn()
-    const onMessageDndUpdated = vi.fn()
+    const onMessageDndUpdated = vi.fn((_target, result) => result.messageDnd)
     const visibleSource = {
       ...source, latestPreview: '当前消息摘要', latestSequence: 9, avatarRef: 'group-avatar-ref',
     }
@@ -553,7 +616,7 @@ describe('group settings menu', () => {
         canDissolve: false, canLeave: true, messageDnd: false,
       }
       if (operation === 'source.ai-polish.settings') return aiSettings
-      if (operation === 'group.notification.set') return { messageDnd: true }
+      if (operation === 'group.notification.set') return { messageDnd: true, chatNotificationPolicyUpdatedAtMillis: 2000 }
       throw new Error(`unexpected ${operation}`)
     })
     await act(async () => {
@@ -584,13 +647,13 @@ describe('group settings menu', () => {
       sourceKey: settingsSource.sourceKey,
       kind: settingsSource.kind,
       displayName: settingsSource.displayName,
-    }, true)
+    }, { messageDnd: true, chatNotificationPolicyUpdatedAtMillis: 2000 })
   })
 
   it('restores the switch and does not publish when a mutation fails', async () => {
     const onError = vi.fn()
     const onSourceProjectionUpdated = vi.fn()
-    const onMessageDndUpdated = vi.fn()
+    const onMessageDndUpdated = vi.fn((_target, result) => result.messageDnd)
     mocks.callArkme.mockImplementation(async (operation: string) => {
       if (operation === 'group.settings') return {
         target: source, selfRole: 'member', selfStatus: 'active', canRename: false,

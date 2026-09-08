@@ -78,6 +78,7 @@ const expectedPublicMethods = [
 ].sort()
 
 const expectedServiceFiles = [
+  'chat-policy.ts',
   'direct-message-admission-service.ts',
   'background-sound-preference-service.ts',
   'background-sound-membership-service.ts',

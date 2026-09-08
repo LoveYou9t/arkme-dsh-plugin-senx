@@ -1,5 +1,5 @@
 import type { ArkmeChatPinProjection, ArkmeSourceItem, ArkmeSourceList } from '../types.js'
-import { retainNewerArkmeChatPin } from '../chat-pin-projection.js'
+import { retainNewerArkmeChatPolicy } from '../chat-policy-projection.js'
 import { arkmeBadgeUnreadCount, projectArkmeChatAttentionFromMuted } from '../chat-attention.js'
 import { ArkmeClientError, callArkme } from './api.js'
 import { arkmeChatSourceIdentityKey, arkmeSourceIdentityKey } from './source-identity.js'
@@ -198,7 +198,7 @@ function mergeSourceProjection(
           }
         })(),
       }
-  return applyReadWatermark(projectSourceAttention(retainNewerArkmeChatPin(existing, merged)), watermarks, indexes, sourceKey)
+  return applyReadWatermark(projectSourceAttention(retainNewerArkmeChatPolicy(existing, merged)), watermarks, indexes, sourceKey)
 }
 
 function sourceUpdate(update: ArkmeSourceItem | ArkmeChatDirectorySourceUpdate): ArkmeChatDirectorySourceUpdate {
@@ -234,6 +234,7 @@ const DIRECTORY_SOURCE_SCALAR_FIELDS: Record<DirectorySourceScalarField, true> =
   isMuted: true,
   isPinned: true,
   chatPolicyUpdatedAtMillis: true,
+  chatNotificationPolicyUpdatedAtMillis: true,
   latestSequence: true,
   recordCount: true,
 }
@@ -277,7 +278,7 @@ function reconcileDirectorySources(
   const currentByIdentity = new Map(current.map(source => [directorySourceIdentity(source), source]))
   const reconciled = incoming.map(source => {
     const previous = currentByIdentity.get(directorySourceIdentity(source))
-    const projected = retainNewerArkmeChatPin(previous, source)
+    const projected = retainNewerArkmeChatPolicy(previous, source)
     return previous !== undefined
       && sameDirectorySourcePresentation(previous, projected)
       ? previous
@@ -466,7 +467,7 @@ export class ArkmeChatDirectoryStore {
       if ((source.kind !== 'private_chat' && source.kind !== 'group_chat') || source.sourceKey === undefined) return source
       const pin = byKey.get(source.sourceKey)
       if (pin === undefined) return source
-      const projected = retainNewerArkmeChatPin(source, {
+      const projected = retainNewerArkmeChatPolicy(source, {
         ...source, isPinned: pin.pinned, chatPolicyUpdatedAtMillis: pin.policyUpdatedAtMillis,
       })
       if (source.isPinned === projected.isPinned && source.chatPolicyUpdatedAtMillis === projected.chatPolicyUpdatedAtMillis) return source
@@ -481,7 +482,7 @@ export class ArkmeChatDirectoryStore {
     const targetKey = arkmeSourceIdentityKey(source)
     const current = this.snapshot.sources.find(item => arkmeSourceIdentityKey(item) === targetKey)
     if (current === undefined) return
-    const updated = retainNewerArkmeChatPin(current, {
+    const updated = retainNewerArkmeChatPolicy(current, {
       ...current, isPinned: pinned, chatPolicyUpdatedAtMillis: policyUpdatedAtMillis,
     })
     if (updated.chatPolicyUpdatedAtMillis !== policyUpdatedAtMillis) return
