@@ -2027,6 +2027,10 @@ export class ArkmeSdk {
     }
   }
 
+  async currentDesktopSession(signal?: AbortSignal): Promise<{ session: { sessionRef: string; workspaceRef: string; title?: string; running?: boolean; projectionAsOfSeq?: number } | null }> {
+    return await this.call('remote.currentSession', undefined, signal)
+  }
+
   async remoteStatus(signal?: AbortSignal): Promise<DshRemoteStatus> {
     return await this.call<DshRemoteStatus>('remote.getStatus', undefined, signal)
   }

@@ -1,3 +1,4 @@
+import { HARNESS_SESSION_CLIENT_ID, HARNESS_SESSION_CLIENT_PATH } from './harness-embed-contract.js'
 import { createHash } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 
@@ -46,6 +47,7 @@ interface HarnessEmbedRouteOptions {
   getGraph(): DshWebBootGraph
   installedPackageNames(): readonly string[]
   readRootHtml(request: IncomingMessage): Promise<string>
+  sessionClient?: { revision: string; apiPath: string }
   onError?(error: unknown): void
 }
 
@@ -236,7 +238,25 @@ export function createHarnessEmbedRouteHandler(options: HarnessEmbedRouteOptions
     try {
       const fullGraph = options.getGraph()
       const projectedGraph = projectHarnessBootGraph(fullGraph, options.installedPackageNames(), options.modelClient)
-      const html = replaceHarnessBootGraph(await options.readRootHtml(request), fullGraph, projectedGraph)
+      if (options.sessionClient !== undefined) {
+        const rev = options.sessionClient.revision
+        projectedGraph.entries.push({
+          id: HARNESS_SESSION_CLIENT_ID, url: HARNESS_SESSION_CLIENT_PATH, rev,
+          inject: [...requiredBootPackages(projectedGraph.entries)].filter(id => !id.endsWith('dsh-client-modules')),
+        })
+        projectedGraph.batches?.push({
+          phase: 'application', url: HARNESS_SESSION_CLIENT_PATH, rev, entries: [HARNESS_SESSION_CLIENT_ID],
+        })
+        projectedGraph.rev = shortHash(`${projectedGraph.rev}:${rev}`)
+      }
+      let html = replaceHarnessBootGraph(await options.readRootHtml(request), fullGraph, projectedGraph)
+      if (options.sessionClient !== undefined) {
+        const apiPath = options.sessionClient.apiPath
+        if (!/^\/[A-Za-z0-9/_-]+$/.test(apiPath) || !html.includes('</head>')) {
+          throw new Error('harness session observer configuration is invalid')
+        }
+        html = html.replace('</head>', `<meta name="arkme-session-api" content="${apiPath}"></head>`)
+      }
       const body = Buffer.from(html)
       response.writeHead(200, {
         'Content-Type': 'text/html; charset=utf-8',
