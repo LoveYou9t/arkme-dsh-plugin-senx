@@ -812,11 +812,11 @@ const styles: Record<string, CSSProperties> = {
   composerInner: {
     ...arkmeConversationComposerLayout.composerInner,
     border: `1px solid ${colors.border}`,
-    background: arkmeTheme.input, boxShadow: 'none',
+    background: 'var(--arkme-primary-composer-idle, #f6f6f6)', boxShadow: 'none',
     transition: 'background-color 140ms ease',
   },
   composerInnerFocused: {
-    background: 'color-mix(in srgb, var(--dsw-alias-bg-base, #ffffff) 97%, #000000)',
+    background: 'var(--arkme-primary-composer-focused, #ffffff)',
     boxShadow: 'none',
   },
   composerInnerExtension: { borderTop: 0, borderRadius: '0 0 15px 15px' },

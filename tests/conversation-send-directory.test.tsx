@@ -3454,7 +3454,7 @@ describe('conversation send directory projection', () => {
     const composerSurface = renderer!.root.findByProps({ className: 'arkme-conversation-composer-inner' })
     expect(composerSurface.props.style).toMatchObject({
       borderRadius: '0 0 15px 15px',
-      background: 'var(--dsw-specific-input-major, var(--dsw-alias-bg-layer-2, #ffffff))',
+      background: 'var(--arkme-primary-composer-idle, #f6f6f6)',
     })
     const composer = renderer!.root.findByType(ArkmeRichComposerInput)
     expect(composer.props.placeholder).toBe('发送到「Harness4」…')
@@ -4686,7 +4686,7 @@ describe('conversation send directory projection', () => {
     let sendButton = renderer!.root.findByProps({ 'aria-label': '发送消息' })
 
     expect(composerShell.props.style).toMatchObject({
-      background: arkmeTheme.input,
+      background: 'var(--arkme-primary-composer-idle, #f6f6f6)',
       boxShadow: 'none',
     })
     expect(composerShell.props).toMatchObject({
@@ -4705,10 +4705,15 @@ describe('conversation send directory projection', () => {
     act(() => { composer.props.onFocus() })
     composerShell = renderer!.root.findByProps({ className: 'arkme-conversation-composer-inner' })
     expect(composerShell.props.style).toMatchObject({
-      background: 'color-mix(in srgb, var(--dsw-alias-bg-base, #ffffff) 97%, #000000)',
+      background: 'var(--arkme-primary-composer-focused, #ffffff)',
       boxShadow: 'none',
     })
     expect(composerShell.props['data-arkme-composer-focused']).toBe('true')
+
+    act(() => { composer.props.onBlur() })
+    composerShell = renderer!.root.findByProps({ className: 'arkme-conversation-composer-inner' })
+    expect(composerShell.props['data-arkme-composer-focused']).toBe('false')
+    expect(composerShell.props.style.background).toBe('var(--arkme-primary-composer-idle, #f6f6f6)')
 
     await act(async () => {
       composer.props.onTextChange('继续输入')
