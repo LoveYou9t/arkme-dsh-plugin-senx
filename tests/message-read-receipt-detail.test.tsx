@@ -59,6 +59,8 @@ it('refreshes an open detail without clearing its rows, and uses shared member p
     await vi.advanceTimersByTimeAsync(180)
   })
   expect(JSON.stringify(renderer!.toJSON())).toContain('公共成员名字')
+  expect(renderer!.root.findAllByProps({ role: 'status' })).toHaveLength(0)
+  expect(JSON.stringify(renderer!.toJSON())).not.toContain('正在更新')
   await act(async () => {
     resolve({ ...detail, readCount: 1, unreadCount: 0, items: [{ ...detail.items[0]!, readStatus: 'read' }] })
   })

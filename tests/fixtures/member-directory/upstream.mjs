@@ -15,6 +15,24 @@ globalThis.fetch = async (input, init) => {
   const body = init?.body ? JSON.parse(String(init.body)) : {}
   const path = url.pathname
   appendFileSync(join(directory, 'requests.jsonl'), JSON.stringify({ path, at: Date.now(), body }) + '\n')
+  if (path === '/api/v1/sse/chat/noty') {
+    let timer
+    const stop = () => { clearInterval(timer) }
+    return new Response(new ReadableStream({
+      start(controller) {
+        let lastEvent
+        timer = setInterval(() => {
+          const current = JSON.parse(readFileSync(join(directory, 'control.json'), 'utf8'))
+          const frame = current.memberJoined
+          if (frame && frame.event_uid !== lastEvent) {
+            lastEvent = frame.event_uid
+            controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(frame)}\n\n`))
+          } else controller.enqueue(new TextEncoder().encode(': heartbeat\n\n'))
+        }, 200)
+        init?.signal?.addEventListener('abort', () => { stop(); controller.error(new DOMException('aborted', 'AbortError')) }, { once: true })
+      }, cancel: stop,
+    }), { headers: { 'Content-Type': 'text/event-stream' } })
+  }
   if (path.endsWith('/members/page')) {
     if (state.delayMs) await new Promise((resolve, reject) => {
       const timer = setTimeout(resolve, state.delayMs)

@@ -103,6 +103,30 @@ describe('group settings menu', () => {
     expect(onSourceProjectionUpdated).not.toHaveBeenCalled()
   })
 
+  it('silently refreshes existing members without adding a loading row or changing the heading', async () => {
+    const result = { source, items: [{ memberRef: 'member-a', displayName: '已有成员', role: 'member', status: 'active',
+      isSelf: false, isOwner: false, joinedAtMillis: 1, recordCount: 7, mentionCount: 0 }], total: 1, activeCount: 1 }
+    mocks.callArkme.mockImplementation(async (operation: string) => {
+      if (operation === 'source.members') return result
+      if (operation === 'source.ai-polish.settings') return aiSettings
+      throw new Error(`unexpected ${operation}`)
+    })
+    await act(async () => { renderer = create(controls(source)) })
+    await act(async () => { renderer!.root.findByProps({ 'aria-label': '查看群成员' }).props.onClick() })
+    const heading = renderer!.root.findByType('h3').children.join('')
+    let finish!: (value: unknown) => void
+    mocks.callArkme.mockImplementationOnce(async () => await new Promise(resolve => { finish = resolve }))
+    let pending!: Promise<void>
+    await act(async () => { pending = arkmeConversationMembers.ensure('test:42', source, true) })
+    expect(arkmeConversationMembers.get('test:42', source).refreshing).toBe(true)
+    expect(renderer!.root.findByType('h3').children.join('')).toBe(heading)
+    const visible = JSON.stringify(renderer!.toJSON())
+    expect(visible).toContain('已有成员')
+    expect(visible).toContain('7条快记')
+    expect(visible).not.toMatch(/更新中|正在更新|正在读取资料|正在读取群成员/)
+    await act(async () => { finish(result); await pending })
+  })
+
   it('does not show the previous group while current group members are loading', async () => {
     const nextSource: ArkmeSourceItem = {
       ...source, sourceRef: 'group-ref-2', sourceKey: 'chat:group-2', displayName: '研发群',

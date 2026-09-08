@@ -332,7 +332,7 @@ function MemberReceiptPanelContent(props: MemberReceiptPanelProps & { account: s
     <PanelArrow arrowPlacement={layout.arrowPlacement} arrowOffset={layout.arrowOffset} />
     <div style={styles.panelSurface}>
       <div style={styles.panelBody}>
-        {state.status === 'loading' && <div role="status" style={styles.panelState}>{state.detail === undefined ? '加载中...' : '正在更新…'}</div>}
+        {state.status === 'loading' && state.detail === undefined && <div role="status" style={styles.panelState}>加载中...</div>}
         {state.status === 'error' && <button
           type="button" role="alert" title={state.message} style={{ ...styles.panelState, ...styles.panelRetry }}
           onClick={() => { load(true) }}

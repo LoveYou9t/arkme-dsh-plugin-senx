@@ -375,7 +375,7 @@ const GroupMemberRow = memo(function GroupMemberRow({ member, onMemberOpen, onMe
         <span style={styles.memberName}>{member.displayName}{member.isSelf ? '（我）' : ''}</span>
         {badge !== '' && <span style={styles.badge}>{badge}</span>}
       </span>
-      <span style={{ display: 'block', fontSize: 12, lineHeight: '16px', color: colors.secondary }}>{member.statsKnown === false ? '正在读取资料…' : `${member.recordCount}条快记`}</span>
+      <span style={{ display: 'block', minHeight: 16, fontSize: 12, lineHeight: '16px', color: colors.secondary }}>{member.statsKnown === false ? '' : `${member.recordCount}条快记`}</span>
     </span>
   </button>
 })
@@ -408,7 +408,7 @@ function GroupMembersDrawer(props: {
     <div style={styles.drawerScrim} aria-hidden onPointerDown={event => { event.preventDefault(); props.onClose() }} />
     <aside style={styles.drawer} aria-label="协作者">
     <div style={styles.drawerHeader}>
-      <h3 style={{ ...styles.drawerTitle, fontSize: 16, fontWeight: 400 }}>协作者{visibleSnapshot === undefined ? '' : `（${visibleSnapshot.items.length}）`}{loading && items.length > 0 ? ' · 更新中' : ''}</h3>
+      <h3 style={{ ...styles.drawerTitle, fontSize: 16, fontWeight: 400 }}>协作者{visibleSnapshot === undefined ? '' : `（${visibleSnapshot.items.length}）`}</h3>
       <span style={{ flex: 1 }} />
       <button type="button" style={{ ...styles.closeButton, width: 'auto', padding: '0 6px', fontSize: 14, fontWeight: 700, color: colors.primary }} onClick={props.onAdd}>添加</button>
     </div>

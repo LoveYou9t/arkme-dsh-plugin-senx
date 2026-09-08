@@ -16,7 +16,7 @@ export const ARKME_CONVERSATION_LIST_PREFERENCE_UPDATED_BIZ_TYPE = 26
 export const ARKME_MEMBER_JOINED_BIZ_TYPE = 24
 export const ARKME_MEMBER_EVENT_CREATED_BIZ_TYPE = 27
 
-export interface ArkmeMemberEventHint {
+export interface ArkmeMemberInvalidationHint {
   eventUid: string
   chatSessionUid: string
   eventAtMillis: number
@@ -112,8 +112,8 @@ export interface ArkmeChatRealtimeNotice {
   connectionStartedAtMillis?: number
   projectionInvalidation?: ArkmeProjectionInvalidatedHint
   conversationListPreferenceUpdated?: ArkmeConversationListPreferenceUpdatedHint
-  memberJoined?: ArkmeMemberEventHint
-  memberEvent?: ArkmeMemberEventHint
+  memberJoined?: ArkmeMemberInvalidationHint
+  memberEvent?: ArkmeMemberInvalidationHint
 }
 
 export interface ArkmeChatRealtimeRuntimeOptions {
@@ -180,7 +180,7 @@ function decodeDataLine(line: string): Record<string, unknown> | undefined {
     : undefined
 }
 
-export function decodeArkmeMemberJoinedDataLine(line: string): ArkmeMemberEventHint | undefined {
+export function decodeArkmeMemberJoinedDataLine(line: string): ArkmeMemberInvalidationHint | undefined {
   const source = decodeDataLine(line)
   if (source === undefined || positiveInteger(source.t) !== ARKME_MEMBER_JOINED_BIZ_TYPE) return undefined
   if (Object.keys(source).some(key => !['t', 'event_uid', 'chat_session_uid', 'actor_user_id', 'member_user_id', 'join_at', 'event_at', 'source_client_id'].includes(key))) return undefined
@@ -193,7 +193,7 @@ export function decodeArkmeMemberJoinedDataLine(line: string): ArkmeMemberEventH
   return { eventUid, chatSessionUid, eventAtMillis }
 }
 
-export function decodeArkmeMemberEventDataLine(line: string): ArkmeMemberEventHint | undefined {
+export function decodeArkmeMemberEventDataLine(line: string): ArkmeMemberInvalidationHint | undefined {
   const source = decodeDataLine(line)
   if (source === undefined || positiveInteger(source.t) !== ARKME_MEMBER_EVENT_CREATED_BIZ_TYPE) return undefined
   if (Object.keys(source).some(key => !['t','event_uid','chat_session_uid','event_at'].includes(key))) return undefined
@@ -793,8 +793,8 @@ export class ArkmeChatRealtimeRuntime {
       connectionSignal?: AbortSignal
       connectionStartedAtMillis?: number
       conversationListPreferenceUpdated?: ArkmeConversationListPreferenceUpdatedHint
-      memberJoined?: ArkmeMemberEventHint
-      memberEvent?: ArkmeMemberEventHint
+      memberJoined?: ArkmeMemberInvalidationHint
+      memberEvent?: ArkmeMemberInvalidationHint
     } = {},
   ): void {
     const {

@@ -22,6 +22,28 @@ async function seed(db: ArkmeLocalDatabase, user: number, group: string, items: 
 }
 
 describe('persistent member cache', () => {
+  it('migrates the old table once without rewriting old cache contents or unrelated records', async () => {
+    const path = await mkdtemp(join(tmpdir(), 'arkme old member cache '))
+    const file = join(path, 'records.sqlite3')
+    const old = new DatabaseSync(file)
+    const payload = JSON.stringify({ items: [member('a')], joinEvents: [] })
+    old.exec('CREATE TABLE conversation_member_cache (user_id INTEGER NOT NULL, group_key TEXT NOT NULL, snapshot_json TEXT NOT NULL, updated_at_millis INTEGER NOT NULL, PRIMARY KEY(user_id, group_key)); CREATE TABLE unrelated_data (value TEXT)')
+    old.prepare('INSERT INTO conversation_member_cache VALUES (?, ?, ?, ?)').run(42, 'group', payload, Date.now())
+    old.prepare('INSERT INTO unrelated_data VALUES (?)').run('keep')
+    old.close()
+    try {
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const db = new ArkmeLocalDatabase(path, new ArkmeStateStore(path))
+        try { expect(await db.cachedConversationMembers(42, 'group')).toBeUndefined() } finally { db.close() }
+        const raw = new DatabaseSync(file)
+        try {
+          expect(raw.prepare('SELECT snapshot_json, payload_bytes FROM conversation_member_cache').get()).toMatchObject({ snapshot_json: payload, payload_bytes: Buffer.byteLength(payload) })
+          expect(raw.prepare('SELECT value FROM unrelated_data').get()?.value).toBe('keep')
+        } finally { raw.close() }
+      }
+    } finally { await rm(path, { recursive: true }) }
+  })
+
   it('does not let a late presentation result create or resurrect membership', async () => {
     const path = await mkdtemp(join(tmpdir(), 'arkme member cache '))
     const db = new ArkmeLocalDatabase(path, new ArkmeStateStore(path))
