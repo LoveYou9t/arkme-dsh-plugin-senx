@@ -923,12 +923,15 @@ export function ArkmeNavigation({
   const [topicCreateSubmitting, setTopicCreateSubmitting] = useState(false)
   const [pendingRevealSourceRef, setPendingRevealSourceRef] = useState<string>()
   const [createdHighlight, setCreatedHighlight] = useState<{ sourceRef: string, visible: boolean }>()
-  const [directoryContextMenu, setDirectoryContextMenu] = useState<
-    | { kind: 'source', source: ArkmeSourceItem, x: number, y: number }
-    | { kind: 'bot', bot: ArkmeBotSummary, x: number, y: number }
+  const [directoryContextTarget, setDirectoryContextMenu] = useState<
+    { kind: 'source' | 'bot', key: string, x: number, y: number }
   >()
-  const [directoryMutationSourceRef, setDirectoryMutationSourceRef] = useState<string>()
-  const [directoryMutationBotRef, setDirectoryMutationBotRef] = useState<string>()
+  const directoryMutationAbortRef = useRef<AbortController>()
+  const [directoryMutation, setDirectoryMutation] = useState<{
+    kind: 'source' | 'bot'
+    key: string
+    action: 'pin' | 'dismiss'
+  }>()
   const [directoryActionFeedback, setDirectoryActionFeedback] = useState<string>()
   const [officialAuthorOpening, setOfficialAuthorOpening] = useState(false)
   const [officialAuthorProfile, setOfficialAuthorProfile] = useState<ArkmeOfficialAuthorProfile>()
@@ -1033,6 +1036,15 @@ export function ArkmeNavigation({
   ].sort((left, right) => Number(right.pinned) - Number(left.pinned) || right.activeAtMillis - left.activeAtMillis), [
     botChatDirectory, botDirectoryPreferences, conversationVisibility, conversationVisibilityHydrated,
   ])
+  const directoryContextMenu = useMemo(() => {
+    if (directoryContextTarget === undefined) return undefined
+    const row = rootConversationRows.find(row => row.kind === directoryContextTarget.kind
+      && (row.kind === 'source' ? arkmeSourceIdentityKey(row.source) : conversationBotVisibilityKey(row.bot)) === directoryContextTarget.key)
+    return row === undefined ? undefined : { ...row, x: directoryContextTarget.x, y: directoryContextTarget.y }
+  }, [directoryContextTarget, rootConversationRows])
+  useEffect(() => {
+    if (directoryContextTarget !== undefined && directoryContextMenu === undefined) setDirectoryContextMenu(undefined)
+  }, [directoryContextMenu, directoryContextTarget])
   const showArkoInSearch = true
   const sendToSelfPresentation = arkmeSendToSelfDirectoryPresentation(sendToSelfSource)
   const showSelfInSearch = true
@@ -1104,8 +1116,8 @@ export function ArkmeNavigation({
     writeNavigationCache(next)
   }, [])
 
-  const reconcileAuth = useCallback((snapshot: ArkmeAuthSnapshot | undefined) => {
-    if (snapshot?.status !== 'authenticated' || snapshot.userId === undefined) {
+  const reconcileAuth = useCallback((status: ArkmeAuthSnapshot['status'] | undefined, environment: ArkmeAuthSnapshot['environment'] | undefined, userId: number | undefined) => {
+    if (status !== 'authenticated' || userId === undefined) {
       authenticatedUserIdRef.current = undefined
       cacheRef.current = undefined
       clearLastNavigationCache()
@@ -1113,10 +1125,10 @@ export function ArkmeNavigation({
       setDirectory('root'); setSources([])
       return
     }
-    arkmeChatDirectory.activateAccount(`${snapshot.environment}:${String(snapshot.userId)}`)
-    authenticatedUserIdRef.current = snapshot.userId
-    const cached = readNavigationCache(snapshot.userId) ?? {
-      version: 1, userId: snapshot.userId, directory: 'root', sources: {}, updatedAtMillis: 0,
+    arkmeChatDirectory.activateAccount(`${environment}:${String(userId)}`)
+    authenticatedUserIdRef.current = userId
+    const cached = readNavigationCache(userId) ?? {
+      version: 1, userId: userId, directory: 'root', sources: {}, updatedAtMillis: 0,
     } satisfies ArkmeNavigationCache
     cacheRef.current = cached
     writeNavigationCache(cached)
@@ -1179,16 +1191,22 @@ export function ArkmeNavigation({
     }
   }, [persistCache])
 
-  useEffect(() => { reconcileAuth(auth) }, [auth, reconcileAuth])
+  const authStatus = auth?.status
+  const authEnvironment = auth?.environment
+  const authUserId = auth?.userId
+  useEffect(() => { reconcileAuth(authStatus, authEnvironment, authUserId) }, [authStatus, authEnvironment, authUserId, reconcileAuth])
   useEffect(() => {
     conversationVisibilityEpochRef.current += 1
     conversationVisibilityFeedbackRef.current = emptyConversationVisibilityOverlay()
     setConversationVisibility(emptyConversationVisibilityOverlay())
     setConversationVisibilityHydrated(emptyConversationVisibilityHydration())
-    setDirectoryMutationSourceRef(undefined)
-    setDirectoryMutationBotRef(undefined)
+    const controller = new AbortController()
+    directoryMutationAbortRef.current = controller
+    setDirectoryMutation(undefined)
+    setDirectoryContextMenu(undefined)
     setDirectoryActionFeedback(undefined)
-  }, [auth?.userId])
+    return () => { controller.abort() }
+  }, [authenticated, auth?.environment, auth?.userId])
   useEffect(() => {
     setBotDirectoryPreferences(readBotDirectoryPreferences(authenticated ? auth?.userId : undefined))
     if (!authenticated) { setBots([]); return }
@@ -1260,7 +1278,7 @@ export function ArkmeNavigation({
       ))
     })
     return () => { controller.abort() }
-  }, [authenticated, auth?.userId, bots, chatRevision, directory, rootSources])
+  }, [authenticated, auth?.environment, auth?.userId, bots, chatRevision, directory, rootSources])
   useEffect(() => {
     if (!authenticated) {
       setOfficialAuthorProfile(undefined)
@@ -1513,54 +1531,48 @@ export function ArkmeNavigation({
     target: { kind: 'source'; source: ArkmeSourceItem } | { kind: 'bot'; bot: ArkmeBotSummary },
     pinned: boolean,
   ) => {
-    if (directoryMutationSourceRef !== undefined || directoryMutationBotRef !== undefined) return
-    const mutationUserId = authenticatedUserIdRef.current
-    if (mutationUserId === undefined) return
+    if (directoryMutation !== undefined) return
+    const controller = directoryMutationAbortRef.current
+    if (authenticatedUserIdRef.current === undefined || controller === undefined || controller.signal.aborted) return
     const previousBotPreferences = botDirectoryPreferences
     const nextBotPreferences = target.kind === 'bot'
       ? updateBotDirectoryPreferences(botDirectoryPreferences, target.bot, { pinned })
       : botDirectoryPreferences
     directoryContextRequestRef.current += 1
     setDirectoryContextMenu(undefined)
-    if (target.kind === 'source') {
-      setDirectoryMutationSourceRef(target.source.sourceRef)
-    } else {
-      setDirectoryMutationBotRef(target.bot.botRef)
-    }
+    setDirectoryMutation({ kind: target.kind, key: target.kind === 'source'
+      ? arkmeSourceIdentityKey(target.source) : conversationBotVisibilityKey(target.bot), action: 'pin' })
     try {
       if (target.kind === 'source') {
         const result = await callArkme<ArkmeSourceDirectoryPinResult>('source.directory.policy.set', {
           sourceRef: target.source.sourceRef,
           pinned,
-        })
-        if (authenticatedUserIdRef.current !== mutationUserId) return
+        }, controller.signal)
+        if (controller.signal.aborted) return
         arkmeChatDirectory.confirmPin(target.source, result.pinned, result.policyUpdatedAtMillis)
       } else {
         setBotDirectoryPreferences(nextBotPreferences)
         writeBotDirectoryPreferences(auth?.userId, nextBotPreferences)
       }
-      if (authenticatedUserIdRef.current !== mutationUserId) return
+      if (controller.signal.aborted) return
       setDirectoryActionFeedback(pinned ? '已置顶对话' : '已取消置顶')
     } catch (caught) {
-      if (authenticatedUserIdRef.current !== mutationUserId) return
+      if (controller.signal.aborted) return
       if (target.kind === 'bot') {
         setBotDirectoryPreferences(previousBotPreferences)
         writeBotDirectoryPreferences(auth?.userId, previousBotPreferences)
       }
       setDirectoryActionFeedback(caught instanceof Error ? caught.message : '操作失败，请重试')
     } finally {
-      if (authenticatedUserIdRef.current === mutationUserId) {
-        if (target.kind === 'source') setDirectoryMutationSourceRef(undefined)
-        else setDirectoryMutationBotRef(undefined)
-      }
+      if (!controller.signal.aborted) setDirectoryMutation(undefined)
     }
   }
   const dismissConversationDirectoryEntry = async (
     target: { kind: 'source'; source: ArkmeSourceItem } | { kind: 'bot'; bot: ArkmeBotSummary },
   ) => {
-    if (directoryMutationSourceRef !== undefined || directoryMutationBotRef !== undefined) return
-    const mutationUserId = authenticatedUserIdRef.current
-    if (mutationUserId === undefined) return
+    if (directoryMutation !== undefined) return
+    const controller = directoryMutationAbortRef.current
+    if (authenticatedUserIdRef.current === undefined || controller === undefined || controller.signal.aborted) return
     const entryKind = target.kind
     const stableKey = target.kind === 'source'
       ? conversationSourceVisibilityKey(target.source)
@@ -1590,11 +1602,11 @@ export function ArkmeNavigation({
     conversationVisibilityEpochRef.current += 1
     directoryContextRequestRef.current += 1
     setDirectoryContextMenu(undefined)
-    if (target.kind === 'source') setDirectoryMutationSourceRef(entryRef)
-    else setDirectoryMutationBotRef(entryRef)
+    setDirectoryMutation({ kind: target.kind, key: target.kind === 'source'
+      ? arkmeSourceIdentityKey(target.source) : conversationBotVisibilityKey(target.bot), action: 'dismiss' })
     try {
-      await callArkme('conversation.directory.visibility.set', { entryKind, entryRef, hidden: true })
-      if (authenticatedUserIdRef.current !== mutationUserId) return
+      await callArkme('conversation.directory.visibility.set', { entryKind, entryRef, hidden: true }, controller.signal)
+      if (controller.signal.aborted) return
       const currentActivity = conversationVisibilityActivityRef.current.get(activityKey)
       if (currentActivity === undefined
         || conversationVisibilityActivityAdvanced(submittedActivity, currentActivity)) {
@@ -1607,15 +1619,14 @@ export function ArkmeNavigation({
       ))
       setDirectoryActionFeedback('已移除对话，可在联系人中找回')
     } catch (caught) {
-      if (authenticatedUserIdRef.current !== mutationUserId) return
+      if (controller.signal.aborted) return
       setDirectoryActionFeedback(caught instanceof Error ? caught.message : '操作失败，请重试')
     } finally {
-      const protectedKeys = new Set(conversationVisibilityFeedbackRef.current)
-      protectedKeys.delete(protectedKey)
-      conversationVisibilityFeedbackRef.current = protectedKeys
-      if (authenticatedUserIdRef.current === mutationUserId) {
-        if (target.kind === 'source') setDirectoryMutationSourceRef(undefined)
-        else setDirectoryMutationBotRef(undefined)
+      if (!controller.signal.aborted) {
+        const protectedKeys = new Set(conversationVisibilityFeedbackRef.current)
+        protectedKeys.delete(protectedKey)
+        conversationVisibilityFeedbackRef.current = protectedKeys
+        setDirectoryMutation(undefined)
       }
     }
   }
@@ -1920,7 +1931,8 @@ export function ArkmeNavigation({
             const unreadPlacement = arkmeRootChatUnreadPlacement(bot)
             const badgeUnreadCount = arkmeBadgeUnreadCount(bot)
             const unreadText = badgeUnreadCount > 99 ? '99+' : badgeUnreadCount
-            const interactionsDisabled = directoryMutationBotRef === bot.botRef
+            const interactionsDisabled = directoryMutation?.kind === 'bot'
+              && directoryMutation.key === conversationBotVisibilityKey(bot)
             return <button
               key={bot.botRef} type="button" role="treeitem" aria-selected={selected}
               aria-label={unreadPlacement === 'avatar'
@@ -1934,7 +1946,7 @@ export function ArkmeNavigation({
                 event.preventDefault()
                 if (interactionsDisabled) return
                 directoryContextRequestRef.current += 1
-                setDirectoryContextMenu({ kind: 'bot', bot, x: event.clientX, y: event.clientY })
+                setDirectoryContextMenu({ kind: 'bot', key: conversationBotVisibilityKey(bot), x: event.clientX, y: event.clientY })
               }}
             >
               <span style={styles.sourceAvatarWrap} aria-hidden>
@@ -1959,7 +1971,9 @@ export function ArkmeNavigation({
           const unreadPlacement = arkmeRootChatUnreadPlacement(source)
           const badgeUnreadCount = arkmeBadgeUnreadCount(source)
           const unreadText = badgeUnreadCount > 99 ? '99+' : badgeUnreadCount
-          const interactionsDisabled = directoryMutationSourceRef === source.sourceRef
+          const mutationPending = directoryMutation?.kind === 'source'
+            && directoryMutation.key === arkmeSourceIdentityKey(source)
+          const interactionsDisabled = mutationPending && directoryMutation.action === 'dismiss'
           return <button
             key={source.sourceRef} type="button" role="treeitem" aria-selected={selected}
             aria-label={unreadPlacement === 'avatar'
@@ -1971,13 +1985,13 @@ export function ArkmeNavigation({
             }}
             style={{ ...styles.chatRow, ...(selected ? styles.chatRowActive : {}), ...(interactionsDisabled ? styles.chatRowRemoving : {}) }}
             disabled={interactionsDisabled}
-            aria-busy={interactionsDisabled || undefined}
+            aria-busy={mutationPending || undefined}
             onClick={() => { selectSource(source) }}
             onContextMenu={event => {
               event.preventDefault()
-              if (interactionsDisabled) return
+              if (mutationPending) return
               directoryContextRequestRef.current += 1
-              setDirectoryContextMenu({ kind: 'source', source, x: event.clientX, y: event.clientY })
+              setDirectoryContextMenu({ kind: 'source', key: arkmeSourceIdentityKey(source), x: event.clientX, y: event.clientY })
             }}
           >
             <span style={styles.sourceAvatarWrap}>
@@ -2077,13 +2091,9 @@ export function ArkmeNavigation({
         type="button"
         role="menuitem"
         style={styles.directoryContextMenuItem}
-        disabled={directoryMutationSourceRef !== undefined || directoryMutationBotRef !== undefined}
+        disabled={directoryMutation !== undefined}
         onClick={() => {
-          if (directoryContextMenu.kind === 'source') {
-            void updateConversationDirectoryPin(directoryContextMenu, !directoryContextMenuPinned)
-          } else {
-            void updateConversationDirectoryPin(directoryContextMenu, !directoryContextMenuPinned)
-          }
+          void updateConversationDirectoryPin(directoryContextMenu, !directoryContextMenuPinned)
         }}
         onMouseEnter={event => { event.currentTarget.style.background = arkmeTheme.subtle }}
         onMouseLeave={event => { event.currentTarget.style.background = 'transparent' }}
@@ -2093,7 +2103,7 @@ export function ArkmeNavigation({
         type="button"
         role="menuitem"
         style={{ ...styles.directoryContextMenuItem, ...styles.directoryContextMenuDanger }}
-        disabled={directoryMutationSourceRef !== undefined || directoryMutationBotRef !== undefined}
+        disabled={directoryMutation !== undefined}
         onClick={() => {
           void dismissConversationDirectoryEntry(directoryContextMenu)
         }}

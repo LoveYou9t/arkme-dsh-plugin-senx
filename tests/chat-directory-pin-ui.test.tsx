@@ -75,12 +75,142 @@ afterEach(async () => {
 })
 
 describe('conversation pin interaction', () => {
+  it('pins a group through the same Chat operation and current directory projection', async () => {
+    await act(async () => { arkmeChatDirectory.publish([{ ...source, kind: 'group_chat' }]) })
+    await startPin()
+    expect(pinCalls()[0]?.[1]).toEqual({ sourceRef: source.sourceRef, pinned: true })
+    await act(async () => { resolvePin({ sourceRef: source.sourceRef, pinned: true, policyUpdatedAtMillis: 2000 }) })
+    expect(arkmeChatDirectory.getSnapshot().sources[0]).toMatchObject({ kind: 'group_chat', isPinned: true })
+    await openMenu()
+    expect(menu().children).toEqual(['取消置顶'])
+  })
+
+  it('keeps Bot local pin preferences separate from a Chat with the same directory key', async () => {
+    await act(async () => { renderer!.unmount() })
+    const bot = { botRef: 'bot-ref', directoryKey: source.sourceKey, name: 'Bot 目标', provider: 'openclaw',
+      description: '', status: 'offline', directChatAvailable: true, createdAtMillis: 100 }
+    const fallback = mocks.callArkme.getMockImplementation()!
+    mocks.callArkme.mockImplementation(async (...args) => args[0] === 'bots.private-chat.directory'
+      ? { items: [bot] } : fallback(...args))
+    await act(async () => { renderer = create(<ArkmeNavigation />) })
+    const botRow = () => renderer!.root.findAllByProps({ role: 'treeitem' }).find(node => node.props['aria-label'] === bot.name)!
+    await act(async () => { botRow().props.onContextMenu({ preventDefault() {}, clientX: 20, clientY: 20 }) })
+    await act(async () => { menu().props.onClick() })
+    expect(pinCalls()).toHaveLength(0)
+    expect(arkmeChatDirectory.getSnapshot().sources[0]?.isPinned).toBe(false)
+    await act(async () => { botRow().props.onContextMenu({ preventDefault() {}, clientX: 20, clientY: 20 }) })
+    expect(menu().children).toEqual(['取消置顶'])
+    await openMenu()
+    expect(menu().children).toEqual(['置顶对话'])
+  })
+
+  it('keeps an open menu bound to the current pin and current capability for the same conversation', async () => {
+    await openMenu()
+    await act(async () => { arkmeChatDirectory.publish([{ ...source, sourceRef: 'current-ref', isPinned: true, chatPolicyUpdatedAtMillis: 3000 }]) })
+    expect(menu().children).toEqual(['取消置顶'])
+    await act(async () => { menu().props.onClick() })
+    expect(pinCalls()[0]?.[1]).toEqual({ sourceRef: 'current-ref', pinned: false })
+    await act(async () => { resolvePin({ sourceRef: 'current-ref', pinned: false, policyUpdatedAtMillis: 4000 }) })
+  })
+
+  it('does not offer actions for a conversation removed while its menu is open', async () => {
+    await openMenu()
+    await act(async () => { arkmeChatDirectory.publish([]) })
+    expect(renderer!.root.findAllByProps({ role: 'menuitem' })).toHaveLength(0)
+    expect(pinCalls()).toHaveLength(0)
+  })
+
+  it.each(['account', 'environment', 'logout-return'] as const)('allows a fresh pin after %s changes while the old request is pending', async change => {
+    await startPin()
+    const oldResolve = resolvePin
+    const nextAuth = { status: 'authenticated' as const, environment: change === 'environment' ? 'prod' as const : 'test' as const,
+      userId: change === 'account' ? 7002 : 7001 }
+    await act(async () => { arkmeAuthStore.setAuth(change === 'logout-return'
+      ? { status: 'logged-out', environment: 'test' } : nextAuth) })
+    if (change === 'logout-return') await act(async () => { arkmeAuthStore.setAuth(nextAuth) })
+    await act(async () => { arkmeChatDirectory.publish([source]) })
+    await startPin()
+    expect(pinCalls()).toHaveLength(2)
+    await act(async () => { oldResolve({ sourceRef: source.sourceRef, pinned: true, policyUpdatedAtMillis: 9000 }) })
+    expect(arkmeChatDirectory.getSnapshot().sources[0]?.isPinned).toBe(false)
+    expect(row().props['aria-busy']).toBe(true)
+    await act(async () => { resolvePin({ sourceRef: source.sourceRef, pinned: true, policyUpdatedAtMillis: 2000 }) })
+    expect(arkmeChatDirectory.getSnapshot().sources[0]?.chatPolicyUpdatedAtMillis).toBe(2000)
+  })
+
+  it('keeps a pending pin across a credential refresh for the same account', async () => {
+    await startPin()
+    const signal = pinCalls()[0]?.[2] as AbortSignal
+    await act(async () => { arkmeAuthStore.setAuth({ status: 'authenticated', environment: 'test', userId: 7001, expiresAtMillis: 9000 }) })
+    expect(signal.aborted).toBe(false)
+    expect(row().props['aria-busy']).toBe(true)
+    await act(async () => { resolvePin({ sourceRef: source.sourceRef, pinned: true, policyUpdatedAtMillis: 2000 }) })
+    expect(arkmeChatDirectory.getSnapshot().sources[0]?.isPinned).toBe(true)
+  })
+
+  it('cancels local handling when unmounted even if the owner later returns success', async () => {
+    await startPin()
+    const signal = pinCalls()[0]?.[2] as AbortSignal
+    await act(async () => { renderer!.unmount(); renderer = undefined })
+    expect(signal.aborted).toBe(true)
+    await act(async () => { resolvePin({ sourceRef: source.sourceRef, pinned: true, policyUpdatedAtMillis: 2000 }) })
+    expect(arkmeChatDirectory.getSnapshot().sources[0]?.isPinned).toBe(false)
+  })
+
+  it('keeps a rotated capability busy without preventing navigation', async () => {
+    await startPin()
+    await act(async () => { arkmeChatDirectory.publish([{ ...source, sourceRef: 'rotated-ref' }]) })
+    expect(row().props['aria-busy']).toBe(true)
+    expect(row().props.disabled).toBe(false)
+    await openMenu()
+    expect(renderer!.root.findAllByProps({ role: 'menuitem' })).toHaveLength(0)
+    await act(async () => { resolvePin({ sourceRef: source.sourceRef, pinned: true, policyUpdatedAtMillis: 2000 }) })
+  })
+
+  it.each(['success', 'failure'] as const)('preserves the distinct remove interaction on %s', async outcome => {
+    let resolveRemove!: () => void
+    let rejectRemove!: (reason: unknown) => void
+    const fallback = mocks.callArkme.getMockImplementation()!
+    mocks.callArkme.mockImplementation(async (...args) => args[0] === 'conversation.directory.visibility.set'
+      ? await new Promise<void>((resolve, reject) => { resolveRemove = resolve; rejectRemove = reject }) : fallback(...args))
+    await openMenu()
+    await act(async () => { renderer!.root.findAllByProps({ role: 'menuitem' })[1]!.props.onClick() })
+    expect(row().props.disabled).toBe(true)
+    expect(pinCalls()).toHaveLength(0)
+    await act(async () => {
+      if (outcome === 'success') resolveRemove()
+      else rejectRemove(new Error('移除失败'))
+    })
+    if (outcome === 'success') expect(row()).toBeUndefined()
+    else {
+      expect(row().props.disabled).toBe(false)
+      expect(renderer!.root.findByProps({ role: 'status' }).children).toEqual(['移除失败'])
+    }
+  })
+
+  it('keeps the new lifecycle pending when an old failure arrives after logout and login', async () => {
+    await startPin()
+    const oldReject = rejectPin
+    const signal = pinCalls()[0]?.[2] as AbortSignal
+    await act(async () => { arkmeAuthStore.setAuth({ status: 'logged-out', environment: 'test' }) })
+    await act(async () => { arkmeAuthStore.setAuth({ status: 'authenticated', environment: 'test', userId: 7001 }) })
+    await act(async () => { arkmeChatDirectory.publish([source]) })
+    await startPin()
+    expect(signal.aborted).toBe(true)
+    await act(async () => { oldReject(new Error('旧账号失败')) })
+    expect(row().props['aria-busy']).toBe(true)
+    expect(renderer!.root.findAllByProps({ role: 'status' })).toHaveLength(0)
+    await act(async () => { resolvePin({ sourceRef: source.sourceRef, pinned: true, policyUpdatedAtMillis: 2000 }) })
+  })
+
   it('shows pending feedback, prevents reentry, then offers unpin after success', async () => {
     await startPin()
     expect(pinCalls()).toHaveLength(1)
     expect(pinCalls()[0]?.[1]).toEqual({ sourceRef: 'chat-ref', pinned: true })
-    expect(row().props.disabled).toBe(true)
+    expect(row().props.disabled).toBe(false)
     expect(row().props['aria-busy']).toBe(true)
+    await act(async () => { row().props.onClick() })
+    expect(arkmeUi.getSnapshot().selectedSource?.sourceKey).toBe(source.sourceKey)
     await openMenu()
     expect(renderer!.root.findAllByProps({ role: 'menuitem' })).toHaveLength(0)
     expect(pinCalls()).toHaveLength(1)
