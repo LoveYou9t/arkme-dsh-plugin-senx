@@ -288,3 +288,29 @@ describe('durable conversation directory', () => {
     db.close()
   })
 })
+
+
+it('retains Bot visibility across source-only disk deltas and a reopen', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'arkme sidebar bot visibility '))
+  const operational = new ArkmeStateStore(directory)
+  let db = new ArkmeLocalDatabase(directory, operational)
+  const hidden = { entryKind: 'bot' as const, entryRef: 'bot-ref', hidden: true }
+  const projection = { revision: 1, phase: 'complete' as const, cachedAtMillis: 2, bots: [], visibility: [hidden] }
+  await db.writeDirectoryCache(1, { directory: 'root', items: [], hasMore: false, projection })
+  await db.writeDirectoryCache(1, { directory: 'root', items: [], hasMore: false, projection: { ...projection, visibility: [], revision: 2 } })
+  db.close(); db = new ArkmeLocalDatabase(directory, operational)
+  expect((await db.readDirectoryCache(1))?.projection?.visibility).toContainEqual(hidden)
+  db.close()
+})
+
+
+it('persists explicit source removal even when coalesced with an older row delta', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'arkme group removal '))
+  const db = new ArkmeLocalDatabase(directory, new ArkmeStateStore(directory))
+  const source = { sourceRef: 'ref', sourceKey: 'key', kind: 'group_chat' as const, displayName: 'Left', activeAtMillis: 1, unreadCount: 0 }
+  const projection = { revision: 1, phase: 'complete' as const, cachedAtMillis: 1, bots: [], visibility: [] }
+  await db.writeDirectoryCache(1, { directory: 'root', items: [source], hasMore: false, projection })
+  await db.writeDirectoryCache(1, { directory: 'root', items: [source], hasMore: false, projection: { ...projection, revision: 2, removedSourceKeys: ['key'] } })
+  expect((await db.readDirectoryCache(1))?.items).toEqual([])
+  db.close()
+})

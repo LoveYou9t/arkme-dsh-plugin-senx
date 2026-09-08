@@ -48,12 +48,11 @@ import {
 import { ArkmeArkoConversationPreviewSync } from './arko-conversation-preview-sync.js'
 import {
   botDirectoryIsPinned,
-  readBotDirectoryPreferences,
+  readBotDirectoryPreferences, migrateBotDirectoryPreferences,
   updateBotDirectoryPreferences,
-  writeBotDirectoryPreferences,
   type ArkmeBotDirectoryPreferences,
 } from './bot-directory-preferences.js'
-import { mergeBotDirectoryActivity, projectBotChatDirectory } from './bot-chat-directory-projection.js'
+import { mergeBotDirectoryActivity, mergeBotDirectorySnapshots, projectBotChatDirectory } from './bot-chat-directory-projection.js'
 import {
   applyConversationVisibilityQueryFailure,
   applyConversationVisibilityQuerySuccess,
@@ -896,6 +895,7 @@ export function ArkmeNavigation({
   const [sources, setSources] = useState<ArkmeSourceItem[]>(
     [],
   )
+  const botPinMigration = useRef<Promise<void> | undefined>(undefined)
   const [bots, setBots] = useState<ArkmeBotSummary[]>([])
   const [botDirectoryPreferences, setBotDirectoryPreferences] = useState<ArkmeBotDirectoryPreferences>(() => readBotDirectoryPreferences(auth?.userId))
   const [collapsedSourceRefs, setCollapsedSourceRefs] = useState<Set<string>>(() => new Set())
@@ -1018,21 +1018,33 @@ export function ArkmeNavigation({
   const hostVisibility = useMemo(() => new Map((chatDirectory.projection?.visibility ?? []).map(item => [`${item.entryKind}:${item.entryRef}`, item.hidden])), [chatDirectory.projection?.visibility])
   useEffect(() => {
     if (chatDirectory.projection !== undefined) {
-      setBots(sortArkmeBotsByCreatedAt(chatDirectory.projection.bots))
-      if (chatDirectory.projection.botPinnedKeys !== undefined) setBotDirectoryPreferences({ pinnedKeys: chatDirectory.projection.botPinnedKeys })
+      setBots(current => sortArkmeBotsByCreatedAt(mergeBotDirectorySnapshots(current, chatDirectory.projection!.bots, chatDirectory.projection!.removedBotRefs)))
+      if (chatDirectory.projection.botPinnedKeys !== undefined) {
+        const userId = authenticated ? auth?.userId : undefined
+        const legacy = readBotDirectoryPreferences(userId)
+        setBotDirectoryPreferences({ pinnedKeys: [...new Set([...chatDirectory.projection.botPinnedKeys, ...legacy.pinnedKeys])] })
+        if (userId !== undefined && legacy.pinnedKeys.length > 0 && botPinMigration.current === undefined) {
+          const signal = directoryMutationAbortRef.current?.signal
+          const migration = migrateBotDirectoryPreferences(userId, chatDirectory.projection.bots, async botRef => {
+            if (authenticatedUserIdRef.current !== userId) throw new Error('Account changed')
+            await callArkme('conversation.directory.bot-pin', { botRef, pinned: true }, signal)
+          }, signal).catch(() => undefined).finally(() => { if (botPinMigration.current === migration) botPinMigration.current = undefined })
+          botPinMigration.current = migration
+        }
+      }
     }
-  }, [chatDirectory.projection?.bots, chatDirectory.projection?.botPinnedKeys])
+  }, [chatDirectory.projection?.bots, chatDirectory.projection?.botPinnedKeys, chatDirectory.projection?.removedBotRefs])
   const rootConversationRows = useMemo(() => [
     ...botChatDirectory.sources
       .filter(source => {
         const sourceKey = conversationVisibilityKey('source', conversationSourceVisibilityKey(source))
-        return !conversationVisibilityFeedbackRef.current.has(sourceKey) && (hostVisibility.has(`source:${source.sourceRef}`) ? !hostVisibility.get(`source:${source.sourceRef}`) : conversationVisibilityHydrated.has(sourceKey) && !conversationVisibility.has(sourceKey))
+        return (hostVisibility.has(`source:${source.sourceRef}`) ? !hostVisibility.get(`source:${source.sourceRef}`) : conversationVisibilityHydrated.has(sourceKey) && !conversationVisibility.has(sourceKey))
       })
       .map(source => ({ kind: 'source' as const, source, activeAtMillis: source.activeAtMillis, pinned: source.isPinned === true })),
     ...botChatDirectory.bots
       .filter(bot => {
         const botKey = conversationVisibilityKey('bot', conversationBotVisibilityKey(bot))
-        return !conversationVisibilityFeedbackRef.current.has(botKey) && (hostVisibility.has(`bot:${bot.botRef}`) ? !hostVisibility.get(`bot:${bot.botRef}`) : conversationVisibilityHydrated.has(botKey) && !conversationVisibility.has(botKey))
+        return (hostVisibility.has(`bot:${bot.botRef}`) ? !hostVisibility.get(`bot:${bot.botRef}`) : conversationVisibilityHydrated.has(botKey) && !conversationVisibility.has(botKey))
       })
       .map(bot => ({ kind: 'bot' as const, bot, activeAtMillis: botActivityAtMillis(bot), pinned: botDirectoryIsPinned(botDirectoryPreferences, bot) })),
   ].sort((left, right) => Number(right.pinned) - Number(left.pinned) || right.activeAtMillis - left.activeAtMillis), [
@@ -1211,13 +1223,16 @@ export function ArkmeNavigation({
   }, [authenticated, auth?.environment, auth?.userId])
   useEffect(() => {
     setBotDirectoryPreferences(readBotDirectoryPreferences(authenticated ? auth?.userId : undefined))
-    if (!authenticated) { setBots([]); return }
+    setBots([])
+  }, [authenticated, auth?.userId])
+  useEffect(() => {
+    if (!authenticated || !chatDirectory.baselineReady || chatDirectory.projection !== undefined) return
     const controller = new AbortController()
     void callArkme<{ items: ArkmeBotSummary[] }>('bots.private-chat.directory', undefined, controller.signal)
-      .then(value => { if (!controller.signal.aborted) setBots(sortArkmeBotsByCreatedAt(value.items)) })
+      .then(value => { if (!controller.signal.aborted) setBots(current => sortArkmeBotsByCreatedAt(mergeBotDirectorySnapshots(current, value.items, arkmeChatDirectory.getSnapshot().projection?.removedBotRefs))) })
       .catch(() => undefined)
     return () => { controller.abort() }
-  }, [authenticated, auth?.userId])
+  }, [authenticated, auth?.userId, chatDirectory.baselineReady, chatDirectory.projection !== undefined])
   useEffect(() => {
     if (!authenticated || recordRevision === 0) return
     const activityUserId = auth?.userId
@@ -1239,10 +1254,9 @@ export function ArkmeNavigation({
       return
     }
     if (directory !== 'root') return
-    if (chatDirectory.projection !== undefined) return
     const scope = conversationVisibilityScope(
-      rootSources.filter(source => source.kind === 'private_chat' || source.kind === 'group_chat'),
-      bots,
+      rootSources.filter(source => (source.kind === 'private_chat' || source.kind === 'group_chat') && !hostVisibility.has(`source:${source.sourceRef}`)),
+      bots.filter(bot => !hostVisibility.has(`bot:${bot.botRef}`)),
     )
     if (scope.sourceRefs.length === 0 && scope.botRefs.length === 0) return
     const protectedKeysAtRequest = conversationVisibilityFeedbackRef.current
@@ -1557,7 +1571,6 @@ export function ArkmeNavigation({
         await callArkme("conversation.directory.bot-pin", { botRef: target.bot.botRef, pinned }, controller.signal)
         if (controller.signal.aborted) return
         setBotDirectoryPreferences(nextBotPreferences)
-        writeBotDirectoryPreferences(auth?.userId, nextBotPreferences)
       }
       if (controller.signal.aborted) return
       setDirectoryActionFeedback(pinned ? '已置顶对话' : '已取消置顶')
@@ -1565,7 +1578,6 @@ export function ArkmeNavigation({
       if (controller.signal.aborted) return
       if (target.kind === 'bot') {
         setBotDirectoryPreferences(previousBotPreferences)
-        writeBotDirectoryPreferences(auth?.userId, previousBotPreferences)
       }
       setDirectoryActionFeedback(caught instanceof Error ? caught.message : '操作失败，请重试')
     } finally {

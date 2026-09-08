@@ -36,7 +36,8 @@ export const listSourcesToolModule = defineArkmeCoreToolModule({
         const items = result.items.slice(0, boundedSourceLimit(args.limit))
         const bots = result.projection.bots.slice(0, boundedSourceLimit(args.limit))
         const refs = new Set([...items.map(item => item.sourceRef), ...bots.map(item => item.botRef)])
-        return taggedJSON('Arkme 数据源目录', { ...result, items, cachedCount: result.items.length, projection: {
+        return taggedJSON('Arkme 数据源目录', { ...result, items, cachedCount: result.items.length, truncated: items.length < result.items.length || bots.length < result.projection.bots.length,
+          ...(items.length < result.items.length ? { continuation: 'Use local_first=false with cursor pagination to enumerate all conversations.' } : {}), projection: {
           ...result.projection, bots,
           visibility: result.projection.visibility.filter(item => refs.has(item.entryRef)),
           botPinnedKeys: result.projection.botPinnedKeys?.filter(key => bots.some(bot => (bot.directoryKey ?? bot.botRef) === key)),

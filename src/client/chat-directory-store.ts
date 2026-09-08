@@ -236,6 +236,7 @@ const DIRECTORY_SOURCE_SCALAR_FIELDS: Record<DirectorySourceScalarField, true> =
   isPinned: true,
   chatPolicyUpdatedAtMillis: true,
   latestSequence: true,
+  readSequence: true,
   recordCount: true,
 }
 
@@ -446,7 +447,8 @@ export class ArkmeChatDirectoryStore {
     if (projection === undefined) return
     if (this.projection !== undefined && projection.revision < this.projection.revision) {
       const known = new Set(this.snapshot.sources.map(arkmeSourceIdentityKey))
-      const missing = page.items.filter(item => !known.has(arkmeSourceIdentityKey(item)))
+      const removed = new Set(this.projection.removedSourceKeys ?? [])
+      const missing = page.items.filter(item => !known.has(arkmeSourceIdentityKey(item)) && !removed.has(arkmeSourceIdentityKey(item)))
       const visibility = new Map(this.projection.visibility.map(item => [`${item.entryKind}:${item.entryRef}`, item]))
       const count = visibility.size
       for (const item of projection.visibility) {
@@ -470,12 +472,16 @@ export class ArkmeChatDirectoryStore {
       if (previousProjection?.[field] !== undefined && JSON.stringify(previousProjection[field]) === JSON.stringify(projection[field])) Object.assign(this.projection, { [field]: previousProjection[field] })
     }
     const mutations = page.items.map(source => ({ type: 'upsert' as const, source, ...(source.sourceKey === undefined ? {} : { sourceKey: source.sourceKey }) }))
-    const sources = applyDirectoryMutations(this.snapshot.sources, [...mutations, ...this.pendingMutations], this.combinedReadWatermarks(), { sourceKeysByRef: this.sourceKeysByRef })
+    const removed = new Set(projection.removedSourceKeys ?? [])
+    const sources = applyDirectoryMutations(this.snapshot.sources.filter(source => !removed.has(arkmeSourceIdentityKey(source))), [...mutations, ...this.pendingMutations.filter(mutation => mutation.type !== 'upsert' || !removed.has(arkmeSourceIdentityKey(mutation.source)))], this.combinedReadWatermarks(), { sourceKeysByRef: this.sourceKeysByRef })
     for (const incoming of page.items) {
       const index = sources.findIndex(source => arkmeSourceIdentityKey(source) === arkmeSourceIdentityKey(incoming))
       if (index < 0) continue
       if (incoming.avatarRef === '') sources[index] = { ...sources[index]!, avatarRef: '' }
-      if (incoming.avatarRefs?.length === 0) sources[index] = { ...sources[index]!, avatarRefs: [] }
+      if (incoming.avatarRefs?.length === 0) {
+        sources[index] = { ...sources[index]!, avatarRefs: [] }
+        if (incoming.groupAvatar === undefined) delete sources[index]!.groupAvatar
+      }
     }
     this.pendingMutations = []
     this.baselineReady = true
@@ -570,7 +576,8 @@ export class ArkmeChatDirectoryStore {
   }
 
   upsertMany(updates: Array<ArkmeSourceItem | ArkmeChatDirectorySourceUpdate>): void {
-    const mutations = updates.map(update => {
+    const removed = new Set(this.projection?.removedSourceKeys ?? [])
+    const mutations = updates.filter(update => !removed.has(arkmeSourceIdentityKey(sourceUpdate(update).source))).map(update => {
       const normalized = sourceUpdate(update)
       return {
         type: 'upsert' as const,
@@ -721,6 +728,7 @@ export class ArkmeChatDirectoryStore {
   }
 
   clear(): void {
+    this.projection = undefined
     this.generation += 1
     this.refreshInFlight = undefined
     this.refreshedAtMillis = 0

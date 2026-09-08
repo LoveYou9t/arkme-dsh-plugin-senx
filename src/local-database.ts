@@ -201,16 +201,22 @@ export class ArkmeLocalDatabase {
     if (page.projection === undefined) return
     const visibility = new Map(page.projection.visibility.map(item => [item.entryRef, item]))
     this.transaction(() => {
+      for (const key of page.projection!.removedSourceKeys ?? []) this.database.prepare('DELETE FROM conversation_directory WHERE user_id=? AND identity=?').run(userId, key)
       const upsert = this.database.prepare(`INSERT INTO conversation_directory VALUES (?, ?, ?, ?)
         ON CONFLICT(user_id, identity) DO UPDATE SET payload=excluded.payload,
           visibility=COALESCE(excluded.visibility, conversation_directory.visibility)
         WHERE conversation_directory.payload != excluded.payload OR (excluded.visibility IS NOT NULL AND excluded.visibility IS NOT conversation_directory.visibility)`)
-      for (const source of page.items) upsert.run(userId, source.sourceKey ?? source.sourceRef, JSON.stringify(source), visibility.has(source.sourceRef) ? JSON.stringify(visibility.get(source.sourceRef)) : null)
+      for (const source of page.items.filter(source => !page.projection!.removedSourceKeys?.includes(source.sourceKey ?? source.sourceRef))) upsert.run(userId, source.sourceKey ?? source.sourceRef, JSON.stringify(source), visibility.has(source.sourceRef) ? JSON.stringify(visibility.get(source.sourceRef)) : null)
       for (const item of page.projection!.visibility.filter(item => item.entryKind === 'source')) {
         this.database.prepare("UPDATE conversation_directory SET visibility=? WHERE user_id=? AND json_extract(payload, '$.sourceRef')=? AND visibility IS NOT ?").run(JSON.stringify(item), userId, item.entryRef, JSON.stringify(item))
       }
-      this.database.prepare('INSERT INTO conversation_directory_meta VALUES (?, ?) ON CONFLICT(user_id) DO UPDATE SET payload=excluded.payload').run(userId, JSON.stringify({ ...page.projection, visibility: page.projection!.visibility.filter(item => item.entryKind === 'bot') }))
-      const size = this.database.prepare('SELECT count(*) AS count, sum(length(payload)) AS bytes FROM conversation_directory WHERE user_id=?').get(userId) as { count: number; bytes: number }
+      const previousMeta = this.database.prepare('SELECT payload FROM conversation_directory_meta WHERE user_id=?').get(userId) as { payload: string } | undefined
+      const previousVisibility = previousMeta === undefined ? [] : (JSON.parse(previousMeta.payload) as ArkmeDirectoryProjection).visibility
+      const botVisibility = new Map(previousVisibility.filter(item => item.entryKind === 'bot').map(item => [item.entryRef, item]))
+      for (const item of page.projection!.visibility) if (item.entryKind === 'bot') botVisibility.set(item.entryRef, item)
+      for (const ref of page.projection!.removedBotRefs ?? []) botVisibility.delete(ref)
+      this.database.prepare('INSERT INTO conversation_directory_meta VALUES (?, ?) ON CONFLICT(user_id) DO UPDATE SET payload=excluded.payload').run(userId, JSON.stringify({ ...page.projection, visibility: [...botVisibility.values()] }))
+      const size = this.database.prepare('SELECT count(*) AS count, sum(length(CAST(payload AS BLOB))) AS bytes FROM conversation_directory WHERE user_id=?').get(userId) as { count: number; bytes: number }
       if (size.count > 20_000 || size.bytes > 32 * 1024 * 1024) throw new Error('Conversation directory cache capacity exceeded; synchronization remains incomplete')
     })
     this.secureDatabaseFiles()
@@ -230,7 +236,8 @@ export class ArkmeLocalDatabase {
         DO UPDATE SET media_type=excluded.media_type, data=excluded.data, touched_at=excluded.touched_at`).run(userId, imageRef, image.mediaType, image.data, Date.now())
       // Disk cache has a byte budget; eviction never deletes directory identities or preferences.
       let bytes = (this.database.prepare('SELECT COALESCE(sum(length(data)),0) AS bytes FROM avatar_cache').get() as { bytes: number }).bytes
-      const oldest = this.database.prepare('SELECT a.user_id, a.image_ref, length(a.data) AS bytes FROM avatar_cache a WHERE NOT EXISTS (SELECT 1 FROM conversation_directory d, json_tree(d.payload) j WHERE d.user_id=a.user_id AND j.value=a.image_ref) ORDER BY a.touched_at').all() as unknown as Array<{ user_id: number; image_ref: string; bytes: number }>
+      if (bytes <= 256 * 1024 * 1024) return
+      const oldest = this.database.prepare('SELECT a.user_id, a.image_ref, length(a.data) AS bytes FROM avatar_cache a WHERE NOT EXISTS (SELECT 1 FROM conversation_directory d, json_tree(d.payload) j WHERE d.user_id=a.user_id AND j.value=a.image_ref) AND NOT EXISTS (SELECT 1 FROM conversation_directory_meta m, json_tree(m.payload) j WHERE m.user_id=a.user_id AND j.value=a.image_ref) ORDER BY a.touched_at').all() as unknown as Array<{ user_id: number; image_ref: string; bytes: number }>
       for (const row of oldest) {
         if (bytes <= 256 * 1024 * 1024) break
         this.database.prepare('DELETE FROM avatar_cache WHERE user_id=? AND image_ref=?').run(row.user_id, row.image_ref)

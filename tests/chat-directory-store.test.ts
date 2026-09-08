@@ -1177,3 +1177,31 @@ describe('Host incremental directory projection', () => {
     expect(store.getSnapshot().projection?.visibility).toContainEqual({ entryKind: 'source', entryRef: 'host-1', hidden: false })
   })
 })
+
+
+it('clears an authoritative group-avatar deletion carried by a Host delta', () => {
+  const store = new ArkmeChatDirectoryStore()
+  const source: ArkmeSourceItem = { sourceRef: 'group', sourceKey: 'group-key', kind: 'group_chat', displayName: 'Group', activeAtMillis: 1, unreadCount: 0,
+    avatarRefs: ['old'], groupAvatar: { memberCount: 1, strategy: 'members', computedAtMillis: 1, slots: [{ avatarRef: 'old' }] } }
+  const projection = { revision: 1, phase: 'complete' as const, cachedAtMillis: 1, bots: [], visibility: [] }
+  store.applyHostPage({ directory: 'root', items: [source], hasMore: false, projection })
+  const { groupAvatar, ...removed } = source
+  store.applyHostPage({ directory: 'root', items: [{ ...removed, avatarRefs: [] }], hasMore: false, projection: { ...projection, revision: 2 } })
+  expect(store.getSnapshot().sources[0]?.groupAvatar).toBeUndefined()
+  store.clear()
+  expect(store.getSnapshot().projection).toBeUndefined()
+})
+
+
+it('does not resurrect a left group through a late snapshot or realtime delta', () => {
+  const store = new ArkmeChatDirectoryStore()
+  const source: ArkmeSourceItem = { sourceRef: 'left-group', sourceKey: 'group-key', kind: 'group_chat', displayName: 'Left', activeAtMillis: 1, unreadCount: 0 }
+  const initial = { directory: 'root' as const, items: [source], hasMore: false, projection: { revision: 1, phase: 'complete' as const, cachedAtMillis: 1, bots: [], visibility: [] } }
+  store.applyHostPage(initial)
+  store.applyHostPage({ ...initial, items: [], projection: { ...initial.projection, revision: 2, removedSourceKeys: ['group-key'] } })
+  store.applyHostPage(initial)
+  store.upsert(source)
+  expect(store.getSnapshot().sources).toEqual([])
+  store.applyHostPage({ ...initial, projection: { ...initial.projection, revision: 3, removedSourceKeys: [] } })
+  expect(store.getSnapshot().sources).toMatchObject([source])
+})

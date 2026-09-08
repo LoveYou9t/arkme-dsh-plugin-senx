@@ -22,6 +22,8 @@ it('exposes local-first discovery and dispatches it through the official session
   expect(result.isError).toBe(false)
   expect(listSources).toHaveBeenCalledWith('root', expect.objectContaining({ localFirst: true, limit: 20 }))
   expect(String(result.value)).toContain('"cachedCount": 80')
+  expect(String(result.value)).toContain('"truncated": true')
+  expect(String(result.value)).toContain('local_first=false')
   expect(String(result.value)).not.toContain('"sourceRef": "20"')
 })
 

@@ -334,3 +334,17 @@ describe('conversation pin interaction', () => {
     expect(statuses).not.toContain('已置顶对话')
   })
 })
+
+
+it('hydrates visibility for a newly opened Bot that is not yet in the Host snapshot', async () => {
+  mocks.callArkme.mockImplementation(async (operation: string, params: { botRefs?: string[] }) => {
+    if (operation === 'conversation.directory.visibility.query') return { items: (params.botRefs ?? []).map(entryRef => ({ entryKind: 'bot', entryRef, hidden: false })) }
+    return {}
+  })
+  await act(async () => {
+    arkmeChatDirectory.applyHostPage({ directory: 'root', items: [source], hasMore: false, projection: { revision: 1, phase: 'complete', cachedAtMillis: 1, bots: [], visibility: [{ entryKind: 'source', entryRef: source.sourceRef, hidden: false }] } })
+    arkmeUi.openBotConversation({ botRef: 'new-bot', name: 'New Bot', provider: 'openclaw', description: '', status: 'offline', directChatAvailable: true })
+  })
+  expect(renderer!.root.findAllByProps({ role: 'treeitem' }).some(node => node.props['aria-label'] === 'New Bot')).toBe(true)
+  expect(mocks.callArkme.mock.calls.some(([operation, params]) => operation === 'conversation.directory.visibility.query' && params.botRefs?.includes('new-bot'))).toBe(true)
+})

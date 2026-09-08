@@ -3,7 +3,8 @@ import { useEffect, useRef, useState, isValidElement, type ReactNode } from 'rea
 /** Keep nearby directory chunks mounted; measured spacers preserve the scroll range. */
 function DirectoryChunk({ children, count, initial, selected }: { children: ReactNode; count: number; initial: boolean; selected: boolean }) {
   const element = useRef<HTMLDivElement>(null)
-  const [visible, setVisible] = useState(initial)
+  const [visible, setVisible] = useState(initial || typeof IntersectionObserver === 'undefined')
+  const [focused, setFocused] = useState(false)
   const height = useRef(count * 54)
   useEffect(() => {
     const target = element.current
@@ -20,8 +21,10 @@ function DirectoryChunk({ children, count, initial, selected }: { children: Reac
     observer.observe(target)
     return () => { observer.disconnect() }
   }, [])
-  return <div ref={element} style={visible || selected ? undefined : { height: height.current }} data-arkme-directory-chunk>
-    {visible || selected ? children : null}
+  return <div ref={element} role="none" onFocusCapture={() => { setFocused(true) }}
+    onBlurCapture={event => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setFocused(false) }}
+    style={visible || selected || focused ? undefined : { height: height.current }} data-arkme-directory-chunk>
+    {visible || selected || focused ? children : null}
   </div>
 }
 

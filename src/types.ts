@@ -1411,6 +1411,8 @@ export interface ArkmeSourceItem {
   /** Chat policy.update_at for ordering pin projections; independent of message sequence. */
   chatPolicyUpdatedAtMillis?: number
   latestSequence?: number
+  /** Current viewer's confirmed Chat read cursor; distinct from the last message sequence. */
+  readSequence?: number
   recordCount?: number
 }
 
@@ -1441,6 +1443,8 @@ export interface ArkmeConversationDirectoryVisibility {
 
 /** Account-scoped directory progress. Cache availability never proves remote completeness. */
 export interface ArkmeDirectoryProjection {
+  removedSourceKeys?: string[]
+  removedBotRefs?: string[]
   botPinnedKeys?: string[]
   sendToSelf?: ArkmeSourceItem
   arkoProfile?: ArkmeArkoProfile

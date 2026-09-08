@@ -570,7 +570,10 @@ export class ArkmeService {
   }
 
   async listBots(options: { signal?: AbortSignal } = {}): Promise<ArkmeBotList> {
-    return await this.bot.listBots(options)
+    const { userId } = await this.runtime.requireSession()
+    const result = await this.bot.listBots(options)
+    void this.directory.rememberBots(result.items, userId).catch(() => undefined)
+    return result
   }
 
   async createBot(
@@ -584,7 +587,10 @@ export class ArkmeService {
     input: ArkmeBotCreateInput,
     options: { signal?: AbortSignal } = {},
   ): Promise<ArkmeBotSummary> {
-    return await this.bot.createBotSummary(input, options)
+    const { userId } = await this.runtime.requireSession()
+    const bot = await this.bot.createBotSummary(input, options)
+    void this.directory.rememberBots([bot], userId).catch(() => undefined)
+    return bot
   }
 
   async revealBotSecret(botRef: string, options: { signal?: AbortSignal } = {}): Promise<SecretValue> {
@@ -604,8 +610,9 @@ export class ArkmeService {
   }
 
   async deleteManagedBot(botRef: string, confirmationName: string, options: { signal?: AbortSignal } = {}): Promise<void> {
+    const { userId } = await this.runtime.requireSession()
     await this.bot.deleteManagedBot(botRef, confirmationName, options)
-    await this.directory.forgetBot(botRef)
+    await this.directory.forgetBot(botRef, userId).catch(() => undefined)
   }
 
   async botNotificationPreference(botRef: string, options: { signal?: AbortSignal } = {}): Promise<ArkmeBotNotificationPreference> { return await this.botConversation.notificationPreference(botRef, options) }
@@ -920,8 +927,9 @@ export class ArkmeService {
   }
 
   async arkoProfile(signal?: AbortSignal): Promise<ArkmeArkoProfile> {
+    const { userId } = await this.runtime.requireSession()
     const profile = await this.arko.arkoProfile(signal)
-    void this.directory.rememberSpecial({ arkoProfile: profile }).catch(() => undefined)
+    void this.directory.rememberSpecial({ arkoProfile: profile }, userId).catch(() => undefined)
     return profile
   }
 
@@ -946,10 +954,11 @@ export class ArkmeService {
     offset = 0,
     signal?: AbortSignal,
   ): Promise<ArkmeArkoHistoryPage> {
+    const { userId } = await this.runtime.requireSession()
     const page = await this.arko.arkoHistoryPage(limit, offset, signal)
     if (offset === 0) {
       const latest = [...page.items].filter(item => item.text.trim() !== '').sort((a, b) => b.createdAtMillis - a.createdAtMillis || b.messageId - a.messageId)[0]
-      if (latest !== undefined) void this.directory.rememberSpecial({ arkoPreview: { text: latest.text, createdAtMillis: latest.createdAtMillis } }).catch(() => undefined)
+      if (latest !== undefined) void this.directory.rememberSpecial({ arkoPreview: { text: latest.text, createdAtMillis: latest.createdAtMillis } }, userId).catch(() => undefined)
     }
     return page
   }
@@ -1084,21 +1093,22 @@ export class ArkmeService {
   ): Promise<ArkmeSourceList> {
     if (options.localFirst === true) {
       if (directory !== "root") throw new ArkmePluginError("source-directory-invalid", "本地目录仅支持会话列表", false)
-      return await this.directory.read(options.refresh === true)
+      return await this.directory.read(options.refresh === true, options.signal)
     }
+    const { userId } = await this.runtime.requireSession()
     const page = await this.source.listSources(directory, options)
     if (directory === 'send_to_self') {
       const sendToSelf = page.items.find(item => item.kind === 'send_to_self')
-      if (sendToSelf !== undefined) void this.directory.rememberSpecial({ sendToSelf }).catch(() => undefined)
+      if (sendToSelf !== undefined) void this.directory.rememberSpecial({ sendToSelf }, userId).catch(() => undefined)
     }
     return page
   }
 
-  async setChatDirectoryPin(sourceRef: string, pinned: boolean, signal?: AbortSignal): Promise<ArkmeSourceDirectoryPinResult> { const result = await this.source.setChatDirectoryPin(sourceRef, pinned, signal); await this.directory.confirmPin(sourceRef, result.pinned, result.policyUpdatedAtMillis); return result }
+  async setChatDirectoryPin(sourceRef: string, pinned: boolean, signal?: AbortSignal): Promise<ArkmeSourceDirectoryPinResult> { const { userId } = await this.runtime.requireSession(); const result = await this.source.setChatDirectoryPin(sourceRef, pinned, signal); await this.directory.confirmPin(sourceRef, result.pinned, result.policyUpdatedAtMillis, userId).catch(() => undefined); return result }
   async setBotDirectoryPin(botRef: string, pinned: boolean): Promise<void> { await this.directory.pinBot(botRef, pinned) }
 
   async conversationDirectoryVisibilitySnapshot(sourceRefs: readonly string[], botRefs: readonly string[], signal?: AbortSignal): Promise<ArkmeConversationDirectoryVisibility> { return await this.conversationDirectoryVisibility.query(sourceRefs, botRefs, signal) }
-  async setConversationDirectoryVisibility(entryKind: 'source' | 'bot', entryRef: string, hidden: boolean, signal?: AbortSignal): Promise<void> { await this.conversationDirectoryVisibility.setVisibility(entryKind, entryRef, hidden, signal); await this.directory.confirmVisibility(entryKind, entryRef, hidden) }
+  async setConversationDirectoryVisibility(entryKind: 'source' | 'bot', entryRef: string, hidden: boolean, signal?: AbortSignal): Promise<void> { const { userId } = await this.runtime.requireSession(); await this.conversationDirectoryVisibility.setVisibility(entryKind, entryRef, hidden, signal); await this.directory.confirmVisibility(entryKind, entryRef, hidden, userId).catch(() => undefined) }
 
   async dshBetaCommunityEntryState(signal?: AbortSignal): Promise<ArkmeDSHBetaCommunityEntryState> {
     return await this.community.dshBetaCommunityEntryState(signal)
@@ -1273,11 +1283,17 @@ export class ArkmeService {
   }
 
   async leaveGroup(sourceRef: string, signal?: AbortSignal): Promise<ArkmeGroupCommandResult> {
-    return await this.group.leaveGroup(sourceRef, signal)
+    const { userId } = await this.runtime.requireSession()
+    const result = await this.group.leaveGroup(sourceRef, signal)
+    await this.directory.forgetSource(sourceRef, userId).catch(() => undefined)
+    return result
   }
 
   async dissolveGroup(sourceRef: string, signal?: AbortSignal): Promise<ArkmeGroupCommandResult> {
-    return await this.group.dissolveGroup(sourceRef, signal)
+    const { userId } = await this.runtime.requireSession()
+    const result = await this.group.dissolveGroup(sourceRef, signal)
+    await this.directory.forgetSource(sourceRef, userId).catch(() => undefined)
+    return result
   }
 
   async reportGroup(sourceRef: string, reason: string, signal?: AbortSignal): Promise<ArkmeGroupCommandResult> {
