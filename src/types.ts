@@ -1407,14 +1407,24 @@ export interface ArkmeSourceItem {
   isMuted?: boolean
   /** Server-persisted conversation pin state for private and group chats. */
   isPinned?: boolean
+  /** Chat policy.update_at for ordering pin projections; independent of message sequence. */
+  chatPolicyUpdatedAtMillis?: number
   latestSequence?: number
   recordCount?: number
+}
+
+/** Account-bound pin snapshot; does not describe directory membership or message state. */
+export interface ArkmeChatPinProjection {
+  sourceKey: string
+  pinned: boolean
+  policyUpdatedAtMillis: number
 }
 
 /** Result of the existing Chat pin mutation; sidebar visibility is a separate capability. */
 export interface ArkmeSourceDirectoryPinResult {
   sourceRef: string
   pinned: boolean
+  policyUpdatedAtMillis: number
 }
 
 export interface ArkmeConversationDirectoryVisibilityItem {
@@ -3188,6 +3198,13 @@ export type ArkmeChatClientEvent = {
   /** Account-bound conversation identity; raw Chat session and reader identities stay in Host memory. */
   sourceKey: string
   throughSequence: number
+} | {
+  type: 'chat-pins-reconciled'
+  revision: number
+  pins: ArkmeChatPinProjection[]
+} | {
+  type: 'chat-policy-invalidated'
+  revision: number
 } | {
   type: 'conversation-list-preference-invalidated'
   revision: number

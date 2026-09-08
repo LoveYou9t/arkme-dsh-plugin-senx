@@ -196,6 +196,15 @@ export function useArkmeRealtimeClientEvents(
           arkmeCalendarInvalidations.publishAll()
           return
         }
+        if (update.type === 'chat-pins-reconciled') {
+          arkmeChatDirectory.reconcilePins(update.pins)
+          return
+        }
+        if (update.type === 'chat-policy-invalidated') {
+          arkmeChatDirectory.invalidateRoot()
+          void arkmeChatDirectory.refreshRoot({ force: true, silent: true }).catch(() => undefined)
+          return
+        }
         if (update.type === 'conversation-list-preference-invalidated') {
           arkmeUi.chatChanged()
           return
