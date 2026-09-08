@@ -1414,6 +1414,12 @@ export interface ArkmeSourceItem {
 }
 
 /** Result of the existing Chat pin mutation; sidebar visibility is a separate capability. */
+export interface ArkmeChatPinProjection {
+  sourceKey: string
+  pinned: boolean
+  policyUpdatedAtMillis: number
+}
+
 export interface ArkmeSourceDirectoryPinResult {
   sourceRef: string
   pinned: boolean
@@ -3190,6 +3196,10 @@ export type ArkmeChatClientEvent = {
   /** Account-bound conversation identity; raw Chat session and reader identities stay in Host memory. */
   sourceKey: string
   throughSequence: number
+} | {
+  type: 'chat-pins-reconciled'
+  revision: number
+  pins: ArkmeChatPinProjection[]
 } | {
   type: 'chat-policy-invalidated'
   revision: number

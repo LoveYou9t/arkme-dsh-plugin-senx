@@ -9,6 +9,33 @@ import {
 } from '../src/client/chat-directory-store.js'
 
 describe('ArkmeChatDirectoryStore', () => {
+  it('reconciles only existing chat pins in one publication without touching messages or refreshing', () => {
+    const loadPage = vi.fn()
+    const store = new ArkmeChatDirectoryStore({ loadPage })
+    const group = { sourceKey: 'group-key', sourceRef: 'rotated-ref', kind: 'group_chat' as const,
+      displayName: '群聊', activeAtMillis: 9, unreadCount: 3, latestSequence: 10,
+      latestPreview: '最新消息', isPinned: false, chatPolicyUpdatedAtMillis: 1000 }
+    const topic = { ...group, kind: 'topic' as const, sourceKey: 'topic-key' }
+    store.publish([group, topic])
+    const listener = vi.fn()
+    store.subscribe(listener)
+    const pins = [
+      { sourceKey: 'group-key', pinned: true, policyUpdatedAtMillis: 3000 },
+      { sourceKey: 'group-key', pinned: false, policyUpdatedAtMillis: 2000 },
+      { sourceKey: 'removed-key', pinned: true, policyUpdatedAtMillis: 3000 },
+      { sourceKey: 'topic-key', pinned: true, policyUpdatedAtMillis: 3000 },
+    ]
+    store.reconcilePins(pins)
+    expect(store.getSnapshot().sources).toEqual([
+      { ...group, isPinned: true, chatPolicyUpdatedAtMillis: 3000 }, topic,
+    ])
+    expect(listener).toHaveBeenCalledOnce()
+    store.reconcilePins(pins)
+    store.reconcilePins([{ sourceKey: 'group-key', pinned: false, policyUpdatedAtMillis: 2000 }])
+    expect(listener).toHaveBeenCalledOnce()
+    expect(loadPage).not.toHaveBeenCalled()
+  })
+
   it('publishes one authoritative source snapshot to every Chat surface', () => {
     const store = new ArkmeChatDirectoryStore()
     const listener = vi.fn()

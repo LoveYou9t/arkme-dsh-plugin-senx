@@ -1,4 +1,4 @@
-import type { ArkmeSourceItem, ArkmeSourceList } from '../types.js'
+import type { ArkmeChatPinProjection, ArkmeSourceItem, ArkmeSourceList } from '../types.js'
 import { retainNewerArkmeChatPin } from '../chat-pin-projection.js'
 import { arkmeBadgeUnreadCount, projectArkmeChatAttentionFromMuted } from '../chat-attention.js'
 import { callArkme } from './api.js'
@@ -435,6 +435,28 @@ export class ArkmeChatDirectoryStore {
     this.refreshInFlight = undefined
     this.refreshedAtMillis = 0
     this.setRefreshing(false)
+  }
+
+  /** A reconnect pin projection is not a directory membership or message snapshot. */
+  reconcilePins(pins: readonly ArkmeChatPinProjection[]): void {
+    const byKey = new Map<string, ArkmeChatPinProjection>()
+    for (const pin of pins) {
+      const previous = byKey.get(pin.sourceKey)
+      if (previous === undefined || previous.policyUpdatedAtMillis < pin.policyUpdatedAtMillis) byKey.set(pin.sourceKey, pin)
+    }
+    let changed = false
+    const sources = this.snapshot.sources.map(source => {
+      if ((source.kind !== 'private_chat' && source.kind !== 'group_chat') || source.sourceKey === undefined) return source
+      const pin = byKey.get(source.sourceKey)
+      if (pin === undefined) return source
+      const projected = retainNewerArkmeChatPin(source, {
+        ...source, isPinned: pin.pinned, chatPolicyUpdatedAtMillis: pin.policyUpdatedAtMillis,
+      })
+      if (source.isPinned === projected.isPinned && source.chatPolicyUpdatedAtMillis === projected.chatPolicyUpdatedAtMillis) return source
+      changed = true
+      return projected
+    })
+    if (changed) this.commit(sources)
   }
 
   confirmPin(source: ArkmeSourceItem, pinned: boolean, policyUpdatedAtMillis: number): void {

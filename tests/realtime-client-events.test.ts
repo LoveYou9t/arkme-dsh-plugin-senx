@@ -86,6 +86,42 @@ describe('Chat-owned Bot realtime invalidation', () => {
 })
 
 describe('realtime reconcile routing', () => {
+  it('applies reconnect pins without triggering directory, message, receipt or notification refreshes', async () => {
+    let channel!: FakeEventSource
+    class FakeEventSource {
+      onopen: (() => void) | null = null
+      onmessage: ((event: MessageEvent<string>) => void) | null = null
+      constructor() { channel = this }
+      close() {}
+    }
+    vi.stubGlobal('EventSource', FakeEventSource)
+    vi.spyOn(arkmeAuthStore, 'refresh').mockResolvedValue()
+    const receipts = vi.spyOn(arkmeMessageReadReceipts, 'reconcile').mockImplementation(() => undefined)
+    const interwoven = vi.spyOn(arkmeInterwovenInvalidation, 'invalidate')
+    const refresh = vi.spyOn(arkmeChatDirectory, 'refreshRoot').mockResolvedValue([])
+    function Harness() {
+      useArkmeRealtimeClientEvents({ status: 'authenticated', userId: 42, environment: 'test' }, 1, false)
+      return null
+    }
+    let renderer!: ReactTestRenderer
+    await act(async () => { renderer = create(createElement(Harness)) })
+    const row = { sourceKey: 'bound-chat', sourceRef: 'current-ref', kind: 'group_chat' as const,
+      displayName: '群聊', activeAtMillis: 1, unreadCount: 3, latestSequence: 10,
+      isPinned: false, chatPolicyUpdatedAtMillis: 1000 }
+    arkmeChatDirectory.publish([row])
+    receipts.mockClear()
+    interwoven.mockClear()
+    await act(async () => {
+      channel.onmessage?.({ data: JSON.stringify({ type: 'chat-pins-reconciled', revision: 1,
+        pins: [{ sourceKey: 'bound-chat', pinned: true, policyUpdatedAtMillis: 3000 }] }) } as MessageEvent<string>)
+    })
+    expect(arkmeChatDirectory.getSnapshot().sources).toEqual([{ ...row, isPinned: true, chatPolicyUpdatedAtMillis: 3000 }])
+    expect(refresh).not.toHaveBeenCalled()
+    expect(receipts).not.toHaveBeenCalled()
+    expect(interwoven).not.toHaveBeenCalled()
+    await act(async () => { renderer.unmount() })
+  })
+
   it('refreshes only the directory for a policy invalidation and deduplicates Browser revisions', async () => {
     let source!: FakeEventSource
     class FakeEventSource {

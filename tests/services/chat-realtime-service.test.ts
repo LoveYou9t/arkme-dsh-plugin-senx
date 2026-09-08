@@ -20,6 +20,69 @@ const config: ArkmeServiceConfig = {
 }
 
 describe('ChatRealtimeService', () => {
+  it.each(['current', 'account-change', 'new-connection', 'final-connection-change', 'disconnected', 'disposed'] as const)(
+    'recovers pin projections from the existing reconnect read: %s', async scenario => {
+      let account = { userId: 42, accessToken: 'access', refreshToken: 'refresh' }
+      let reads = 0
+      const sessions: ArkmeSessionStore = {
+        async read() {
+          reads += 1
+          if (scenario === 'final-connection-change' && reads === 3) {
+            await Promise.resolve()
+            state.mockReturnValue({ revision: 2, connected: true, connectionGeneration: 3 })
+          }
+          return account
+        },
+        async write() {}, async delete() {},
+      }
+      const runtime = new ServiceRuntime(config, sessions, {} as StateStore)
+      vi.spyOn(runtime, 'requireSession').mockImplementation(async () => account)
+      const source = new SourceService(runtime, new ProfileService(runtime), {
+        async summary() { return { recordCount: 0, wordsCount: 0, totalSec: 0 } }, recordItem() { return undefined },
+      })
+      const timeline = vi.fn(async () => [])
+      const service = new ChatRealtimeService(runtime, source, { chatTimelineItems: timeline })
+      const internals = service as unknown as {
+        chatRealtime: { state(): { revision: number; connected: boolean; connectionGeneration: number } }
+        reconcileChatConnectionBaseline(generation: number, userId: number): Promise<void>
+      }
+      const state = vi.spyOn(internals.chatRealtime, 'state').mockReturnValue({ revision: 1, connected: true, connectionGeneration: 2 })
+      let release!: () => void
+      const rows = [
+        { sourceKey: 'bound-private', sourceRef: 'private-ref', kind: 'private_chat' as const,
+          displayName: '私聊', activeAtMillis: 1, unreadCount: 0, isPinned: true, chatPolicyUpdatedAtMillis: 3000 },
+        { sourceKey: 'bound-group', sourceRef: 'group-ref', kind: 'group_chat' as const,
+          displayName: '群聊', activeAtMillis: 1, unreadCount: 5, isPinned: false, chatPolicyUpdatedAtMillis: 4000 },
+      ]
+      const list = vi.spyOn(source, 'listSources')
+        .mockImplementationOnce(async () => { await new Promise<void>(resolve => { release = resolve }); return { directory: 'root', items: [rows[0]!], hasMore: true, nextCursor: 'page-2' } })
+        .mockResolvedValue({ directory: 'root', items: [rows[1]!], hasMore: false })
+      vi.spyOn(source, 'openSourceRef').mockImplementation(async ref => ({ v: 1, userId: 42, kind: 'group_chat', ownerRef: ref }))
+      const events: unknown[] = []
+      service.subscribeChatRealtime(event => { events.push(event) })
+      const pending = internals.reconcileChatConnectionBaseline(2, 42)
+      await vi.waitFor(() => { expect(list).toHaveBeenCalledOnce() })
+      if (scenario === 'account-change') account = { ...account, userId: 43 }
+      if (scenario === 'new-connection') state.mockReturnValue({ revision: 2, connected: true, connectionGeneration: 3 })
+      if (scenario === 'disconnected') state.mockReturnValue({ revision: 2, connected: false, connectionGeneration: 2 })
+      if (scenario === 'disposed') service.dispose()
+      release()
+      await pending
+      if (scenario === 'current') {
+        expect(events).toEqual([{ type: 'chat-pins-reconciled', revision: 1, pins: [
+          { sourceKey: 'bound-private', pinned: true, policyUpdatedAtMillis: 3000 },
+          { sourceKey: 'bound-group', pinned: false, policyUpdatedAtMillis: 4000 },
+        ] }])
+        expect(list).toHaveBeenCalledTimes(2)
+      } else {
+        expect(events).toEqual([])
+        expect(list).toHaveBeenCalledTimes(scenario === 'final-connection-change' ? 2 : 1)
+      }
+      expect(timeline).not.toHaveBeenCalled()
+      service.dispose()
+    },
+  )
+
   it('projects a member event hint without reading messages or refreshing unread/attention state', async () => {
     const sessions: ArkmeSessionStore = {
       async read() { return { userId: 10001, accessToken: 'access', refreshToken: 'refresh' } },
@@ -73,8 +136,8 @@ describe('ChatRealtimeService', () => {
     const service = new ChatRealtimeService(runtime, source, { async chatTimelineItems() { return [] } })
     const invalidate = vi.spyOn(source, 'invalidateSourceListCache')
     const invalidateKey = vi.spyOn(runtime, 'invalidateKey')
-    vi.spyOn(service as unknown as { reconcileChatNotificationBaseline(generation: number): Promise<void> },
-      'reconcileChatNotificationBaseline').mockResolvedValue()
+    vi.spyOn(service as unknown as { reconcileChatConnectionBaseline(generation: number): Promise<void> },
+      'reconcileChatConnectionBaseline').mockResolvedValue()
     const events: unknown[] = []
     service.subscribeChatRealtime(event => { events.push(event) })
 
@@ -272,8 +335,8 @@ describe('ChatRealtimeService', () => {
     })
     const service = new ChatRealtimeService(runtime, source, { async chatTimelineItems() { return [] } })
     vi.spyOn(service as unknown as {
-      reconcileChatNotificationBaseline(generation: number, userId?: number): Promise<void>
-    }, 'reconcileChatNotificationBaseline').mockResolvedValue()
+      reconcileChatConnectionBaseline(generation: number, userId?: number): Promise<void>
+    }, 'reconcileChatConnectionBaseline').mockResolvedValue()
     vi.spyOn(service, 'refreshAttentionSummary').mockResolvedValue()
     vi.spyOn(service, 'invalidateRecordProjection').mockResolvedValue()
     const internals = service as unknown as {
