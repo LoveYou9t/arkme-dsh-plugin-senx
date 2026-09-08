@@ -163,7 +163,7 @@ import {
 } from './composer-placeholder.js'
 import {
   ARKME_CONVERSATION_HEADER_HEIGHT, ArkmeInterwovenDetailAside, ArkmeInterwovenMentionCard,
-  mergeConversationRows, resolveInterwovenGroupTarget,
+  mergeConversationRows, projectInterwovenWindow, ArkmeInterwovenPrelude, resolveInterwovenGroupTarget,
   type ArkmeConversationRow, type ArkmeInterwovenDetailViewState,
 } from './interwoven-moments.js'
 import {
@@ -1584,11 +1584,12 @@ export function arkmeRealtimeDeltaCoversTimelineGap(
   return true
 }
 
-function arkmeConversationViewport(root: HTMLDivElement): ArkmeConversationViewportSnapshot {
-  const stickToBottom = root.scrollHeight - root.scrollTop - root.clientHeight <= 80
+function arkmeConversationViewport(root: HTMLDivElement, messagesOnly = false): ArkmeConversationViewportSnapshot {
+  const stickToBottom = !messagesOnly && root.scrollHeight - root.scrollTop - root.clientHeight <= 80
   if (stickToBottom) return { scrollTop: root.scrollTop, stickToBottom: true }
   const rootRect = root.getBoundingClientRect()
   for (const row of root.querySelectorAll<HTMLElement>('[data-arkme-conversation-row]')) {
+    if (messagesOnly && !row.dataset.arkmeConversationRow?.startsWith('message:')) continue
     const rowRect = row.getBoundingClientRect()
     if (rowRect.bottom <= rootRect.top || rowRect.top >= rootRect.bottom) continue
     const anchorId = row.dataset.arkmeConversationRow
@@ -2855,6 +2856,8 @@ export function ArkmeSurface({
   const [compactNavigation, setCompactNavigation] = useState(false)
   const [submitBusy, setSubmitBusy] = useState(false)
   const [loadingOlder, setLoadingOlder] = useState(false)
+  const olderLoadRef = useRef({ armed: true, error: '' })
+  const olderLoadError = olderLoadRef.current.error
   const [loadingNewer, setLoadingNewer] = useState(false)
   const newerSentinelArmedRef = useRef(true)
   const [highlightedTargetUid, setHighlightedTargetUid] = useState('')
@@ -3215,6 +3218,8 @@ export function ArkmeSurface({
     if (activeConversation) return
     timelineGenerationRef.current += 1
     timelineWindowRevisionRef.current += 1
+    olderLoadRef.current = { armed: true, error: '' }
+    setLoadingOlder(false)
     for (const request of timelineRequestsRef.current.values()) request.controller.abort()
     timelineRequestsRef.current.clear()
     conversationTargetAbortRef.current?.abort()
@@ -3747,7 +3752,7 @@ export function ArkmeSurface({
     cursor?: ArkmeTimelineCursor,
     preserve = false,
     limit = 40,
-    intent: 'latest' | 'background' | 'pagination' | 'refresh' = cursor === undefined ? 'latest' : 'pagination',
+    intent: 'latest' | 'background' | 'pagination' | 'history' | 'refresh' = cursor === undefined ? 'latest' : 'pagination',
   ): Promise<void> => {
     if (source === undefined) return
     const sourceRef = source.sourceRef
@@ -3774,6 +3779,8 @@ export function ArkmeSurface({
       && activeRequest.requestKey === requestKey) return
     if (intent === 'latest') {
       timelineWindowRevisionRef.current += 1
+      olderLoadRef.current = { armed: true, error: '' }
+      setLoadingOlder(false)
       for (const [activeDirection, request] of timelineRequestsRef.current) {
         if (activeDirection !== direction) request.controller.abort()
       }
@@ -3808,6 +3815,10 @@ export function ArkmeSurface({
     }
     if (controller.signal.aborted || generation !== timelineGenerationRef.current
       || windowRevision !== timelineWindowRevisionRef.current) return
+    if (direction === 'older' && page.hasMore
+      && (page.nextCursor === undefined || sameStateValue(page.nextCursor, cursor))) {
+      throw new Error('暂时无法继续加载，请重试')
+    }
     const cached = conversationCacheRef.current.getTimeline(sourceKey)
     const loadingNewerPage = (cursor?.afterSequence ?? 0) > 0
     const cachedItemUids = new Set((cached?.items ?? []).map(item => item.itemUid))
@@ -3877,7 +3888,7 @@ export function ArkmeSurface({
       pendingViewportRestoreRef.current = {
         sourceKey,
         viewport: preserve || hadCachedTimeline
-          ? body === null ? conversationCacheRef.current.getViewport(sourceKey) : arkmeConversationViewport(body)
+          ? body === null ? conversationCacheRef.current.getViewport(sourceKey) : arkmeConversationViewport(body, intent === 'history')
           : undefined,
         ...(newerPageStartItemUid === undefined
           ? {}
@@ -4023,6 +4034,8 @@ export function ArkmeSurface({
         timelineRequestsRef.current.get('initial')?.controller.abort()
         timelineRequestsRef.current.delete('initial')
         timelineWindowRevisionRef.current += 1
+        olderLoadRef.current = { armed: true, error: '' }
+        setLoadingOlder(false)
         const nextAroundSequenceRange = arkmeConversationTimelineSequenceRange(page.items)
         const snapshot: ArkmeConversationTimelineSnapshot = {
           mode: 'around',
@@ -4111,6 +4124,8 @@ export function ArkmeSurface({
     timelineGenerationRef.current += 1
     timelineWindowRevisionRef.current += 1
     newerSentinelArmedRef.current = true
+    olderLoadRef.current = { armed: true, error: '' }
+    setLoadingOlder(false)
     for (const request of timelineRequestsRef.current.values()) request.controller.abort()
     timelineRequestsRef.current.clear()
     conversationTargetAbortRef.current?.abort()
@@ -4430,16 +4445,44 @@ export function ArkmeSurface({
     }
   }, [activeConversation, authenticated, conversationKey, source?.kind, source?.sourceRef])
 
+  const loadOlderHistory = useCallback(async () => {
+    const state = olderLoadRef.current
+    if (!activeConversation || !authenticated || !hasMore || nextCursor === undefined
+      || ui.conversationTarget !== undefined || loadingOlder || timelineRequestsRef.current.has('older')) return
+    const generation = timelineGenerationRef.current
+    const windowRevision = timelineWindowRevisionRef.current
+    state.armed = false
+    state.error = ''
+    setLoadingOlder(true)
+    const current = () => state === olderLoadRef.current && generation === timelineGenerationRef.current
+      && windowRevision === timelineWindowRevisionRef.current
+    try {
+      await loadTimeline(nextCursor, true, 40, 'history')
+    } catch (caught) {
+      if (current()) {
+        state.error = errorMessage(caught)
+      }
+    } finally {
+      if (state === olderLoadRef.current && generation === timelineGenerationRef.current) setLoadingOlder(false)
+    }
+  }, [activeConversation, authenticated, hasMore, nextCursor, loadingOlder, loadTimeline, ui.conversationTarget])
+
   useEffect(() => {
     const root = bodyRef.current; const sentinel = sentinelRef.current
-    if (!activeConversation || !authenticated || root === null || sentinel === null || !hasMore || nextCursor === undefined) return
+    if (!activeConversation || !authenticated || ui.conversationTarget !== undefined
+      || root === null || sentinel === null || !hasMore || nextCursor === undefined) return
+    let active = true
     const observer = new IntersectionObserver(entries => {
-      if (entries[0]?.isIntersecting !== true || loadingOlder) return
-      setLoadingOlder(true)
-      void loadTimeline(nextCursor, true).catch(caught => { setError(errorMessage(caught)) }).finally(() => { setLoadingOlder(false) })
+      const state = olderLoadRef.current
+      if (!active || loadingOlder || state.error !== '') return
+      if (entries[0]?.isIntersecting !== true) {
+        state.armed = true
+        return
+      }
+      if (state.armed) void loadOlderHistory()
     }, { root, rootMargin: '120px 0px 0px' })
-    observer.observe(sentinel); return () => { observer.disconnect() }
-  }, [activeConversation, authenticated, hasMore, loadTimeline, loadingOlder, nextCursor])
+    observer.observe(sentinel); return () => { active = false; observer.disconnect() }
+  }, [activeConversation, authenticated, hasMore, loadOlderHistory, loadingOlder, nextCursor, ui.conversationTarget])
 
   useEffect(() => {
     const root = bodyRef.current; const sentinel = newerSentinelRef.current
@@ -5743,6 +5786,10 @@ export function ArkmeSurface({
     setMemberMenu(undefined)
     setMemberEventProfile({scope:memberEventScope,event})
   }
+  const interwovenWindow = useMemo(
+    () => projectInterwovenWindow(displayItems, interwovenMoments, hasMore),
+    [displayItems, interwovenMoments, hasMore],
+  )
   const displayRows = useMemo<Array<ArkmeConversationRow | {
     kind: 'notice'; id: string; occurredAtMillis: number; item: ArkmeGroupAiPolishNotice
   } | {
@@ -5751,7 +5798,7 @@ export function ArkmeSurface({
     kind:'member-event-gap'; id:string; occurredAtMillis:number; gapId:string
   }>>(
     () => [
-      ...mergeConversationRows(displayItems, interwovenMoments, memberEventTimeline.events),
+      ...mergeConversationRows(displayItems, interwovenWindow.inline, memberEventTimeline.events),
       ...memberEventTimeline.gaps.map(gap => ({kind:'member-event-gap' as const,id:`member-event-gap:${gap.id}`,occurredAtMillis:gap.at,gapId:gap.id})),
       ...aiPolishNotices.map(notice => ({
         kind: 'notice' as const,
@@ -5766,7 +5813,7 @@ export function ArkmeSurface({
         item: event,
       })),
     ].sort((left, right) => left.occurredAtMillis - right.occurredAtMillis || left.id.localeCompare(right.id)),
-    [aiPolishNotices, displayItems, interwovenMoments, visibleConversationJoinEvents,memberEventTimeline.events,memberEventTimeline.gaps],
+    [aiPolishNotices, displayItems, interwovenWindow, visibleConversationJoinEvents,memberEventTimeline.events,memberEventTimeline.gaps],
   )
   useLayoutEffect(() => {
     const pending = pendingConversationTargetLocateRef.current
@@ -7079,12 +7126,22 @@ export function ArkmeSurface({
           </div> : <>
           <div className="arkme-conversation-body" ref={bodyRef} style={{
             ...styles.body,
-            ...(displayRows.length === 0 ? { display: 'flex', flexDirection: 'column' as const } : {}),
+            ...(displayRows.length === 0 && interwovenWindow.prelude.length === 0 ? { display: 'flex', flexDirection: 'column' as const } : {}),
             ...(activeSelectMode === undefined ? {} : styles.bodySelectMode),
           }} onScroll={handleConversationScroll}>
             {error !== '' && <div style={styles.error}>{error}</div>}
+            {interwovenWindow.prelude.length > 0 && <ArkmeInterwovenPrelude
+              key={conversationKey} moments={interwovenWindow.prelude} onOpen={openMomentDetail} />}
             <div ref={sentinelRef} style={styles.sentinel} />
-            {loadingOlder && <div style={styles.loading}>正在加载更早内容…</div>}
+            {hasMore && <div style={styles.loading}>
+              {(olderLoadError !== '' || nextCursor === undefined) && <div role="alert">
+                {olderLoadError || '暂时无法继续加载，请刷新会话后重试'}
+              </div>}
+              {nextCursor !== undefined && <button type="button" style={styles.retry} disabled={loadingOlder}
+                onClick={() => { void loadOlderHistory() }}>
+                {loadingOlder ? '正在加载更早内容…' : olderLoadError === '' ? '继续加载更早消息' : '重试加载更早消息'}
+              </button>}
+            </div>}
             {timelineSkeletonKey === conversationKey && displayRows.length === 0 && <div
               role="status"
               aria-label="正在加载会话内容"
