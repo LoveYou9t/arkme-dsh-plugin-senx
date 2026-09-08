@@ -1413,13 +1413,14 @@ export interface ArkmeSourceItem {
   recordCount?: number
 }
 
-/** Result of the existing Chat pin mutation; sidebar visibility is a separate capability. */
+/** Account-bound pin snapshot; does not describe directory membership or message state. */
 export interface ArkmeChatPinProjection {
   sourceKey: string
   pinned: boolean
   policyUpdatedAtMillis: number
 }
 
+/** Result of the existing Chat pin mutation; sidebar visibility is a separate capability. */
 export interface ArkmeSourceDirectoryPinResult {
   sourceRef: string
   pinned: boolean
