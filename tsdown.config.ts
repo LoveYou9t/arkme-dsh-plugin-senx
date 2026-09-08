@@ -66,6 +66,18 @@ export default defineConfig([
     },
   },
   {
+    name: '@senguoyun/dsh-arkme/harness-session',
+    entry: { 'harness-session-client': 'src/client/harness-session-client.ts' },
+    outDir: 'lib', format: 'cjs', platform: 'browser', inputOptions: { platform: 'browser' }, target: 'es2022',
+    fixedExtension: false, dts: false, clean: false,
+    outputOptions: {
+      entryFileNames: 'harness-session-client.js',
+      banner: 'window.__ModuleLoader__.load({ id: "@senguoyun/dsh-arkme/harness-session", factory: (require) => {',
+      footer: 'return module.exports; } });',
+      intro: 'var module = { exports: {} }; var exports = module.exports;',
+    },
+  },
+  {
     name: '@senguoyun/dsh-arkme/harness-model',
     entry: { 'harness-model-client': 'src/client/harness-model-client.tsx' },
     outDir: 'lib', format: 'cjs', platform: 'browser',
