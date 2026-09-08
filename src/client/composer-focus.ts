@@ -5,6 +5,28 @@ export interface ArkmeComposerFocusTarget {
   setSelectionRange(start: number, end: number): void
 }
 
+export function focusArkmeComposerFromClick(
+  target: ArkmeComposerFocusTarget | null,
+  event: { currentTarget: HTMLElement; target: EventTarget | null; button: number; defaultPrevented: boolean },
+): boolean {
+  if (target === null || target.disabled || event.button !== 0 || event.defaultPrevented) return false
+  const container = event.currentTarget
+  const clicked = event.target
+  if (!(clicked instanceof Element) || !container.contains(clicked)) return false
+  // The outer composer is itself a footer. Only its two marked bottom regions
+  // are excluded; editable content and controls keep their native interaction.
+  if (clicked.closest('[data-arkme-composer-footer], button, a[href], input, select, textarea, [contenteditable], [role="button"], [role="link"], [role="option"], [role="menuitem"], [role="separator"], [draggable="true"]')) return false
+  const active = container.ownerDocument.activeElement
+  if (active !== null && container.contains(active) && active.matches('[data-arkme-rich-composer]')) return false
+  // A drag can end in a click after selecting reference text or crossing padding.
+  const selection = container.ownerDocument.getSelection()
+  if (selection !== null && !selection.isCollapsed
+    && (container.contains(selection.anchorNode) || container.contains(selection.focusNode))) return false
+
+  target.focus({ preventScroll: true })
+  return true
+}
+
 export function restoreArkmeComposerFocus(
   target: ArkmeComposerFocusTarget | null,
   activeElement: Element | null,
