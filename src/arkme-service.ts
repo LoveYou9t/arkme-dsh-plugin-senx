@@ -746,6 +746,7 @@ export class ArkmeService {
         outgoingCall: true,
         callHistory: true,
         groupMembers: true,
+        memberDirectoryPaging: true,
         groupMemberAdd: true,
         userCard: true,
         openPrivateChat: true,
@@ -1214,6 +1215,14 @@ export class ArkmeService {
     return await this.group.listGroupMembers(sourceRef, options)
   }
 
+  async cachedSourceMembers(sourceRef: string, signal?: AbortSignal) { return await this.chat.cachedSourceMembers(sourceRef, signal) }
+  async pageSourceMembers(sourceRef: string, options: { cursor?: string; limit?: number; signal?: AbortSignal } = {}) {
+    return await this.chat.pageSourceMembers(sourceRef, options)
+  }
+  async sourceMembersPresentation(sourceRef: string, memberRefs: readonly string[], options: { signal?: AbortSignal } = {}) {
+    return await this.chat.sourceMembersPresentation(sourceRef, memberRefs, options)
+  }
+
   async listSourceMembers(
     sourceRef: string,
     options: { activeOnly?: boolean; signal?: AbortSignal } = {},
@@ -1383,7 +1392,7 @@ export class ArkmeService {
   async saveMessageLocation(sourceRef: string, itemUid: string, location: ArkmeRecordLocationCapture, recordVersion?: number, options: { signal?: AbortSignal } = {}): Promise<void> { await this.chat.saveMessageLocation(sourceRef, itemUid, location, recordVersion, options) }
 
   async messageReadReceiptSummaries(sourceRef: string, items: readonly ArkmeMessageReadReceiptQueryItem[], options: { signal?: AbortSignal } = {}): Promise<ArkmeMessageReadReceiptSummaryList> { return await this.chat.messageReadReceiptSummaries(sourceRef, items, options) }
-  async messageReadReceiptDetail(sourceRef: string, itemUid: string, sequence: number, options: { signal?: AbortSignal } = {}): Promise<ArkmeMessageReadReceiptDetail> { return await this.chat.messageReadReceiptDetail(sourceRef, itemUid, sequence, options) }
+  async messageReadReceiptDetail(sourceRef: string, itemUid: string, sequence: number, options: { signal?: AbortSignal; basicOnly?: boolean } = {}): Promise<ArkmeMessageReadReceiptDetail> { return await this.chat.messageReadReceiptDetail(sourceRef, itemUid, sequence, options) }
 
   async relatedRecordingEligibility(sourceRef: string, signal?: AbortSignal): Promise<ArkmeRelatedRecordingEligibility> { return await this.relatedRecording.relatedRecordingEligibility(sourceRef, signal) }
   async relatedRecordings(sourceRef: string, options: ArkmeRelatedRecordingPageOptions = {}): Promise<ArkmeRelatedRecordingPage> { return await this.relatedRecording.relatedRecordings(sourceRef, options) }

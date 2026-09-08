@@ -252,8 +252,8 @@ export class ChatRealtimeService {
       void this.invalidateChatPolicyForCurrentSession(notice)
       return
     }
-    if (notice.cause === 'chat-hint' && notice.memberEvent !== undefined) {
-      void this.handleMemberEvent(notice.memberEvent)
+    if (notice.cause === 'chat-hint' && (notice.memberEvent !== undefined || notice.memberJoined !== undefined)) {
+      void this.handleMemberEvent(notice)
       return
     }
     if (notice.cause === 'reconcile') {
@@ -436,13 +436,17 @@ export class ChatRealtimeService {
     }
   }
 
-  private async handleMemberEvent(hint: NonNullable<ArkmeChatRealtimeNotice['memberEvent']>): Promise<void> {
+  private async handleMemberEvent(notice: ArkmeChatRealtimeNotice): Promise<void> {
+    const hint = notice.memberJoined ?? notice.memberEvent
+    if (hint === undefined || notice.connectionSignal?.aborted) return
     try {
       const session = await this.runtime.sessionStore.read()
-      if (session === undefined) return
+      if (session === undefined || (notice.connectionUserId !== undefined && notice.connectionUserId !== session.userId)) return
+      this.runtime.invalidateMemberCache?.()
       const sourceKey = await this.source.chatDirectorySourceKey(session.userId, hint.chatSessionUid)
-      if ((await this.runtime.sessionStore.read())?.userId !== session.userId) return
-      this.emitChatClientEvent({ type:'member-events-invalidated', revision:this.nextChatClientRevision(),
+      if (notice.connectionSignal?.aborted || (await this.runtime.sessionStore.read())?.userId !== session.userId) return
+      if (notice.memberJoined !== undefined) this.emitChatClientEvent({ type: 'members-invalidated', revision: this.nextChatClientRevision(), sourceKey })
+      else this.emitChatClientEvent({ type:'member-events-invalidated', revision:this.nextChatClientRevision(),
         sourceKey, eventId:hint.eventUid, occurredAtMillis:hint.eventAtMillis })
     } catch (error) { console.warn('dsh-arkme: member event hint failed:', safeFailureMessage(error)) }
   }

@@ -1192,6 +1192,8 @@ export interface ArkmeProviderCapabilities {
     /** Browser-safe call-history list/detail and explicit summary retry are available. */
     callHistory?: true
     groupMembers: true
+    /** Progressive member pages, explicit membership verification and advisory disk cache. */
+    memberDirectoryPaging?: true
     groupMemberAdd?: true
     userCard: true
     openPrivateChat: true
@@ -1714,6 +1716,8 @@ export interface ArkmeMessageReadReceiptSummaryList {
 }
 
 export interface ArkmeMessageReadReceiptMember {
+  /** False when the displayed name came only from a local cache. */
+  displayNameIsCurrent?: boolean
   /** Account- and conversation-bound member reference. */
   memberRef: string
   displayName: string
@@ -1725,6 +1729,8 @@ export interface ArkmeMessageReadReceiptMember {
 
 /** Member-level receipt detail for one current-user-sent group message. */
 export interface ArkmeMessageReadReceiptDetail extends ArkmeMessageReadReceiptQueryItem {
+  /** False means member presentation is advisory; receipt membership and read status remain authoritative. */
+  presentationComplete?: boolean
   sourceRef: string
   readCount: number
   unreadCount: number
@@ -2316,6 +2322,8 @@ export interface ArkmeGroupMemberList {
 }
 
 export interface ArkmeConversationMemberItem {
+  /** False while member statistics have not been retrieved. */
+  statsKnown?: boolean
   /** Stable account-and-session-scoped identity for member actions. */
   memberRef: string
   /** Present only when this active non-self group member can be selected for a new human mention. */
@@ -2389,6 +2397,36 @@ export interface ArkmeConversationMemberList {
   total: number
   activeCount: number
   joinEvents?: ArkmeConversationMemberJoinEvent[]
+}
+
+export type ArkmeConversationMemberFacts = Pick<ArkmeConversationMemberItem,
+  'memberRef' | 'role' | 'status' | 'isSelf' | 'isOwner' | 'joinedAtMillis' | 'memberName'>
+
+export interface ArkmeConversationMemberPage {
+  kind: 'membership'
+  selfRole: ArkmeGroupMemberRole
+  source: ArkmeSourceItem
+  items: ArkmeConversationMemberFacts[]
+  removedMemberRefs: string[]
+  hasMore: boolean
+  nextCursor?: string
+  joinEvents?: ArkmeConversationMemberJoinEvent[]
+}
+
+export interface ArkmeConversationMemberPresentation {
+  kind: 'presentation'
+  source: ArkmeSourceItem
+  items: ArkmeConversationMemberItem[]
+  removedMemberRefs: string[]
+  unavailableProfileMemberRefs: string[]
+}
+
+export type ArkmeConversationMemberUpdate = ArkmeConversationMemberPage | ArkmeConversationMemberPresentation
+
+export interface ArkmeConversationMemberCache {
+  items: ArkmeConversationMemberItem[]
+  joinEvents: ArkmeConversationMemberJoinEvent[]
+  cachedAtMillis: number
 }
 
 export interface ArkmeMemberEvent {
@@ -3234,6 +3272,10 @@ export type ArkmeChatClientEvent = {
   type: 'conversation-list-preference-invalidated'
   revision: number
 } | {
+  type: 'members-invalidated'
+  revision: number
+  sourceKey: string
+} | {
   type: 'member-events-invalidated'
   revision: number
   sourceKey: string
@@ -3349,6 +3391,9 @@ export type ArkmePluginOperation =
   | 'source.timeline'
   | 'source.timeline-around'
   | 'source.members'
+  | 'source.members.page'
+  | 'source.members.presentation'
+  | 'source.members.cached'
   | 'source.member-events'
   | 'source.member-event.profile'
   | 'source.member-event.private.open'

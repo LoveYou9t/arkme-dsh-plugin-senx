@@ -1,5 +1,5 @@
 import type {
-  ArkmeConversationMemberList, ArkmeConversationMemberRecordMode, ArkmeConversationMemberRecordPage,
+  ArkmeConversationMemberPresentation, ArkmeConversationMemberPage, ArkmeConversationMemberCache, ArkmeConversationMemberList, ArkmeConversationMemberRecordMode, ArkmeConversationMemberRecordPage,
   ArkmeDirectTextSendResult, ArkmeGroupAiPolishMutationResult, ArkmeGroupAiPolishRuleCandidate,
   ArkmeMessageCopyLinkExtendResult,
   ArkmeGroupAiPolishSnapshot, ArkmeMessageReportResult, ArkmeSourceDirectory, ArkmeSourceList, ArkmeSourceReadResult, ArkmeSourceSendResult,
@@ -12,6 +12,9 @@ import type {
 
 export interface ArkmeConversationToolPort {
   setBotDirectoryPin(botRef: string, pinned: boolean): Promise<void>
+  cachedSourceMembers(sourceRef: string, signal?: AbortSignal): Promise<ArkmeConversationMemberCache | undefined>
+  pageSourceMembers(sourceRef: string, options?: { cursor?: string; limit?: number; signal?: AbortSignal }): Promise<ArkmeConversationMemberPage>
+  sourceMembersPresentation(sourceRef: string, memberRefs: readonly string[], options?: { signal?: AbortSignal }): Promise<ArkmeConversationMemberPresentation>
   listSources(
     directory: ArkmeSourceDirectory,
     options?: { limit?: number; cursor?: string; signal?: AbortSignal; localFirst?: boolean },
@@ -29,7 +32,7 @@ export interface ArkmeConversationToolPort {
     sourceRef: string,
     itemUid: string,
     sequence: number,
-    options?: { signal?: AbortSignal },
+    options?: { signal?: AbortSignal; basicOnly?: boolean },
   ): Promise<ArkmeMessageReadReceiptDetail>
   markSourceRead(
     sourceRef: string,

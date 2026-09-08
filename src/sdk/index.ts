@@ -35,6 +35,8 @@ import type {
   ArkmeFavoriteStickerAddInput,
   ArkmeFavoriteStickerManageAction,
   ArkmeConversationMemberList,
+  ArkmeConversationMemberPresentation, ArkmeConversationMemberPage,
+  ArkmeConversationMemberCache,
   ArkmeConversationMemberRecordMode,
   ArkmeConversationMemberRecordPage,
   ArkmeCreateTextResult,
@@ -189,6 +191,8 @@ export type {
   ArkmeContentKind,
   ArkmeConversationMemberItem,
   ArkmeConversationMemberList,
+  ArkmeConversationMemberPresentation, ArkmeConversationMemberPage,
+  ArkmeConversationMemberCache,
   ArkmeConversationMemberRecordMode,
   ArkmeConversationMemberRecordPage,
   ArkmeCreateTextResult,
@@ -1377,6 +1381,24 @@ export class ArkmeSdk {
     return await this.call<ArkmeGroupAiPolishMutationResult>('source.ai-polish.confirm-disable', { confirmationRef }, signal)
   }
 
+  async cachedSourceMembers(sourceRef: string, signal?: AbortSignal): Promise<ArkmeConversationMemberCache | null> {
+    if (sourceRef.trim() === '') throw new TypeError('Arkme source reference must not be empty')
+    return await this.call('source.members.cached', { sourceRef }, signal)
+  }
+
+  async pageSourceMembers(sourceRef: string, options: { cursor?: string; limit?: number; signal?: AbortSignal } = {}): Promise<ArkmeConversationMemberPage> {
+    if (sourceRef.trim() === '') throw new TypeError('Arkme source reference must not be empty')
+    if (options.limit !== undefined && (!Number.isSafeInteger(options.limit) || options.limit < 1 || options.limit > 100)) throw new TypeError('Arkme member page limit must be 1-100')
+    return await this.call('source.members.page', { sourceRef,
+      ...(options.cursor === undefined ? {} : { cursor: options.cursor }), ...(options.limit === undefined ? {} : { limit: options.limit }),
+    }, options.signal)
+  }
+
+  async sourceMembersPresentation(sourceRef: string, memberRefs: readonly string[], signal?: AbortSignal): Promise<ArkmeConversationMemberPresentation> {
+    if (!sourceRef.trim() || memberRefs.length < 1 || memberRefs.length > 50 || memberRefs.some(ref => !ref.trim())) throw new TypeError('Arkme member presentation needs 1-50 member references')
+    return await this.call('source.members.presentation', { sourceRef, memberRefs: [...memberRefs] }, signal)
+  }
+
   async listSourceMembers(sourceRef: string, signal?: AbortSignal): Promise<ArkmeConversationMemberList> {
     if (sourceRef.trim() === '') throw new TypeError('Arkme chat source reference must not be empty')
     return await this.call<ArkmeConversationMemberList>('source.members', { sourceRef, activeOnly: true }, signal)
@@ -1543,6 +1565,7 @@ export class ArkmeSdk {
     itemUid: string,
     sequence: number,
     signal?: AbortSignal,
+    options: { basicOnly?: boolean } = {},
   ): Promise<ArkmeMessageReadReceiptDetail> {
     const normalizedSourceRef = sourceRef.trim()
     const normalizedItemUid = itemUid.trim()
@@ -1551,7 +1574,7 @@ export class ArkmeSdk {
     }
     return await this.call<ArkmeMessageReadReceiptDetail>(
       'source.read-receipts.detail',
-      { sourceRef: normalizedSourceRef, itemUid: normalizedItemUid, sequence },
+      { sourceRef: normalizedSourceRef, itemUid: normalizedItemUid, sequence, ...(options.basicOnly === undefined ? {} : { basicOnly: options.basicOnly }) },
       signal,
     )
   }

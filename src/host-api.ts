@@ -1618,9 +1618,20 @@ export async function dispatchArkmeHostOperation(
         ...(requestSignal === undefined ? {} : { signal: requestSignal }),
       },
     )
+    case 'source.members.cached': return await service.cachedSourceMembers(stringParam(params, 'sourceRef'), requestSignal) ?? null
+    case 'source.members.page': return await service.pageSourceMembers(stringParam(params, 'sourceRef'), {
+      limit: numberParam(params, 'limit', 50),
+      ...(typeof params.cursor === 'string' ? { cursor: params.cursor } : {}),
+      ...(requestSignal === undefined ? {} : { signal: requestSignal }),
+    })
+    case 'source.members.presentation': {
+      if (!Array.isArray(params.memberRefs) || params.memberRefs.some(value => typeof value !== 'string')) throw new ArkmePluginError('member-presentation-invalid', '成员引用必须为字符串列表', false, 400)
+      return await service.sourceMembersPresentation(stringParam(params, 'sourceRef'), params.memberRefs as string[],
+        requestSignal === undefined ? {} : { signal: requestSignal })
+    }
     case 'source.members': return await service.listSourceMembers(
       stringParam(params, 'sourceRef'),
-      { activeOnly: params.activeOnly !== false },
+      { activeOnly: params.activeOnly !== false, ...(requestSignal === undefined ? {} : { signal: requestSignal }) },
     )
     case 'source.member-events': return await service.memberEvents(stringParam(params, 'sourceRef'), {
       fromAtMillis: numberParam(params, 'fromAtMillis', 0),
@@ -1689,7 +1700,7 @@ export async function dispatchArkmeHostOperation(
       stringParam(params, 'sourceRef'),
       stringParam(params, 'itemUid'),
       numberParam(params, 'sequence', 0),
-      requestSignal === undefined ? {} : { signal: requestSignal },
+      { ...(params.basicOnly === undefined ? {} : { basicOnly: params.basicOnly === true }), ...(requestSignal === undefined ? {} : { signal: requestSignal }) },
     )
     case 'source.message-report': {
       const report = messageReportParam(params)
