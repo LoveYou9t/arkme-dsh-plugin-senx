@@ -823,6 +823,43 @@ describe('record re-edit attachment UI', () => {
     vi.unstubAllGlobals()
   })
 
+  it.each([false, true])('keeps refusal scoped to new messages when admission arrives after opening re-edit: %s', async lateAdmission => {
+    const refusedSource = { ...source, directMessageAdmissionApplicable: true }
+    const admission = deferred<unknown>()
+    const refused = { state: 'refused_by_self', canSend: false, refusalCreationEnabled: true,
+      ownRefused: true, counterpartRefused: false, ownRevision: 1, counterpartRevision: 0 }
+    const base = mocks.callArkme.getMockImplementation()!
+    mocks.callArkme.mockImplementation(async (operation, params) => {
+      if (operation === 'sources.list') return { directory: 'root', items: [refusedSource, other], hasMore: false }
+      if (operation === 'chat.direct-message-admission') return lateAdmission ? admission.promise : refused
+      return base(operation, params)
+    })
+    arkmeComposerDraftStore.setText(normalKey, '普通草稿')
+    arkmeChatDirectory.publish([refusedSource, other])
+    arkmeUi.selectSource(refusedSource)
+    await mount()
+    if (!lateAdmission) {
+      expect.soft(composer().props.disabled).toBe(true)
+      expect.soft(renderer!.root.findByProps({ 'aria-label': '添加内容' }).props.disabled).toBe(true)
+    }
+    await open()
+    if (lateAdmission) await act(async () => { admission.resolve(refused); await flush() })
+    expect(composer().props.value).toBe('原正文')
+    expect(composer().props.disabled).toBe(false)
+    expect(renderer!.root.findByProps({ 'aria-label': '添加内容' }).props.disabled).toBe(false)
+    await pick()
+    expect(strip().props.attachments).toHaveLength(3)
+    await act(async () => { renderer!.root.findByProps({ 'aria-label': '保存重新编辑' }).props.onClick(); await flush() })
+    expect(mocks.callArkme).toHaveBeenCalledWith('source.record-reedit.submit', expect.objectContaining({
+      attachments: [{ fileAssetUid: 'a' }, { fileAssetUid: 'b' }, { fileRef: local.fileRef }],
+    }))
+    expect(composer().props.disabled).toBe(true)
+    expect(composer().props.value).toBe('')
+    expect(arkmeComposerDraftStore.get(normalKey).text).toBe('普通草稿')
+    expect(arkmeComposerDraftStore.get(normalKey).attachments).toHaveLength(0)
+    expect(mocks.callArkme.mock.calls.some(([operation]) => operation === 'source.send-text')).toBe(false)
+  })
+
   it('uses the existing strip to reorder and remove original attachments without touching the ordinary draft', async () => {
     arkmeComposerDraftStore.appendAttachments(normalKey, [{ localFile: local }], 9)
     await mount(); await open()

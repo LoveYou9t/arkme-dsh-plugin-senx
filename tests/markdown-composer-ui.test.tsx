@@ -4,6 +4,8 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Editor } from '@tiptap/core'
 import { ArkmeMarkdownComposerInput } from '../src/client/ArkmeMarkdownComposerInput.js'
+import { ArkmeMarkdownBody } from '../src/client/ArkmeMarkdownBody.js'
+import { ArkmeEmojiPicker } from '../src/client/ArkmeEmojiPicker.js'
 import type { ArkmeRichComposerHandle } from '../src/client/ArkmeRichComposerInput.js'
 import { arkmeEditorProjection, arkmeSerializeMarkdownEditor } from '../src/client/markdown-editor.js'
 import { ArkmeComposerDraftStore, arkmeComposerCanSend, arkmeSourceComposerDraftKey, type ArkmeComposerDraftSnapshot } from '../src/client/composer-draft-store.js'
@@ -65,6 +67,40 @@ beforeEach(async () => {
 afterEach(() => { act(() => root.unmount()); host.remove(); vi.unstubAllGlobals() })
 
 describe('Markdown composer DOM interaction', () => {
+  it.each(['native DOMRect', 'plain rectangle'])('opens the emoji picker with %s caret coordinates and keeps navigation usable', async kind => {
+    const coordinates = new DOMRect(120, 500, 0, 21)
+    const rect = kind === 'native DOMRect' ? coordinates : {
+      left: coordinates.left, right: coordinates.right, top: coordinates.top, bottom: coordinates.bottom,
+    }
+    const coordsAtPos = vi.spyOn(editor().view, 'coordsAtPos').mockReturnValue(rect)
+    try {
+      expect(handle.current!.getCaretGeometry()).toEqual({
+        left: 120, right: 120, top: 500, bottom: 521, width: 0, height: 21,
+      })
+      const selected = vi.fn()
+      const render = (scopeKey: string) => <><Harness /><ArkmeEmojiPicker
+        disabled={false} scopeKey={scopeKey} onSelect={selected}
+        getCaretGeometry={() => handle.current?.getCaretGeometry()}
+        getEditorGeometry={() => handle.current?.getEditorGeometry()}
+      /></>
+      await act(async () => { root.render(render('chat:1')) })
+      const toggle = () => act(() => { host.querySelector<HTMLButtonElement>('[aria-label="选择表情"]')!.click() })
+      toggle()
+      const panel = () => document.querySelector<HTMLElement>('[data-arkme-emoji-panel-shell]')
+      expect(panel()?.style.visibility).toBe('visible')
+      expect(document.querySelectorAll('[data-arkme-emoji-grid="default"] img')).toHaveLength(56)
+      act(() => { document.querySelector<HTMLButtonElement>('[data-arkme-emoji-id="angry_face"]')!.click() })
+      expect(selected).toHaveBeenCalledWith(expect.objectContaining({ id: 'angry_face' }))
+      act(() => { document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' })) })
+      expect(panel()).toBeNull()
+      toggle()
+      await act(async () => { root.render(render('chat:2')) })
+      expect(panel()).toBeNull()
+      toggle()
+      expect(panel()?.style.visibility).toBe('visible')
+      expect(coordsAtPos.mock.calls.length).toBeGreaterThan(1)
+    } finally { coordsAtPos.mockRestore() }
+  })
   it('reports Markdown typing to the existing input activity owner', () => {
     type('甲乙')
     expect(inputActivity).toEqual(['甲', '甲乙'])
@@ -102,6 +138,16 @@ describe('Markdown composer DOM interaction', () => {
     expect(host.querySelector('code')?.textContent).toBe('甲**乙**丙')
     act(() => update(initial)); type('甲丙'); act(() => editor().commands.setTextSelection(2)); paste('  ')
     expect(editor().getText()).toBe('甲  丙')
+  })
+  it('renders saved inline code with embedded backticks without activating its formatting or tags', () => {
+    paste('``a`b **粗体** #标签``')
+    const text = 'a`b **粗体** #标签'
+    expect(host.querySelector('code')?.textContent).toBe(text)
+    const source = snapshot.markdown!.source
+    act(() => root.render(<ArkmeMarkdownBody text={source} />))
+    expect(host.querySelector('code')?.textContent).toBe(text)
+    expect(host.querySelector('strong')).toBeNull()
+    expect(host.querySelector('[role="link"]')).toBeNull()
   })
   it('retains explicit heading and task structures on document paste', () => {
     paste('# 标题\n\n- [ ] 待办')

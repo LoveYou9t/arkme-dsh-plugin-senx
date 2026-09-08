@@ -70,6 +70,19 @@ describe('core-only DeepSeek Harness iframe route', () => {
     expect(projected.rev).toMatch(/^[a-f0-9]{12}$/)
   })
 
+  it('adds only the lightweight model UI to compatible embedded graphs and preserves batch coverage', () => {
+    const value = graph()
+    value.entries.push({ id: '@deepseek-ai/dsh-client-ui-model-selection', url: '/models.js', rev: 'models' })
+    value.batches = [{ phase: 'application', url: '/batch.js', rev: 'batch', entries: value.entries.map(entry => entry.id) }]
+    const modelClient = { id: '@senguoyun/dsh-arkme/harness-model', url: '/model-client.js', rev: 'model-client' }
+    const projected = projectHarnessBootGraph(value, ['@arkme-local/weather'], modelClient)
+    expect(projected.entries.at(-1)).toEqual(modelClient)
+    expect(projected.entries.some(entry => entry.id === '@senguoyun/dsh-arkme')).toBe(false)
+    expect(projected.batches?.at(-1)).toEqual({ phase: 'application', url: modelClient.url, rev: modelClient.rev, entries: [modelClient.id] })
+    expect(projected.batches?.flatMap(batch => batch.entries)).toEqual(projected.entries.map(entry => entry.id))
+    expect(projectHarnessBootGraph(graph(), [], modelClient).entries).not.toContainEqual(modelClient)
+  })
+
   it('accepts the current DSH client-connection runtime capability without a legacy runtime entry', () => {
     const value = graph()
     value.entries = value.entries.map(entry => entry.id === '@deepseek-ai/dsh-client-runtime'

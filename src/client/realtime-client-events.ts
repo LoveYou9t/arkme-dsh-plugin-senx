@@ -1,6 +1,7 @@
 import { useEffect } from 'react'
 import { publishMemberEventHint } from './member-event-hints.js'
 import { arkmeMemberEvents } from './member-event-cache.js'
+import { invalidateDirectMessageAdmission } from './direct-message-admission.js'
 import type { ArkmeAuthSnapshot, ArkmeBotSummary, ArkmeChatClientEvent } from '../types.js'
 import { arkmeAuthStore } from './auth-store.js'
 import { arkmeCalendarInvalidations } from './calendar-invalidation-store.js'
@@ -102,6 +103,7 @@ export function useArkmeRealtimeClientEvents(
       if (stopped) return
       if (ownsMessagePreparing) arkmeMessagePreparing.reset()
       reconcileReceipts()
+      invalidateDirectMessageAdmission()
       void reconcileArkmeProviderInstance()
         .then(async changed => {
           if (!changed || stopped) return
@@ -148,6 +150,7 @@ export function useArkmeRealtimeClientEvents(
           if (update.attentionSummary !== undefined) arkmeAttentionSummary.apply(update.attentionSummary)
           arkmeInterwovenInvalidation.invalidate()
           reconcileReceipts()
+          invalidateDirectMessageAdmission()
           if (update.refresh === 'none') return
           void refreshUnread(update.refresh === 'force')
             .then(() => {
@@ -176,6 +179,7 @@ export function useArkmeRealtimeClientEvents(
           return
         }
         if (update.type === 'projection-invalidated') {
+          if (update.projection === 'chat.direct_message_admission') { invalidateDirectMessageAdmission(); return }
           if (update.projection !== 'record') return
           arkmeInterwovenInvalidation.invalidate()
           arkmeCalendarInvalidations.publishAll()

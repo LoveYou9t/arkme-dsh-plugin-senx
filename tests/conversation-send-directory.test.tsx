@@ -2,6 +2,7 @@ import { emojiSample } from './fixtures/emoji.js'
 import { act, create, type ReactTestRenderer } from 'react-test-renderer'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { arkmeMessagePreparing } from '../src/client/message-preparing-store.js'
+import { invalidateDirectMessageAdmission } from '../src/client/direct-message-admission.js'
 import type {
   ArkmeConversationMemberItem,
   ArkmeMessageCopyLinkSnapshotItem,
@@ -1126,6 +1127,113 @@ describe('conversation send directory projection', () => {
     expect(renderer!.root.findAllByProps({ 'aria-labelledby': 'arkme-message-report-title' })).toHaveLength(0)
   })
 
+  it('places refusal in the private menu and its status inside the disabled composer', async () => {
+    activeSource = { ...target, directMessageAdmissionApplicable: true }
+    arkmeChatDirectory.publish([other, activeSource])
+    arkmeUi.selectSource(activeSource)
+    const original = mocks.callArkme.getMockImplementation()!
+    let refused = true
+    mocks.callArkme.mockImplementation(async (operation: string, params: any, ...rest: any[]) => {
+      if (operation === 'sources.list') return { directory: 'root', items: [other, activeSource], hasMore: false }
+      if (operation === 'chat.direct-message-refusal.set') refused = false
+      if (operation.startsWith('chat.direct-message')) return {
+        state: refused ? 'refused_by_self' : 'allowed', canSend: !refused,
+        refusalCreationEnabled: true, ownRefused: refused, counterpartRefused: false,
+        ownRevision: refused ? 1 : 2, counterpartRevision: 0,
+      }
+      return await original(operation, params, ...rest)
+    })
+    await act(async () => {
+      renderer = create(<ArkmeSurface productChrome={false} productNavigation={false} />, {
+        createNodeMock: element => element.props.className === 'arkme-conversation-panel' || element.props['aria-label'] === '更多私聊操作'
+          ? { getBoundingClientRect: () => ({ left: 0, top: 0, right: 960, bottom: 40, width: 960, height: 720 }) }
+          : null,
+      })
+    })
+    const input = renderer!.root.findByType(ArkmeRichComposerInput)
+    expect(input.props.disabled).toBe(true)
+    expect(input.props.placeholder).toBe('你已拒收对方的消息')
+    expect(renderer!.root.findAll(node => node.type === 'button' && node.children.includes('解除拒收'))).toHaveLength(0)
+    await act(async () => {
+      renderer!.root.findAllByProps({ 'aria-label': '更多私聊操作' })[0]!.props.onClick()
+    })
+    const menu = renderer!.root.findByProps({ role: 'menu', 'aria-label': '更多私聊操作' })
+    const refusal = menu.findByProps({ role: 'menuitemcheckbox' })
+    expect(refusal).toBeDefined()
+    expect(refusal.props['aria-checked']).toBe(true)
+    expect(refusal.findByType('span').children).toEqual(['拒收对方消息'])
+    await act(async () => { refusal.props.onClick() })
+    expect(renderer!.root.findByType(ArkmeRichComposerInput).props.disabled).toBe(false)
+    expect(renderer!.root.findByProps({ role: 'menuitemcheckbox' }).props['aria-checked']).toBe(false)
+    expect(mocks.callArkme.mock.calls.filter(call => call[0] === 'chat.direct-message-refusal.set')).toHaveLength(1)
+    expect(mocks.callArkme.mock.calls.some(call => call[0] === 'source.send-text')).toBe(false)
+  })
+
+  it('preserves Markdown drafts and stops preparing across refusal and release', async () => {
+    activeSource = { ...target, directMessageAdmissionApplicable: true }
+    arkmeChatDirectory.publish([other, activeSource])
+    arkmeUi.selectSource(activeSource)
+    const original = mocks.callArkme.getMockImplementation()!
+    let refused = false
+    mocks.callArkme.mockImplementation(async (operation: string, params: any, ...rest: any[]) => {
+      if (operation === 'sources.list') return { directory: 'root', items: [other, activeSource], hasMore: false }
+      if (operation.startsWith('source.message-preparing.')) return null
+      if (operation === 'chat.direct-message-admission') return {
+        state: refused ? 'refused_by_counterpart' : 'allowed', canSend: !refused,
+        refusalCreationEnabled: true, ownRefused: false, counterpartRefused: refused,
+        ownRevision: 0, counterpartRevision: refused ? 1 : 2,
+      }
+      return await original(operation, params, ...rest)
+    })
+    const key = arkmeSourceComposerDraftKey(42, activeSource)!
+    const markdown = {
+      document: { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: '未发送草稿' }] }] },
+      source: '未发送草稿', mentions: [],
+    }
+    arkmeComposerDraftStore.setMarkdown(key, markdown, '未发送草稿', [], [])
+    await act(async () => { renderer = create(<ArkmeSurface productChrome={false} productNavigation={false} />) })
+    vi.useFakeTimers()
+    try {
+      const input = () => renderer!.root.findByType(ArkmeRichComposerInput)
+      await act(async () => {
+        input().props.onFocus()
+        input().props.onInputActivity('未发送草稿')
+        await vi.advanceTimersByTimeAsync(600)
+      })
+      expect(mocks.callArkme.mock.calls.filter(([operation]) => operation === 'source.message-preparing.report')).toHaveLength(1)
+      await act(async () => { refused = true; invalidateDirectMessageAdmission() })
+      expect(input().props.disabled).toBe(true)
+      expect(input().props.value).toBe('')
+      expect(input().props.markdown).toBeUndefined()
+      await act(async () => {
+        input().props.onTextChange('不应写入')
+        input().props.onMarkdownChange(undefined, '', [], [])
+        input().props.onInputActivity('不应报告')
+        await vi.advanceTimersByTimeAsync(600)
+      })
+      expect(arkmeComposerDraftStore.get(key).markdown).toEqual(markdown)
+      expect(arkmeComposerDraftStore.get(key).text).toBe('未发送草稿')
+      expect(mocks.callArkme.mock.calls.filter(([operation]) => operation === 'source.message-preparing.report')).toHaveLength(1)
+      expect(mocks.callArkme.mock.calls.some(([operation]) => operation === 'source.message-preparing.cancel')).toBe(true)
+      await act(async () => { refused = false; invalidateDirectMessageAdmission() })
+      expect(input().props.disabled).toBe(false)
+      expect(input().props.value).toBe('未发送草稿')
+      expect(input().props.markdown).toEqual(markdown)
+      await act(async () => {
+        input().props.onFocus()
+        input().props.onMarkdownChange(markdown, '恢复输入', [], [])
+        input().props.onInputActivity('恢复输入')
+        await vi.advanceTimersByTimeAsync(600)
+      })
+      expect(arkmeComposerDraftStore.get(key).text).toBe('恢复输入')
+      expect(mocks.callArkme.mock.calls.filter(([operation]) => operation === 'source.message-preparing.report')).toHaveLength(2)
+      expect(mocks.callArkme.mock.calls.some(([operation]) => operation === 'source.send-text')).toBe(false)
+    } finally {
+      act(() => { renderer?.unmount() }); renderer = undefined
+      vi.useRealTimers()
+    }
+  })
+
   async function openForwardPicker(textContent = '待转发快记') {
     timeline = [{
       itemUid: 'forward-source', messageActionRef: 'opaque-forward-action',
@@ -1397,6 +1505,40 @@ describe('conversation send directory projection', () => {
     const sends = mocks.callArkme.mock.calls.filter(([operation]) => operation === 'source.forward-messages')
     expect(sends).toHaveLength(1)
     expect(sends[0]?.[1]).toMatchObject({ actionRefs: ['opaque-forward-action'], commentText: emojiSample })
+    expect(renderer!.root.findAllByProps({ 'aria-labelledby': 'arkme-forward-target-title' })).toHaveLength(0)
+  })
+
+  it('forwards to an allowed target when another selected target becomes refused', async () => {
+    const original = mocks.callArkme.getMockImplementation()!
+    let refuse = false
+    mocks.callArkme.mockImplementation(async (operation: string, params: any, ...rest: any[]) => {
+      if (operation === 'chat.direct-message-admission') {
+        const blocked = refuse && params.sourceRef === other.sourceRef
+        return {
+          state: blocked ? 'refused_by_counterpart' : 'allowed', canSend: !blocked,
+          refusalCreationEnabled: true, ownRefused: false, counterpartRefused: blocked,
+          ownRevision: 0, counterpartRevision: blocked ? 1 : 0,
+        }
+      }
+      const result = await original(operation, params, ...rest)
+      return operation === 'sources.list'
+        ? { ...result, items: result.items.map((item: ArkmeSourceItem) => ({ ...item, directMessageAdmissionApplicable: true })) }
+        : result
+    })
+    const dialog = await openForwardPicker()
+    for (let index = 0; index < 2; index += 1) {
+      await act(async () => {
+        await dialog.findAll(node => node.type === 'button'
+          && typeof node.props['aria-pressed'] === 'boolean')[index]!.props.onClick()
+      })
+    }
+    refuse = true
+    await act(async () => {
+      await renderer!.root.findByProps({ 'aria-label': '发送转发' }).props.onClick()
+    })
+    const sends = mocks.callArkme.mock.calls.filter(call => call[0] === 'source.forward-messages')
+    expect(sends).toHaveLength(1)
+    expect(sends[0]?.[1]).toMatchObject({ targetSourceRef: target.sourceRef })
     expect(renderer!.root.findAllByProps({ 'aria-labelledby': 'arkme-forward-target-title' })).toHaveLength(0)
   })
 
@@ -3325,6 +3467,9 @@ describe('conversation send directory projection', () => {
 
     expect(mocks.callArkme).toHaveBeenCalledWith('source.message-extension.extend', {
       sourceRef: 'source-harness',
+      humanMentions: [],
+      botMentions: [],
+      textFormat: undefined,
       messageActionRef: 'opaque-extension-action',
       textContent: '我的补充',
       recordUid: 'record-new',
