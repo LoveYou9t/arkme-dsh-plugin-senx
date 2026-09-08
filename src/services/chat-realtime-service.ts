@@ -6,6 +6,7 @@ import {
 import type { ArkmeSessionCredentials } from '../keychain-store.js'
 import type {
   ArkmeChatClientEvent,
+  ArkmeChatPinProjection,
   ArkmeChatAttentionSummary,
   ArkmeChatRealtimeState,
   ArkmeSourceItem,
@@ -143,8 +144,8 @@ export class ChatRealtimeService {
   private notificationBaselineUserId: number | undefined
   private notificationBaselineOwnerGeneration = 0
   private readonly notificationBaselineSequences = new Map<string, number>()
-  private notificationBaselineRetryTimer: ReturnType<typeof setTimeout> | undefined
-  private notificationBaselineRetryCount = 0
+  private connectionBaselineRetryTimer: ReturnType<typeof setTimeout> | undefined
+  private connectionBaselineRetryCount = 0
   private chatClientRevision = 0
   private attentionSummaryVersion = 0
   private attentionSummaryFingerprint = ''
@@ -188,11 +189,11 @@ export class ChatRealtimeService {
   dispose(): void {
     this.disposed = true
     if (this.projectionTimer !== undefined) clearTimeout(this.projectionTimer)
-    if (this.notificationBaselineRetryTimer !== undefined) clearTimeout(this.notificationBaselineRetryTimer)
+    if (this.connectionBaselineRetryTimer !== undefined) clearTimeout(this.connectionBaselineRetryTimer)
     if (this.attentionRetryTimer !== undefined) clearTimeout(this.attentionRetryTimer)
     this.projectionTimer = undefined
     this.projectionTimerDueAtMillis = 0
-    this.notificationBaselineRetryTimer = undefined
+    this.connectionBaselineRetryTimer = undefined
     this.attentionRetryTimer = undefined
     this.pendingChatProjections.clear()
     this.projectionRetryCounts.clear()
@@ -211,11 +212,11 @@ export class ChatRealtimeService {
       unsubscribe()
       stop()
       if (this.projectionTimer !== undefined) clearTimeout(this.projectionTimer)
-      if (this.notificationBaselineRetryTimer !== undefined) clearTimeout(this.notificationBaselineRetryTimer)
+      if (this.connectionBaselineRetryTimer !== undefined) clearTimeout(this.connectionBaselineRetryTimer)
       if (this.attentionRetryTimer !== undefined) clearTimeout(this.attentionRetryTimer)
       this.projectionTimer = undefined
       this.projectionTimerDueAtMillis = 0
-      this.notificationBaselineRetryTimer = undefined
+      this.connectionBaselineRetryTimer = undefined
       this.attentionRetryTimer = undefined
       this.pendingChatProjections.clear()
       this.projectionRetryCounts.clear()
@@ -246,6 +247,10 @@ export class ChatRealtimeService {
   }
 
   handleChatRealtimeNotice(notice: ArkmeChatRealtimeNotice): void {
+    if (notice.cause === 'chat-policy-invalidation' && notice.policyUpdated !== undefined) {
+      void this.invalidateChatPolicyForCurrentSession(notice)
+      return
+    }
     if (notice.cause === 'chat-hint' && notice.memberEvent !== undefined) {
       void this.handleMemberEvent(notice.memberEvent)
       return
@@ -257,17 +262,22 @@ export class ChatRealtimeService {
       this.notificationBaselineUserId = undefined
       this.notificationBaselineOwnerGeneration = 0
       this.notificationBaselineSequences.clear()
-      this.notificationBaselineRetryCount = 0
-      if (this.notificationBaselineRetryTimer !== undefined) clearTimeout(this.notificationBaselineRetryTimer)
-      this.notificationBaselineRetryTimer = undefined
+      this.connectionBaselineRetryCount = 0
+      if (this.connectionBaselineRetryTimer !== undefined) clearTimeout(this.connectionBaselineRetryTimer)
+      this.connectionBaselineRetryTimer = undefined
       this.emitChatClientEvent({
         type: 'reconcile', revision: this.nextChatClientRevision(), connected: notice.state.connected,
         connectionGeneration: generation,
         refresh: 'none',
       })
-      void this.reconcileChatNotificationBaseline(generation, notice.connectionUserId)
+      void this.reconcileChatConnectionBaseline(generation, notice.connectionUserId)
       void this.refreshAttentionSummary()
       void this.invalidateRecordProjection()
+      return
+    }
+    if (notice.cause === 'projection-invalidation'
+      && notice.projectionInvalidation?.projection === 'chat.direct_message_admission') {
+      this.emitChatClientEvent({ type: 'projection-invalidated', projection: 'chat.direct_message_admission', revision: this.nextChatClientRevision() })
       return
     }
     if (notice.cause === 'projection-invalidation'
@@ -605,9 +615,9 @@ export class ChatRealtimeService {
     this.notificationBaselineGeneration = 0
     this.notificationBaselineUserId = undefined
     this.notificationBaselineOwnerGeneration = 0
-    this.notificationBaselineRetryCount = 0
-    if (this.notificationBaselineRetryTimer !== undefined) clearTimeout(this.notificationBaselineRetryTimer)
-    this.notificationBaselineRetryTimer = undefined
+    this.connectionBaselineRetryCount = 0
+    if (this.connectionBaselineRetryTimer !== undefined) clearTimeout(this.connectionBaselineRetryTimer)
+    this.connectionBaselineRetryTimer = undefined
     const resetVersion = Math.max(Date.now(), this.attentionSummaryVersion + 1)
     this.emitChatClientEvent({
       type: 'attention-summary',
@@ -626,6 +636,20 @@ export class ChatRealtimeService {
     this.latestAttentionSummary = undefined
   }
 
+  private async invalidateChatPolicyForCurrentSession(notice: ArkmeChatRealtimeNotice): Promise<void> {
+    const hint = notice.policyUpdated
+    if (this.disposed || hint === undefined || notice.connectionSignal?.aborted
+      || notice.connectionUserId !== hint.userId) return
+    try {
+      const session = await this.runtime.sessionStore.read()
+      if (this.disposed || notice.connectionSignal?.aborted || session?.userId !== hint.userId) return
+      this.source.invalidateSourceListCache(session.userId, 'root')
+      this.emitChatClientEvent({ type: 'chat-policy-invalidated', revision: this.nextChatClientRevision() })
+    } catch (error) {
+      console.warn('dsh-arkme: Chat policy invalidation failed:', safeFailureMessage(error))
+    }
+  }
+
   /** Browser invalidation only; raw source/Bot caches belong to different projections. */
   async invalidateConversationListPreferenceForCurrentSession(expectedUserId?: number): Promise<void> {
     try {
@@ -641,18 +665,23 @@ export class ChatRealtimeService {
     }
   }
 
-  private async reconcileChatNotificationBaseline(
+  private async reconcileChatConnectionBaseline(
     connectionGeneration: number,
     expectedUserId?: number,
   ): Promise<void> {
+    if (this.disposed) return
     try {
       const session = await this.runtime.requireSession()
-      if (expectedUserId !== undefined && session.userId !== expectedUserId) return
+      if (this.disposed || (expectedUserId !== undefined && session.userId !== expectedUserId)) return
+      const initialState = this.chatRealtime.state()
+      if (!initialState.connected || initialState.connectionGeneration !== connectionGeneration) return
       expectedUserId = session.userId
       this.activateAttentionOwner(session.userId)
       const ownerGeneration = this.attentionOwnerGeneration
       this.notificationBaselineSequences.clear()
       const sequences = new Map<string, number>()
+      const pins: ArkmeChatPinProjection[] = []
+      this.source.invalidateSourceListCache(session.userId, 'root')
       let cursor: string | undefined
       for (let pageIndex = 0; pageIndex < 10; pageIndex += 1) {
         const page = await this.source.listSources('root', {
@@ -660,19 +689,25 @@ export class ChatRealtimeService {
           refresh: true,
           ...(cursor === undefined ? {} : { cursor }),
         })
+        const activeSession = await this.runtime.sessionStore.read()
+        const state = this.chatRealtime.state()
+        if (this.disposed || !state.connected || state.connectionGeneration !== connectionGeneration
+          || activeSession?.userId !== session.userId || ownerGeneration !== this.attentionOwnerGeneration) return
         for (const item of page.items) {
           if (item.kind !== 'private_chat' && item.kind !== 'group_chat') continue
           const source = await this.source.openSourceRef(item.sourceRef, session.userId)
           sequences.set(source.ownerRef, item.latestSequence ?? 0)
+          if (item.sourceKey !== undefined && item.isPinned !== undefined
+            && item.chatPolicyUpdatedAtMillis !== undefined) {
+            pins.push({ sourceKey: item.sourceKey, pinned: item.isPinned, policyUpdatedAtMillis: item.chatPolicyUpdatedAtMillis })
+          }
         }
         if (!page.hasMore || page.nextCursor === undefined) break
         cursor = page.nextCursor
       }
-      const [state, activeSession] = await Promise.all([
-        Promise.resolve(this.chatRealtime.state()),
-        this.runtime.sessionStore.read(),
-      ])
-      if (!state.connected || state.connectionGeneration !== connectionGeneration
+      const activeSession = await this.runtime.sessionStore.read()
+      const state = this.chatRealtime.state()
+      if (this.disposed || !state.connected || state.connectionGeneration !== connectionGeneration
         || activeSession?.userId !== session.userId
         || ownerGeneration !== this.attentionOwnerGeneration) return
       this.notificationBaselineSequences.clear()
@@ -680,23 +715,24 @@ export class ChatRealtimeService {
       this.notificationBaselineGeneration = connectionGeneration
       this.notificationBaselineUserId = session.userId
       this.notificationBaselineOwnerGeneration = ownerGeneration
-      this.notificationBaselineRetryCount = 0
+      this.connectionBaselineRetryCount = 0
+      if (pins.length > 0) this.emitChatClientEvent({ type: 'chat-pins-reconciled', revision: this.nextChatClientRevision(), pins })
       console.info('dsh-arkme: reconcile_completed', {
         connectionGeneration,
         sessionCount: sequences.size,
       })
       if (this.pendingChatProjections.size > 0) this.scheduleProjectionFlush(0)
     } catch (error) {
-      const state = this.chatRealtime.state()
       const activeSession = await this.runtime.sessionStore.read().catch(() => undefined)
-      if (!state.connected || state.connectionGeneration !== connectionGeneration
+      const state = this.chatRealtime.state()
+      if (this.disposed || !state.connected || state.connectionGeneration !== connectionGeneration
         || expectedUserId === undefined || activeSession?.userId !== expectedUserId) return
-      this.notificationBaselineRetryCount += 1
-      const delay = Math.min(15_000, 1_000 * 2 ** Math.min(4, this.notificationBaselineRetryCount - 1))
+      this.connectionBaselineRetryCount += 1
+      const delay = Math.min(15_000, 1_000 * 2 ** Math.min(4, this.connectionBaselineRetryCount - 1))
       console.warn('dsh-arkme: Chat reconnect reconciliation failed:', safeFailureMessage(error))
-      this.notificationBaselineRetryTimer = setTimeout(() => {
-        this.notificationBaselineRetryTimer = undefined
-        void this.reconcileChatNotificationBaseline(connectionGeneration, expectedUserId)
+      this.connectionBaselineRetryTimer = setTimeout(() => {
+        this.connectionBaselineRetryTimer = undefined
+        void this.reconcileChatConnectionBaseline(connectionGeneration, expectedUserId)
       }, delay)
     }
   }

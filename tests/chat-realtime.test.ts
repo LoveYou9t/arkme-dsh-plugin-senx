@@ -6,7 +6,7 @@ import {
   ARKME_PROJECTION_INVALIDATED_BIZ_TYPE, ARKME_RUNTIME_INSTANCE_ID_HEADER,
   ARKME_SSE_IDENTITY_VERSION, ARKME_SSE_IDENTITY_VERSION_HEADER, ArkmeChatRealtimeRuntime,
   decodeArkmeChatReadCursorAdvancedDataLine, decodeArkmeChatReceiveDataLine,
-  decodeArkmeChatTimelineChangedDataLine,
+  decodeArkmeChatTimelineChangedDataLine, decodeArkmeChatPolicyUpdatedDataLine,
   decodeArkmeConversationListPreferenceUpdatedDataLine,
   decodeArkmeProjectionInvalidatedDataLine,
 } from '../src/chat-realtime.js'
@@ -634,4 +634,31 @@ describe('Arkme Chat realtime', () => {
       }
     },
   )
+})
+
+
+describe('Chat policy realtime contract', () => {
+  const policy = { t: 19, event_uid: 'policy-1', chat_session_uid: 'chat-1', user_id: 42, pin_state: 2, policy_update_at: 1000, event_at: 1000, source_client_id: 9 }
+  it.each([1, 2])('decodes pin state %s without treating it as message content', pinState => {
+    expect(decodeArkmeChatPolicyUpdatedDataLine(`data: ${JSON.stringify({ ...policy, pin_state: pinState })}`))
+      .toEqual({ eventUid: 'policy-1', chatSessionUid: 'chat-1', userId: 42, pinState, policyUpdateAtMillis: 1000, eventAtMillis: 1000 })
+  })
+  it.each([{ t: 26 }, { pin_state: 0 }, { user_id: 0 }, { policy_update_at: 0 }, { chat_session_uid: '' }, { source_client_id: -1 }, { rel_uid: 'message-1' }, { unread_count: 3 }, { payload: {} }])('rejects malformed or mixed policy metadata %j', extra => {
+    expect(decodeArkmeChatPolicyUpdatedDataLine(`data: ${JSON.stringify({ ...policy, ...extra })}`)).toBeUndefined()
+  })
+  it('routes each same-account event once and ignores other-account or aborted-connection hints', () => {
+    const runtime = new ArkmeChatRealtimeRuntime({ imBaseUrl: 'https://unused.test', async readSession() { return undefined } })
+    const notices: unknown[] = []
+    runtime.subscribe(notice => { notices.push(notice) })
+    const receiver = runtime as unknown as { acceptLine(line: string, userId: number, signal: AbortSignal): void }
+    const controller = new AbortController()
+    const receive = (value: typeof policy) => { receiver.acceptLine(`data: ${JSON.stringify(value)}`, 42, controller.signal) }
+    receive({ ...policy, user_id: 43 })
+    receive(policy)
+    receive(policy)
+    expect(notices).toEqual([expect.objectContaining({ cause: 'chat-policy-invalidation', connectionUserId: 42, policyUpdated: expect.objectContaining({ userId: 42 }) })])
+    controller.abort()
+    receive({ ...policy, event_uid: 'policy-2' })
+    expect(notices).toHaveLength(1)
+  })
 })

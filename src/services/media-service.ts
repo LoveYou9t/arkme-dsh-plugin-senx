@@ -1109,6 +1109,13 @@ export class MediaService {
     return ref
   }
 
+  /** A current Record version does not imply that every media URL was resolved. */
+  recordMediaUnavailable(raw: unknown, blocks: readonly ArkmeContentBlock[]): boolean {
+    if (this.runtime.config.richMediaRenderEnabled === false) return false
+    const displayed = new Set(blocks.map(block => block.fileAssetUid))
+    return this.recordMediaRefs(raw).some(ref => !displayed.has(stringValue(ref.file_asset_uid).trim()))
+  }
+
   richContentBlocks(raw: unknown, viewerUserId: number, hydratedDisplayItems: unknown[] = []): ArkmeContentBlock[] {
     if (this.runtime.config.richMediaRenderEnabled === false) return []
     const root = objectValue(raw)

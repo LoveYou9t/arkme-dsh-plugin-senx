@@ -27,6 +27,7 @@ class MemoryStateStore {
   readonly cached = new Map<number, ArkmeSelfRecordItem[]>()
   readonly events: string[] = []
   readonly longArticleDrafts = new Map<string, ArkmeLongArticleDraft>()
+  async getRecordReeditDraft() { return undefined }
   readonly extensionReviewOperations = new Map<number, ArkmeExtensionReviewOperation[]>()
   summary: ArkmeSelfSummary | undefined
   page: ArkmeSelfRecordList | undefined
@@ -5966,7 +5967,7 @@ describe('ArkmeService', () => {
       })
   })
 
-  it.each([false, true])('keeps projection pending after owner commit whether local invalidation rejects: %s', async rejects => {
+  it('forwards the owner result without a second projection invalidation', async () => {
     const sessions = new MemorySessionStore()
     sessions.session = { userId: 10001, accessToken: 'access', refreshToken: 'refresh' }
     const service = new ArkmeService(config, sessions, new MemoryStateStore(), vi.fn() as never)
@@ -5977,11 +5978,10 @@ describe('ArkmeService', () => {
     vi.spyOn((service as unknown as { record: { commitRecordReedit: () => Promise<typeof ownerResult> } }).record, 'commitRecordReedit')
       .mockResolvedValue(ownerResult)
     const invalidate = vi.spyOn((service as unknown as { realtime: { invalidateRecordProjection: () => Promise<void> } }).realtime, 'invalidateRecordProjection')
-    if (rejects) invalidate.mockRejectedValue(new Error('projection offline'))
-    else invalidate.mockResolvedValue()
+    invalidate.mockResolvedValue()
 
     await expect(service.commitRecordReedit({} as never)).resolves.toEqual(ownerResult)
-    expect(invalidate).toHaveBeenCalledOnce()
+    expect(invalidate).not.toHaveBeenCalled()
   })
 
   it('rejects forged, expired and cross-account moment refs before record detail access', async () => {

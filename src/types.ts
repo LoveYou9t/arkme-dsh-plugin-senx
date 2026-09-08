@@ -1178,6 +1178,7 @@ export interface ArkmeProviderCapabilities {
     messageReport?: true
     /** Employee-only, source-bound private-chat user ban inspection and mutation are available. */
     userBanManagement?: true
+    directMessageAdmission?: true
     /** Group owners can withdraw peer messages, remove members, and manage future join restrictions. */
     groupOwnerGovernance?: true
     markdownQuickNotes?: true
@@ -1370,6 +1371,8 @@ export interface ArkmeGroupAvatarPresentation {
 
 export interface ArkmeSourceItem {
   sourceRef: string
+  /** Established human Direct session, never PendingPrivate or Bot direct. */
+  directMessageAdmissionApplicable?: boolean
   /** Stable Host-projected directory identity. Consumers must treat it as opaque when present. */
   sourceKey?: string
   /** Private-chat peer identity when this source is a one-to-one chat. */
@@ -1404,14 +1407,24 @@ export interface ArkmeSourceItem {
   isMuted?: boolean
   /** Server-persisted conversation pin state for private and group chats. */
   isPinned?: boolean
+  /** Chat policy.update_at for ordering pin projections; independent of message sequence. */
+  chatPolicyUpdatedAtMillis?: number
   latestSequence?: number
   recordCount?: number
+}
+
+/** Account-bound pin snapshot; does not describe directory membership or message state. */
+export interface ArkmeChatPinProjection {
+  sourceKey: string
+  pinned: boolean
+  policyUpdatedAtMillis: number
 }
 
 /** Result of the existing Chat pin mutation; sidebar visibility is a separate capability. */
 export interface ArkmeSourceDirectoryPinResult {
   sourceRef: string
   pinned: boolean
+  policyUpdatedAtMillis: number
 }
 
 export interface ArkmeConversationDirectoryVisibilityItem {
@@ -1968,6 +1981,7 @@ export interface ArkmeRecordReeditDraft {
   itemUid: string
   title: string
   textContent: string
+  attachments?: import('./record-reedit-contract.js').ArkmeRecordReeditAttachmentSelection[]
   baseVersion: number
   baseContentFingerprint: string
   editDurationMillis: number
@@ -3158,7 +3172,7 @@ export type ArkmeChatClientEvent = {
 } | {
   type: 'projection-invalidated'
   revision: number
-  projection: 'record'
+  projection: 'record' | 'chat.direct_message_admission'
 } | {
   type: 'message-notification'
   revision: number
@@ -3184,6 +3198,13 @@ export type ArkmeChatClientEvent = {
   /** Account-bound conversation identity; raw Chat session and reader identities stay in Host memory. */
   sourceKey: string
   throughSequence: number
+} | {
+  type: 'chat-pins-reconciled'
+  revision: number
+  pins: ArkmeChatPinProjection[]
+} | {
+  type: 'chat-policy-invalidated'
+  revision: number
 } | {
   type: 'conversation-list-preference-invalidated'
   revision: number
@@ -3211,6 +3232,8 @@ export type ArkmePluginOperation =
   | 'auth.phone.verify'
   | 'auth.logout'
   | 'user-ban.status'
+  | 'chat.direct-message-admission'
+  | 'chat.direct-message-refusal.set'
   | 'user-ban.ban'
   | 'user-ban.unban'
   | 'openapi.mcp.status'
@@ -3373,6 +3396,10 @@ export type ArkmePluginOperation =
   | 'source.record-reedit.draft.put'
   | 'source.record-reedit.draft.delete'
   | 'source.record-reedit.update'
+  | 'source.record-reedit.submit'
+  | 'source.record-reedit.submissions'
+  | 'source.record-reedit.resume'
+  | 'source.record-reedit.acknowledge'
   | 'calls.outgoing.intent.claim'
   | 'calls.outgoing.intent.resolve'
   | 'calls.outgoing.prepare'
@@ -3520,6 +3547,8 @@ export interface ArkmePluginErrorBody {
   code: string
   message: string
   retryable: boolean
+  /** Sanitized Chat Handler result, not a global error-code taxonomy. */
+  directMessageAdmission?: import('./direct-message-admission.js').ArkmeDirectMessageAdmission
 }
 
 export type ArkmePluginResponse<T = unknown> =

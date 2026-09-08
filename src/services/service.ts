@@ -59,12 +59,19 @@ export interface StateStore {
   putRecordReeditDraft(
     userId: number,
     draft: Omit<ArkmeRecordReeditDraft, 'draftRevision'>,
+    expectedRevision?: number,
   ): Promise<ArkmeRecordReeditDraft>
+  recordReeditFileRefs(userId: number): Promise<string[]>
+  listRecordReeditSubmissions(userId: number): Promise<import('../record-reedit-contract.js').ArkmeRecordReeditSubmission[]>
+  acknowledgeRecordReeditSubmission(userId: number, identity: string, submissionId: string, version: number): Promise<void>
+  discardRecordReeditCandidate(userId: number, sourceIdentityKey: string, itemUid: string, expectedRevision: number): Promise<boolean>
+  putRecordReeditSubmission(userId: number, job: import('../record-reedit-contract.js').ArkmeRecordReeditSubmission, expectedId?: string): Promise<void>
   removeRecordReeditDraft(
     userId: number,
     sourceIdentityKey: string,
     itemUid: string,
     expectedRevision: number,
+    expectedCandidate?: ArkmeRecordReeditDraft,
   ): Promise<boolean>
   listRecordingImportJobs(userId: number): Promise<RecordingImportJob[]>
   listAllRecordingImportJobs(): Promise<RecordingImportJob[]>
@@ -152,6 +159,13 @@ export class ArkmePluginError extends Error {
     if (options?.upstreamStatus !== undefined) this.upstreamStatus = options.upstreamStatus
     if (options?.retryAfterMillis !== undefined) this.retryAfterMillis = options.retryAfterMillis
     if (options?.writeOutcomeUnknown === true) this.writeOutcomeUnknown = true
+  }
+}
+
+/** Opaque upstream body, for the owning business adapter only. Never serialize this error wholesale. */
+export class ArkmeUpstreamResponseError extends ArkmePluginError {
+  constructor(code: string, message: string, retryable: boolean, httpStatus: number, readonly responseData: unknown) {
+    super(code, message, retryable, httpStatus)
   }
 }
 
@@ -491,11 +505,12 @@ export class ServiceRuntime {
         const errorData = objectValue(envelope.data)
         const serviceErrorCode = preferDataError ? stringValue(errorData.error_code).trim() : ''
         const serviceMessage = preferDataError ? stringValue(errorData.message).trim() : ''
-        throw new ArkmePluginError(
+        throw new ArkmeUpstreamResponseError(
           serviceErrorCode || `arkme-code-${envelope.code}`,
           serviceMessage || envelope.message?.trim() || 'Arkme 服务请求失败',
-          serviceErrorCode === '' ? envelope.code >= 500 : serviceErrorCode === 'ai_comic_video_rate_limited',
+          serviceErrorCode === '' ? envelope.code !== 1004 && envelope.code >= 500 : serviceErrorCode === 'ai_comic_video_rate_limited',
           502,
+          envelope.data,
         )
       }
       return (envelope.data ?? {}) as T
