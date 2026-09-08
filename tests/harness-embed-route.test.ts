@@ -270,6 +270,42 @@ describe('core-only DeepSeek Harness iframe route', () => {
     expect(errors).toHaveLength(1)
   })
 
+  it('adds only the small public-session observer to the isolated iframe boot graph', async () => {
+    const full = graph()
+    const response = responseDouble()
+    await createHarnessEmbedRouteHandler({
+      getGraph: () => full, installedPackageNames: () => ['@arkme-local/weather'],
+      readRootHtml: async () => htmlWithGraph(full), sessionClient: { revision: 'observer-v1', apiPath: '/custom/api' },
+    })({ method: 'GET' } as IncomingMessage, response.value)
+    expect(response.status()).toBe(200)
+    expect(response.body()).toContain('/arkme-self/harness-session-client.js')
+    expect(response.body()).toContain('<meta name="arkme-session-api" content="/custom/api">')
+    expect(response.body()).toContain('@senguoyun/dsh-arkme/harness-session')
+    expect(response.body()).not.toContain('/arkme.js')
+    expect(response.body()).not.toContain('/weather.js')
+  })
+
+  it('boots model selection and mobile session following together without coupling their modules', async () => {
+    const full = graph()
+    full.entries.push({ id: '@deepseek-ai/dsh-client-ui-model-selection', url: '/models.js', rev: 'models' })
+    full.batches = [{ phase: 'application', url: '/core-batch.js', rev: 'core', entries: full.entries.map(e => e.id) }]
+    const modelClient = { id: '@senguoyun/dsh-arkme/harness-model', url: '/model-client.js', rev: 'model-v1', inject: ['@deepseek-ai/dsh-client-ui-model-selection'] }
+    const response = responseDouble()
+    await createHarnessEmbedRouteHandler({ getGraph: () => full, installedPackageNames: () => ['@arkme-local/weather'],
+      modelClient, sessionClient: { revision: 'session-v1', apiPath: '/custom/api' }, readRootHtml: async () => htmlWithGraph(full),
+    })({ method: 'GET' } as IncomingMessage, response.value)
+    expect(response.status()).toBe(200)
+    const boot = JSON.parse(response.body().match(/globalThis\["__DSH_BOOT__"\] = ([^<]+)/)![1]!) as DshWebBootGraph
+    expect(boot.entries.filter(e => e.id === modelClient.id)).toEqual([modelClient])
+    const observer = boot.entries.filter(e => e.id === '@senguoyun/dsh-arkme/harness-session')
+    expect(observer).toHaveLength(1)
+    expect(observer[0]!.inject).not.toContain(modelClient.id)
+    expect(boot.batches!.flatMap(batch => batch.entries)).toEqual(boot.entries.map(e => e.id))
+    expect(response.body()).toContain('name="arkme-session-api" content="/custom/api"')
+    expect(response.body()).not.toContain('/arkme.js')
+    expect(response.body()).not.toContain('/weather.js')
+  })
+
   it('rejects mutating methods', async () => {
     const response = responseDouble()
     await createHarnessEmbedRouteHandler({

@@ -469,6 +469,8 @@ export function ArkmePersistentWorkspace({
     <DeepSeekHarnessSurface
       visible={harnessVisible}
       nativeSettings={webLockedHarness}
+      accountId={authenticatedUserId}
+      followSession={ui.mode === 'harness'}
     />
     {!webLockedHarness && <div
         data-arkme-owned="arkme-conversation-layer"

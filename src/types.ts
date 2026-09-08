@@ -3268,6 +3268,8 @@ export type ArkmePluginOperation =
   | 'team.members.list'
   | 'team.create'
   | 'team.join-by-jotmo-id'
+  | 'remote.currentSession'
+  | 'remote.reportCurrentSession'
   | 'remote.getStatus'
   | 'remote.renameDesktop'
   | 'billing.quota'
