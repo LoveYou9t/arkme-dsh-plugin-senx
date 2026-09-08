@@ -309,9 +309,9 @@ describe('durable avatar availability', () => {
 })
 
 
-it('restores Bot image bytes offline while still validating the current account reference', async () => {
+it('restores expired Bot image bytes offline only from the current account cache', async () => {
   const bytes = { mediaType: 'image/png' as const, bytes: 8, data: new Uint8Array([137,80,78,71,13,10,26,10]) }
-  const state = { readAvatarCache: vi.fn(async () => bytes) }
+  const state = { readAvatarCache: vi.fn(async (viewer: number) => viewer === 42 ? bytes : undefined) }
   let userId = 42
   const sessionStore = { read: async () => ({ userId, accessToken: 'a', refreshToken: 'r' }), write: async () => {}, delete: async () => {} }
   const fetchImpl = vi.fn(async () => { throw new Error('offline') })
@@ -322,11 +322,11 @@ it('restores Bot image bytes offline while still validating the current account 
   })
   const media = new MediaService(runtime, {} as never, {} as never, { recordUid: () => '' }, { openBotImageRef } as never)
   await expect(media.readImage('arkme-bot-image-v1.fixture')).resolves.toMatchObject({ bytes: 8 })
-  expect(openBotImageRef).toHaveBeenCalledWith('arkme-bot-image-v1.fixture', 42)
+  expect(openBotImageRef).not.toHaveBeenCalled()
   expect(fetchImpl).not.toHaveBeenCalled()
   userId = 43
   const secondRuntime = new ServiceRuntime(config, sessionStore, state as unknown as StateStore, fetchImpl)
   const secondMedia = new MediaService(secondRuntime, {} as never, {} as never, { recordUid: () => '' }, { openBotImageRef } as never)
   await expect(secondMedia.readImage('arkme-bot-image-v1.fixture')).rejects.toThrow('foreign account')
-  expect(state.readAvatarCache).toHaveBeenCalledTimes(1)
+  expect(state.readAvatarCache).toHaveBeenCalledTimes(2)
 })

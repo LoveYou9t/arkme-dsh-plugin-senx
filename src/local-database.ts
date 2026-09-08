@@ -215,6 +215,10 @@ export class ArkmeLocalDatabase {
       const botVisibility = new Map(previousVisibility.filter(item => item.entryKind === 'bot').map(item => [item.entryRef, item]))
       for (const item of page.projection!.visibility) if (item.entryKind === 'bot') botVisibility.set(item.entryRef, item)
       for (const ref of page.projection!.removedBotRefs ?? []) botVisibility.delete(ref)
+      if (page.projection!.bots.length > 0) {
+        const currentRefs = new Set(page.projection!.bots.map(bot => bot.botRef))
+        for (const ref of botVisibility.keys()) if (!currentRefs.has(ref)) botVisibility.delete(ref)
+      }
       this.database.prepare('INSERT INTO conversation_directory_meta VALUES (?, ?) ON CONFLICT(user_id) DO UPDATE SET payload=excluded.payload').run(userId, JSON.stringify({ ...page.projection, visibility: [...botVisibility.values()] }))
       const size = this.database.prepare('SELECT count(*) AS count, sum(length(CAST(payload AS BLOB))) AS bytes FROM conversation_directory WHERE user_id=?').get(userId) as { count: number; bytes: number }
       if (size.count > 20_000 || size.bytes > 32 * 1024 * 1024) throw new Error('Conversation directory cache capacity exceeded; synchronization remains incomplete')

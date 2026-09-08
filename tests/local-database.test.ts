@@ -314,3 +314,15 @@ it('persists explicit source removal even when coalesced with an older row delta
   expect((await db.readDirectoryCache(1))?.items).toEqual([])
   db.close()
 })
+
+
+it('does not accumulate retired Bot handles in durable visibility metadata', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'arkme bot handle rotation '))
+  const db = new ArkmeLocalDatabase(directory, new ArkmeStateStore(directory))
+  const bot = { botRef: 'old', directoryKey: 'stable', name: 'Bot', provider: 'openclaw' as const, description: '', status: 'offline' as const, directChatAvailable: true }
+  const projection = { revision: 1, phase: 'complete' as const, cachedAtMillis: 1, bots: [bot], visibility: [{ entryKind: 'bot' as const, entryRef: 'old', hidden: true }] }
+  await db.writeDirectoryCache(1, { directory: 'root', items: [], hasMore: false, projection })
+  await db.writeDirectoryCache(1, { directory: 'root', items: [], hasMore: false, projection: { ...projection, revision: 2, bots: [{ ...bot, botRef: 'new' }], visibility: [{ entryKind: 'bot', entryRef: 'new', hidden: true }] } })
+  expect((await db.readDirectoryCache(1))?.projection?.visibility).toEqual([{ entryKind: 'bot', entryRef: 'new', hidden: true }])
+  db.close()
+})

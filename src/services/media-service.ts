@@ -613,14 +613,20 @@ export class MediaService {
     const byteLimit = Math.min(maximumBytes, Math.max(1, Math.trunc(options.maxBytes ?? maximumBytes)))
     const cacheKey = `${String(session.userId)}:${String(byteLimit)}:${imageRef.trim()}`
     if (isProfileImage) await this.profile.openProfileImageRef(imageRef, session.userId)
-    if (isBotImage) {
-      if (this.botImages === undefined) throw new ArkmePluginError('bot-image-ref-invalid', 'Bot 头像引用不可用', false, 403)
-      await this.botImages.openBotImageRef(imageRef, session.userId)
-    }
     const persisted = isAvatar ? await this.runtime.stateStore.readAvatarCache?.(session.userId, imageRef).catch(() => undefined) : undefined
     if (persisted !== undefined && options.refresh !== true && persisted.bytes <= byteLimit) {
       this.cacheImage(cacheKey, persisted)
       return cloneImageBytes(persisted)
+    }
+    if (isBotImage) {
+      try {
+        if (this.botImages === undefined) throw new ArkmePluginError('bot-image-ref-invalid', 'Bot 头像引用不可用', false, 403)
+        await this.botImages.openBotImageRef(imageRef, session.userId)
+      } catch (error) {
+        // The account-scoped DB row authorizes historical local bytes, never an expired upstream URL.
+        if (persisted !== undefined && persisted.bytes <= byteLimit) return cloneImageBytes(persisted)
+        throw error
+      }
     }
     const cached = options.refresh === true ? undefined : this.cachedImage(cacheKey)
     if (cached !== undefined) return cached

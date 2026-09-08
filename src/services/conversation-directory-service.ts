@@ -53,6 +53,7 @@ export class ConversationDirectoryService {
   private mutations = new Map<string, number>()
   private visibility = new Map<string, ArkmeConversationDirectoryVisibilityItem>()
   private bots: ArkmeBotSummary[] = []
+  private cachedBotKeys = new Map<string, string>()
   private botPinnedKeys = new Set<string>()
   private deletedBotRefs = new Set<string>()
   private special: Pick<NonNullable<ArkmeSourceList['projection']>, 'sendToSelf' | 'arkoProfile' | 'arkoPreview'> = {}
@@ -80,6 +81,7 @@ export class ConversationDirectoryService {
     private readonly readBots: (signal: AbortSignal) => Promise<{ items: ArkmeBotSummary[] }>,
     private readonly warmAvatar: (ref: string, signal: AbortSignal) => Promise<unknown>,
     private readonly emit: (page: ArkmeSourceList) => void,
+    private readonly restoreBots: (items: ArkmeBotSummary[], userId: number) => Promise<ArkmeBotSummary[]> = async items => items,
   ) {}
 
   reset(): void {
@@ -88,7 +90,7 @@ export class ConversationDirectoryService {
     this.generation++
     this.userId = undefined
     this.sourceRemovals.clear(); this.pendingReadAcks.clear(); this.sources.clear(); this.mutations.clear(); this.visibility.clear(); this.visibilityMutations.clear(); this.avatars.clear()
-    this.bots = []; this.botPinnedKeys.clear(); this.deletedBotRefs.clear(); this.special = {}; this.restore = undefined; this.scan = undefined; this.firstPage = undefined; this.rawBaseline = undefined; this.avatarWork = undefined
+    this.bots = []; this.cachedBotKeys.clear(); this.botPinnedKeys.clear(); this.deletedBotRefs.clear(); this.special = {}; this.restore = undefined; this.scan = undefined; this.firstPage = undefined; this.rawBaseline = undefined; this.avatarWork = undefined
     this.phase = 'cached'; this.error = undefined; this.lastPublished = ''; this.cachedAtMillis = 0; this.rescanRequested = false; this.rawBaselineComplete = false
   }
 
@@ -106,7 +108,18 @@ export class ConversationDirectoryService {
         for (const item of cached.items) this.sources.set(keyOf(item), item)
         this.cachedAtMillis = cached.projection?.cachedAtMillis ?? 0
         for (const item of cached.projection?.visibility ?? []) this.visibility.set(`${item.entryKind}:${item.entryRef}`, item)
-        this.bots = cached.projection?.bots ?? []
+        const cachedBots = cached.projection?.bots ?? []
+        const bots = await this.restoreBots(cachedBots, userId)
+        if (generation !== this.generation) return
+        this.bots = bots
+        for (const bot of bots) {
+          if (bot.directoryKey !== undefined) this.cachedBotKeys.set(bot.botRef, bot.directoryKey)
+          const previous = cachedBots.find(item => item.directoryKey === bot.directoryKey)
+          if (previous === undefined || previous.botRef === bot.botRef) continue
+          const visibility = this.visibility.get(`bot:${previous.botRef}`)
+          this.visibility.delete(`bot:${previous.botRef}`)
+          if (visibility !== undefined) this.visibility.set(`bot:${bot.botRef}`, { ...visibility, entryRef: bot.botRef })
+        }
         this.botPinnedKeys = new Set(cached.projection?.botPinnedKeys ?? [])
         this.deletedBotRefs = new Set(cached.projection?.removedBotRefs ?? [])
         this.special = { ...(cached.projection?.sendToSelf === undefined ? {} : { sendToSelf: cached.projection.sendToSelf }),
@@ -375,7 +388,13 @@ export class ConversationDirectoryService {
       next.conversationListActivityAtMillis = Math.max(previous?.conversationListActivityAtMillis ?? 0, bot.conversationListActivityAtMillis ?? 0)
       merged.set(key, next)
     }
+    for (const bot of this.bots) if (bot.directoryKey !== undefined) this.cachedBotKeys.set(bot.botRef, bot.directoryKey)
+    while (this.cachedBotKeys.size > MAX_ROWS) this.cachedBotKeys.delete(this.cachedBotKeys.keys().next().value!)
     this.bots = [...merged.values()]
+    const currentRefs = new Set(this.bots.map(bot => bot.botRef))
+    for (const [key, entry] of this.visibility) {
+      if (entry.entryKind === 'bot' && !currentRefs.has(entry.entryRef)) { this.visibility.delete(key); this.visibilityMutations.delete(key) }
+    }
     this.apply([], visible.items.filter(item => !this.deletedBotRefs.has(item.entryRef)), atRevision)
   }
 
@@ -399,17 +418,19 @@ export class ConversationDirectoryService {
     await this.activate()
     if (expectedUserId !== undefined && this.userId !== expectedUserId) return
     this.deletedBotRefs.add(botRef)
-    const deleted = this.bots.find(bot => bot.botRef === botRef)
+    const deleted = this.bots.find(bot => bot.botRef === botRef || bot.directoryKey !== undefined && bot.directoryKey === this.cachedBotKeys.get(botRef))
+    if (deleted !== undefined) this.deletedBotRefs.add(deleted.botRef)
+    while (this.deletedBotRefs.size > MAX_ROWS) this.deletedBotRefs.delete(this.deletedBotRefs.values().next().value!)
     if (deleted !== undefined) this.botPinnedKeys.delete(deleted.directoryKey ?? deleted.botRef)
     this.visibility.delete(`bot:${botRef}`); this.visibilityMutations.delete(`bot:${botRef}`)
-    this.bots = this.bots.filter(bot => bot.botRef !== botRef)
+    this.bots = this.bots.filter(bot => bot !== deleted)
     this.publish([])
   }
 
   async pinBot(botRef: string, pinned: boolean): Promise<void> {
     await this.activate()
     const generation = this.generation
-    let bot = this.bots.find(item => item.botRef === botRef)
+    let bot = this.bots.find(item => item.botRef === botRef || item.directoryKey !== undefined && item.directoryKey === this.cachedBotKeys.get(botRef))
     if (bot === undefined) {
       const fresh = await this.readBots(this.controller.signal)
       if (generation !== this.generation) throw new ArkmePluginError('login-context-changed', '账号已切换', false, 409)
@@ -444,6 +465,16 @@ export class ConversationDirectoryService {
   async confirmVisibility(entryKind: 'source' | 'bot', entryRef: string, hidden: boolean, expectedUserId?: number): Promise<void> {
     await this.activate()
     if (expectedUserId !== undefined && this.userId !== expectedUserId) return
+    if (entryKind === 'bot') {
+      const current = this.bots.find(bot => bot.botRef === entryRef || bot.directoryKey !== undefined && bot.directoryKey === this.cachedBotKeys.get(entryRef))
+      if (current !== undefined) {
+        const generation = this.generation
+        const atRevision = this.revision
+        const visible = await this.preferences.query([], [current.botRef], this.controller.signal)
+        if (generation === this.generation) this.apply([], visible.items, atRevision)
+        return
+      }
+    }
     this.apply([], [{ entryKind, entryRef, hidden }])
   }
 

@@ -10,7 +10,7 @@ const row = (id: number, extra: Partial<ArkmeSourceItem> = {}): ArkmeSourceItem 
 const page = (items: ArkmeSourceItem[], nextCursor?: string): ArkmeSourceList => ({ directory: 'root', items, hasMore: nextCursor !== undefined, ...(nextCursor === undefined ? {} : { nextCursor }) })
 const owners: ConversationDirectoryService[] = []
 afterEach(() => { for (const owner of owners.splice(0)) owner.reset() })
-function setup(load: (cursor?: string) => Promise<ArkmeSourceList>, cached?: ArkmeSourceList) {
+function setup(load: (cursor?: string) => Promise<ArkmeSourceList>, cached?: ArkmeSourceList, restoreBots?: (items: import('../../src/types.js').ArkmeBotSummary[], userId: number) => Promise<import('../../src/types.js').ArkmeBotSummary[]>) {
   let userId = 1
   const write = vi.fn(async (_userId: number, _page: ArkmeSourceList) => undefined)
   const emitted: ArkmeSourceList[] = []
@@ -20,7 +20,7 @@ function setup(load: (cursor?: string) => Promise<ArkmeSourceList>, cached?: Ark
   const runtime = { requireSession: async () => ({ userId }), accountScopedSession: async () => ({ userId }), stateStore: { readDirectoryCache: async () => cached, writeDirectoryCache: write } }
   const readBots = vi.fn(async () => ({ items: [] as import('../../src/types.js').ArkmeBotSummary[] }))
   const warmAvatar = vi.fn(async () => undefined)
-  const owner = new ConversationDirectoryService(runtime as unknown as ServiceRuntime, source as unknown as SourceService, preferences as unknown as ConversationDirectoryVisibilityService, readBots, warmAvatar, value => { emitted.push(value) })
+  const owner = new ConversationDirectoryService(runtime as unknown as ServiceRuntime, source as unknown as SourceService, preferences as unknown as ConversationDirectoryVisibilityService, readBots, warmAvatar, value => { emitted.push(value) }, restoreBots)
   owners.push(owner)
   return { owner, source, write, emitted, preferences, runtime, readBots, warmAvatar, switchUser: (id: number) => { userId = id; owner.reset() } }
 }
@@ -267,4 +267,18 @@ it('removes an explicitly left group, ignores the older scan, and accepts a late
   await test.owner.read(true); await test.owner.settled()
   expect((await test.owner.read()).items).toHaveLength(1)
   expect((await test.owner.read()).projection?.removedSourceKeys).toEqual([])
+})
+
+
+it('rebinds cached Bot visibility to its directory lookup and keeps local actions valid after fresh refs arrive', async () => {
+  const remote = gate<ArkmeSourceList>()
+  const bot = { botRef: 'old-process-ref', directoryKey: 'stable-bot', name: 'Bot', provider: 'openclaw' as const, description: '', status: 'offline' as const, directChatAvailable: true }
+  const cached = { ...page([row(1)]), projection: { revision: 1, phase: 'cached' as const, cachedAtMillis: 1, bots: [bot], visibility: [{ entryKind: 'bot' as const, entryRef: bot.botRef, hidden: true }] } }
+  const test = setup(() => remote.promise, cached, async bots => bots.map(bot => ({ ...bot, botRef: 'directory-lookup' })))
+  const restored = await test.owner.read()
+  expect(restored.projection?.visibility).toContainEqual({ entryKind: 'bot', entryRef: 'directory-lookup', hidden: true })
+  await test.owner.rememberBots([{ ...bot, botRef: 'fresh-live-ref' }], 1)
+  await test.owner.pinBot('directory-lookup', true)
+  expect((await test.owner.read()).projection?.botPinnedKeys).toEqual(['stable-bot'])
+  remote.resolve(page([row(1)])); await test.owner.settled()
 })
