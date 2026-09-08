@@ -1,3 +1,8 @@
+import { currentDesktopSessionTool } from './dsh-remote/current-session-tool.js'
+import { HARNESS_SESSION_CLIENT_PATH } from './harness-embed-contract.js'
+import { readInstalledPluginVersion } from './plugin-update.js'
+import { DshConnectionDiagnostics } from './dsh-remote/connection-diagnostics.js'
+import { createDesktopLifecycleReader } from './services/desktop-attention-bridge.js'
 import { homedir } from 'node:os'
 import { readFileSync, realpathSync } from 'node:fs'
 import { createHash, createHmac, randomUUID } from 'node:crypto'
@@ -127,6 +132,7 @@ export interface Config {
   openclawProfile: string
   shareWebsite: string
   dshRemoteFeatureEnabled: boolean
+  dshRemoteSentryDsn?: string
   dshRemoteRealtimeBaseUrl: string
 }
 
@@ -179,6 +185,7 @@ export const Config: Schema<Config> = Schema.object({
   shareWebsite: Schema.string().default(ARKME_DEFAULT_SHARE_WEBSITE),
   dshRemoteFeatureEnabled: Schema.boolean().default(false),
   dshRemoteRealtimeBaseUrl: Schema.string().default(''),
+  dshRemoteSentryDsn: Schema.string().default(''),
 })
 
 export const name = 'dsh-arkme'
@@ -518,11 +525,17 @@ export function apply(ctx: Context, config: Config): void {
       }))
     const profileRef = resolveDshRemoteProfileRef()
     const hostClientRef = `host_${createHash('sha256').update(`dsh-remote-host-client-v1\n${stateDirectory}\n${profileRef}`).digest('base64url')}`
+    const diagnostics = new DshConnectionDiagnostics({
+      dsn: config.dshRemoteSentryDsn ?? '', environment: config.environment,
+      release: `arkme-plugin/${readInstalledPluginVersion()}`,
+      path: join(stateDirectory, 'dsh-remote', 'connection-diagnostics.json'),
+      log: fields => { ctx.logger.info('dsh-remote lifecycle %s', JSON.stringify({ ...fields, app_version: appVersion, harness_version: dshRuntimeVersion })) },
+    })
     const realtime = new ArkmeRemoteRealtimeTransport(async input => {
       const session = await service.accountScope.scopedSession()
       if (session === undefined) throw new Error('Arkme session is unavailable')
       return await authenticatedSocketFactory({ ...input, accessToken: session.accessToken })
-    })
+    }, 10_000, { onDiagnostic: (event, fields) => diagnostics.record(event, fields) })
     const secretBroker = new DshRemoteRuntimeSecretBroker(createArkmeSecureValueStore(
       `${config.keychainServicePrefix}.${config.environment}.dsh-remote-desktop`,
     ))
@@ -538,8 +551,12 @@ export function apply(ctx: Context, config: Config): void {
       controlPlane,
       realtime, apiProxy,
       ...(sessionPersistence === undefined ? {} : { sessionPersistence }),
+      onDiagnostic: (event, fields) => diagnostics.record(event, fields),
+      readLifecycle: createDesktopLifecycleReader(fetch),
       readSession: async () => {
         const session = await service.accountScope.scopedSession()
+        diagnostics.resetAccount(session === undefined ? undefined : String(session.userId))
+        diagnostics.tick()
         if (session === undefined) return undefined
         const clientId = dshRemoteClientId(session.accessToken)
         return clientId === undefined ? undefined : { userId: session.userId, clientId }
@@ -567,6 +584,9 @@ export function apply(ctx: Context, config: Config): void {
       }),
     })
     remoteHost = host
+    if (config.toolProfile !== 'disabled') {
+      apiCtx.effect(() => apiCtx.tools.register(currentDesktopSessionTool(host)), 'arkme: current DSH session read tool')
+    }
     apiCtx.effect(async () => {
       let lifecycleTail: Promise<void> = Promise.resolve()
       const reconcile = () => {
@@ -583,6 +603,7 @@ export function apply(ctx: Context, config: Config): void {
         await lifecycleTail
         if (remoteHost === host) remoteHost = undefined
         await host.stop()
+        await diagnostics.close()
       }
     }, 'dsh-arkme: DSH remote Host lifecycle')
   })
@@ -631,7 +652,24 @@ export function apply(ctx: Context, config: Config): void {
     expectedPort: ctx.webServer.port,
     allowNonLoopback: config.allowNonLoopback,
   })
+  const sessionClient = config.dshRemoteFeatureEnabled ? {
+    source: readFileSync(new URL('../lib/harness-session-client.js', import.meta.url)),
+    apiPath: config.routePath,
+  } : undefined
+  if (sessionClient !== undefined) {
+    ctx.effect(() => ctx.webServer.register({
+      kind: 'exact', path: HARNESS_SESSION_CLIENT_PATH,
+      handler: (_request, response) => {
+        response.writeHead(200, { 'Content-Type': 'application/javascript', 'Cache-Control': 'no-cache' })
+        response.end(sessionClient.source)
+      },
+    }), 'arkme: Harness session observer asset')
+  }
   const harnessEmbedHandler = createHarnessEmbedRouteHandler({
+    ...(sessionClient === undefined ? {} : { sessionClient: {
+      revision: createHash('sha256').update(sessionClient.source).digest('hex').slice(0, 12),
+      apiPath: sessionClient.apiPath,
+    } }),
     getGraph: () => clientModules.graph(),
     installedPackageNames: () => extensionStore.list().flatMap(item =>
       item.profilePackageName === undefined ? [] : [item.profilePackageName]),

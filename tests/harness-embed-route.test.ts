@@ -257,6 +257,21 @@ describe('core-only DeepSeek Harness iframe route', () => {
     expect(errors).toHaveLength(1)
   })
 
+  it('adds only the small public-session observer to the isolated iframe boot graph', async () => {
+    const full = graph()
+    const response = responseDouble()
+    await createHarnessEmbedRouteHandler({
+      getGraph: () => full, installedPackageNames: () => ['@arkme-local/weather'],
+      readRootHtml: async () => htmlWithGraph(full), sessionClient: { revision: 'observer-v1', apiPath: '/custom/api' },
+    })({ method: 'GET' } as IncomingMessage, response.value)
+    expect(response.status()).toBe(200)
+    expect(response.body()).toContain('/arkme-self/harness-session-client.js')
+    expect(response.body()).toContain('<meta name="arkme-session-api" content="/custom/api">')
+    expect(response.body()).toContain('@senguoyun/dsh-arkme/harness-session')
+    expect(response.body()).not.toContain('/arkme.js')
+    expect(response.body()).not.toContain('/weather.js')
+  })
+
   it('rejects mutating methods', async () => {
     const response = responseDouble()
     await createHarnessEmbedRouteHandler({
