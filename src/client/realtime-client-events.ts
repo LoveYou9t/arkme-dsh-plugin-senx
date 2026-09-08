@@ -138,6 +138,10 @@ export function useArkmeRealtimeClientEvents(
         if (!Number.isSafeInteger(update.revision) || update.revision < 0
           || (observedRevision !== undefined && update.revision <= observedRevision)) return
         observedRevision = update.revision
+        if (update.type === 'members-invalidated') {
+          arkmeConversationMembers.invalidate(authenticatedAccountScope, { sourceKey: update.sourceKey, sourceRef: '' })
+          return
+        }
         if (update.type === 'member-events-invalidated') {
           arkmeConversationMembers.invalidate(authenticatedAccountScope, { sourceKey: update.sourceKey, sourceRef: '' })
           publishMemberEventHint({ account:authenticatedAccountScope, sourceKey:update.sourceKey,

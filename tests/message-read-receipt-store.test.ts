@@ -25,6 +25,9 @@ describe('Arkme message read receipt store', () => {
     store.setForeground(false)
     await vi.advanceTimersByTimeAsync(500)
     expect(refresh).not.toHaveBeenCalled()
+    store.setForeground(true)
+    await vi.advanceTimersByTimeAsync(180)
+    expect(refresh).toHaveBeenCalledOnce()
     release(); store.activateAccount(undefined)
   })
   it('notifies open details once for a burst of hints and releases the final consumer', async () => {

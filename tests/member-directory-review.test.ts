@@ -9,7 +9,7 @@ const member = (ref: string): ArkmeConversationMemberItem => ({ memberRef: ref, 
   isOwner: false, joinedAtMillis: 1, displayName: ref, recordCount: 7, mentionCount: 2 })
 
 it('lets only the authentication owner activate accounts, including child subscriptions made before activation', async () => {
-  const page = vi.fn(async (): Promise<ArkmeConversationMemberPage> => ({ kind: 'membership', source, items: [member('a')], removedMemberRefs: [], hasMore: false }))
+  const page = vi.fn(async (): Promise<ArkmeConversationMemberPage> => ({ kind: 'membership', selfRole: 'member', source, items: [member('a')], removedMemberRefs: [], hasMore: false }))
   const store = new ConversationMembersStore({ page, cached: async () => null,
     presentation: async () => ({ kind: 'presentation', source, items: [member('a')], removedMemberRefs: [], unavailableProfileMemberRefs: [] }) })
   const releaseA = store.subscribe('test:1', source, () => {})
@@ -33,7 +33,7 @@ it('lets only the authentication owner activate accounts, including child subscr
 it('keeps all membership pages moving while only two presentation requests are in flight', async () => {
   const loadPage = vi.fn(async (_ref: string, cursor?: string): Promise<ArkmeConversationMemberPage> => {
     const offset = Number(cursor ?? 0)
-    return { kind: 'membership', source, items: Array.from({ length: 50 }, (_, index) => member(String(index + offset))),
+    return { kind: 'membership', selfRole: 'member', source, items: Array.from({ length: 50 }, (_, index) => member(String(index + offset))),
       removedMemberRefs: [], hasMore: offset < 100, ...(offset < 100 ? { nextCursor: String(offset + 50) } : {}) }
   })
   let active = 0

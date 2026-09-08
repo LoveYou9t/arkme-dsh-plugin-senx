@@ -11,7 +11,7 @@ const member = (memberRef: string, displayName = memberRef): ArkmeConversationMe
 const rows = new Map<string, ArkmeConversationMemberItem>()
 const page = (items: ArkmeConversationMemberItem[], cursor?: string): ArkmeConversationMemberPage => {
   for (const item of items) rows.set(item.memberRef, item)
-  return { kind: 'membership', source, items: items.map(memberFacts), removedMemberRefs: [], hasMore: cursor !== undefined,
+  return { kind: 'membership', selfRole: 'member', source, items: items.map(memberFacts), removedMemberRefs: [], hasMore: cursor !== undefined,
     ...(cursor === undefined ? {} : { nextCursor: cursor }) }
 }
 const presentation = (items: ArkmeConversationMemberItem[], removedMemberRefs: string[] = []): ArkmeConversationMemberPresentation => ({

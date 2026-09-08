@@ -1,3 +1,4 @@
+import { invalidatesMemberSnapshot } from '../member-directory.js'
 import { arkmeRecordTextFormat, arkmeMarkdownHashTagRanges, arkmeMarkdownPlainText, arkmeMarkdownTextRanges } from '../markdown.js'
 import { createHash, createHmac, randomUUID, timingSafeEqual } from 'node:crypto'
 import { arkmeEmojiTokenSafePrefix } from '../arkme-emoji-text.js'
@@ -1721,7 +1722,7 @@ export class ChatService {
     const raw = listValue(data.items).map(objectValue)
     const ids = raw.map(item => numberValue(item.user_id))
     const next = numberValue(data.next_user_id)
-    if (stringValue(data.chat_session_uid) !== source.ownerRef || !Array.isArray(data.items) || typeof data.has_more !== 'boolean'
+    if (stringValue(data.chat_session_uid) !== source.ownerRef || !Array.isArray(data.items) || typeof data.has_more !== 'boolean' || chatMemberRole(data.self_role) === 'unknown'
       || raw.some(item => chatMemberStatus(item.status) === 'unknown')
       || raw.length > limit || ids.some((id, index) => !Number.isSafeInteger(id) || id <= (index === 0 ? after : ids[index - 1]!))
       || (data.has_more && (raw.length === 0 || next !== ids.at(-1)))) {
@@ -1742,7 +1743,7 @@ export class ChatService {
           eventIdForStableKey: async stableKey => `arkme-chat-join-v1.${createHmac('sha256', signingKey).update(`${session.userId}|${source.ownerRef}|${stableKey}`).digest('base64url')}`,
         }) : []
     const page: ArkmeConversationMemberPage = {
-      kind: 'membership', source: await this.source.sourceItem(source),
+      kind: 'membership', selfRole: chatMemberRole(data.self_role), source: await this.source.sourceItem(source),
       items: items.map(({ memberRef, role, status, isSelf, isOwner, joinedAtMillis, memberName }) => ({ memberRef, role, status, isSelf, isOwner, joinedAtMillis, ...(memberName === undefined ? {} : { memberName }) })),
       removedMemberRefs, hasMore: data.has_more, joinEvents,
       ...(data.has_more ? { nextCursor: await this.sealMemberPageCursor(session.userId, source.ownerRef, next) } : {}),
@@ -1793,10 +1794,10 @@ export class ChatService {
   private async memberRead(session: ArkmeSessionCredentials, group: string, path: string, body: Record<string, unknown>, signal?: AbortSignal): Promise<Record<string, unknown>> {
     try {
       return await this.runtime.authenticatedChatPost(path, body, session, signal, {
-        lane: path.endsWith('/members/page') ? 'interactive-read' : 'background-read', key: `members:${path}:${JSON.stringify(body)}`, failureCooldownMs: 2_000,
+        lane: path.endsWith('/members/page') ? 'interactive-read' : 'background-read', key: `members:${this.runtime.memberCacheEpoch?.() ?? 0}:${path}:${JSON.stringify(body)}`, failureCooldownMs: 2_000,
       })
     } catch (error) {
-      if (error instanceof ArkmePluginError && ['auth-http-401', 'auth-http-403', 'arkme-code-403', 'arkme-code-1004'].includes(error.code)) {
+      if (invalidatesMemberSnapshot(error)) {
         this.runtime.invalidateMemberCache?.()
         await this.runtime.stateStore.clearConversationMembers?.(session.userId, group).catch(() => undefined)
       }

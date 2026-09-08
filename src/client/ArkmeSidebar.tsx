@@ -2872,7 +2872,7 @@ export function ArkmeSurface({
   const conversationMemberSnapshot = useConversationMembers(authenticatedAccountKey, source, activeConversation)
   const conversationMembers = conversationMemberSnapshot.items
   const conversationJoinEvents = conversationMemberSnapshot.joinEvents
-  const groupSelfRole = conversationMembers.find(member => member.isSelf)?.role ?? 'unknown'
+  const groupSelfRole = conversationMemberSnapshot.selfRole
   useEffect(() => {
     if (conversationMemberSnapshot.error !== undefined) setError(conversationMemberSnapshot.error)
   }, [conversationMemberSnapshot.error])
@@ -6622,7 +6622,7 @@ export function ArkmeSurface({
       || ui.mode === 'voiceprint' || ui.mode === 'calls')
   const conversationOverlayHost = panelRef.current
   const composerPlaceholder = arkmeComposerPlaceholderText(
-    arkmeComposerPlaceholderTargetForSource(selectedSource, conversationMembers.length),
+    arkmeComposerPlaceholderTargetForSource(selectedSource, conversationMemberSnapshot.complete && conversationMemberSnapshot.error === undefined ? conversationMembers.length : 0),
   )
   const effectiveComposerPlaceholder = activeRecordReeditComposer !== undefined
     ? activeRecordReeditComposer.loading ? '正在读取快记和草稿…' : '重新编辑快记…'

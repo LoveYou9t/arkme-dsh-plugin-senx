@@ -38,6 +38,7 @@ import {
   arkmeCanReeditTimelineMessage, arkmeGroupMentionCandidates, arkmeRealtimeDeltaCoversTimelineGap,
 } from '../src/client/ArkmeSidebar.js'
 import { ArkmeClientError } from '../src/client/api.js'
+import * as memberApi from '../src/client/api.js'
 import { ArkmeRichComposerInput } from '../src/client/ArkmeRichComposerInput.js'
 import { ArkmeEmojiPicker } from '../src/client/ArkmeEmojiPicker.js'
 import { ArkmeMarkdownComposerInput } from '../src/client/ArkmeMarkdownComposerInput.js'
@@ -2120,6 +2121,30 @@ describe('conversation send directory projection', () => {
     })
 
     expect(renderer!.root.findByType(ArkmeRichComposerInput).props.placeholder).toBe('发消息到 群聊 B(22人)')
+  })
+
+  it('does not turn a partial member page into the group total or block composing', async () => {
+    const pagedGroup: ArkmeSourceItem = { ...group, displayName: '分页群',
+      groupAvatar: { memberCount: 500, strategy: 'owner_recent_speakers', computedAtMillis: 1, slots: [] } }
+    arkmeChatDirectory.publish([pagedGroup]); arkmeUi.selectSource(pagedGroup)
+    const original = memberApi.callArkme
+    let resume!: () => void
+    const later = new Promise<void>(resolve => { resume = resolve })
+    const request = vi.spyOn(memberApi, 'callArkme').mockImplementation(async (operation, params, signal) => {
+      if (operation === 'source.members.page' && (params as { cursor?: string })?.cursor !== undefined) await later
+      return await original(operation, params, signal)
+    })
+    const existing = mocks.callArkme.getMockImplementation()!
+    mocks.callArkme.mockImplementation(async (operation: string, params?: unknown, signal?: AbortSignal) => {
+      if (operation === 'source.members') return { source: pagedGroup, items: activeMembers(100), total: 100, activeCount: 100 }
+      return await existing(operation, params, signal)
+    })
+    try {
+      await act(async () => { renderer = create(<ArkmeSurface productChrome={false} productNavigation={false} />) })
+      expect(renderer!.root.findByType(ArkmeRichComposerInput).props).toMatchObject({ placeholder: '发消息到 分页群(500人)', disabled: false })
+      await act(async () => { resume() })
+      expect(renderer!.root.findByType(ArkmeRichComposerInput).props).toMatchObject({ placeholder: '发消息到 分页群(100人)', disabled: false })
+    } finally { resume(); request.mockRestore() }
   })
 
   it('keeps the composer usable with the projected group count when member refresh fails', async () => {

@@ -248,7 +248,9 @@ export class ArkmeMessageReadReceiptStore {
   }
 
   reconcile(): void {
-    if (this.accountUserId === undefined || this.visible.size === 0) return
+    if (this.accountUserId === undefined) return
+    for (const key of this.detailObservers.keys()) this.invalidateDetail(key)
+    if (this.visible.size === 0) return
     this.summaryController?.abort()
     let changed = false
     for (const key of this.visible) {

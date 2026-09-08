@@ -20,7 +20,7 @@ export function memberPageFixture(call: (operation: string, params?: Record<stri
       const offset = params?.cursor === undefined ? 0 : Number(String(params.cursor).split(':')[1])
       const items = result.items.slice(offset, offset + 50)
       const hasMore = offset + 50 < result.items.length
-      return { kind: 'membership', source: result.source, items: items.map(memberFacts), joinEvents: offset === 0 ? result.joinEvents ?? [] : [],
+      return { kind: 'membership', selfRole: result.items.find(member => member.isSelf)?.role ?? 'member', source: result.source, items: items.map(memberFacts), joinEvents: offset === 0 ? result.joinEvents ?? [] : [],
         hasMore, ...(hasMore ? { nextCursor: `fixture:${offset + 50}` } : {}), removedMemberRefs: [] }
     }
     if (operation === 'source.members.presentation') {

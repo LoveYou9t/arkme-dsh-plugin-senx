@@ -27,19 +27,22 @@ it('shares authorized pages, presentation and cache across Host, SDK and officia
   let active = true
   let unsupported = false
   let malformed = false
+  let memberFailureCode: number | undefined
   let receiptName: string | undefined
+  let pageHasMember = true
   let deferredPage: Promise<void> | undefined
   let unblockPage: (() => void) | undefined
   const fetchImpl: typeof fetch = async (input, init) => {
     const endpoint = new URL(String(input)).pathname
     calls.push(endpoint)
     const body = JSON.parse(String(init?.body))
+    if (memberFailureCode !== undefined && endpoint.includes('/members/')) return new Response(JSON.stringify({ code: memberFailureCode, message: 'unreadable' }))
     let data: unknown
     if (endpoint.endsWith('/members/page')) {
       if (unsupported) return new Response('', { status: 404 })
-      if (deferredPage !== undefined) await deferredPage
       const after = body.after_user_id ?? 0
-      data = { chat_session_uid: body.chat_session_uid, items: after === 0 ? [{ user_id: 2, status: 1, role: 3, display_name_snapshot: '群内昵称', join_at: 1 }] : [], has_more: after === 0, ...(after === 0 ? { next_user_id: 2 } : {}) }
+      data = { chat_session_uid: body.chat_session_uid, self_role: 1, items: after === 0 && pageHasMember ? [{ user_id: 2, status: 1, role: 3, display_name_snapshot: '群内昵称', join_at: 1 }] : [], has_more: after === 0 && pageHasMember, ...(after === 0 && pageHasMember ? { next_user_id: 2 } : {}) }
+      if (deferredPage !== undefined) await deferredPage
     } else if (endpoint.endsWith('/members/by-user-ids')) data = malformed ? { chat_session_uid: body.chat_session_uid } : { chat_session_uid: body.chat_session_uid, items: active ? [{ user_id: 2, status: 1, role: 3, remark: '私人备注', display_name_snapshot: '群内昵称', display_name: '公开昵称', join_at: 1 }] : [] }
     else if (endpoint.endsWith('/get-public-users-by-ids')) data = { items: [{ user_id: 2, nick_name: '公开昵称' }] }
     else if (endpoint.endsWith('/read-receipts/detail')) data = { chat_session_uid: body.chat_session_uid, record_uid: body.record_uid, seq: body.seq,
@@ -105,6 +108,21 @@ it('shares authorized pages, presentation and cache across Host, SDK and officia
     runtime.invalidateScope(runtime.requestScope(1))
     expect((await sdk.messageReadReceiptDetail(group.sourceRef, 'message', 8, undefined, { basicOnly: true })).items[0]).toMatchObject({ displayName: receiptName, displayNameIsCurrent: true })
 
+    for (const operation of ['page', 'presentation']) for (const code of [2001, 2002]) {
+      runtime.invalidateScope(runtime.requestScope(1))
+      await chat.pageSourceMembers(group.sourceRef)
+      expect(await db.cachedConversationMembers(1, 'group')).toBeDefined()
+      memberFailureCode = code
+      runtime.invalidateScope(runtime.requestScope(1))
+      const failed = operation === 'page' ? chat.pageSourceMembers(group.sourceRef)
+        : chat.sourceMembersPresentation(group.sourceRef, [first.items[0]!.memberRef])
+      await expect(failed).rejects.toMatchObject({ code: `arkme-code-${code}` })
+      expect(await db.cachedConversationMembers(1, 'group')).toBeUndefined()
+      memberFailureCode = undefined
+    }
+    runtime.invalidateScope(runtime.requestScope(1))
+    await chat.pageSourceMembers(group.sourceRef)
+
     registrations.push(await ctx.plugin(SystemPrompt))
     registrations.push(await ctx.plugin(ToolRuntime))
     const ports = { pageSourceMembers: chat.pageSourceMembers.bind(chat), cachedSourceMembers: chat.cachedSourceMembers.bind(chat),
@@ -132,13 +150,18 @@ it('shares authorized pages, presentation and cache across Host, SDK and officia
     unsupported = false
     runtime.invalidateScope(runtime.requestScope(1))
     deferredPage = new Promise(resolve => { unblockPage = resolve })
+    const starts = calls.filter(path => path.endsWith('/members/page')).length
     const oldRead = chat.pageSourceMembers(group.sourceRef)
     await new Promise(resolve => setTimeout(resolve, 0))
     runtime.invalidateMemberCache()
     await db.clearConversationMembers(1, 'group')
-    unblockPage!()
+    pageHasMember = false
+    const newRead = chat.pageSourceMembers(group.sourceRef)
+    const startedFresh = vi.waitFor(() => expect(calls.filter(path => path.endsWith('/members/page'))).toHaveLength(starts + 2))
+    try { await startedFresh } finally { unblockPage!() }
+    expect((await newRead).items).toEqual([])
     await oldRead
-    expect(await db.cachedConversationMembers(1, 'group')).toBeUndefined()
+    expect((await db.cachedConversationMembers(1, 'group'))?.items).toEqual([])
     await db.mergeConversationMembers(1, 'group', { ...first, items: [{ ...first.items[0]!, memberRef: 'invalid-old-runtime-ref' }] })
     expect(await chat.cachedSourceMembers(group.sourceRef)).toBeUndefined()
     expect((await db.cachedConversationMembers(1, 'group'))?.items ?? []).toEqual([])

@@ -1,5 +1,13 @@
 import type { ArkmeConversationMemberItem, ArkmeConversationMemberFacts, ArkmeConversationMemberJoinEvent, ArkmeConversationMemberJoinPerson, ArkmeConversationMemberUpdate } from './types.js'
 
+/** Only for the members/page and members/by-user-ids read contracts: 2001/2002 mean unreadable membership/session. */
+export function invalidatesMemberSnapshot(error: unknown): boolean {
+  const failure = error as { code?: string; body?: { code?: string } }
+  const code = failure?.body?.code ?? failure?.code
+  return code !== undefined && ['auth-http-401', 'auth-http-403', 'login-required', 'login-expired', 'source-ref-invalid',
+    'arkme-code-1000', 'arkme-code-403', 'arkme-code-1004', 'arkme-code-2001', 'arkme-code-2002', 'chat-members-source-invalid'].includes(code)
+}
+
 export function mergeMemberFacts(previous: ArkmeConversationMemberItem | undefined, facts: ArkmeConversationMemberFacts): ArkmeConversationMemberItem {
   const { memberName: _oldName, ...base } = previous ?? {
     displayName: facts.memberName || '群成员', recordCount: 0, mentionCount: 0, statsKnown: false,
@@ -77,7 +85,7 @@ export function validateMemberUpdate(update: ArkmeConversationMemberUpdate): voi
     if (!Array.isArray(update.unavailableProfileMemberRefs)
       || update.unavailableProfileMemberRefs.some(ref => !update.items.some(item => item.memberRef === ref))
       || update.items.some(item => cachedMemberItem(item) === undefined)) throw new Error('成员资料响应无效')
-  } else if (update.kind !== 'membership' || typeof update.hasMore !== 'boolean' || update.items.length + update.removedMemberRefs.length > 100) throw new Error('成员分页响应无效')
+  } else if (update.kind !== 'membership' || !['owner', 'admin', 'member'].includes(update.selfRole) || typeof update.hasMore !== 'boolean' || update.items.length + update.removedMemberRefs.length > 100) throw new Error('成员分页响应无效')
 }
 
 function joinPerson(value: ArkmeConversationMemberJoinPerson): ArkmeConversationMemberJoinPerson {

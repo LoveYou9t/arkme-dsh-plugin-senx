@@ -35,7 +35,7 @@ globalThis.fetch = async (input, init) => {
     const rows = members.filter(item => item.user_id > (body.after_user_id ?? 0)).slice(0, body.limit ?? 50)
     const last = rows.at(-1)?.user_id ?? 0
     const more = last > 0 && last < members.at(-1).user_id
-    return json({ chat_session_uid: group, items: rows, has_more: more, ...(more ? { next_user_id: last } : {}) })
+    return json({ chat_session_uid: group, items: rows, self_role: 1, has_more: more, ...(more ? { next_user_id: last } : {}) })
   }
   if (path.endsWith('/members/by-user-ids')) return json({ chat_session_uid: group, items: members.filter(item => body.user_ids.includes(item.user_id) && (!body.active_only || item.status === 1)) })
   if (path.endsWith('/members/list')) return json({ chat_session_uid: group, items: members.filter(item => !body.active_only || item.status === 1) })

@@ -14,7 +14,7 @@ const member = (memberRef: string, displayName = memberRef): ArkmeConversationMe
 const source = { sourceRef: 'ref', sourceKey: 'group', kind: 'group_chat' as const, displayName: '群' }
 const page = (items: ArkmeConversationMemberItem[], complete = true): ArkmeConversationMemberUpdate => complete
   ? { kind: 'presentation', source, items, removedMemberRefs: [], unavailableProfileMemberRefs: [] }
-  : { kind: 'membership', source, items: items.map(memberFacts), removedMemberRefs: [], hasMore: false }
+  : { kind: 'membership', selfRole: 'member', source, items: items.map(memberFacts), removedMemberRefs: [], hasMore: false }
 
 async function seed(db: ArkmeLocalDatabase, user: number, group: string, items: ArkmeConversationMemberItem[]) {
   await db.mergeConversationMembers(user, group, page(items, false))

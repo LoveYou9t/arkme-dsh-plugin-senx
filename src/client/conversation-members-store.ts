@@ -1,5 +1,5 @@
 import { arkmeMessageReadReceipts } from './message-read-receipt-store.js'
-import { applyMemberUpdate, mergeMemberJoinEvents, validateMemberUpdate } from '../member-directory.js'
+import { applyMemberUpdate, mergeMemberJoinEvents, validateMemberUpdate, invalidatesMemberSnapshot } from '../member-directory.js'
 import type { ArkmeConversationMemberItem, ArkmeConversationMemberPage, ArkmeConversationMemberPresentation, ArkmeConversationMemberUpdate, ArkmeConversationMemberCache, ArkmeSourceItem } from '../types.js'
 import { callArkme } from './api.js'
 
@@ -17,6 +17,7 @@ interface LoadingOptions {
 export interface ConversationMembersSnapshot {
   items: readonly ArkmeConversationMemberItem[]
   joinEvents: ArkmeConversationMemberCache['joinEvents']
+  selfRole: ArkmeConversationMemberItem['role']
   ready: boolean
   complete: boolean
   cached: boolean
@@ -25,7 +26,7 @@ export interface ConversationMembersSnapshot {
 }
 
 export const EMPTY_CONVERSATION_MEMBERS: ConversationMembersSnapshot = {
-  items: [], joinEvents: [], ready: false, complete: false, cached: false, refreshing: false, error: undefined,
+  items: [], joinEvents: [], selfRole: 'unknown', ready: false, complete: false, cached: false, refreshing: false, error: undefined,
 }
 
 interface Entry {
@@ -44,12 +45,6 @@ interface Entry {
 
 function key(source: Source): string { return source.sourceKey ?? source.sourceRef }
 function entryKey(account: string | undefined, source: Source): string { return JSON.stringify([account, key(source)]) }
-
-function invalidatesMemberSnapshot(error: unknown): boolean {
-  const failure = error as { code?: string; body?: { code?: string } }
-  const code = failure?.body?.code ?? failure?.code
-  return code !== undefined && ['auth-http-401', 'auth-http-403', 'login-required', 'login-expired', 'source-ref-invalid', 'arkme-code-403', 'arkme-code-1004', 'chat-members-source-invalid'].includes(code)
-}
 
 /** One account/runtime-scoped member directory; React only observes its snapshots. */
 export class ConversationMembersStore {
@@ -105,6 +100,7 @@ export class ConversationMembersStore {
       entry.revision += 1
       entry.stale = true
       this.cancel(entry)
+      this.publish(entry, { selfRole: 'unknown' })
     }
     entry.source = source
     entry.listeners.add(listener)
@@ -136,7 +132,7 @@ export class ConversationMembersStore {
     const controller = new AbortController()
     entry.controller = controller
     entry.stale = false
-    this.publish(entry, { refreshing: true, error: undefined })
+    this.publish(entry, { refreshing: true, complete: false, selfRole: 'unknown', error: undefined })
     entry.pending = Promise.resolve().then(() => this.loadPages(account, entry, revision, controller))
       .catch(error => {
         if (controller.signal.aborted || account !== this.account || this.entries.get(entryKey(account, source)) !== entry) return
@@ -240,11 +236,13 @@ export class ConversationMembersStore {
     if (key(page.source) !== key(entry.source)) throw new Error('成员响应会话不匹配')
     validateMemberUpdate(page)
     const joins = page.kind === 'membership' ? mergeMemberJoinEvents(entry.snapshot.joinEvents, page.joinEvents ?? []) : entry.snapshot.joinEvents
+    const previousSelf = entry.snapshot.items.find(member => member.isSelf)
+    const selfRole = page.kind === 'membership' ? page.selfRole : (previousSelf !== undefined && page.removedMemberRefs.includes(previousSelf.memberRef) ? 'unknown' : entry.snapshot.selfRole)
     const changed = applyMemberUpdate(entry.members, page)
     const rank = (role: string) => role === 'owner' ? 0 : role === 'admin' ? 1 : role === 'member' ? 2 : 3
     const items = changed ? [...entry.members.values()].sort((left, right) => rank(left.role) - rank(right.role)
       || left.joinedAtMillis - right.joinedAtMillis || left.displayName.localeCompare(right.displayName)) : entry.snapshot.items
-    this.publish(entry, { items, ready: true, joinEvents: JSON.stringify(joins) === JSON.stringify(entry.snapshot.joinEvents) ? entry.snapshot.joinEvents : joins })
+    this.publish(entry, { items, selfRole, ready: true, joinEvents: JSON.stringify(joins) === JSON.stringify(entry.snapshot.joinEvents) ? entry.snapshot.joinEvents : joins })
   }
 
   invalidate(account: string | undefined, source: Source): void {
@@ -255,6 +253,7 @@ export class ConversationMembersStore {
     entry.revision += 1
     entry.stale = true
     this.cancel(entry)
+    this.publish(entry, { selfRole: 'unknown' })
     this.schedule(entry)
   }
 

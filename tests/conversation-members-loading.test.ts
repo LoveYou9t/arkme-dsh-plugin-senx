@@ -27,7 +27,7 @@ it('loads 500 members through the real Host projection and coordinator under slo
     if (path.endsWith('/members/page')) {
       const rows = members.filter(member => member.user_id > body.after_user_id).slice(0, body.limit)
       const last = rows.at(-1)?.user_id ?? 0
-      data = { chat_session_uid: 'group', items: rows, has_more: last > 0 && last < 500, ...(last > 0 && last < 500 ? { next_user_id: last } : {}) }
+      data = { chat_session_uid: 'group', items: rows, self_role: 1, has_more: last > 0 && last < 500, ...(last > 0 && last < 500 ? { next_user_id: last } : {}) }
     } else if (path.endsWith('/members/by-user-ids')) data = { chat_session_uid: 'group', items: members.filter(member => body.user_ids.includes(member.user_id)).map(member => ({ ...member, remark: `备注 ${member.user_id}` })) }
     else if (path.endsWith('/members/list')) data = { items: members }
     else if (path.endsWith('/get-public-users-by-ids')) data = { items: body.user_ids.map((userId: number) => ({ user_id: userId, nick_name: `用户 ${userId}` })) }

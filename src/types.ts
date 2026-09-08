@@ -2383,6 +2383,7 @@ export type ArkmeConversationMemberFacts = Pick<ArkmeConversationMemberItem,
 
 export interface ArkmeConversationMemberPage {
   kind: 'membership'
+  selfRole: ArkmeGroupMemberRole
   source: ArkmeSourceItem
   items: ArkmeConversationMemberFacts[]
   removedMemberRefs: string[]
@@ -3245,6 +3246,10 @@ export type ArkmeChatClientEvent = {
 } | {
   type: 'conversation-list-preference-invalidated'
   revision: number
+} | {
+  type: 'members-invalidated'
+  revision: number
+  sourceKey: string
 } | {
   type: 'member-events-invalidated'
   revision: number
