@@ -390,7 +390,7 @@ describe('SourceService', () => {
           show_in_home_state: 1, privacy_state: 2, mute_state: 2, pin_state: 1, notify_state: 2, status: 3,
         } }), { status: 200 })
       }
-      if (path === '/api/v1/chats/policy/update') return new Response(JSON.stringify({ code: 200, data: { chat_session_uid: body.chat_session_uid, pin_state: body.pin_state } }), { status: 200 })
+      if (path === '/api/v1/chats/policy/update') return new Response(JSON.stringify({ code: 200, data: { chat_session_uid: body.chat_session_uid, pin_state: body.pin_state, update_at: body.update_at } }), { status: 200 })
       if (path === '/api/v1/topics/pin/set') return new Response(JSON.stringify({ code: 400, message: 'topic is not found' }), { status: 200 })
       throw new Error(`unexpected path: ${path}`)
     }) as typeof fetch)
@@ -405,7 +405,7 @@ describe('SourceService', () => {
     })
 
     await expect(service.setChatDirectoryPin(source.sourceRef, true)).resolves.toEqual({
-      sourceRef: source.sourceRef, pinned: true,
+      sourceRef: source.sourceRef, pinned: true, policyUpdatedAtMillis: expect.any(Number),
     })
     expect(requests).toHaveLength(2)
     expect(requests[1]).toMatchObject({
@@ -976,7 +976,7 @@ describe('Chat directory pin owner boundary', () => {
       async summary() { return { recordCount: 0, wordsCount: 0, totalSec: 0 } },
       recordItem() { return undefined },
     })
-    return { service, requests, policy }
+    return { service, requests, policy, runtime, fetchImpl }
   }
 
   for (const kind of ['private_chat', 'group_chat'] as const) {
@@ -993,13 +993,13 @@ describe('Chat directory pin owner boundary', () => {
         const before = service.cachedChatSource(42, 'chat-1')
         const otherAccountBefore = service.cachedChatSource(43, 'chat-1')
 
-        await expect(service.setChatDirectoryPin(source.sourceRef, pinned)).resolves.toEqual({ sourceRef: source.sourceRef, pinned })
+        await expect(service.setChatDirectoryPin(source.sourceRef, pinned)).resolves.toEqual({ sourceRef: source.sourceRef, pinned, policyUpdatedAtMillis: expect.any(Number) })
         expect(requests.map(request => request.path)).toEqual(['/api/v1/chats/policy/get', '/api/v1/chats/policy/update'])
         expect(requests[1]?.body).toEqual({
           chat_session_uid: 'chat-1', show_in_home_state: 2, privacy_state: 2, mute_state: 2,
           pin_state: pinned ? 2 : 1, notify_state: 2, status: 3, update_at: expect.any(Number),
         })
-        expect(service.cachedChatSource(42, 'chat-1')).toEqual({ ...before, isPinned: pinned })
+        expect(service.cachedChatSource(42, 'chat-1')).toEqual({ ...before, isPinned: pinned, chatPolicyUpdatedAtMillis: expect.any(Number) })
         expect(service.cachedChatSource(43, 'chat-1')).toEqual(otherAccountBefore)
       })
     }
@@ -1026,6 +1026,27 @@ describe('Chat directory pin owner boundary', () => {
     expect(policy.pin_state).toBe(2)
     await service.setChatDirectoryPin(source.sourceRef, false)
     expect(policy).toMatchObject({ pin_state: 1, privacy_state: 2, mute_state: 2, show_in_home_state: 2 })
+  })
+
+  it('projects owner policy timestamps through directory and realtime rows without regressing newer cached pins', async () => {
+    const { service, policy } = fixture()
+    Object.assign(policy, { pin_state: 2, update_at: 3000 })
+    const first = await service.listSources('root')
+    expect(first.items[0]).toMatchObject({ isPinned: true, chatPolicyUpdatedAtMillis: 3000 })
+    const session = { userId: 42, accessToken: 'access', refreshToken: 'refresh' }
+    const stale = await service.chatSourceFromBundle({
+      session: { chat_session_uid: 'chat-1', session_kind: 1 },
+      current_policy: { ...policy, pin_state: 1, update_at: 2000 },
+      unread_snapshot: { session_last_seq: 11, unread_count: 1 },
+    }, session, first.items[0], [])
+    expect(stale).toMatchObject({ isPinned: true, chatPolicyUpdatedAtMillis: 3000, latestSequence: 11, unreadCount: 1 })
+    const fresh = await service.chatSourceFromBundle({
+      session: { chat_session_uid: 'chat-1', session_kind: 1 },
+      current_policy: { ...policy, pin_state: 1, update_at: 4000 },
+    }, session, stale, [])
+    service.setChatSource(42, 'chat-1', fresh)
+    service.setChatSource(42, 'chat-1', stale)
+    expect(service.cachedChatSource(42, 'chat-1')).toMatchObject({ isPinned: false, chatPolicyUpdatedAtMillis: 4000 })
   })
 
   it('invalidates the directory cache and reads pin state back from Chat after each write', async () => {
@@ -1067,6 +1088,36 @@ describe('Chat directory pin owner boundary', () => {
     await expect(service.listSources('root')).resolves.toEqual(freshResult)
   })
 
+  it.each(['pin-ack', 'policy-notice'] as const)('retires coordinated directory reads after %s', async trigger => {
+    const { service, policy, fetchImpl, runtime } = fixture()
+    const source = await service.sourceItem({ version: 1, userId: 42, kind: 'private_chat', ownerRef: 'chat-1', displayName: '会话' })
+    let releaseOld!: (response: Response) => void
+    const oldResponse = new Response(JSON.stringify({ code: 200, data: { has_more: false, items: [{
+      session: { chat_session_uid: 'chat-1', session_kind: 1 },
+      current_policy: { ...policy },
+    }] } }), { status: 200 })
+    fetchImpl.mockImplementationOnce(async () => await new Promise<Response>(resolve => { releaseOld = resolve }))
+    const oldRead = service.listSources('root', { refresh: true })
+    await vi.waitFor(() => { expect(releaseOld).toBeTypeOf('function') })
+    if (trigger === 'pin-ack') await service.setChatDirectoryPin(source.sourceRef, true)
+    else {
+      policy.pin_state = 2
+      service.invalidateSourceListCache(42, 'root')
+    }
+    const callsBeforeRefresh = fetchImpl.mock.calls.length
+    const freshRead = service.listSources('root', { refresh: true })
+    try {
+      await vi.waitFor(() => { expect(fetchImpl).toHaveBeenCalledTimes(callsBeforeRefresh + 1) })
+      await expect(freshRead).resolves.toMatchObject({ items: [{ isPinned: true }] })
+    } finally {
+      releaseOld(oldResponse)
+      await Promise.allSettled([oldRead, freshRead])
+      runtime.dispose()
+    }
+    await expect(service.listSources('root')).resolves.toMatchObject({ items: [{ isPinned: true }] })
+    expect(service.cachedChatSource(42, 'chat-1')?.isPinned).toBe(true)
+  })
+
   it('rejects a source from another account before network I/O', async () => {
     const { service, requests } = fixture({ userId: 43 })
     const source = await service.sourceItem({ version: 1, userId: 42, kind: 'private_chat', ownerRef: 'chat-1', displayName: '会话' })
@@ -1088,7 +1139,11 @@ describe('Chat directory pin owner boundary', () => {
     expect(requests.map(request => request.path)).toEqual(['/api/v1/chats/policy/get'])
   })
 
-  it.each([{}, { chat_session_uid: 'other-chat', pin_state: 2 }, { chat_session_uid: 'chat-1', pin_state: 0 }])('does not publish an invalid write acknowledgement: %j', async updateReply => {
+  it.each([
+    {}, { chat_session_uid: 'other-chat', pin_state: 2, update_at: 1000 },
+    { chat_session_uid: 'chat-1', pin_state: 0, update_at: 1000 },
+    ...[undefined, 0, -1, '1000'].map(update_at => ({ chat_session_uid: 'chat-1', pin_state: 2, update_at })),
+  ])('does not publish an invalid write acknowledgement: %j', async updateReply => {
     const { service } = fixture({ updateReply })
     const source = await service.sourceItem({ version: 1, userId: 42, kind: 'private_chat', ownerRef: 'chat-1', displayName: '会话' })
     service.setChatSource(42, 'chat-1', { ...source, isPinned: false })
@@ -1097,7 +1152,7 @@ describe('Chat directory pin owner boundary', () => {
   })
 
   it('does not report success when Chat ignores a stale pin write', async () => {
-    const { service } = fixture({ updateReply: { chat_session_uid: 'chat-1', pin_state: 1 } })
+    const { service } = fixture({ updateReply: { chat_session_uid: 'chat-1', pin_state: 1, update_at: 2000 } })
     const source = await service.sourceItem({ version: 1, userId: 42, kind: 'private_chat', ownerRef: 'chat-1', displayName: '会话' })
     service.setChatSource(42, 'chat-1', { ...source, isPinned: false })
     await expect(service.setChatDirectoryPin(source.sourceRef, true)).rejects.toMatchObject({ code: 'chat-pin-conflict' })

@@ -1407,6 +1407,8 @@ export interface ArkmeSourceItem {
   isMuted?: boolean
   /** Server-persisted conversation pin state for private and group chats. */
   isPinned?: boolean
+  /** Chat policy.update_at for ordering pin projections; independent of message sequence. */
+  chatPolicyUpdatedAtMillis?: number
   latestSequence?: number
   recordCount?: number
 }
@@ -1415,6 +1417,7 @@ export interface ArkmeSourceItem {
 export interface ArkmeSourceDirectoryPinResult {
   sourceRef: string
   pinned: boolean
+  policyUpdatedAtMillis: number
 }
 
 export interface ArkmeConversationDirectoryVisibilityItem {

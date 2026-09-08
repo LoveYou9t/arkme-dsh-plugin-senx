@@ -6,7 +6,7 @@ import { RobotIcon } from '@phosphor-icons/react/dist/csr/Robot'
 import type {
   ArkmeArkoHistoryPage, ArkmeArkoProfile, ArkmeAuthSnapshot, ArkmeBotSummary, ArkmeConversationDirectoryVisibility,
   ArkmeOfficialAuthorProfile, ArkmeOpenPrivateChatResult, ArkmeSourceDirectory, ArkmeSourceItem, ArkmeSourceList,
-  ArkmeTopicCreateResult,
+  ArkmeTopicCreateResult, ArkmeSourceDirectoryPinResult,
 } from '../types.js'
 import { arkmeBadgeUnreadCount, projectArkmeChatAttentionFromMuted } from '../chat-attention.js'
 import type { ArkmeDirectoryEntryOwnerProps, ArkmeDirectoryRowProps } from './slots-contract.js'
@@ -1529,12 +1529,12 @@ export function ArkmeNavigation({
     }
     try {
       if (target.kind === 'source') {
-        const result = await callArkme<{ sourceRef: string; pinned: boolean }>('source.directory.policy.set', {
+        const result = await callArkme<ArkmeSourceDirectoryPinResult>('source.directory.policy.set', {
           sourceRef: target.source.sourceRef,
           pinned,
         })
         if (authenticatedUserIdRef.current !== mutationUserId) return
-        arkmeChatDirectory.confirmPin(target.source, result.pinned)
+        arkmeChatDirectory.confirmPin(target.source, result.pinned, result.policyUpdatedAtMillis)
       } else {
         setBotDirectoryPreferences(nextBotPreferences)
         writeBotDirectoryPreferences(auth?.userId, nextBotPreferences)

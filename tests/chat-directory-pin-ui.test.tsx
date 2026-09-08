@@ -84,14 +84,14 @@ describe('conversation pin interaction', () => {
     await openMenu()
     expect(renderer!.root.findAllByProps({ role: 'menuitem' })).toHaveLength(0)
     expect(pinCalls()).toHaveLength(1)
-    await act(async () => { resolvePin({ sourceRef: 'chat-ref', pinned: true }) })
+    await act(async () => { resolvePin({ sourceRef: 'chat-ref', pinned: true, policyUpdatedAtMillis: 2000 }) })
     expect(row().props.disabled).toBe(false)
     expect(renderer!.root.findByProps({ role: 'status' }).children).toEqual(['已置顶对话'])
     await openMenu()
     expect(menu().children).toEqual(['取消置顶'])
     await act(async () => { menu().props.onClick() })
     expect(pinCalls()[1]?.[1]).toEqual({ sourceRef: 'chat-ref', pinned: false })
-    await act(async () => { resolvePin({ sourceRef: 'chat-ref', pinned: false }) })
+    await act(async () => { resolvePin({ sourceRef: 'chat-ref', pinned: false, policyUpdatedAtMillis: 3000 }) })
     await openMenu()
     expect(menu().children).toEqual(['置顶对话'])
   })
@@ -105,7 +105,7 @@ describe('conversation pin interaction', () => {
     expect(menu().children).toEqual(['置顶对话'])
     await act(async () => { menu().props.onClick() })
     expect(pinCalls()).toHaveLength(2)
-    await act(async () => { resolvePin({ sourceRef: 'chat-ref', pinned: true }) })
+    await act(async () => { resolvePin({ sourceRef: 'chat-ref', pinned: true, policyUpdatedAtMillis: 2000 }) })
   })
 
   it.each(['success', 'failure'] as const)('preserves new messages and rotated refs during pin %s', async outcome => {
@@ -115,7 +115,7 @@ describe('conversation pin interaction', () => {
     const other = { ...source, sourceKey: 'other-key', sourceRef: 'other-ref', displayName: '新会话' }
     await act(async () => { arkmeChatDirectory.publish([latest, other]) })
     await act(async () => {
-      if (outcome === 'success') resolvePin({ sourceRef: source.sourceRef, pinned: true })
+      if (outcome === 'success') resolvePin({ sourceRef: source.sourceRef, pinned: true, policyUpdatedAtMillis: 2000 })
       else rejectPin(new Error('置顶失败'))
     })
     expect(arkmeChatDirectory.getSnapshot().sources).toEqual(expect.arrayContaining([
@@ -134,7 +134,7 @@ describe('conversation pin interaction', () => {
     expect(arkmeUi.getSnapshot()).toMatchObject({ mode: 'source' })
     expect(arkmeUi.getSnapshot().selectedSource).toBeUndefined()
     await act(async () => {
-      if (outcome === 'success') resolvePin({ sourceRef: source.sourceRef, pinned: true })
+      if (outcome === 'success') resolvePin({ sourceRef: source.sourceRef, pinned: true, policyUpdatedAtMillis: 2000 })
       else rejectPin(new Error('置顶失败'))
     })
     expect(arkmeUi.getSnapshot().selectedSource).toBeUndefined()
@@ -150,7 +150,7 @@ describe('conversation pin interaction', () => {
     let refresh!: Promise<ArkmeSourceItem[]>
     await act(async () => { refresh = arkmeChatDirectory.refreshRoot({ force: true }) })
     await startPin()
-    await act(async () => { resolvePin({ sourceRef: source.sourceRef, pinned: true }) })
+    await act(async () => { resolvePin({ sourceRef: source.sourceRef, pinned: true, policyUpdatedAtMillis: 2000 }) })
     expect(arkmeChatDirectory.getSnapshot().sources[0]?.isPinned).toBe(true)
     await act(async () => {
       releasePage({ directory: 'root', items: [source], hasMore: false })
@@ -164,8 +164,18 @@ describe('conversation pin interaction', () => {
   it('does not resurrect a removed conversation when pin finishes', async () => {
     await startPin()
     await act(async () => { arkmeChatDirectory.publish([]) })
-    await act(async () => { resolvePin({ sourceRef: source.sourceRef, pinned: true }) })
+    await act(async () => { resolvePin({ sourceRef: source.sourceRef, pinned: true, policyUpdatedAtMillis: 2000 }) })
     expect(arkmeChatDirectory.getSnapshot().sources).toEqual([])
+  })
+
+  it('keeps a newer cross-device unpin when the local pin acknowledgement arrives later', async () => {
+    await startPin()
+    await act(async () => { arkmeChatDirectory.publish([{ ...source, isPinned: false, chatPolicyUpdatedAtMillis: 3000 }]) })
+    await act(async () => { resolvePin({ sourceRef: source.sourceRef, pinned: true, policyUpdatedAtMillis: 2000 }) })
+    expect(row().props.disabled).toBe(false)
+    await openMenu()
+    expect(menu().children).toEqual(['置顶对话'])
+    expect(pinCalls()).toHaveLength(1)
   })
 
   it('keeps another conversation navigable while pinning', async () => {
@@ -176,7 +186,7 @@ describe('conversation pin interaction', () => {
     expect(otherRow.props.disabled).not.toBe(true)
     await act(async () => { otherRow.props.onClick() })
     expect(arkmeUi.getSnapshot().selectedSource?.sourceKey).toBe(other.sourceKey)
-    await act(async () => { resolvePin({ sourceRef: source.sourceRef, pinned: true }) })
+    await act(async () => { resolvePin({ sourceRef: source.sourceRef, pinned: true, policyUpdatedAtMillis: 2000 }) })
     expect(arkmeUi.getSnapshot().selectedSource?.sourceKey).toBe(other.sourceKey)
   })
 
@@ -185,7 +195,7 @@ describe('conversation pin interaction', () => {
     await act(async () => { arkmeAuthStore.setAuth({ status: 'authenticated', environment: 'test', userId: 7002 }) })
     const before = arkmeChatDirectory.getSnapshot().sources
     await act(async () => {
-      if (outcome === 'success') resolvePin({ sourceRef: source.sourceRef, pinned: true })
+      if (outcome === 'success') resolvePin({ sourceRef: source.sourceRef, pinned: true, policyUpdatedAtMillis: 2000 })
       else rejectPin(new Error('旧账号的错误'))
     })
     expect(arkmeChatDirectory.getSnapshot().sources).toEqual(before)

@@ -616,6 +616,38 @@ describe('ChatRealtimeService', () => {
 
 
 describe('Chat policy invalidation', () => {
+  it.each(['account-change', 'abort', 'dispose'] as const)('drops policy projection when %s occurs during the session read', async scenario => {
+    const account = { userId: 42, accessToken: 'access', refreshToken: 'refresh' }
+    let release!: (value: typeof account) => void
+    const sessions: ArkmeSessionStore = {
+      read: vi.fn(async () => await new Promise(resolve => { release = resolve })),
+      async write() {}, async delete() {},
+    }
+    const runtime = new ServiceRuntime(config, sessions, {} as StateStore)
+    const source = new SourceService(runtime, new ProfileService(runtime), {
+      async summary() { return { recordCount: 0, wordsCount: 0, totalSec: 0 } }, recordItem() { return undefined },
+    })
+    const invalidate = vi.spyOn(source, 'invalidateSourceListCache')
+    const service = new ChatRealtimeService(runtime, source, { async chatTimelineItems() { return [] } })
+    const events: unknown[] = []
+    const controller = new AbortController()
+    service.subscribeChatRealtime(event => { events.push(event) })
+    service.handleChatRealtimeNotice({
+      cause: 'chat-policy-invalidation', state: { revision: 1, connected: true, connectionGeneration: 1 },
+      connectionUserId: 42, connectionSignal: controller.signal,
+      policyUpdated: { eventUid: 'policy-1', chatSessionUid: 'chat-1', userId: 42, pinState: 2, policyUpdateAtMillis: 1000, eventAtMillis: 1000 },
+    })
+    expect(sessions.read).toHaveBeenCalledOnce()
+    if (scenario === 'abort') controller.abort()
+    if (scenario === 'dispose') service.dispose()
+    release({ ...account, userId: scenario === 'account-change' ? 43 : 42 })
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(events).toEqual([])
+    expect(invalidate).not.toHaveBeenCalled()
+    service.dispose()
+  })
+
   it.each(['current', 'other-account', 'aborted', 'disposed'] as const)('invalidates only the active account directory: %s', async scenario => {
     const controller = new AbortController()
     const sessions: ArkmeSessionStore = {

@@ -29,17 +29,18 @@ describe('ArkmeChatDirectoryStore', () => {
     expect(store.getSnapshot()).toEqual({ revision: 3, sources: [], baselineReady: false, isRefreshing: false })
   })
 
-  it('accepts a fresh owner snapshot after a confirmed pin supersedes an older refresh', async () => {
+  it('accepts a newer owner snapshot after a confirmed pin and a directory invalidation', async () => {
     const source = { sourceRef: 'old-ref', sourceKey: 'chat-key', kind: 'private_chat' as const, displayName: '会话', activeAtMillis: 1, unreadCount: 2, isPinned: false }
     let releaseStale!: (value: { items: typeof source[]; directory: 'root'; hasMore: boolean }) => void
     const loadPage = vi.fn()
       .mockImplementationOnce(async () => await new Promise(resolve => { releaseStale = resolve }))
-      .mockResolvedValue({ directory: 'root', items: [{ ...source, sourceRef: 'new-ref', isPinned: false, unreadCount: 5 }], hasMore: false })
+      .mockResolvedValue({ directory: 'root', items: [{ ...source, sourceRef: 'new-ref', isPinned: false, chatPolicyUpdatedAtMillis: 2000, unreadCount: 5 }], hasMore: false })
     const store = new ArkmeChatDirectoryStore({ loadPage })
     store.publish([source])
     const stale = store.refreshRoot({ force: true })
-    store.confirmPin(source, true)
-    expect(store.getSnapshot()).toMatchObject({ isRefreshing: false, sources: [expect.objectContaining({ isPinned: true })] })
+    store.confirmPin(source, true, 1000)
+    expect(store.getSnapshot()).toMatchObject({ isRefreshing: true, sources: [expect.objectContaining({ isPinned: true })] })
+    store.invalidateRoot()
     await store.refreshRoot({ force: true })
     expect(loadPage).toHaveBeenCalledTimes(2)
     releaseStale({ directory: 'root', items: [source], hasMore: false })
@@ -52,8 +53,60 @@ describe('ArkmeChatDirectoryStore', () => {
     const store = new ArkmeChatDirectoryStore()
     store.publish([source])
     const before = store.getSnapshot()
-    store.confirmPin(source, true)
+    store.confirmPin(source, true, 1000)
     expect(store.getSnapshot()).toBe(before)
+  })
+
+  it('keeps a newer remote policy when an earlier local pin acknowledgement arrives late', () => {
+    const source = { sourceRef: 'chat-ref', sourceKey: 'chat-key', kind: 'group_chat' as const, displayName: '群聊', activeAtMillis: 1, unreadCount: 0, isPinned: false, chatPolicyUpdatedAtMillis: 3000 }
+    const store = new ArkmeChatDirectoryStore()
+    store.publish([source])
+    store.confirmPin(source, true, 2000)
+    expect(store.getSnapshot().sources[0]).toMatchObject({ isPinned: false, chatPolicyUpdatedAtMillis: 3000 })
+  })
+
+  it.each(['delta', 'baseline'] as const)('keeps Chat policy freshness separate from message sequence in a late %s', kind => {
+    const source = { sourceRef: 'chat-ref', sourceKey: 'chat-key', kind: 'group_chat' as const, displayName: '群聊', activeAtMillis: 1, unreadCount: 0, isPinned: true, chatPolicyUpdatedAtMillis: 3000, latestSequence: 10 }
+    const store = new ArkmeChatDirectoryStore()
+    store.publish([source])
+    const incoming = { ...source, isPinned: false, chatPolicyUpdatedAtMillis: 2000, latestSequence: 11, latestPreview: '新消息', unreadCount: 1 }
+    if (kind === 'delta') store.upsert(incoming)
+    else store.publish([incoming])
+    expect(store.getSnapshot().sources[0]).toMatchObject({ isPinned: true, chatPolicyUpdatedAtMillis: 3000, latestSequence: 11, latestPreview: '新消息', unreadCount: 1 })
+  })
+
+  it('accepts a newer policy even when its message sequence is older', () => {
+    const source = { sourceRef: 'chat-ref', sourceKey: 'chat-key', kind: 'private_chat' as const, displayName: '私聊', activeAtMillis: 1, unreadCount: 2, isPinned: true, chatPolicyUpdatedAtMillis: 2000, latestSequence: 10 }
+    const store = new ArkmeChatDirectoryStore()
+    store.publish([source])
+    store.upsert({ ...source, isPinned: false, chatPolicyUpdatedAtMillis: 3000, latestSequence: 9, unreadCount: 1 })
+    expect(store.getSnapshot().sources[0]).toMatchObject({ isPinned: false, chatPolicyUpdatedAtMillis: 3000, latestSequence: 10, unreadCount: 2 })
+  })
+
+  it('does not cancel a newer directory read when ignoring a stale pin acknowledgement', async () => {
+    const source = { sourceRef: 'chat-ref', sourceKey: 'chat-key', kind: 'group_chat' as const, displayName: '群聊', activeAtMillis: 1, unreadCount: 0, isPinned: false, chatPolicyUpdatedAtMillis: 3000 }
+    let release!: (value: unknown) => void
+    const store = new ArkmeChatDirectoryStore({ loadPage: async () => await new Promise(resolve => { release = resolve }) })
+    store.publish([source])
+    const pending = store.refreshRoot({ force: true })
+    store.confirmPin(source, true, 2000)
+    expect(store.getSnapshot().isRefreshing).toBe(true)
+    release({ directory: 'root', items: [{ ...source, isPinned: true, chatPolicyUpdatedAtMillis: 4000 }], hasMore: false })
+    await pending
+    expect(store.getSnapshot().sources[0]).toMatchObject({ isPinned: true, chatPolicyUpdatedAtMillis: 4000 })
+  })
+
+  it('allows a pending remote policy read to finish after a local acknowledgement is applied', async () => {
+    const source = { sourceRef: 'chat-ref', sourceKey: 'chat-key', kind: 'group_chat' as const, displayName: '群聊', activeAtMillis: 1, unreadCount: 0, isPinned: false, chatPolicyUpdatedAtMillis: 1000 }
+    let release!: (value: unknown) => void
+    const store = new ArkmeChatDirectoryStore({ loadPage: async () => await new Promise(resolve => { release = resolve }) })
+    store.publish([source])
+    const pending = store.refreshRoot({ force: true })
+    store.confirmPin(source, true, 2000)
+    expect(store.getSnapshot()).toMatchObject({ isRefreshing: true, sources: [{ isPinned: true }] })
+    release({ directory: 'root', items: [{ ...source, isPinned: false, chatPolicyUpdatedAtMillis: 3000 }], hasMore: false })
+    await pending
+    expect(store.getSnapshot().sources[0]).toMatchObject({ isPinned: false, chatPolicyUpdatedAtMillis: 3000 })
   })
 
   it.each([true, false])('reads owner pin=%s after an invalidation while ignoring an older directory response', async pinned => {
@@ -84,6 +137,42 @@ describe('ArkmeChatDirectoryStore', () => {
     expect(store.getSnapshot()).toMatchObject({ sources: [source], isRefreshing: false })
     await store.refreshRoot({ force: true })
     expect(store.getSnapshot().sources[0]?.isPinned).toBe(true)
+  })
+
+  it('keeps the current loading state when callers joined an invalidated read', async () => {
+    const page = { directory: 'root' as const, items: [], hasMore: false }
+    let releaseOld!: (value: typeof page) => void
+    let releaseCurrent!: (value: typeof page) => void
+    const loadPage = vi.fn()
+      .mockImplementationOnce(async () => await new Promise(resolve => { releaseOld = resolve }))
+      .mockImplementationOnce(async () => await new Promise(resolve => { releaseCurrent = resolve }))
+    const store = new ArkmeChatDirectoryStore({ loadPage })
+    const oldRead = store.refreshRoot()
+    const joinedRead = store.refreshRoot()
+    store.invalidateRoot()
+    const currentRead = store.refreshRoot({ force: true })
+    releaseOld(page)
+    await Promise.all([oldRead, joinedRead])
+    expect(store.getSnapshot().isRefreshing).toBe(true)
+    releaseCurrent(page)
+    await currentRead
+    expect(store.getSnapshot().isRefreshing).toBe(false)
+  })
+
+  it.each(['policy-notice', 'account-change'] as const)('stops obsolete pagination after %s', async trigger => {
+    let releaseOld!: (value: unknown) => void
+    const loadPage = vi.fn()
+      .mockImplementationOnce(async () => await new Promise(resolve => { releaseOld = resolve }))
+      .mockResolvedValue({ directory: 'root', items: [], hasMore: false })
+    const store = new ArkmeChatDirectoryStore({ loadPage })
+    store.activateAccount('test:42')
+    const oldRead = store.refreshRoot()
+    if (trigger === 'policy-notice') store.invalidateRoot()
+    else store.activateAccount('test:43')
+    await store.refreshRoot({ force: true })
+    releaseOld({ directory: 'root', items: [], hasMore: true, nextCursor: 'old-account-cursor' })
+    await oldRead
+    expect(loadPage).toHaveBeenCalledTimes(2)
   })
 
   it('can exclude muted conversations from an unread total', () => {

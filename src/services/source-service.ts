@@ -30,6 +30,7 @@ import { ArkmePluginError, ServiceRuntime, objectValue, stringValue } from './se
 import { arkmeMentionMetadataMentionsViewer } from '../mention-metadata.js'
 import { arkmeMediaKind } from '../file-transfer-contract.js'
 import { projectArkmeChatAttention, projectArkmeChatAttentionFromMuted } from '../chat-attention.js'
+import { retainNewerArkmeChatPin } from '../chat-pin-projection.js'
 import { arkmeEmojiTokenSafePrefix, arkmeHasKnownEmojiToken } from '../arkme-emoji-text.js'
 
 export interface ArkmeSourceRefPayload {
@@ -426,7 +427,8 @@ export class SourceService {
   }
 
   private storeChatSourceByKey(cacheKey: string, source: ArkmeSourceItem): void {
-    this.chatSourceCache.set(cacheKey, cloneSourceItem(this.projectChatSourceAttention(source)))
+    const projected = retainNewerArkmeChatPin(this.chatSourceCache.get(cacheKey), source)
+    this.chatSourceCache.set(cacheKey, cloneSourceItem(this.projectChatSourceAttention(projected)))
   }
 
   /**
@@ -1125,7 +1127,11 @@ export class SourceService {
     if (options.refresh !== true && cached !== undefined && cached.expiresAtMillis > Date.now()) return cloneSourceList(cached.value)
     const existing = this.sourceListInFlight.get(cacheKey)
     if (existing !== undefined) return cloneSourceList(await existing)
-    const pending = this.listSourcesUncached(session, directory, { ...options, ...(cursor === '' ? {} : { cursor }) }, limit)
+    const pending = this.listSourcesUncached(session, directory, {
+      ...options,
+      ...(cursor === '' ? {} : { cursor }),
+      isCurrent: () => this.sourceListInFlight.get(cacheKey) === pending,
+    }, limit)
     this.sourceListInFlight.set(cacheKey, pending)
     try {
       const result = await pending
@@ -1175,18 +1181,22 @@ export class SourceService {
       session,
       signal,
     )
-    if (updated.chat_session_uid !== source.ownerRef || (updated.pin_state !== 1 && updated.pin_state !== 2)) {
+    if (updated.chat_session_uid !== source.ownerRef || (updated.pin_state !== 1 && updated.pin_state !== 2)
+      || !Number.isSafeInteger(updated.update_at) || Number(updated.update_at) <= 0) {
       throw new ArkmePluginError('chat-pin-result-invalid', '无法确认置顶结果，请刷新后重试', true, 502)
     }
     const effectivePinned = updated.pin_state === 2
+    const policyUpdatedAtMillis = Number(updated.update_at)
     const cacheKey = `${String(session.userId)}:${source.ownerRef}`
     const cached = this.chatSourceCache.get(cacheKey)
-    if (cached !== undefined) this.storeChatSourceByKey(cacheKey, { ...cached, isPinned: effectivePinned })
+    if (cached !== undefined) this.storeChatSourceByKey(cacheKey, {
+      ...cached, isPinned: effectivePinned, chatPolicyUpdatedAtMillis: policyUpdatedAtMillis,
+    })
     this.invalidateSourceListCache(session.userId, 'root')
     if (effectivePinned !== pinned) {
       throw new ArkmePluginError('chat-pin-conflict', '会话置顶状态已变化，请刷新后重试', true, 409)
     }
-    return { sourceRef, pinned: effectivePinned }
+    return { sourceRef, pinned: effectivePinned, policyUpdatedAtMillis }
   }
 
   async chatConversationListPreferenceEntry(
@@ -1254,7 +1264,7 @@ export class SourceService {
   private async listSourcesUncached(
     session: ArkmeSessionCredentials,
     directory: ArkmeSourceDirectory,
-    options: { limit?: number; cursor?: string; signal?: AbortSignal; refresh?: boolean },
+    options: { limit?: number; cursor?: string; signal?: AbortSignal; refresh?: boolean; isCurrent?: () => boolean },
     limit: number,
     sessionKind?: number,
   ): Promise<ArkmeSourceList> {
@@ -1531,7 +1541,7 @@ export class SourceService {
       const botGroupTarget = kind === 'group_chat' ? arkmeGroupBotBindingTargetFromBundle(bundle) : undefined
       const cached = this.chatSourceCache.get(`${String(session.userId)}:${uid}`)
       const chatDirectoryMetadata = arkmeChatDirectoryMetadataFromBundle(bundle, kind === 'group_chat' ? uid : '')
-      const item: ArkmeSourceItem = {
+      const item = retainNewerArkmeChatPin(cached, {
         sourceRef: await this.sealSourceRef(
           session.userId,
           kind,
@@ -1560,10 +1570,11 @@ export class SourceService {
         ...attention,
         ...(hasUnreadMention === undefined ? {} : { hasUnreadMention }),
         isPinned,
+        chatPolicyUpdatedAtMillis: numberValue(currentPolicy.update_at),
         ...((numberValue(unread.session_last_seq ?? chatSession.last_seq)) > 0
           ? { latestSequence: numberValue(unread.session_last_seq ?? chatSession.last_seq) }
           : {}),
-      }
+      })
       const itemIndex = items.push(item) - 1
       chatSessionUidByIndex.set(itemIndex, uid)
       if (kind === 'private_chat') {
@@ -1586,9 +1597,11 @@ export class SourceService {
     }
     // Cache the final hydrated projection as an owned snapshot. Realtime updates
     // must not depend on later mutation of the directory row object.
-    for (const [index, uid] of chatSessionUidByIndex) {
-      const item = items[index]
-      if (item !== undefined) this.storeChatSourceByKey(`${String(session.userId)}:${uid}`, item)
+    if (options.isCurrent?.() !== false) {
+      for (const [index, uid] of chatSessionUidByIndex) {
+        const item = items[index]
+        if (item !== undefined) this.storeChatSourceByKey(`${String(session.userId)}:${uid}`, item)
+      }
     }
     const hasMore = data.has_more === true
     const totalValue = data.total ?? data.total_count
@@ -1606,6 +1619,9 @@ export class SourceService {
   }
 
   invalidateSourceListCache(userId: number, directory?: ArkmeSourceDirectory): void {
+    if (directory === undefined || directory === 'root') {
+      this.runtime.invalidateKey(this.runtime.requestScope(userId), 'directory:root:')
+    }
     const prefix = `${String(userId)}:`
     const matches = (key: string): boolean => (
       key.startsWith(prefix)
@@ -1979,7 +1995,7 @@ export class SourceService {
           : backendMentionState === true || latestMentionsViewer
     const botGroupTarget = kind === 'group_chat' ? arkmeGroupBotBindingTargetFromBundle(bundle) : undefined
     const chatDirectoryMetadata = arkmeChatDirectoryMetadataFromBundle(bundle, kind === 'group_chat' ? uid : '')
-    return {
+    return retainNewerArkmeChatPin(cached, {
       sourceRef: await this.sealSourceRef(
         session.userId,
         kind,
@@ -2005,8 +2021,9 @@ export class SourceService {
       ...attention,
       ...(hasUnreadMention === undefined ? {} : { hasUnreadMention }),
       isPinned,
+      chatPolicyUpdatedAtMillis: numberValue(currentPolicy.update_at),
       ...(latestSequence > 0 ? { latestSequence } : {}),
-    }
+    })
   }
 
   private encodeCursor(value: Record<string, unknown>): string {
