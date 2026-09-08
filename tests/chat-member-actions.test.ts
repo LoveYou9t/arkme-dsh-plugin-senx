@@ -16,7 +16,7 @@ import {
   ArkmeMemberJoinNotice, arkmeConversationJoinEventsInLoadedWindow, arkmeMemberJoinDisplayName,
   ArkmeMemberLeaveNotice,
   arkmeMemberJoinTimeLabel, arkmeVisibleMemberJoinInvitees, arkmeComposerMentionTrigger,
-  arkmeGroupMentionCandidates, arkmeMentionCandidateMatches, arkmeMentionCandidatePrimaryText,
+  arkmeGroupMentionCandidates, arkmeMemberForVisibleMention, arkmeMentionCandidateMatches, arkmeMentionCandidatePrimaryText,
   arkmeSelectedTimelineItems, arkmeTimelineOccurrenceKey,
 } from '../src/client/ArkmeSidebar.js'
 
@@ -321,6 +321,18 @@ describe('chat member action menu placement', () => {
       { kind: 'mention', text: '@Ye' },
       { kind: 'text', text: ' 首席UI设计师分配下，联系a@b.com' },
     ])
+  })
+
+  it('resolves a visible member mention only when it names one active group member', () => {
+    const active = { ...member, memberRef: 'active-ref', mentionDisplayName: 'cruisin', displayName: '-', memberName: 'cruisin' }
+    expect(arkmeMemberForVisibleMention('@cruisin', [active])).toBe(active)
+    expect(arkmeMemberForVisibleMention('@-', [active])).toBe(active)
+    expect(arkmeMemberForVisibleMention('@所有人', [active])).toBeUndefined()
+    expect(arkmeMemberForVisibleMention('@cruisin', [{ ...active, status: 'removed' }])).toBeUndefined()
+    expect(arkmeMemberForVisibleMention('@重复', [
+      { ...active, memberRef: 'one', mentionDisplayName: '重复', displayName: '一' },
+      { ...active, memberRef: 'two', mentionDisplayName: '重复', displayName: '二' },
+    ])).toBeUndefined()
   })
 
   it('reveals member join events only after they enter the loaded timeline window', () => {
