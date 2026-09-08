@@ -1174,7 +1174,7 @@ export class ArkmeService {
     return await this.group.listGroupMembers(sourceRef, options)
   }
 
-  async cachedSourceMembers(sourceRef: string) { return await this.chat.cachedSourceMembers(sourceRef) }
+  async cachedSourceMembers(sourceRef: string, signal?: AbortSignal) { return await this.chat.cachedSourceMembers(sourceRef, signal) }
   async pageSourceMembers(sourceRef: string, options: { cursor?: string; limit?: number; signal?: AbortSignal } = {}) {
     return await this.chat.pageSourceMembers(sourceRef, options)
   }

@@ -1695,6 +1695,8 @@ export interface ArkmeMessageReadReceiptSummaryList {
 }
 
 export interface ArkmeMessageReadReceiptMember {
+  /** False when the displayed name came only from a local cache. */
+  displayNameIsCurrent?: boolean
   /** Account- and conversation-bound member reference. */
   memberRef: string
   displayName: string
@@ -2299,6 +2301,8 @@ export interface ArkmeGroupMemberList {
 }
 
 export interface ArkmeConversationMemberItem {
+  /** False while member statistics have not been retrieved. */
+  statsKnown?: boolean
   /** Stable account-and-session-scoped identity for member actions. */
   memberRef: string
   /** Present only when this active non-self group member can be selected for a new human mention. */
@@ -2374,15 +2378,28 @@ export interface ArkmeConversationMemberList {
   joinEvents?: ArkmeConversationMemberJoinEvent[]
 }
 
+export type ArkmeConversationMemberFacts = Pick<ArkmeConversationMemberItem,
+  'memberRef' | 'role' | 'status' | 'isSelf' | 'isOwner' | 'joinedAtMillis' | 'memberName'>
+
 export interface ArkmeConversationMemberPage {
+  kind: 'membership'
   source: ArkmeSourceItem
-  items: ArkmeConversationMemberItem[]
+  items: ArkmeConversationMemberFacts[]
   removedMemberRefs: string[]
   hasMore: boolean
   nextCursor?: string
   joinEvents?: ArkmeConversationMemberJoinEvent[]
-  presentationComplete: boolean
 }
+
+export interface ArkmeConversationMemberPresentation {
+  kind: 'presentation'
+  source: ArkmeSourceItem
+  items: ArkmeConversationMemberItem[]
+  removedMemberRefs: string[]
+  unavailableProfileMemberRefs: string[]
+}
+
+export type ArkmeConversationMemberUpdate = ArkmeConversationMemberPage | ArkmeConversationMemberPresentation
 
 export interface ArkmeConversationMemberCache {
   items: ArkmeConversationMemberItem[]

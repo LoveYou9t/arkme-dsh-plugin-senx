@@ -1,4 +1,4 @@
-import { mergeMemberPresentation, mergeMemberJoinEvents } from './member-directory.js'
+import { applyMemberUpdate, mergeMemberJoinEvents, validateMemberUpdate, cachedMemberItem } from './member-directory.js'
 import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
@@ -6,7 +6,7 @@ import type { ArkmeStateStore } from './state-store.js'
 import type {
   ArkmeCachedSnapshot,
   ArkmeConversationMemberCache,
-  ArkmeConversationMemberPage,
+  ArkmeConversationMemberUpdate,
   ArkmeCachedQueryResult,
   ArkmeLongArticleDraft,
   ArkmePendingWrite,
@@ -90,6 +90,7 @@ export class ArkmeLocalDatabase {
         user_id INTEGER NOT NULL,
         group_key TEXT NOT NULL,
         snapshot_json TEXT NOT NULL,
+        payload_bytes INTEGER NOT NULL DEFAULT 0,
         updated_at_millis INTEGER NOT NULL,
         PRIMARY KEY (user_id, group_key)
       );
@@ -160,6 +161,13 @@ export class ArkmeLocalDatabase {
       CREATE UNIQUE INDEX IF NOT EXISTS extension_review_outbox_user_record
         ON extension_review_outbox (user_id, record_uid);
     `)
+    this.transaction(() => {
+      const columns = this.database.prepare('PRAGMA table_info(conversation_member_cache)').all() as unknown as Array<{ name: string }>
+      if (!columns.some(column => column.name === 'payload_bytes')) {
+        this.database.exec('ALTER TABLE conversation_member_cache ADD COLUMN payload_bytes INTEGER NOT NULL DEFAULT 0')
+        this.database.exec('UPDATE conversation_member_cache SET payload_bytes = LENGTH(CAST(snapshot_json AS BLOB))')
+      }
+    })
     const recordColumns = this.database.prepare('PRAGMA table_info(record_cache)').all() as unknown as Array<{ name: string }>
     if (!recordColumns.some(column => column.name === 'record_duration_millis')) {
       this.database.exec('ALTER TABLE record_cache ADD COLUMN record_duration_millis INTEGER NOT NULL DEFAULT 0')
@@ -284,28 +292,39 @@ export class ArkmeLocalDatabase {
     const row = this.database.prepare('SELECT snapshot_json, updated_at_millis FROM conversation_member_cache WHERE user_id = ? AND group_key = ?').get(userId, group) as { snapshot_json: string; updated_at_millis: number } | undefined
     if (row === undefined || Date.now() - row.updated_at_millis > 14 * 24 * 60 * 60 * 1000 || Buffer.byteLength(row.snapshot_json) > 4_000_000) return undefined
     try {
-      const data = JSON.parse(row.snapshot_json) as ArkmeConversationMemberCache
-      if (!Array.isArray(data.items) || data.items.length > 20_000 || !Array.isArray(data.joinEvents)
-        || data.items.some(item => typeof item.memberRef !== 'string' || typeof item.displayName !== 'string' || item.status !== 'active')) return undefined
-      return { items: data.items, joinEvents: data.joinEvents, cachedAtMillis: row.updated_at_millis }
+      const data = JSON.parse(row.snapshot_json) as ArkmeConversationMemberCache & { schemaVersion: number }
+      if (data.schemaVersion !== 1 || !Array.isArray(data.items) || data.items.length > 20_000 || !Array.isArray(data.joinEvents)) return undefined
+      const items = data.items.map(cachedMemberItem)
+      if (items.some(item => item === undefined) || new Set(items.map(item => item!.memberRef)).size !== items.length) return undefined
+      const joinEvents = mergeMemberJoinEvents([], data.joinEvents)
+      return { items: items as ArkmeConversationMemberCache['items'], joinEvents, cachedAtMillis: row.updated_at_millis }
     } catch { return undefined }
   }
 
-  async mergeConversationMembers(userId: number, group: string, page: ArkmeConversationMemberPage): Promise<void> {
+  async mergeConversationMembers(userId: number, group: string, update: ArkmeConversationMemberUpdate): Promise<void> {
+    validateMemberUpdate(update)
     // This read/merge/write is synchronous in one SQLite owner turn; concurrent pages cannot lose updates.
     const previous = this.readConversationMembers(userId, group)
+    if (update.kind === 'presentation' && previous === undefined) return
     const members = new Map(previous?.items.map(item => [item.memberRef, item]))
-    for (const member of page.items) {
-      const old = members.get(member.memberRef)
-      members.set(member.memberRef, mergeMemberPresentation(old, member, page.presentationComplete))
-    }
-    for (const memberRef of page.removedMemberRefs) members.delete(memberRef)
-    const joins = mergeMemberJoinEvents(previous?.joinEvents ?? [], page.joinEvents ?? [])
-    const payload = JSON.stringify({ items: [...members.values()], joinEvents: joins })
-    if (members.size > 20_000 || Buffer.byteLength(payload) > 4_000_000) return
-    this.database.prepare('INSERT INTO conversation_member_cache (user_id, group_key, snapshot_json, updated_at_millis) VALUES (?, ?, ?, ?) ON CONFLICT(user_id, group_key) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at_millis=excluded.updated_at_millis').run(userId, group, payload, Date.now())
+    applyMemberUpdate(members, update)
+    const joins = mergeMemberJoinEvents(previous?.joinEvents ?? [], update.kind === 'membership' ? update.joinEvents ?? [] : [])
+    this.writeConversationMembers(userId, group, [...members.values()], joins)
+  }
+
+  async forgetCachedMembers(userId: number, group: string, refs: readonly string[]): Promise<void> {
+    const cache = this.readConversationMembers(userId, group)
+    if (cache === undefined) return
+    const invalid = new Set(refs)
+    this.writeConversationMembers(userId, group, cache.items.filter(item => !invalid.has(item.memberRef)), cache.joinEvents)
+  }
+
+  private writeConversationMembers(userId: number, group: string, items: ArkmeConversationMemberCache['items'], joins: ArkmeConversationMemberCache['joinEvents']): void {
+    const payload = JSON.stringify({ schemaVersion: 1, items, joinEvents: joins })
+    if (items.length > 20_000 || Buffer.byteLength(payload) > 4_000_000) return
+    this.database.prepare('INSERT INTO conversation_member_cache (user_id, group_key, snapshot_json, payload_bytes, updated_at_millis) VALUES (?, ?, ?, ?, ?) ON CONFLICT(user_id, group_key) DO UPDATE SET snapshot_json=excluded.snapshot_json, payload_bytes=excluded.payload_bytes, updated_at_millis=excluded.updated_at_millis').run(userId, group, payload, Buffer.byteLength(payload), Date.now())
     this.database.prepare('DELETE FROM conversation_member_cache WHERE updated_at_millis < ? OR rowid NOT IN (SELECT rowid FROM conversation_member_cache ORDER BY updated_at_millis DESC, rowid DESC LIMIT 100)').run(Date.now() - 14 * 24 * 60 * 60 * 1000)
-    while (Number(this.database.prepare('SELECT COALESCE(SUM(LENGTH(CAST(snapshot_json AS BLOB))), 0) AS bytes FROM conversation_member_cache').get()?.bytes) > 32 * 1024 * 1024) {
+    while (Number(this.database.prepare('SELECT COALESCE(SUM(payload_bytes), 0) AS bytes FROM conversation_member_cache').get()?.bytes) > 32 * 1024 * 1024) {
       this.database.prepare('DELETE FROM conversation_member_cache WHERE rowid = (SELECT rowid FROM conversation_member_cache ORDER BY updated_at_millis, rowid LIMIT 1)').run()
     }
   }

@@ -66,7 +66,7 @@ export const messageReadMembersToolModule = defineArkmeCoreToolModule({
       name: 'arkme_message_read_members',
       description: 'Read which active human members have or have not read one group-chat message sent by the signed-in user. Use only an unchanged group source_ref plus item_uid and sequence from arkme_source_read. For private chats use arkme_message_read_statuses; messages sent by other people cannot be queried.',
       parameters: {
-        basic_only: { type: 'boolean', description: 'Return authoritative read facts immediately with cached member presentation; use member pages/presentation to refresh names and avatars. Defaults to false.' },
+        basic_only: { type: 'boolean', description: 'Return read status without waiting for member profile details. Defaults to false.' },
         source_ref: {
           type: 'string',
           required: true,

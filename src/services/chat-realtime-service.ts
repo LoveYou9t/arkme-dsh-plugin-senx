@@ -439,6 +439,7 @@ export class ChatRealtimeService {
     try {
       const session = await this.runtime.sessionStore.read()
       if (session === undefined) return
+      this.runtime.invalidateMemberCache?.()
       const sourceKey = await this.source.chatDirectorySourceKey(session.userId, hint.chatSessionUid)
       if ((await this.runtime.sessionStore.read())?.userId !== session.userId) return
       this.emitChatClientEvent({ type:'member-events-invalidated', revision:this.nextChatClientRevision(),

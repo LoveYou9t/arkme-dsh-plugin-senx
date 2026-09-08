@@ -15,6 +15,18 @@ function target(sequence: number, sourceKey = 'source-key-1'): ArkmeMessageReadR
 afterEach(() => { vi.useRealTimers() })
 
 describe('Arkme message read receipt store', () => {
+  it('cancels a queued detail refresh when the page becomes hidden', async () => {
+    vi.useFakeTimers()
+    const store = new ArkmeMessageReadReceiptStore()
+    store.activateAccount(42)
+    const refresh = vi.fn()
+    const release = store.observeDetail(target(8), refresh)
+    store.invalidate('source-key-1', 8)
+    store.setForeground(false)
+    await vi.advanceTimersByTimeAsync(500)
+    expect(refresh).not.toHaveBeenCalled()
+    release(); store.activateAccount(undefined)
+  })
   it('notifies open details once for a burst of hints and releases the final consumer', async () => {
     vi.useFakeTimers()
     const store = new ArkmeMessageReadReceiptStore()

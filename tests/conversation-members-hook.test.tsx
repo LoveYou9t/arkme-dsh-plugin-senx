@@ -32,6 +32,7 @@ afterEach(async () => {
 it('shares a directory across mounted consumers and renders only the changed member', async () => {
   const initial = Array.from({ length: 1000 }, (_, index) => person(String(index)))
   read.mockResolvedValue(snapshot(initial))
+  arkmeConversationMembers.activateAccount('test:42')
   await act(async () => { renderer = create(<><Consumer name="conversation" /><Consumer name="drawer" open={false} /></>) })
   expect(read).toHaveBeenCalledTimes(1)
   await act(async () => { renderer!.update(<><Consumer name="conversation" /><Consumer name="drawer" /></>) })
@@ -45,6 +46,7 @@ it('shares a directory across mounted consumers and renders only the changed mem
 
 it('keeps rendered rows during refresh and after a failure', async () => {
   read.mockResolvedValue(snapshot([person('a')]))
+  arkmeConversationMembers.activateAccount('test:42')
   await act(async () => { renderer = create(<Consumer name="drawer" />) })
   let reject!: (reason: Error) => void
   read.mockImplementation(() => new Promise((_resolve, fail) => { reject = fail }))

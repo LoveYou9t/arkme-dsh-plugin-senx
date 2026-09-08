@@ -10,6 +10,7 @@ import type {
   ArkmeConversationMemberItem,
   ArkmeConversationMemberList,
   ArkmeConversationMemberPage,
+  ArkmeConversationMemberPresentation,
   ArkmeConversationMemberCache,
   ArkmeConversationMemberRecordMode,
   ArkmeConversationMemberRecordPage,
@@ -1199,7 +1200,7 @@ export async function projectArkmeConversationMemberJoinEvents(
     const action: ArkmeConversationMemberJoinEvent['action'] = new Set([
       'direct_add', 'add_member', 'add_members', 'manual_add', 'added_by_member',
     ]).has(sourceType) ? 'direct_add' : 'invite'
-    const inviterKey = inviterUserId > 0 ? `id:${String(inviterUserId)}` : `name:${inviterDisplayName}`
+    const inviterKey = inviterUserId > 0 ? `id:${String(inviterUserId)}` : `unknown-inviter:${String(inviteeUserId)}`
     const groupKey = `${String(occurredAtMillis)}|${action}|${inviterKey}`
     const group = groups.get(groupKey) ?? {
       action,
@@ -1683,21 +1684,30 @@ export class ChatService {
     return await pending
   }
 
-  async cachedSourceMembers(sourceRef: string): Promise<ArkmeConversationMemberCache | undefined> {
+  async cachedSourceMembers(sourceRef: string, signal?: AbortSignal): Promise<ArkmeConversationMemberCache | undefined> {
+    signal?.throwIfAborted()
     const session = await this.runtime.requireSession()
     const source = await this.requireReadReceiptChatSource(sourceRef, session.userId)
     const cached = await this.runtime.stateStore.cachedConversationMembers?.(session.userId, source.ownerRef).catch(() => undefined)
+    signal?.throwIfAborted()
     if (cached === undefined) return undefined
-    try {
-      for (const member of cached.items) await this.openChatMemberRef(member.memberRef, session.userId, source.ownerRef)
-      return cached
-    } catch {
-      await this.runtime.stateStore.clearConversationMembers?.(session.userId, source.ownerRef).catch(() => undefined)
-      return undefined
+    const invalid: string[] = []
+    for (const member of cached.items) {
+      signal?.throwIfAborted()
+      try { await this.openChatMemberRef(member.memberRef, session.userId, source.ownerRef) }
+      catch (error) {
+        if (!(error instanceof ArkmePluginError)) return undefined
+        invalid.push(member.memberRef)
+      }
     }
+    signal?.throwIfAborted()
+    if (invalid.length === 0) return cached
+    await this.runtime.stateStore.forgetCachedMembers?.(session.userId, source.ownerRef, invalid).catch(() => undefined)
+    return undefined
   }
 
   async pageSourceMembers(sourceRef: string, options: { cursor?: string; limit?: number; signal?: AbortSignal } = {}): Promise<ArkmeConversationMemberPage> {
+    options.signal?.throwIfAborted()
     const session = await this.runtime.requireSession()
     const cacheEpoch = this.runtime.memberCacheEpoch?.() ?? 0
     const source = await this.requireReadReceiptChatSource(sourceRef, session.userId)
@@ -1707,10 +1717,11 @@ export class ChatService {
     const data = await this.memberRead(session, source.ownerRef, '/api/v1/chats/members/page', {
       chat_session_uid: source.ownerRef, after_user_id: after, limit, active_only: false,
     }, options.signal)
+    options.signal?.throwIfAborted()
     const raw = listValue(data.items).map(objectValue)
     const ids = raw.map(item => numberValue(item.user_id))
     const next = numberValue(data.next_user_id)
-    if (stringValue(data.chat_session_uid) !== source.ownerRef || typeof data.has_more !== 'boolean'
+    if (stringValue(data.chat_session_uid) !== source.ownerRef || !Array.isArray(data.items) || typeof data.has_more !== 'boolean'
       || raw.some(item => chatMemberStatus(item.status) === 'unknown')
       || raw.length > limit || ids.some((id, index) => !Number.isSafeInteger(id) || id <= (index === 0 ? after : ids[index - 1]!))
       || (data.has_more && (raw.length === 0 || next !== ids.at(-1)))) {
@@ -1731,15 +1742,17 @@ export class ChatService {
           eventIdForStableKey: async stableKey => `arkme-chat-join-v1.${createHmac('sha256', signingKey).update(`${session.userId}|${source.ownerRef}|${stableKey}`).digest('base64url')}`,
         }) : []
     const page: ArkmeConversationMemberPage = {
-      source: await this.source.sourceItem(source), items, removedMemberRefs, hasMore: data.has_more, joinEvents,
-      presentationComplete: false,
+      kind: 'membership', source: await this.source.sourceItem(source),
+      items: items.map(({ memberRef, role, status, isSelf, isOwner, joinedAtMillis, memberName }) => ({ memberRef, role, status, isSelf, isOwner, joinedAtMillis, ...(memberName === undefined ? {} : { memberName }) })),
+      removedMemberRefs, hasMore: data.has_more, joinEvents,
       ...(data.has_more ? { nextCursor: await this.sealMemberPageCursor(session.userId, source.ownerRef, next) } : {}),
     }
-    if (cacheEpoch === (this.runtime.memberCacheEpoch?.() ?? 0)) await this.runtime.stateStore.mergeConversationMembers?.(session.userId, source.ownerRef, page).catch(() => undefined)
+    if (!options.signal?.aborted && cacheEpoch === (this.runtime.memberCacheEpoch?.() ?? 0)) await this.runtime.stateStore.mergeConversationMembers?.(session.userId, source.ownerRef, page).catch(() => undefined)
     return page
   }
 
-  async sourceMembersPresentation(sourceRef: string, memberRefs: readonly string[], options: { signal?: AbortSignal } = {}): Promise<ArkmeConversationMemberPage> {
+  async sourceMembersPresentation(sourceRef: string, memberRefs: readonly string[], options: { signal?: AbortSignal } = {}): Promise<ArkmeConversationMemberPresentation> {
+    options.signal?.throwIfAborted()
     const session = await this.runtime.requireSession()
     const cacheEpoch = this.runtime.memberCacheEpoch?.() ?? 0
     const source = await this.requireReadReceiptChatSource(sourceRef, session.userId)
@@ -1751,38 +1764,38 @@ export class ChatService {
     const data = await this.memberRead(session, source.ownerRef, '/api/v1/chats/members/by-user-ids', {
       chat_session_uid: source.ownerRef, user_ids: ids, active_only: true,
     }, options.signal)
+    options.signal?.throwIfAborted()
     const raw = listValue(data.items).map(objectValue)
     const returnedIds = raw.map(item => numberValue(item.user_id))
-    if (stringValue(data.chat_session_uid) !== source.ownerRef || raw.length > ids.length || new Set(returnedIds).size !== raw.length
+    if (stringValue(data.chat_session_uid) !== source.ownerRef || !Array.isArray(data.items) || raw.length > ids.length || new Set(returnedIds).size !== raw.length
       || returnedIds.some(id => !ids.includes(id)) || raw.some(item => chatMemberStatus(item.status) !== 'active')) {
       throw new ArkmePluginError('member-presentation-invalid-response', '成员资料响应无效', true, 502)
     }
-    let presentationComplete = true
     const profiles = await this.profile.publicProfileSummariesByUserIds(returnedIds, session, options.signal).catch(error => {
       if (options.signal?.aborted) throw error
-      presentationComplete = false
       return new Map()
     })
-    presentationComplete = presentationComplete && returnedIds.every(id => profiles.has(id))
     const items = await this.projectChatMembers(source.ownerRef, raw, session, {
       includeViewerLabels: false, includeHumanMentionRefs: source.kind === 'group_chat', profiles,
       ...(options.signal === undefined ? {} : { signal: options.signal }),
     })
-    const page: ArkmeConversationMemberPage = {
-      source: await this.source.sourceItem(source), items, presentationComplete, hasMore: false,
+    options.signal?.throwIfAborted()
+    const unavailableProfileMemberRefs = await Promise.all(returnedIds.filter(id => !profiles.has(id)).map(id => this.sealChatMemberRef(session.userId, source.ownerRef, id)))
+    const result: ArkmeConversationMemberPresentation = {
+      kind: 'presentation', source: await this.source.sourceItem(source), items,
+      unavailableProfileMemberRefs,
       removedMemberRefs: memberRefs.filter((_ref, index) => !returnedIds.includes(ids[index]!)),
     }
-    if (cacheEpoch === (this.runtime.memberCacheEpoch?.() ?? 0)) await this.runtime.stateStore.mergeConversationMembers?.(session.userId, source.ownerRef, page).catch(() => undefined)
-    return page
+    if (!options.signal?.aborted && cacheEpoch === (this.runtime.memberCacheEpoch?.() ?? 0)) await this.runtime.stateStore.mergeConversationMembers?.(session.userId, source.ownerRef, result).catch(() => undefined)
+    return result
   }
 
   private async memberRead(session: ArkmeSessionCredentials, group: string, path: string, body: Record<string, unknown>, signal?: AbortSignal): Promise<Record<string, unknown>> {
     try {
       return await this.runtime.authenticatedChatPost(path, body, session, signal, {
-        lane: 'interactive-read', key: `members:${path}:${JSON.stringify(body)}`, failureCooldownMs: 2_000,
+        lane: path.endsWith('/members/page') ? 'interactive-read' : 'background-read', key: `members:${path}:${JSON.stringify(body)}`, failureCooldownMs: 2_000,
       })
     } catch (error) {
-      if (path.endsWith('/members/page') && error instanceof ArkmePluginError && [404, 501].includes(error.upstreamStatus ?? 0)) throw new ArkmePluginError('member-pagination-unavailable', '当前服务器暂不支持成员分页', false, 501)
       if (error instanceof ArkmePluginError && ['auth-http-401', 'auth-http-403', 'arkme-code-403', 'arkme-code-1004'].includes(error.code)) {
         this.runtime.invalidateMemberCache?.()
         await this.runtime.stateStore.clearConversationMembers?.(session.userId, group).catch(() => undefined)
@@ -1813,7 +1826,6 @@ export class ChatService {
     options: { activeOnly?: boolean; signal?: AbortSignal } = {},
   ): Promise<ArkmeConversationMemberList> {
     const session = await this.runtime.requireSession()
-    const cacheEpoch = this.runtime.memberCacheEpoch?.() ?? 0
     const source = await this.source.openSourceRef(sourceRef, session.userId)
     if (source.kind !== 'group_chat' && source.kind !== 'private_chat') {
       throw new ArkmePluginError('chat-members-source-invalid', '仅支持查看群聊或私聊成员', false)
@@ -1850,13 +1862,6 @@ export class ChatService {
       activeCount: members.filter(item => item.status === 'active').length,
       ...(joinEvents === undefined ? {} : { joinEvents }),
     }
-    const cached = await this.runtime.stateStore.cachedConversationMembers?.(session.userId, source.ownerRef).catch(() => undefined)
-    const refs = new Set(members.map(member => member.memberRef))
-    if (cacheEpoch === (this.runtime.memberCacheEpoch?.() ?? 0)) await this.runtime.stateStore.mergeConversationMembers?.(session.userId, source.ownerRef, {
-      source: result.source, items: members, hasMore: false, presentationComplete: true,
-      removedMemberRefs: (cached?.items ?? []).filter(member => !refs.has(member.memberRef)).map(member => member.memberRef),
-      ...(joinEvents === undefined ? {} : { joinEvents }),
-    }).catch(() => undefined)
     return result
   }
 
@@ -2444,7 +2449,7 @@ export class ChatService {
     }
     this.runtime.invalidateMemberCache?.()
     await this.runtime.stateStore.mergeConversationMembers?.(session.userId, source.ownerRef, {
-      source: await this.source.sourceItem(source), items: [], removedMemberRefs: [normalizedMemberRef], hasMore: false, presentationComplete: true,
+      kind: 'presentation', source: await this.source.sourceItem(source), items: [], removedMemberRefs: [normalizedMemberRef], unavailableProfileMemberRefs: [],
     }).catch(() => undefined)
     return {
       sourceRef: normalizedSourceRef,
@@ -2698,8 +2703,9 @@ export class ChatService {
         const known = cached.get(memberRef)
         const names = resolveChatMemberDisplayNames({ userId: member.userId,
           remarkCandidates: [member.remarkName], memberNameCandidates: [member.memberName],
-          userNameCandidates: [member.userName, known?.displayName] })
-        items.push({ memberRef, displayName: known?.displayName ?? names.displayName,
+          userNameCandidates: [member.userName] })
+        const currentName = names.displayName !== '群成员'
+        items.push({ memberRef, displayName: currentName ? names.displayName : known?.displayName ?? names.displayName, displayNameIsCurrent: currentName,
           ...(known?.avatarRef === undefined ? {} : { avatarRef: known.avatarRef }), readStatus: member.readStatus,
           ...(member.readStatus === 'read' && member.readAtMillis > 0 ? { readAtMillis: member.readAtMillis } : {}) })
       }

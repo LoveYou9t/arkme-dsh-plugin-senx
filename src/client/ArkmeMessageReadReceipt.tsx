@@ -237,17 +237,26 @@ function PanelArrow(props: Pick<DetailPanelLayout, 'arrowPlacement' | 'arrowOffs
   </span>
 }
 
-function ArkmeMessageReadReceiptDetailPanel(props: {
+type MemberReceiptPanelProps = {
   anchor: HTMLButtonElement | null
   target: ArkmeMessageReadReceiptTarget
   source: ArkmeSourceItem
   onClose: () => void
-}) {
-  const panelRef = useRef<HTMLDivElement>(null)
-  const [layout, setLayout] = useState(() => detailPanelLayout(props.anchor))
+}
+
+function ArkmeMessageReadReceiptDetailPanel(props: MemberReceiptPanelProps) {
   const auth = useSyncExternalStore(arkmeAuthStore.subscribe, arkmeAuthStore.getSnapshot).auth
   const account = auth?.status === 'authenticated' && auth.userId !== undefined ? `${auth.environment}:${auth.userId}` : undefined
-  const members = useConversationMembers(account, props.source)
+  const generation = useSyncExternalStore(arkmeMessageReadReceipts.subscribe, arkmeMessageReadReceipts.getAccountGeneration)
+  if (account === undefined) return null
+  const identity = JSON.stringify([account, generation, props.target.sourceRef, props.target.itemUid, props.target.sequence])
+  return <MemberReceiptPanelContent key={identity} {...props} account={account} />
+}
+
+function MemberReceiptPanelContent(props: MemberReceiptPanelProps & { account: string | undefined }) {
+  const panelRef = useRef<HTMLDivElement>(null)
+  const [layout, setLayout] = useState(() => detailPanelLayout(props.anchor))
+  const members = useConversationMembers(props.account, props.source)
   const membersByRef = useMemo(() => new Map(members.items.map(member => [member.memberRef, member])), [members.items])
   const [state, setState] = useState<{
     status: 'loading' | 'ready' | 'error'
@@ -264,7 +273,7 @@ function ArkmeMessageReadReceiptDetailPanel(props: {
         if (revision === requestRevision.current) setState({ status: 'ready', detail })
       })
       .catch(error => {
-        if (revision === requestRevision.current) setState(current => ({ ...current, status: 'error', message: errorText(error) }))
+        if (revision === requestRevision.current) setState(current => ({ ...((error as { body?: { retryable?: boolean } }).body?.retryable === false ? {} : current), status: 'error', message: errorText(error) }))
       })
   }, [props.target])
 
@@ -331,11 +340,11 @@ function ArkmeMessageReadReceiptDetailPanel(props: {
         {state.detail !== undefined && state.detail.items.length === 0 && <div style={styles.panelState}>暂无更多人员信息</div>}
         {state.detail?.items.map(receipt => {
           const knownMember = membersByRef.get(receipt.memberRef)
-          const member = { ...receipt, displayName: knownMember?.displayName ?? receipt.displayName, avatarRef: knownMember?.avatarRef ?? receipt.avatarRef }
+          const member = { ...receipt, displayName: receipt.displayNameIsCurrent === false ? knownMember?.displayName ?? receipt.displayName : receipt.displayName, avatarRef: state.detail?.presentationComplete === false ? knownMember?.avatarRef ?? receipt.avatarRef : receipt.avatarRef }
           const isRead = member.readStatus === 'read'
           return <div key={member.memberRef} style={styles.member}>
             <span style={{ ...styles.memberIdentity, opacity: isRead ? 1 : 0.5 }}>
-              <ArkmeUserAvatar
+              <ArkmeUserAvatar lazy
                 {...(member.avatarRef === undefined ? {} : { avatarRef: member.avatarRef })}
                 size={20}
                 label={`${member.displayName} 的头像`}

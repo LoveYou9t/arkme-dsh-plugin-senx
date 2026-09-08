@@ -64,11 +64,12 @@ it('loads 500 members through the real Host projection and coordinator under slo
     calls.length = 0
     const started = Date.now()
     const group = { sourceKey: 'group', sourceRef: 'ref', kind: 'group_chat' as const, displayName: '群' }
-    const store = new ConversationMembersStore(undefined, Date.now, {
+    const store = new ConversationMembersStore({
       page: (ref, cursor, signal) => chat.pageSourceMembers(ref, { ...(cursor === undefined ? {} : { cursor }), limit: 50, signal }),
       presentation: (ref, refs, signal) => chat.sourceMembersPresentation(ref, refs, { signal }),
       cached: async () => null,
-    })
+    }, Date.now)
+    store.activateAccount('test:1')
     store.subscribe('test:1', group, () => {})
     const progressive = store.ensure('test:1', group)
     await vi.advanceTimersByTimeAsync(2000)

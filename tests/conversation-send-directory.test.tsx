@@ -685,6 +685,7 @@ describe('conversation send directory projection', () => {
     arkmeChatTimelineDelta.publish([])
     arkmeChatDirectory.activateAccount(42)
     arkmeChatDirectory.publish([other, target])
+    arkmeConversationMembers.activateAccount('test:42')
     arkmeAuthStore.setAuth({ status: 'authenticated', environment: 'test', userId: 42 })
     arkmeMessageReadReceipts.activateAccount(42)
     arkmeUi.selectSource(target)
@@ -3160,6 +3161,7 @@ describe('conversation send directory projection', () => {
       await Promise.resolve()
     })
     await act(async () => {
+      arkmeConversationMembers.activateAccount('test:43')
       arkmeAuthStore.setAuth({ status: 'authenticated', environment: 'test', userId: 43 })
       await Promise.resolve()
       await Promise.resolve()

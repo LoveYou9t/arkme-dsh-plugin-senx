@@ -1604,7 +1604,7 @@ export async function dispatchArkmeHostOperation(
         ...(requestSignal === undefined ? {} : { signal: requestSignal }),
       },
     )
-    case 'source.members.cached': return await service.cachedSourceMembers(stringParam(params, 'sourceRef')) ?? null
+    case 'source.members.cached': return await service.cachedSourceMembers(stringParam(params, 'sourceRef'), requestSignal) ?? null
     case 'source.members.page': return await service.pageSourceMembers(stringParam(params, 'sourceRef'), {
       limit: numberParam(params, 'limit', 50),
       ...(typeof params.cursor === 'string' ? { cursor: params.cursor } : {}),

@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { memberPageFixture } from './helpers/member-page-fixture.js'
 import { ConversationMembersStore } from '../src/client/conversation-members-store.js'
 import type { ArkmeConversationMemberItem, ArkmeConversationMemberList, ArkmeSourceItem } from '../src/types.js'
 
@@ -17,13 +18,24 @@ function deferred<T>() {
   return { promise, resolve }
 }
 
+function createStore(load: (ref: string, signal: AbortSignal) => Promise<ArkmeConversationMemberList>) {
+  const api = memberPageFixture(async (_operation, params, signal) => await load(String(params?.sourceRef), signal!))
+  const store = new ConversationMembersStore({
+    cached: async () => null,
+    page: (ref, cursor, signal) => api('source.members.page', { sourceRef: ref, ...(cursor === undefined ? {} : { cursor }) }, signal) as never,
+    presentation: (ref, refs, signal) => api('source.members.presentation', { sourceRef: ref, memberRefs: refs }, signal) as never,
+  })
+  store.activateAccount(account)
+  return store
+}
+
 afterEach(() => { vi.useRealTimers() })
 
 describe('shared conversation members', () => {
   it('joins conversation and drawer loads and reuses the snapshot when reopened', async () => {
     const pending = deferred<ArkmeConversationMemberList>()
     const load = vi.fn(() => pending.promise)
-    const store = new ConversationMembersStore(load)
+    const store = createStore(load)
     const releaseConversation = store.subscribe(account, source, vi.fn())
     const releaseDrawer = store.subscribe(account, source, vi.fn())
     const loading = store.ensure(account, source)
@@ -42,7 +54,7 @@ describe('shared conversation members', () => {
 
   it('changes only affected entities, retains unchanged arrays, and reconciles deletions', async () => {
     let items = [member('a'), member('b')]
-    const store = new ConversationMembersStore(async () => result(items))
+    const store = createStore(async () => result(items))
     store.subscribe(account, source, vi.fn())
     await store.ensure(account, source)
     const before = store.get(account, source).items
@@ -53,24 +65,24 @@ describe('shared conversation members', () => {
     await store.ensure(account, source, true)
     const changed = store.get(account, source).items
     expect(changed[0]).toBe(before[0])
-    expect(changed[1]).not.toBe(before[1])
-    expect(changed[1]?.displayName).toBe('新备注')
+    expect(changed.find(item => item.memberRef === 'b')).not.toBe(before.find(item => item.memberRef === 'b'))
+    expect(changed.find(item => item.memberRef === 'b')?.displayName).toBe('新备注')
     items = [member('a'), member('c')]
     await store.ensure(account, source, true)
     expect(store.get(account, source).items.map(item => item.memberRef)).toEqual(['a', 'c'])
-    expect(store.get(account, source).items[1]).toBe(changed[2])
+    expect(store.get(account, source).items.find(item => item.memberRef === 'c')).toBe(changed.find(item => item.memberRef === 'c'))
     store.activateAccount(undefined)
   })
 
   it('keeps known data on failures and rejects incomplete, duplicate and foreign snapshots', async () => {
     let response = result([member('a'), member('b')])
     const load = vi.fn(async () => response)
-    const store = new ConversationMembersStore(load)
+    const store = createStore(load)
     store.subscribe(account, source, vi.fn())
     await store.ensure(account, source)
     const before = store.get(account, source).items
     for (const invalid of [
-      { ...result([member('a')]), total: 2 },
+      result([{ ...member('a'), status: 'unknown' }]),
       result([member('a'), member('a')]),
       result([], { ...source, sourceKey: 'other' }),
     ]) {
@@ -89,7 +101,7 @@ describe('shared conversation members', () => {
   it('revalidates rotated capabilities without losing known rows and clears confirmed revocation', async () => {
     let response = result([member('a')])
     const load = vi.fn(async () => response)
-    const store = new ConversationMembersStore(load)
+    const store = createStore(load)
     const release = store.subscribe(account, source, vi.fn())
     await store.ensure(account, source)
     const before = store.get(account, source).items
@@ -111,7 +123,7 @@ describe('shared conversation members', () => {
     vi.useFakeTimers()
     const old = deferred<ArkmeConversationMemberList>()
     const load = vi.fn(async () => result([member('a'), member('b')]))
-    const store = new ConversationMembersStore(load)
+    const store = createStore(load)
     store.subscribe(account, source, vi.fn())
     await store.ensure(account, source)
     load.mockImplementationOnce(() => old.promise)
@@ -132,7 +144,7 @@ describe('shared conversation members', () => {
     vi.useFakeTimers()
     const other = { ...source, sourceKey: 'other', sourceRef: 'other-ref' }
     const load = vi.fn(async (ref: string) => result([member(ref)], ref === source.sourceRef ? source : other))
-    const store = new ConversationMembersStore(load)
+    const store = createStore(load)
     store.subscribe(account, source, vi.fn())
     store.subscribe(account, other, vi.fn())
     await Promise.all([store.ensure(account, source), store.ensure(account, other)])
@@ -146,7 +158,7 @@ describe('shared conversation members', () => {
   it('only cancels when the last subscriber leaves and fences account switches', async () => {
     const pending = deferred<ArkmeConversationMemberList>()
     let signal!: AbortSignal
-    const store = new ConversationMembersStore(async (_ref, current) => { signal = current; return pending.promise })
+    const store = createStore(async (_ref, current) => { signal = current; return pending.promise })
     const first = store.subscribe(account, source, vi.fn())
     const second = store.subscribe(account, source, vi.fn())
     const loading = store.ensure(account, source)
@@ -164,7 +176,7 @@ describe('shared conversation members', () => {
   it('suspends hidden work and preserves subscriptions across a runtime reset', async () => {
     vi.useFakeTimers()
     const load = vi.fn(async () => result([member('a')]))
-    const store = new ConversationMembersStore(load)
+    const store = createStore(load)
     store.subscribe(account, source, vi.fn())
     await store.ensure(account, source)
     store.setForeground(false)
@@ -184,7 +196,7 @@ describe('shared conversation members', () => {
 
   it('evicts idle groups without disturbing an observed group', async () => {
     const load = vi.fn(async (ref: string) => result([], { ...source, sourceKey: ref, sourceRef: ref }))
-    const store = new ConversationMembersStore(load)
+    const store = createStore(load)
     for (let index = 0; index < 25; index++) {
       const group = { ...source, sourceKey: String(index), sourceRef: String(index) }
       const release = store.subscribe(account, group, vi.fn())

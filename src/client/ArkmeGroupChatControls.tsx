@@ -341,9 +341,10 @@ export function ArkmeConversationHeaderIconButton(props: {
   >{props.children}</button>
 }
 
-function Avatar({ imageRef, size = 32 }: { imageRef: string | undefined; size?: number }) {
-  const src = useArkmeAvatarImage(imageRef) ?? ''
-  return <span style={{ ...styles.avatar, width: size, height: size }}>
+function Avatar({ imageRef, size = 32, lazy = false }: { imageRef: string | undefined; size?: number; lazy?: boolean }) {
+  const container = useRef<HTMLSpanElement>(null)
+  const src = useArkmeAvatarImage(imageRef, lazy ? container : undefined) ?? ''
+  return <span ref={container} style={{ ...styles.avatar, width: size, height: size }}>
     {src === '' ? <ArkmeMark size={size} /> : <img src={src} alt="" draggable={false} style={styles.avatarImage} />}
   </span>
 }
@@ -368,13 +369,13 @@ const GroupMemberRow = memo(function GroupMemberRow({ member, onMemberOpen, onMe
       onMemberContextMenu(member, (avatar ?? event.currentTarget).getBoundingClientRect())
     }}
   >
-    <span data-arkme-member-avatar="true"><Avatar imageRef={member.avatarRef} /></span>
+    <span data-arkme-member-avatar="true"><Avatar imageRef={member.avatarRef} lazy /></span>
     <span style={styles.memberMain}>
       <span style={styles.memberNameLine}>
         <span style={styles.memberName}>{member.displayName}{member.isSelf ? '（我）' : ''}</span>
         {badge !== '' && <span style={styles.badge}>{badge}</span>}
       </span>
-      <span style={{ display: 'block', fontSize: 12, lineHeight: '16px', color: colors.secondary }}>{member.recordCount}条快记</span>
+      <span style={{ display: 'block', fontSize: 12, lineHeight: '16px', color: colors.secondary }}>{member.statsKnown === false ? '正在读取资料…' : `${member.recordCount}条快记`}</span>
     </span>
   </button>
 })
@@ -387,16 +388,10 @@ function GroupMembersDrawer(props: {
   onAdd: () => void
   onMemberOpen: (member: ArkmeConversationMemberItem) => void
   onMemberContextMenu: (member: ArkmeConversationMemberItem, anchorRect: DOMRect) => void
-  onSettingsLoaded: (settings: Pick<ArkmeGroupSettingsSnapshot, 'selfRole' | 'selfStatus'>) => void
   onError: (message: string) => void
 }) {
   const snapshot = useConversationMembers(props.accountScope, props.source, props.open)
   const loading = snapshot.refreshing
-  useEffect(() => {
-    const self = snapshot.items.find(member => member.isSelf)
-    if (self !== undefined) props.onSettingsLoaded({ selfRole: self.role, selfStatus: self.status })
-  }, [snapshot.items, props.onSettingsLoaded])
-
   useEffect(() => {
     if (!props.open) return
     const dismissOnEscape = (event: KeyboardEvent) => {
@@ -1146,15 +1141,12 @@ function GroupSettingsMenu(props: {
   source: ArkmeSourceItem
   open: boolean
   position: { left: number; top: number }
-  fallbackRole: ArkmeGroupSettingsSnapshot['selfRole']
-  fallbackStatus: ArkmeGroupSettingsSnapshot['selfStatus']
   onClose: () => void
   onRename: (target: ArkmeGroupActionTarget) => void
   aiPolishSettings?: ArkmeGroupAiPolishSnapshot | undefined
   onAiPolishSettingsChanged: (settings: ArkmeGroupAiPolishSnapshot) => void
   onAiPolishOpen: () => void
   onRestrictionsOpen: () => void
-  onSettingsLoaded: (settings: Pick<ArkmeGroupSettingsSnapshot, 'selfRole' | 'selfStatus'>) => void
   onSourceProjectionUpdated: (source: ArkmeSourceItem) => void
   onMembershipChanged: (target: ArkmeGroupActionTarget) => void
   onMessageDndUpdated: (target: ArkmeGroupActionTarget, messageDnd: boolean) => void
@@ -1179,7 +1171,6 @@ function GroupSettingsMenu(props: {
         if (!active) return
         setSnapshot(value)
         setMessageDnd(value.messageDnd)
-        props.onSettingsLoaded(value)
       })
       .catch(caught => {
         if (active && !isArkmeRequestAbort(caught, controller.signal)) props.onError(errorMessage(caught))
@@ -1240,11 +1231,11 @@ function GroupSettingsMenu(props: {
       kind: 'group_chat',
       displayName: props.source.displayName,
     },
-    selfRole: props.fallbackRole,
-    selfStatus: props.fallbackStatus,
-    canRename: props.fallbackRole === 'owner' && props.fallbackStatus === 'active',
-    canDissolve: props.fallbackRole === 'owner' && props.fallbackStatus === 'active',
-    canLeave: props.fallbackRole !== 'owner' && props.fallbackStatus === 'active',
+    selfRole: 'unknown' as const,
+    selfStatus: 'unknown' as const,
+    canRename: false,
+    canDissolve: false,
+    canLeave: false,
     messageDnd,
   }
   const actionTarget: ArkmeGroupActionTarget = {
@@ -1625,8 +1616,6 @@ export function ArkmeGroupChatControls(props: {
   const [aiPolishOpen, setAiPolishOpen] = useState(false)
   const [restrictionsOpen, setRestrictionsOpen] = useState(false)
   const [renameSource, setRenameSource] = useState<ArkmeGroupActionTarget>()
-  const [selfRole, setSelfRole] = useState<ArkmeGroupSettingsSnapshot['selfRole']>('unknown')
-  const [selfStatus, setSelfStatus] = useState<ArkmeGroupSettingsSnapshot['selfStatus']>('unknown')
   const settingsButtonRef = useRef<HTMLButtonElement>(null)
   const mountedRef = useRef(true)
   useEffect(() => {
@@ -1634,18 +1623,11 @@ export function ArkmeGroupChatControls(props: {
     return () => { mountedRef.current = false }
   }, [])
   useEffect(() => {
-    setSelfRole('unknown')
-    setSelfStatus('unknown')
     setRestrictionsOpen(false)
   }, [props.source.sourceRef])
   const reportError = useCallback((message: string) => {
     if (mountedRef.current) props.onError(message)
   }, [props.onError])
-
-  const settingsLoaded = useCallback((settings: Pick<ArkmeGroupSettingsSnapshot, 'selfRole' | 'selfStatus'>) => {
-    setSelfRole(settings.selfRole)
-    setSelfStatus(settings.selfStatus)
-  }, [])
 
   const openMembers = useCallback(() => {
     setSettingsOpen(false)
@@ -1702,15 +1684,12 @@ export function ArkmeGroupChatControls(props: {
         source={props.source}
         open={settingsOpen}
         position={settingsPosition}
-        fallbackRole={selfRole}
-        fallbackStatus={selfStatus}
         aiPolishSettings={props.aiPolishSettings}
         onAiPolishSettingsChanged={settings => { props.onAiPolishSettingsChanged?.(settings) }}
         onClose={() => { setSettingsOpen(false) }}
         onRename={setRenameSource}
         onAiPolishOpen={openAiPolish}
         onRestrictionsOpen={openRestrictions}
-        onSettingsLoaded={settingsLoaded}
         onSourceProjectionUpdated={props.onSourceProjectionUpdated}
         onMembershipChanged={props.onMembershipChanged}
         onMessageDndUpdated={props.onMessageDndUpdated}
@@ -1738,7 +1717,6 @@ export function ArkmeGroupChatControls(props: {
         onAdd={() => { setInviteOpen(true) }}
         onMemberOpen={props.onMemberOpen}
         onMemberContextMenu={props.onMemberContextMenu}
-        onSettingsLoaded={settingsLoaded}
         onError={reportError}
       />
       <InviteCollaboratorsDialog

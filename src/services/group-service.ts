@@ -333,6 +333,7 @@ export class GroupService {
           },
           session, signal,
         )
+        this.runtime.invalidateMemberCache?.()
         const outcome = stringValue(objectValue(data.item).outcome)
         results.push({
           candidateRef, displayName: candidate.displayName,

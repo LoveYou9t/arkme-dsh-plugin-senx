@@ -1,5 +1,5 @@
 import type {
-  ArkmeConversationMemberPage, ArkmeConversationMemberCache, ArkmeConversationMemberList, ArkmeConversationMemberRecordMode, ArkmeConversationMemberRecordPage,
+  ArkmeConversationMemberPresentation, ArkmeConversationMemberPage, ArkmeConversationMemberCache, ArkmeConversationMemberList, ArkmeConversationMemberRecordMode, ArkmeConversationMemberRecordPage,
   ArkmeDirectTextSendResult, ArkmeGroupAiPolishMutationResult, ArkmeGroupAiPolishRuleCandidate,
   ArkmeMessageCopyLinkExtendResult,
   ArkmeGroupAiPolishSnapshot, ArkmeMessageReportResult, ArkmeSourceDirectory, ArkmeSourceList, ArkmeSourceReadResult, ArkmeSourceSendResult,
@@ -11,9 +11,9 @@ import type {
 } from '../../types.js'
 
 export interface ArkmeConversationToolPort {
-  cachedSourceMembers(sourceRef: string): Promise<ArkmeConversationMemberCache | undefined>
+  cachedSourceMembers(sourceRef: string, signal?: AbortSignal): Promise<ArkmeConversationMemberCache | undefined>
   pageSourceMembers(sourceRef: string, options?: { cursor?: string; limit?: number; signal?: AbortSignal }): Promise<ArkmeConversationMemberPage>
-  sourceMembersPresentation(sourceRef: string, memberRefs: readonly string[], options?: { signal?: AbortSignal }): Promise<ArkmeConversationMemberPage>
+  sourceMembersPresentation(sourceRef: string, memberRefs: readonly string[], options?: { signal?: AbortSignal }): Promise<ArkmeConversationMemberPresentation>
   listSources(
     directory: ArkmeSourceDirectory,
     options?: { limit?: number; cursor?: string; signal?: AbortSignal },

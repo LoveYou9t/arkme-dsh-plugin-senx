@@ -134,6 +134,7 @@ export class ArkmeMessageReadReceiptStore {
   }
 
   readonly getSnapshot = (): number => this.revision
+  readonly getAccountGeneration = (): number => this.generation
 
   activateAccount(userId: number | undefined, scope = userId === undefined ? undefined : String(userId)): void {
     const normalized = userId !== undefined && Number.isSafeInteger(userId) && userId > 0 ? userId : undefined
@@ -301,10 +302,16 @@ export class ArkmeMessageReadReceiptStore {
     this.detailCache.get(key)?.controller.abort()
     this.detailCache.delete(key)
     const observer = this.detailObservers.get(key)
-    if (!this.foreground || observer === undefined || observer.timer !== undefined) return
+    if (observer === undefined) return
+    if (!this.foreground) {
+      if (observer.timer !== undefined) clearTimeout(observer.timer)
+      observer.timer = undefined
+      return
+    }
+    if (observer.timer !== undefined) return
     observer.timer = setTimeout(() => {
       observer.timer = undefined
-      for (const listener of observer.listeners) listener()
+      if (this.foreground && this.detailObservers.get(key) === observer) for (const listener of observer.listeners) listener()
     }, SUMMARY_DEBOUNCE_MS)
   }
 

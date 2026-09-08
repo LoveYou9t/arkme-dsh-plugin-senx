@@ -56,6 +56,7 @@ describe('group settings menu', () => {
   let renderer: ReactTestRenderer | undefined
 
   beforeEach(() => {
+    arkmeConversationMembers.activateAccount('test:42')
     vi.stubGlobal('window', {
       addEventListener: vi.fn(), removeEventListener: vi.fn(), confirm: vi.fn(() => true),
     })
@@ -73,7 +74,6 @@ describe('group settings menu', () => {
   afterEach(async () => {
     await act(async () => { renderer?.unmount() })
     renderer = undefined
-    arkmeConversationMembers.activateAccount(undefined)
     arkmeConversationMembers.activateAccount(undefined)
     vi.unstubAllGlobals()
   })

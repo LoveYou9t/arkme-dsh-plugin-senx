@@ -24,8 +24,9 @@ import type { ArkmeExtensionReviewOperation } from '../extensions/types.js'
 import type { RecordingImportAdmission, RecordingImportJob } from '../recording-import-contract.js'
 
 export interface StateStore {
+  forgetCachedMembers?(userId: number, group: string, refs: readonly string[]): Promise<void>
   cachedConversationMembers?(userId: number, group: string): Promise<import('../types.js').ArkmeConversationMemberCache | undefined>
-  mergeConversationMembers?(userId: number, group: string, page: import('../types.js').ArkmeConversationMemberPage): Promise<void>
+  mergeConversationMembers?(userId: number, group: string, page: import('../types.js').ArkmeConversationMemberUpdate): Promise<void>
   clearConversationMembers?(userId: number, group: string): Promise<void>
   uniqueCode(): Promise<string>
   cachedSnapshot(userId: number): Promise<ArkmeCachedSnapshot>

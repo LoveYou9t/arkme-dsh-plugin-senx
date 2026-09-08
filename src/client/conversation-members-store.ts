@@ -1,5 +1,6 @@
-import { mergeMemberPresentation, mergeMemberJoinEvents } from '../member-directory.js'
-import type { ArkmeConversationMemberItem, ArkmeConversationMemberList, ArkmeConversationMemberPage, ArkmeConversationMemberCache, ArkmeSourceItem } from '../types.js'
+import { arkmeMessageReadReceipts } from './message-read-receipt-store.js'
+import { applyMemberUpdate, mergeMemberJoinEvents, validateMemberUpdate } from '../member-directory.js'
+import type { ArkmeConversationMemberItem, ArkmeConversationMemberPage, ArkmeConversationMemberPresentation, ArkmeConversationMemberUpdate, ArkmeConversationMemberCache, ArkmeSourceItem } from '../types.js'
 import { callArkme } from './api.js'
 
 const MAX_IDLE_GROUPS = 20
@@ -9,14 +10,13 @@ const INVALIDATION_DELAY_MS = 180
 type Source = Pick<ArkmeSourceItem, 'sourceRef' | 'sourceKey'>
 interface LoadingOptions {
   page?: (sourceRef: string, cursor: string | undefined, signal: AbortSignal) => Promise<ArkmeConversationMemberPage>
-  presentation?: (sourceRef: string, memberRefs: string[], signal: AbortSignal) => Promise<ArkmeConversationMemberPage>
+  presentation?: (sourceRef: string, memberRefs: string[], signal: AbortSignal) => Promise<ArkmeConversationMemberPresentation>
   cached?: (sourceRef: string, signal: AbortSignal) => Promise<ArkmeConversationMemberCache | null>
 }
-type Load = (sourceRef: string, signal: AbortSignal) => Promise<ArkmeConversationMemberList>
 
 export interface ConversationMembersSnapshot {
   items: readonly ArkmeConversationMemberItem[]
-  joinEvents: NonNullable<ArkmeConversationMemberList['joinEvents']>
+  joinEvents: ArkmeConversationMemberCache['joinEvents']
   ready: boolean
   complete: boolean
   cached: boolean
@@ -29,6 +29,7 @@ export const EMPTY_CONVERSATION_MEMBERS: ConversationMembersSnapshot = {
 }
 
 interface Entry {
+  account: string
   source: Source
   members: Map<string, ArkmeConversationMemberItem>
   snapshot: ConversationMembersSnapshot
@@ -42,16 +43,12 @@ interface Entry {
 }
 
 function key(source: Source): string { return source.sourceKey ?? source.sourceRef }
+function entryKey(account: string | undefined, source: Source): string { return JSON.stringify([account, key(source)]) }
 
-function memberAccessRevoked(error: unknown): boolean {
+function invalidatesMemberSnapshot(error: unknown): boolean {
   const failure = error as { code?: string; body?: { code?: string } }
   const code = failure?.body?.code ?? failure?.code
   return code !== undefined && ['auth-http-401', 'auth-http-403', 'login-required', 'login-expired', 'source-ref-invalid', 'arkme-code-403', 'arkme-code-1004', 'chat-members-source-invalid'].includes(code)
-}
-
-function sameMember(left: ArkmeConversationMemberItem, right: ArkmeConversationMemberItem): boolean {
-  const keys = new Set([...Object.keys(left), ...Object.keys(right)] as (keyof ArkmeConversationMemberItem)[])
-  return [...keys].every(field => left[field] === right[field])
 }
 
 /** One account/runtime-scoped member directory; React only observes its snapshots. */
@@ -60,17 +57,19 @@ export class ConversationMembersStore {
   private entries = new Map<string, Entry>()
   private foreground = true
 
-  constructor(private readonly load?: Load, private readonly now = Date.now, private readonly loading: LoadingOptions = {}) {}
+  constructor(private readonly loading: LoadingOptions = {}, private readonly now = Date.now) {}
 
 
   activateAccount(account: string | undefined): void {
     if (account === this.account) return
     this.account = account
-    const previous = [...this.entries.values()]
-    this.entries.clear()
-    for (const entry of previous) {
-      this.cancel(entry)
+    for (const [identity, entry] of [...this.entries]) {
+      if (entry.account !== account) {
+        this.entries.delete(identity)
+        this.cancel(entry)
+      }
       for (const listener of entry.listeners) listener()
+      if (entry.account === account) queueMicrotask(() => { void this.ensure(entry.account, entry.source) })
     }
   }
 
@@ -88,17 +87,16 @@ export class ConversationMembersStore {
 
   get(account: string | undefined, source: Source | undefined): ConversationMembersSnapshot {
     return account === this.account && source !== undefined
-      ? this.entries.get(key(source))?.snapshot ?? EMPTY_CONVERSATION_MEMBERS
+      ? this.entries.get(entryKey(account, source))?.snapshot ?? EMPTY_CONVERSATION_MEMBERS
       : EMPTY_CONVERSATION_MEMBERS
   }
 
   subscribe(account: string, source: Source, listener: () => void): () => void {
-    this.activateAccount(account)
-    const identity = key(source)
+    const identity = entryKey(account, source)
     let entry = this.entries.get(identity)
     if (entry === undefined) {
       entry = {
-        source, members: new Map(), snapshot: EMPTY_CONVERSATION_MEMBERS, listeners: new Set(),
+        account, source, members: new Map(), snapshot: EMPTY_CONVERSATION_MEMBERS, listeners: new Set(),
         revision: 0, refreshedAt: 0, stale: true, pending: undefined, controller: undefined, timer: undefined,
       }
       this.entries.set(identity, entry)
@@ -127,62 +125,23 @@ export class ConversationMembersStore {
   }
 
   async ensure(account: string, source: Source, force = false): Promise<void> {
-    const entry = account === this.account ? this.entries.get(key(source)) : undefined
+    const entry = account === this.account ? this.entries.get(entryKey(account, source)) : undefined
     if (entry === undefined || entry.listeners.size === 0 || !this.foreground) return
     entry.source = source
     if (entry.pending !== undefined) return await entry.pending
     if (!force && !entry.stale && this.now() - entry.refreshedAt < MAX_AGE_MS) return
     if (entry.timer !== undefined) clearTimeout(entry.timer)
     entry.timer = undefined
-    const revision = entry.revision
+    const revision = ++entry.revision
     const controller = new AbortController()
     entry.controller = controller
     entry.stale = false
     this.publish(entry, { refreshing: true, error: undefined })
-    entry.pending = Promise.resolve().then(() => this.load !== undefined
-      ? this.load(source.sourceRef, controller.signal)
-      : this.loadPages(account, entry, revision, controller))
-      .then(result => {
-        if (result === undefined) return
-        if (controller.signal.aborted || this.entries.get(key(source)) !== entry || account !== this.account) return
-        if (revision !== entry.revision) return
-        // Only a complete, matching baseline may remove absent members. Never trim a partial page.
-        if ((result.source.sourceKey ?? result.source.sourceRef) !== key(source)
-          || result.total !== result.items.length
-          || result.activeCount !== result.items.length
-          || new Set(result.items.map(member => member.memberRef)).size !== result.items.length
-          || result.items.some(member => member.memberRef.trim() === '' || member.status !== 'active')) {
-          throw new Error('成员列表响应不完整，请重试')
-        }
-        const seen = new Set<string>()
-        const items = result.items.map(incoming => {
-          seen.add(incoming.memberRef)
-          const previous = entry.members.get(incoming.memberRef)
-          // Optional enrichment may fail; it must not erase a previously usable avatar/name.
-          const member = previous === undefined ? incoming : {
-            ...incoming,
-            ...(incoming.avatarRef === undefined && previous.avatarRef !== undefined ? { avatarRef: previous.avatarRef } : {}),
-            ...(['', '群成员', '成员'].includes(incoming.displayName) ? { displayName: previous.displayName } : {}),
-          }
-          const value = previous !== undefined && sameMember(previous, member) ? previous : member
-          entry.members.set(member.memberRef, value)
-          return value
-        })
-        for (const memberRef of entry.members.keys()) if (!seen.has(memberRef)) entry.members.delete(memberRef)
-        const unchanged = items.length === entry.snapshot.items.length
-          && items.every((member, index) => member === entry.snapshot.items[index])
-        const joinEvents = result.joinEvents ?? []
-        entry.refreshedAt = this.now()
-        this.publish(entry, {
-          items: unchanged ? entry.snapshot.items : items,
-          joinEvents: JSON.stringify(joinEvents) === JSON.stringify(entry.snapshot.joinEvents) ? entry.snapshot.joinEvents : joinEvents,
-          ready: true, complete: true, cached: false, error: undefined,
-        })
-      })
+    entry.pending = Promise.resolve().then(() => this.loadPages(account, entry, revision, controller))
       .catch(error => {
-        if (controller.signal.aborted || account !== this.account || this.entries.get(key(source)) !== entry) return
+        if (controller.signal.aborted || account !== this.account || this.entries.get(entryKey(account, source)) !== entry) return
         if (revision !== entry.revision) return
-        if (memberAccessRevoked(error)) {
+        if (invalidatesMemberSnapshot(error)) {
           controller.abort()
           entry.members.clear()
           this.publish(entry, EMPTY_CONVERSATION_MEMBERS)
@@ -200,75 +159,66 @@ export class ConversationMembersStore {
     await entry.pending
   }
 
-  private async loadPages(account: string, entry: Entry, revision: number, controller: AbortController): Promise<ArkmeConversationMemberList | undefined> {
-    const current = () => !controller.signal.aborted && this.account === account && this.entries.get(key(entry.source)) === entry && revision === entry.revision
+  private async loadPages(account: string, entry: Entry, revision: number, controller: AbortController): Promise<void> {
+    const current = () => !controller.signal.aborted && this.account === account && this.entries.get(entryKey(account, entry.source)) === entry && revision === entry.revision
     let remoteProgress = false
     const sourceRef = entry.source.sourceRef
     const cached = this.loading.cached ?? ((ref, signal) => callArkme<ArkmeConversationMemberCache | null>('source.members.cached', { sourceRef: ref }, signal))
     if (!entry.snapshot.ready) void cached(sourceRef, controller.signal).then(value => {
       if (!current() || remoteProgress || value === null || value === undefined) return
       if (!Array.isArray(value.items) || value.items.length > MAX_IDLE_MEMBERS || value.items.some(member => !member.memberRef || member.status !== 'active')) return
-      this.applyPage(entry, { source: { ...entry.source } as ArkmeSourceItem, items: value.items, removedMemberRefs: [],
-        hasMore: false, presentationComplete: true, joinEvents: value.joinEvents })
-      this.publish(entry, { cached: true, complete: false })
+      entry.members = new Map(value.items.map(member => [member.memberRef, member]))
+      this.publish(entry, { items: value.items, joinEvents: value.joinEvents, ready: true, cached: true, complete: false })
     }).catch(() => undefined)
     const loadPage = this.loading.page ?? ((ref, cursor, signal) => callArkme<ArkmeConversationMemberPage>('source.members.page', {
       sourceRef: ref, limit: 50, ...(cursor === undefined ? {} : { cursor }),
     }, signal))
-    const loadPresentation = this.loading.presentation ?? ((ref, memberRefs, signal) => callArkme<ArkmeConversationMemberPage>('source.members.presentation', {
+    const loadPresentation = this.loading.presentation ?? ((ref, memberRefs, signal) => callArkme<ArkmeConversationMemberPresentation>('source.members.presentation', {
       sourceRef: ref, memberRefs,
     }, signal))
     const seen = new Set<string>()
     const cursors = new Set<string>()
+    const enrichmentController = new AbortController()
+    const enrichmentSignal = AbortSignal.any([controller.signal, enrichmentController.signal])
     const pending = new Set<Promise<void>>()
+    const queued = new Set<string>()
     let presentationFailed = false
-    const enrich = (refs: string[]) => {
-      const work = loadPresentation(sourceRef, refs, controller.signal).then(page => {
-        if (!current()) return
-        this.applyPage(entry, page)
-        if (!page.presentationComplete) presentationFailed = true
-      }).catch(error => {
-        if (!current()) return
-        if (memberAccessRevoked(error)) {
-          this.clear(account, entry.source)
-          this.publish(entry, { error: error instanceof Error ? error.message : '群成员访问权限已失效' })
-        } else presentationFailed = true
-      }).finally(() => { pending.delete(work) })
-      pending.add(work)
+    const drain = () => {
+      while (current() && !enrichmentSignal.aborted && queued.size > 0 && pending.size < 2) {
+        const refs = [...queued].slice(0, 50)
+        for (const ref of refs) queued.delete(ref)
+        const work = loadPresentation(sourceRef, refs, enrichmentSignal).then(update => {
+          if (!current() || enrichmentSignal.aborted) return
+          this.applyUpdate(entry, update)
+          if (update.unavailableProfileMemberRefs.length > 0) presentationFailed = true
+        }).catch(error => {
+          if (!current() || enrichmentSignal.aborted) return
+          if (invalidatesMemberSnapshot(error)) {
+            this.clear(account, entry.source)
+            this.publish(entry, { error: error instanceof Error ? error.message : '群成员访问权限已失效' })
+          } else presentationFailed = true
+        }).finally(() => { pending.delete(work); drain() })
+        pending.add(work)
+      }
     }
+    const enrich = (refs: string[]) => { for (const ref of refs) queued.add(ref); drain() }
     let cursor: string | undefined
     try {
       for (let index = 0; index < 200; index++) {
         if (!current()) return
-        let page: ArkmeConversationMemberPage
-        try { page = await loadPage(sourceRef, cursor, controller.signal) }
-        catch (error) {
-          if (index === 0 && (error as { body?: { code?: string } }).body?.code === 'member-pagination-unavailable') {
-            return await callArkme('source.members', { sourceRef, activeOnly: true }, controller.signal)
-          }
-          throw error
-        }
+        const page = await loadPage(sourceRef, cursor, controller.signal)
         if (!current()) return
+        this.applyUpdate(entry, page)
         remoteProgress = true
-        this.applyPage(entry, page)
         this.publish(entry, { cached: false })
         for (const member of page.items) seen.add(member.memberRef)
         for (const ref of page.removedMemberRefs) seen.add(ref)
-        if (!page.presentationComplete) {
-          for (let start = 0; start < page.items.length; start += 50) {
-            enrich(page.items.slice(start, start + 50).map(member => member.memberRef))
-            if (pending.size >= 2) await Promise.race(pending)
-          }
-        }
+        enrich(page.items.map(member => member.memberRef))
         if (!page.hasMore) {
           // Paged live traversal is not an atomic snapshot. Verify missing cached members explicitly.
           const missing = [...entry.members.keys()].filter(ref => !seen.has(ref))
-          for (let start = 0; start < missing.length; start += 50) {
-            if (!current()) return
-            enrich(missing.slice(start, start + 50))
-            if (pending.size >= 2) await Promise.race(pending)
-          }
-          await Promise.all(pending)
+          enrich(missing)
+          while (current() && pending.size > 0) await Promise.race(pending)
           if (!current()) return
           entry.refreshedAt = this.now()
           entry.stale = presentationFailed
@@ -280,41 +230,37 @@ export class ConversationMembersStore {
         cursor = page.nextCursor
       }
       throw new Error('成员分页超过本次加载上限，已保留当前列表，请重试')
-    } finally { await Promise.all(pending) }
+    } finally {
+      queued.clear()
+      enrichmentController.abort()
+    }
   }
 
-  private applyPage(entry: Entry, page: ArkmeConversationMemberPage): void {
-    if (key(page.source) !== key(entry.source) || !Array.isArray(page.items) || !Array.isArray(page.removedMemberRefs)
-      || new Set(page.items.map(member => member.memberRef)).size !== page.items.length
-      || page.items.some(member => !member.memberRef || member.status !== 'active')) throw new Error('成员分页响应无效')
-    let changed = false
-    for (const incoming of page.items) {
-      const previous = entry.members.get(incoming.memberRef)
-      const member = mergeMemberPresentation(previous, incoming, page.presentationComplete)
-      if (previous !== undefined && sameMember(previous, member)) continue
-      entry.members.set(incoming.memberRef, member)
-      changed = true
-    }
-    for (const ref of page.removedMemberRefs) if (entry.members.delete(ref)) changed = true
+  private applyUpdate(entry: Entry, page: ArkmeConversationMemberUpdate): void {
+    if (key(page.source) !== key(entry.source)) throw new Error('成员响应会话不匹配')
+    validateMemberUpdate(page)
+    const joins = page.kind === 'membership' ? mergeMemberJoinEvents(entry.snapshot.joinEvents, page.joinEvents ?? []) : entry.snapshot.joinEvents
+    const changed = applyMemberUpdate(entry.members, page)
     const rank = (role: string) => role === 'owner' ? 0 : role === 'admin' ? 1 : role === 'member' ? 2 : 3
     const items = changed ? [...entry.members.values()].sort((left, right) => rank(left.role) - rank(right.role)
       || left.joinedAtMillis - right.joinedAtMillis || left.displayName.localeCompare(right.displayName)) : entry.snapshot.items
-    const joins = mergeMemberJoinEvents(entry.snapshot.joinEvents, page.joinEvents ?? [])
     this.publish(entry, { items, ready: true, joinEvents: JSON.stringify(joins) === JSON.stringify(entry.snapshot.joinEvents) ? entry.snapshot.joinEvents : joins })
   }
 
   invalidate(account: string | undefined, source: Source): void {
-    if (account !== this.account) return
-    const entry = this.entries.get(key(source))
+    if (account === undefined || account !== this.account) return
+    arkmeMessageReadReceipts.invalidate(key(source), Number.MAX_SAFE_INTEGER)
+    const entry = this.entries.get(entryKey(account, source))
     if (entry === undefined) return
     entry.revision += 1
     entry.stale = true
+    this.cancel(entry)
     this.schedule(entry)
   }
 
   remove(account: string | undefined, source: Source, memberRef: string): void {
-    if (account !== this.account) return
-    const entry = this.entries.get(key(source))
+    if (account === undefined || account !== this.account) return
+    const entry = this.entries.get(entryKey(account, source))
     if (entry === undefined) return
     if (entry.members.delete(memberRef)) this.publish(entry, {
       items: entry.snapshot.items.filter(member => member.memberRef !== memberRef),
@@ -323,8 +269,8 @@ export class ConversationMembersStore {
   }
 
   clear(account: string | undefined, source: Source): void {
-    if (account !== this.account) return
-    const entry = this.entries.get(key(source))
+    if (account === undefined || account !== this.account) return
+    const entry = this.entries.get(entryKey(account, source))
     if (entry === undefined) return
     this.cancel(entry)
     entry.revision += 1
@@ -348,10 +294,10 @@ export class ConversationMembersStore {
   }
 
   private schedule(entry: Entry): void {
-    if (!this.foreground || entry.listeners.size === 0 || entry.pending !== undefined || entry.timer !== undefined) return
+    if (entry.account !== this.account || !this.foreground || entry.listeners.size === 0 || entry.pending !== undefined || entry.timer !== undefined) return
     entry.timer = setTimeout(() => {
       entry.timer = undefined
-      if (this.account !== undefined) void this.ensure(this.account, entry.source)
+      void this.ensure(entry.account, entry.source)
     }, INVALIDATION_DELAY_MS)
   }
 

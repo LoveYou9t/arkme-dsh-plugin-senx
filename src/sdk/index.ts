@@ -35,7 +35,7 @@ import type {
   ArkmeFavoriteStickerAddInput,
   ArkmeFavoriteStickerManageAction,
   ArkmeConversationMemberList,
-  ArkmeConversationMemberPage,
+  ArkmeConversationMemberPresentation, ArkmeConversationMemberPage,
   ArkmeConversationMemberCache,
   ArkmeConversationMemberRecordMode,
   ArkmeConversationMemberRecordPage,
@@ -191,7 +191,7 @@ export type {
   ArkmeContentKind,
   ArkmeConversationMemberItem,
   ArkmeConversationMemberList,
-  ArkmeConversationMemberPage,
+  ArkmeConversationMemberPresentation, ArkmeConversationMemberPage,
   ArkmeConversationMemberCache,
   ArkmeConversationMemberRecordMode,
   ArkmeConversationMemberRecordPage,
@@ -1386,7 +1386,7 @@ export class ArkmeSdk {
     }, options.signal)
   }
 
-  async sourceMembersPresentation(sourceRef: string, memberRefs: readonly string[], signal?: AbortSignal): Promise<ArkmeConversationMemberPage> {
+  async sourceMembersPresentation(sourceRef: string, memberRefs: readonly string[], signal?: AbortSignal): Promise<ArkmeConversationMemberPresentation> {
     if (!sourceRef.trim() || memberRefs.length < 1 || memberRefs.length > 50 || memberRefs.some(ref => !ref.trim())) throw new TypeError('Arkme member presentation needs 1-50 member references')
     return await this.call('source.members.presentation', { sourceRef, memberRefs: [...memberRefs] }, signal)
   }
