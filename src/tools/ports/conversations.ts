@@ -11,9 +11,10 @@ import type {
 } from '../../types.js'
 
 export interface ArkmeConversationToolPort {
+  setBotDirectoryPin(botRef: string, pinned: boolean): Promise<void>
   listSources(
     directory: ArkmeSourceDirectory,
-    options?: { limit?: number; cursor?: string; signal?: AbortSignal },
+    options?: { limit?: number; cursor?: string; signal?: AbortSignal; localFirst?: boolean },
   ): Promise<ArkmeSourceList>
   readSource(
     sourceRef: string,

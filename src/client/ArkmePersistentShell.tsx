@@ -152,6 +152,7 @@ export function ArkmePersistentSidebar({
   searchDshMessages = async () => ({ items: [], hasMore: false }), openDshSession = () => undefined,
 }: ArkmePersistentSidebarProps) {
   const sessionState = useSessions(state => state)
+  const directorySnapshot = useSyncExternalStore(arkmeChatDirectory.subscribe, arkmeChatDirectory.getSnapshot, arkmeChatDirectory.getSnapshot)
   const ui = useSyncExternalStore(arkmeUi.subscribe, arkmeUi.getViewSnapshot, arkmeUi.getViewSnapshot)
   const recordRevision = useSyncExternalStore(
     arkmeUi.subscribe, arkmeUi.getRecordRevision, arkmeUi.getRecordRevision,
@@ -210,7 +211,7 @@ export function ArkmePersistentSidebar({
   }, [authenticatedUserId, recordRevision])
   const sendToSelfSource = sendToSelfState !== undefined && sendToSelfState.userId === authenticatedUserId
     ? sendToSelfState.source
-    : undefined
+    : directorySnapshot.projection?.sendToSelf
   const searchDsh = useCallback(async (query: string, signal: AbortSignal): Promise<ArkmeDshMessageSearchResult> => {
     const result = await searchDshMessages(query, signal)
     return {

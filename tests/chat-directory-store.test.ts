@@ -372,10 +372,10 @@ describe('ArkmeChatDirectoryStore', () => {
 
     await expect(store.refreshRoot({ force: true })).resolves.toHaveLength(2)
     expect(callArkmeMock).toHaveBeenNthCalledWith(1, 'sources.list', {
-      directory: 'root', limit: 20, refresh: true,
+      directory: 'root', limit: 20, localFirst: true, refresh: true,
     })
     expect(callArkmeMock).toHaveBeenNthCalledWith(2, 'sources.list', {
-      directory: 'root', limit: 20, cursor: 'next-page', refresh: true,
+      directory: 'root', limit: 20, localFirst: true, cursor: 'next-page', refresh: true,
     })
   })
 
@@ -1160,5 +1160,20 @@ describe('ArkmeChatDirectoryStore', () => {
     store.invalidate('chat:selected')
 
     expect(store.getSnapshotForSource('chat:selected').revision).toBeGreaterThan(firstRevision)
+  })
+})
+
+describe('Host incremental directory projection', () => {
+  const projection = { revision: 1, phase: 'syncing' as const, cachedAtMillis: 1, visibility: [], bots: [] }
+  const source = (id: number) => ({ sourceRef: `host-${id}`, sourceKey: `stable-${id}`, kind: 'private_chat' as const, displayName: `Row ${id}`, activeAtMillis: id, unreadCount: 0 })
+  it('adds later pages and retains a live row when an older cache response arrives', () => {
+    const store = new ArkmeChatDirectoryStore()
+    store.activateAccount('test:1')
+    store.applyHostPage({ directory: 'root', items: [source(2)], hasMore: true, projection: { ...projection, revision: 2 } })
+    store.applyHostPage({ directory: 'root', items: [source(1)], hasMore: true, projection: { ...projection, visibility: [{ entryKind: 'source', entryRef: 'host-1', hidden: false }] } })
+    store.applyHostPage({ directory: 'root', items: [source(3)], hasMore: false, projection: { ...projection, phase: 'complete', revision: 3 } })
+    expect(store.getSnapshot().sources.map(item => item.sourceKey).sort()).toEqual(['stable-1', 'stable-2', 'stable-3'])
+    expect(store.getSnapshot().projection?.phase).toBe('complete')
+    expect(store.getSnapshot().projection?.visibility).toContainEqual({ entryKind: 'source', entryRef: 'host-1', hidden: false })
   })
 })

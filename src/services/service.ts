@@ -24,6 +24,10 @@ import type { ArkmeExtensionReviewOperation } from '../extensions/types.js'
 import type { RecordingImportAdmission, RecordingImportJob } from '../recording-import-contract.js'
 
 export interface StateStore {
+  readDirectoryCache?(userId: number): Promise<import('../types.js').ArkmeSourceList | undefined>
+  writeDirectoryCache?(userId: number, page: import('../types.js').ArkmeSourceList): Promise<void>
+  readAvatarCache?(userId: number, imageRef: string): Promise<import('../types.js').ArkmeImageBytes | undefined>
+  writeAvatarCache?(userId: number, imageRef: string, image: import('../types.js').ArkmeImageBytes): Promise<void>
   uniqueCode(): Promise<string>
   cachedSnapshot(userId: number): Promise<ArkmeCachedSnapshot>
   cacheSummary(userId: number, summary: ArkmeSelfSummary): Promise<void>

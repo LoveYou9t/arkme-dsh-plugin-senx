@@ -1,3 +1,4 @@
+import { arkmeAvatarImages } from './avatar-image-runtime.js'
 import { useEffect } from 'react'
 import { publishMemberEventHint } from './member-event-hints.js'
 import { arkmeMemberEvents } from './member-event-cache.js'
@@ -132,6 +133,11 @@ export function useArkmeRealtimeClientEvents(
         if (!Number.isSafeInteger(update.revision) || update.revision < 0
           || (observedRevision !== undefined && update.revision <= observedRevision)) return
         observedRevision = update.revision
+        if (update.type === 'directory-update') {
+          arkmeChatDirectory.applyHostPage(update.page)
+          if (update.page.projection?.avatarRefs !== undefined) void arkmeAvatarImages.revalidateActive(update.page.projection.avatarRefs)
+          return
+        }
         if (update.type === 'member-events-invalidated') {
           publishMemberEventHint({ account:authenticatedAccountScope, sourceKey:update.sourceKey,
             eventId:update.eventId, occurredAtMillis:update.occurredAtMillis })

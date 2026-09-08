@@ -265,3 +265,26 @@ describe('ArkmeLocalDatabase', () => {
     reopened.close()
   })
 })
+
+describe('durable conversation directory', () => {
+  it('restores incrementally written rows, pin/hidden state and image bytes after reopening', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'arkme sidebar cache '))
+    const operational = new ArkmeStateStore(directory)
+    let db = new ArkmeLocalDatabase(directory, operational)
+    const source = { sourceRef: 'ref', sourceKey: 'stable', kind: 'private_chat' as const, displayName: 'One', activeAtMillis: 1, unreadCount: 2, isPinned: true, avatarRef: 'image' }
+    const projection = { revision: 1, phase: 'complete' as const, cachedAtMillis: 2, bots: [], visibility: [{ entryKind: 'source' as const, entryRef: 'ref', hidden: true }] }
+    await db.writeDirectoryCache(1, { directory: 'root', items: [source], hasMore: false, projection })
+    await db.writeDirectoryCache(1, { directory: 'root', items: [{ ...source, sourceKey: 'other', sourceRef: 'ref2' }], hasMore: false, projection: { ...projection, visibility: [], revision: 2 } })
+    await db.writeAvatarCache(1, 'image', { mediaType: 'image/png', bytes: 3, data: new Uint8Array([1, 2, 3]) })
+    db.close()
+    db = new ArkmeLocalDatabase(directory, operational)
+    const restored = await db.readDirectoryCache(1)
+    expect(restored?.items).toHaveLength(2)
+    expect(restored?.items[0]).toMatchObject({ isPinned: true, avatarRef: 'image' })
+    expect(restored?.projection?.visibility).toContainEqual({ entryKind: 'source', entryRef: 'ref', hidden: true })
+    expect(await db.readDirectoryCache(2)).toBeUndefined()
+    expect(await db.readAvatarCache(2, 'image')).toBeUndefined()
+    expect(Array.from((await db.readAvatarCache(1, 'image'))!.data)).toEqual([1, 2, 3])
+    db.close()
+  })
+})

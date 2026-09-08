@@ -602,14 +602,20 @@ export class MediaService {
 
   async readImage(
     imageRef: string,
-    options: { maxBytes?: number; signal?: AbortSignal } = {},
+    options: { maxBytes?: number; signal?: AbortSignal; refresh?: boolean } = {},
   ): Promise<ArkmeImageBytes> {
     const session = await this.runtime.requireSession()
     const isProfileImage = imageRef.trim().startsWith('arkme-profile-image-v1.')
     const maximumBytes = isProfileImage ? MAX_ARKME_PROFILE_IMAGE_BYTES : MAX_ARKME_IMAGE_BYTES
     const byteLimit = Math.min(maximumBytes, Math.max(1, Math.trunc(options.maxBytes ?? maximumBytes)))
     const cacheKey = `${String(session.userId)}:${String(byteLimit)}:${imageRef.trim()}`
-    const cached = this.cachedImage(cacheKey)
+    if (isProfileImage) await this.profile.openProfileImageRef(imageRef, session.userId)
+    const persisted = isProfileImage ? await this.runtime.stateStore.readAvatarCache?.(session.userId, imageRef) : undefined
+    if (persisted !== undefined && options.refresh !== true && persisted.bytes <= byteLimit) {
+      this.cacheImage(cacheKey, persisted)
+      return cloneImageBytes(persisted)
+    }
+    const cached = options.refresh === true ? undefined : this.cachedImage(cacheKey)
     if (cached !== undefined) return cached
     const existing = this.imageInFlight.get(cacheKey)
     if (existing !== undefined) return cloneImageBytes(await existing)
@@ -621,8 +627,10 @@ export class MediaService {
     try {
       const value = await pending
       this.cacheImage(cacheKey, value)
+      if (isProfileImage) await this.runtime.stateStore.writeAvatarCache?.(session.userId, imageRef, value)
       return cloneImageBytes(value)
     } catch (error) {
+      if (persisted !== undefined && persisted.bytes <= byteLimit) return cloneImageBytes(persisted)
       if (isProfileImage) logArkmeAvatarDiagnostic('image_read_failed', {
         environment: this.runtime.config.environment, viewerUserId: session.userId,
         ...avatarReferenceDiagnostic(imageRef), durationMillis: Math.max(0, Date.now() - startedAtMillis),

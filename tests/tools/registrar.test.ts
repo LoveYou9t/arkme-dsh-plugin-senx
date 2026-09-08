@@ -174,6 +174,7 @@ describe('registerArkmeTools', () => {
       'arkme_wechat_money_flows',
       'arkme_wechat_locations',
       'arkme_sources_list',
+      'arkme_bot_conversation_pin',
       'arkme_unread_conversations',
       'arkme_group_member_candidates',
       'arkme_group_member_add',
