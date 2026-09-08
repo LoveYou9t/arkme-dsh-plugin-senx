@@ -52,7 +52,7 @@ import type {
 import { projectArkmeChatAttentionFromMuted } from '../chat-attention.js'
 import { bindSentFileTaskLocals, fileTaskShowsInlineStatus, fileTaskTimelineItem, localFileBlock, useArkmeFileSendTasks } from './file-send-tasks.js'
 import { isArkmeRequestAbort, retryArkmeRead } from './read-retry.js'
-import { arkmeAwaitVisibleReadIntent } from './read-intent-visibility.js'
+import { arkmeAwaitVisibleReadIntent, arkmeVisibleReadIntentAllowed } from './read-intent-visibility.js'
 import { verifyPhoneCaptcha } from './geetest.js'
 import { ArkmeDirectorySourceAvatar, ArkmeUserAvatar } from './ArkmeAvatar.js'
 import {
@@ -2408,6 +2408,20 @@ export function ArkmeSurface({
     activeSourceKeyRef.current = conversationKey
   }, [conversationKey])
   const sourceIsChat = source?.kind === 'private_chat' || source?.kind === 'group_chat'
+  const [foregroundReadRevision, setForegroundReadRevision] = useState(0)
+  useEffect(() => {
+    if (!activeConversation || !sourceIsChat || authenticatedUserId === undefined
+      || typeof window === 'undefined' || typeof document === 'undefined') return
+    const resumeRead = () => {
+      if (arkmeVisibleReadIntentAllowed()) setForegroundReadRevision(value => value + 1)
+    }
+    window.addEventListener('focus', resumeRead)
+    document.addEventListener('visibilitychange', resumeRead)
+    return () => {
+      window.removeEventListener('focus', resumeRead)
+      document.removeEventListener('visibilitychange', resumeRead)
+    }
+  }, [activeConversation, authenticatedUserId, sourceIsChat])
   const sourceProjectionRevision = useSyncExternalStore(
     activeConversation && !sourceIsChat ? arkmeUi.subscribe : NOOP_SUBSCRIBE,
     () => activeConversation && !sourceIsChat ? arkmeUi.getRecordRevision() : 0,
@@ -3641,7 +3655,9 @@ export function ArkmeSurface({
     const hasReadIntent = source.unreadCount > 0
       || arkmeChatDirectory.hasOptimisticRead(source.sourceRef, source.sourceKey, source.latestSequence ?? readSequence)
     if (!hasReadIntent) return
+    const generation = timelineGenerationRef.current
     if (!await arkmeAwaitVisibleReadIntent()) return
+    if (!activeConversationRef.current || generation !== timelineGenerationRef.current) return
     if (lastReadAckRef.current === readAckKey) return
     lastReadAckRef.current = readAckKey
     try {
@@ -4100,7 +4116,7 @@ export function ArkmeSurface({
         if (!hasCachedTimeline) setError(errorMessage(caught))
       }
     })
-  }, [acknowledgeRead, activeConversation, authenticated, chatDelta.items, conversationKey, loadTimeline, notificationActivationRevision, source, sourceIsChat, sourceProjectionRevision])
+  }, [acknowledgeRead, activeConversation, authenticated, chatDelta.items, conversationKey, foregroundReadRevision, loadTimeline, notificationActivationRevision, source, sourceIsChat, sourceProjectionRevision])
   useEffect(() => {
     if (!authenticated || source === undefined || timelineStateKey !== conversationKey) return
     if (conversationCacheRef.current.getTimeline(conversationKey) === undefined) return
