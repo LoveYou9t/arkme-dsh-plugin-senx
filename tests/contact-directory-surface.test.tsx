@@ -1,4 +1,4 @@
-import { Children, isValidElement, type ReactElement, type ReactNode } from 'react'
+import { createElement, type ReactElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { act, create, type ReactTestRenderer } from 'react-test-renderer'
 import { describe, expect, it, vi } from 'vitest'
@@ -60,17 +60,6 @@ function readyState(): ContactDirectoryState {
   return contactDirectoryReducer(state, {
     type: 'select', selection: { kind: 'contact', contactRef: 'zhang' },
   })
-}
-
-function buttonByText(node: ReactNode, text: string): ReactElement<{ onClick?(): void }> {
-  if (isValidElement(node)) {
-    const element = node as ReactElement<{ children?: ReactNode; onClick?(): void }>
-    if (element.type === 'button' && renderToStaticMarkup(element).includes(text)) return element
-    for (const child of Children.toArray(element.props.children)) {
-      try { return buttonByText(child, text) } catch {}
-    }
-  }
-  throw new Error(`button not found: ${text}`)
 }
 
 describe('ContactDirectorySurface content', () => {
@@ -248,7 +237,7 @@ describe('ContactDirectorySurface content', () => {
   })
 
   it('keeps the disclosure caret and section name in one leading title group', () => {
-    const section = CollapsibleDirectorySection({
+    const section = createElement(CollapsibleDirectorySection, {
       section: readyState().sections.contacts,
       label: '联系人',
       emptyLabel: '暂无联系人',
@@ -273,7 +262,7 @@ describe('ContactDirectorySurface content', () => {
     }
     const onRetry = vi.fn()
     const onLoadMore = vi.fn()
-    const content = CollapsibleDirectorySection({
+    const content = createElement(CollapsibleDirectorySection, {
       section,
       label: '联系人',
       emptyLabel: '暂无联系人',
@@ -287,10 +276,19 @@ describe('ContactDirectorySurface content', () => {
     expect(markup).toContain('保留的联系人')
     expect(markup).toContain('role="alert"')
     expect(markup).toContain('联系人加载失败')
-    buttonByText(content, '重试').props.onClick?.()
-    buttonByText(content, '加载更多').props.onClick?.()
-    expect(onRetry).toHaveBeenCalledOnce()
-    expect(onLoadMore).toHaveBeenCalledOnce()
+    let renderer!: ReactTestRenderer
+    act(() => { renderer = create(content) })
+    try {
+      const buttons = renderer.root.findAllByType('button')
+      act(() => {
+        buttons.find(button => button.children.join('') === '重试')!.props.onClick()
+        buttons.find(button => button.children.join('') === '加载更多')!.props.onClick()
+      })
+      expect(onRetry).toHaveBeenCalledOnce()
+      expect(onLoadMore).toHaveBeenCalledOnce()
+    } finally {
+      act(() => { renderer.unmount() })
+    }
   })
 
   it('routes group, Bot, contact, Team and unmarked-speaker rows to their distinct callbacks', () => {
@@ -622,4 +620,27 @@ describe('ContactDirectorySurface content', () => {
     await act(async () => { renderer.update(props(2)); await Promise.resolve() })
     expect(count()).toEqual(['0'])
   })
+})
+
+it('pauses automatic contact pagination while hidden and resumes without replacing the loaded page', async () => {
+  let resolveFirst!: (page: ArkmeDirectoryPage) => void
+  const loadPage = vi.fn(async (section: ArkmeDirectorySectionKind, options: { cursor?: string }) => {
+    if (section !== 'contacts') return { section, items: [], total: 0, hasMore: false }
+    if (!options.cursor) return await new Promise<ArkmeDirectoryPage>(resolve => { resolveFirst = resolve })
+    return { section, items: [items.contacts[1]!], total: 2, hasMore: false }
+  })
+  const props = { accountKey: 'pause-account', onSelectionChange: vi.fn(), onOpenGroup: vi.fn(), onOpenBot: vi.fn(), loadPage }
+  let view!: ReactTestRenderer
+  await act(async () => { view = create(<ContactDirectorySurface {...props} />) })
+  await act(async () => {
+    view.update(<ContactDirectorySurface {...props} active={false} />)
+    resolveFirst({ section: 'contacts', items: [items.contacts[0]!], total: 2, hasMore: true, nextCursor: 'next' })
+  })
+  expect(loadPage.mock.calls.filter(([section]) => section === 'contacts')).toHaveLength(1)
+  expect(JSON.stringify(view.toJSON())).toContain('Alice')
+  await act(async () => { view.update(<ContactDirectorySurface {...props} active />) })
+  expect(loadPage.mock.calls.filter(([section]) => section === 'contacts')).toHaveLength(2)
+  expect(JSON.stringify(view.toJSON())).toContain('Alice')
+  expect(JSON.stringify(view.toJSON())).toContain('张三')
+  await act(async () => { view.unmount() })
 })

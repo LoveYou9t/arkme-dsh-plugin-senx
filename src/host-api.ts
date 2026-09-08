@@ -900,7 +900,7 @@ export function createArkmeHostApi(service: ArkmeService, options: ArkmeHostApiO
       if (['user-ban.ban', 'user-ban.unban'].includes(request.operation) && origin === undefined) {
         throw new ArkmePluginError('origin-required', '封禁操作必须从当前 DSH 页面发起', false, 403)
       }
-      if (['source.message-preparing.report', 'source.message-preparing.cancel'].includes(request.operation) && origin === undefined) {
+      if (['remote.reportCurrentSession', 'source.message-preparing.report', 'source.message-preparing.cancel'].includes(request.operation) && origin === undefined) {
         throw new ArkmePluginError('origin-required', '正在输入状态必须从当前 DSH 页面发起', false, 403)
       }
       if (['user.arkme-id.set', 'extensions.delete', 'extensions.reviews.create', 'extensions.audit.check', 'extensions.install.start', 'extensions.install.pause', 'extensions.install.resume', 'extensions.enabled.set', 'extensions.metadata.update', 'extensions.share.rotate', 'extensions.preview.delete', 'extensions.preview.reorder', 'extensions.uninstall', 'extensions.restart', 'extensions.client.failure', 'extensions.persistent.invoke', 'extensions.bundle.invoke', 'extensions.mine.publish', 'extensions.quarantine.dismiss', 'extensions.quarantine.reenable', 'remote.renameDesktop', 'message-actions.copy-link', 'message-actions.forward', 'recordings.summary-model-config.set', 'recordings.generate', 'recordings.compare.start', 'recordings.forward', 'recordings.import.retry', 'recordings.import.cancel', 'recordings.import.session.update-start', 'recordings.import.session.update-ownership', 'recordings.import.session.delete', 'recordings.speaker.assign-item', 'openapi.mcp.retry', 'team.create', 'team.join-by-jotmo-id']
@@ -1079,6 +1079,17 @@ export async function dispatchArkmeHostOperation(
       })),
       requestSignal,
     )
+    case 'remote.currentSession': return await requireRemoteHost(remoteHost).currentSession()
+    case 'remote.reportCurrentSession': {
+      const host = requireRemoteHost(remoteHost)
+      host.reportCurrentSession({
+        accountId: stringParam(params, 'accountId'),
+        windowRef: stringParam(params, 'windowRef'),
+        revision: numberParam(params, 'revision', Number.NaN),
+        sessionRef: params.sessionRef === null ? null : stringParam(params, 'sessionRef'),
+      })
+      return { accepted: true }
+    }
     case 'remote.getStatus': return requireRemoteHost(remoteHost).getStatus()
     case 'remote.renameDesktop': return await requireRemoteHost(remoteHost).renameDesktop(stringParam(params, 'displayName'))
     case 'billing.quota': return await service.billingQuota()
@@ -1138,6 +1149,10 @@ export async function dispatchArkmeHostOperation(
     case 'directory.contact.profile': return await service.directoryContactProfile(
       stringParam(params, 'contactRef').trim(),
     )
+    case 'directory.contact.remark.update': {
+      if (typeof params.remark !== 'string') throw new ArkmePluginError('directory-contact-remark-invalid', '备注必须为文本', false, 400)
+      return await service.updateDirectoryContactRemark(stringParam(params, 'contactRef').trim(), params.remark, requestSignal)
+    }
     case 'directory.contact.world': return await service.directoryContactWorld(
       stringParam(params, 'contactRef').trim(),
       {
@@ -1559,8 +1574,11 @@ export async function dispatchArkmeHostOperation(
         limit: numberParam(params, 'limit', 30),
         ...(stringParam(params, 'cursor') === '' ? {} : { cursor: stringParam(params, 'cursor') }),
         refresh: booleanParam(params, 'refresh'),
+        localFirst: booleanParam(params, 'localFirst'),
+        ...(requestSignal === undefined ? {} : { signal: requestSignal }),
       },
     )
+    case 'conversation.directory.bot-pin': return await service.setBotDirectoryPin(stringParam(params, 'botRef'), booleanParam(params, 'pinned'))
     case 'conversation.directory.visibility.query': return await service.conversationDirectoryVisibilitySnapshot(
       stringListParam(params, 'sourceRefs').map(value => value.trim()).filter(value => value !== ''),
       stringListParam(params, 'botRefs').map(value => value.trim()).filter(value => value !== ''),
@@ -1604,9 +1622,20 @@ export async function dispatchArkmeHostOperation(
         ...(requestSignal === undefined ? {} : { signal: requestSignal }),
       },
     )
+    case 'source.members.cached': return await service.cachedSourceMembers(stringParam(params, 'sourceRef'), requestSignal) ?? null
+    case 'source.members.page': return await service.pageSourceMembers(stringParam(params, 'sourceRef'), {
+      limit: numberParam(params, 'limit', 50),
+      ...(typeof params.cursor === 'string' ? { cursor: params.cursor } : {}),
+      ...(requestSignal === undefined ? {} : { signal: requestSignal }),
+    })
+    case 'source.members.presentation': {
+      if (!Array.isArray(params.memberRefs) || params.memberRefs.some(value => typeof value !== 'string')) throw new ArkmePluginError('member-presentation-invalid', '成员引用必须为字符串列表', false, 400)
+      return await service.sourceMembersPresentation(stringParam(params, 'sourceRef'), params.memberRefs as string[],
+        requestSignal === undefined ? {} : { signal: requestSignal })
+    }
     case 'source.members': return await service.listSourceMembers(
       stringParam(params, 'sourceRef'),
-      { activeOnly: params.activeOnly !== false },
+      { activeOnly: params.activeOnly !== false, ...(requestSignal === undefined ? {} : { signal: requestSignal }) },
     )
     case 'source.member-events': return await service.memberEvents(stringParam(params, 'sourceRef'), {
       fromAtMillis: numberParam(params, 'fromAtMillis', 0),
@@ -1675,7 +1704,7 @@ export async function dispatchArkmeHostOperation(
       stringParam(params, 'sourceRef'),
       stringParam(params, 'itemUid'),
       numberParam(params, 'sequence', 0),
-      requestSignal === undefined ? {} : { signal: requestSignal },
+      { ...(params.basicOnly === undefined ? {} : { basicOnly: params.basicOnly === true }), ...(requestSignal === undefined ? {} : { signal: requestSignal }) },
     )
     case 'source.message-report': {
       const report = messageReportParam(params)
