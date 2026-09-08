@@ -89,7 +89,7 @@ import { ArkmePrivateCallMenu } from './ArkmePrivateCallMenu.js'
 import { shouldShowUserBanAction } from './user-ban.js'
 import { ArkmeLongArticleDialog } from './ArkmeLongArticleDialog.js'
 import { ArkmeRecordingSurface } from './ArkmeRecordingSurface.js'
-import { ArkmeRecordingImportDialog, type ArkmeRecordingImportDialogHandle } from './recordings/ArkmeRecordingImportDialog.js'
+import { ArkmeRecordingImportDialog, type ArkmeRecordingImportDialogHandle, type RecordingImportButtonStatus } from './recordings/ArkmeRecordingImportDialog.js'
 import { ArkmeCallSurface } from './ArkmeCallSurface.js'
 import { ArkmeWorldSurface } from './ArkmeWorldSurface.js'
 import {
@@ -2311,6 +2311,13 @@ export function ArkmeSurface({
   const authenticatedUserId = auth?.status === 'authenticated' ? auth.userId : undefined
   const authenticatedAccountKey = arkmeAuthenticatedAccountKey(auth)
   const recordingImportDialogRef = useRef<ArkmeRecordingImportDialogHandle>(null)
+  const [recordingImportFeedback, setRecordingImportFeedback] = useState<{ accountKey: string | undefined; status: RecordingImportButtonStatus }>()
+  const updateRecordingImportStatus = useCallback((status: RecordingImportButtonStatus) => {
+    setRecordingImportFeedback(current => current?.accountKey === authenticatedAccountKey && current?.status === status
+      ? current : { accountKey: authenticatedAccountKey, status })
+  }, [authenticatedAccountKey])
+  const recordingImportStatus = recordingImportFeedback?.accountKey === authenticatedAccountKey
+    ? recordingImportFeedback?.status ?? 'idle' : 'idle'
   const [recordingImportDefaultStartAtMillis, setRecordingImportDefaultStartAtMillis] = useState(() => {
     const today = new Date()
     today.setHours(0, 0, 0, 0)
@@ -6755,6 +6762,7 @@ export function ArkmeSurface({
       defaultStartAtMillis={recordingImportDefaultStartAtMillis}
       currentUserId={authenticatedUserId}
       foreground={recordingImportForeground}
+      onStatusChange={updateRecordingImportStatus}
       onAccepted={() => { setRecordingRefreshRevision(value => value + 1) }}
     />
     : null
@@ -7051,6 +7059,7 @@ export function ArkmeSurface({
             key={`recordings:${auth?.status ?? 'unknown'}:${auth?.environment ?? 'unknown'}:${String(auth?.userId ?? 0)}`}
             onOpenRecordingImport={openRecordingImport}
             recordingRefreshRevision={recordingRefreshRevision}
+            recordingImportStatus={recordingImportStatus}
           />
           : ui.mode === 'world' ? <ArkmeWorldSurface
             {...(ui.worldTarget === undefined ? {} : { target: ui.worldTarget })}
