@@ -613,3 +613,39 @@ describe('ChatRealtimeService', () => {
     service.dispose()
   })
 })
+
+
+describe('Chat policy invalidation', () => {
+  it.each(['current', 'other-account', 'aborted', 'disposed'] as const)('invalidates only the active account directory: %s', async scenario => {
+    const controller = new AbortController()
+    const sessions: ArkmeSessionStore = {
+      async read() { return { userId: scenario === 'other-account' ? 43 : 42, accessToken: 'access', refreshToken: 'refresh' } },
+      async write() {}, async delete() {},
+    }
+    const fetchImpl = vi.fn() as typeof fetch
+    const runtime = new ServiceRuntime(config, sessions, {} as StateStore, fetchImpl)
+    const source = new SourceService(runtime, new ProfileService(runtime), { async summary() { return { recordCount: 0, wordsCount: 0, totalSec: 0 } }, recordItem() { return undefined } })
+    const invalidate = vi.spyOn(source, 'invalidateSourceListCache')
+    const service = new ChatRealtimeService(runtime, source, { async chatTimelineItems() { return [] } })
+    const events: unknown[] = []
+    service.subscribeChatRealtime(event => { events.push(event) })
+    if (scenario === 'aborted') controller.abort()
+    if (scenario === 'disposed') service.dispose()
+    service.handleChatRealtimeNotice({
+      cause: 'chat-policy-invalidation', state: { revision: 1, connected: true, connectionGeneration: 1 },
+      connectionUserId: 42, connectionSignal: controller.signal,
+      policyUpdated: { eventUid: 'policy-1', chatSessionUid: 'private-owner-uid', userId: 42, pinState: 2, policyUpdateAtMillis: 1000, eventAtMillis: 1000 },
+    })
+    if (scenario === 'current') {
+      await vi.waitFor(() => { expect(events).toEqual([{ type: 'chat-policy-invalidated', revision: 1 }]) })
+      expect(invalidate).toHaveBeenCalledExactlyOnceWith(42, 'root')
+    } else {
+      await Promise.resolve()
+      await Promise.resolve()
+      expect(events).toEqual([])
+      expect(invalidate).not.toHaveBeenCalled()
+    }
+    expect(fetchImpl).not.toHaveBeenCalled()
+    service.dispose()
+  })
+})

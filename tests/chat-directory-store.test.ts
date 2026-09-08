@@ -56,6 +56,36 @@ describe('ArkmeChatDirectoryStore', () => {
     expect(store.getSnapshot()).toBe(before)
   })
 
+  it.each([true, false])('reads owner pin=%s after an invalidation while ignoring an older directory response', async pinned => {
+    const source = { sourceRef: 'chat-ref', sourceKey: 'chat-key', kind: 'group_chat' as const, displayName: '群聊', activeAtMillis: 1, unreadCount: 3, isPinned: !pinned }
+    let releaseOld!: (value: unknown) => void
+    const loadPage = vi.fn()
+      .mockImplementationOnce(async () => await new Promise(resolve => { releaseOld = resolve }))
+      .mockResolvedValue({ directory: 'root', items: [{ ...source, isPinned: pinned }], hasMore: false })
+    const store = new ArkmeChatDirectoryStore({ loadPage })
+    store.publish([source])
+    const oldRead = store.refreshRoot({ force: true })
+    store.invalidateRoot()
+    expect(store.getSnapshot().sources[0]?.isPinned).toBe(!pinned)
+    await store.refreshRoot({ force: true })
+    releaseOld({ directory: 'root', items: [source], hasMore: false })
+    await oldRead
+    expect(store.getSnapshot().sources).toEqual([{ ...source, isPinned: pinned }])
+    expect(loadPage).toHaveBeenCalledTimes(2)
+  })
+
+  it('keeps visible rows when the owner read after invalidation fails, and permits retry', async () => {
+    const source = { sourceRef: 'chat-ref', kind: 'group_chat' as const, displayName: '群聊', activeAtMillis: 1, unreadCount: 3, isPinned: false }
+    const loadPage = vi.fn().mockRejectedValueOnce(new Error('offline')).mockResolvedValue({ directory: 'root', items: [{ ...source, isPinned: true }], hasMore: false })
+    const store = new ArkmeChatDirectoryStore({ loadPage })
+    store.publish([source])
+    store.invalidateRoot()
+    await expect(store.refreshRoot({ force: true })).rejects.toThrow('offline')
+    expect(store.getSnapshot()).toMatchObject({ sources: [source], isRefreshing: false })
+    await store.refreshRoot({ force: true })
+    expect(store.getSnapshot().sources[0]?.isPinned).toBe(true)
+  })
+
   it('can exclude muted conversations from an unread total', () => {
     const store = new ArkmeChatDirectoryStore()
     store.publish([{

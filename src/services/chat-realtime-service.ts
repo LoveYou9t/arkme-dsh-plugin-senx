@@ -246,6 +246,10 @@ export class ChatRealtimeService {
   }
 
   handleChatRealtimeNotice(notice: ArkmeChatRealtimeNotice): void {
+    if (notice.cause === 'chat-policy-invalidation' && notice.policyUpdated !== undefined) {
+      void this.invalidateChatPolicyForCurrentSession(notice)
+      return
+    }
     if (notice.cause === 'chat-hint' && notice.memberEvent !== undefined) {
       void this.handleMemberEvent(notice.memberEvent)
       return
@@ -629,6 +633,20 @@ export class ChatRealtimeService {
     this.attentionSummaryVersion = 0
     this.attentionSummaryFingerprint = ''
     this.latestAttentionSummary = undefined
+  }
+
+  private async invalidateChatPolicyForCurrentSession(notice: ArkmeChatRealtimeNotice): Promise<void> {
+    const hint = notice.policyUpdated
+    if (this.disposed || hint === undefined || notice.connectionSignal?.aborted
+      || notice.connectionUserId !== hint.userId) return
+    try {
+      const session = await this.runtime.sessionStore.read()
+      if (this.disposed || notice.connectionSignal?.aborted || session?.userId !== hint.userId) return
+      this.source.invalidateSourceListCache(session.userId, 'root')
+      this.emitChatClientEvent({ type: 'chat-policy-invalidated', revision: this.nextChatClientRevision() })
+    } catch (error) {
+      console.warn('dsh-arkme: Chat policy invalidation failed:', safeFailureMessage(error))
+    }
   }
 
   /** Browser invalidation only; raw source/Bot caches belong to different projections. */

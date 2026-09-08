@@ -3188,6 +3188,9 @@ export type ArkmeChatClientEvent = {
   sourceKey: string
   throughSequence: number
 } | {
+  type: 'chat-policy-invalidated'
+  revision: number
+} | {
   type: 'conversation-list-preference-invalidated'
   revision: number
 } | {

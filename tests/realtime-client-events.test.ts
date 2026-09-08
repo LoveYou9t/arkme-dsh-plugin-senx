@@ -86,6 +86,41 @@ describe('Chat-owned Bot realtime invalidation', () => {
 })
 
 describe('realtime reconcile routing', () => {
+  it('refreshes only the directory for a policy invalidation and deduplicates Browser revisions', async () => {
+    let source!: FakeEventSource
+    class FakeEventSource {
+      onopen: (() => void) | null = null
+      onmessage: ((event: MessageEvent<string>) => void) | null = null
+      constructor() { source = this }
+      close() {}
+    }
+    vi.stubGlobal('EventSource', FakeEventSource)
+    vi.spyOn(arkmeAuthStore, 'refresh').mockResolvedValue()
+    const receipts = vi.spyOn(arkmeMessageReadReceipts, 'reconcile').mockImplementation(() => undefined)
+    const interwoven = vi.spyOn(arkmeInterwovenInvalidation, 'invalidate')
+    const invalidate = vi.spyOn(arkmeChatDirectory, 'invalidateRoot')
+    const refresh = vi.spyOn(arkmeChatDirectory, 'refreshRoot').mockResolvedValue([])
+    function Harness() {
+      useArkmeRealtimeClientEvents({ status: 'authenticated', userId: 42, environment: 'test' }, 1, false)
+      return null
+    }
+    let renderer!: ReactTestRenderer
+    await act(async () => { renderer = create(createElement(Harness)) })
+    receipts.mockClear()
+    interwoven.mockClear()
+    await act(async () => {
+      const event = { data: JSON.stringify({ type: 'chat-policy-invalidated', revision: 1 }) } as MessageEvent<string>
+      source.onmessage?.(event)
+      source.onmessage?.(event)
+    })
+    expect(invalidate).toHaveBeenCalledOnce()
+    expect(refresh).toHaveBeenCalledExactlyOnceWith({ force: true })
+    expect(invalidate.mock.invocationCallOrder[0]).toBeLessThan(refresh.mock.invocationCallOrder[0]!)
+    expect(receipts).not.toHaveBeenCalled()
+    expect(interwoven).not.toHaveBeenCalled()
+    await act(async () => { renderer.unmount() })
+  })
+
   it('clears member-event memory on logout even when no conversation is mounted',async()=>{
     class FakeEventSource { onopen=null;onmessage=null;close(){} }
     vi.stubGlobal('EventSource',FakeEventSource)

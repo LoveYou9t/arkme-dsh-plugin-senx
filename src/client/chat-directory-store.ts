@@ -431,13 +431,17 @@ export class ArkmeChatDirectoryStore {
     }
   }
 
-  confirmPin(source: ArkmeSourceItem, pinned: boolean): void {
-    if (source.kind !== 'private_chat' && source.kind !== 'group_chat') return
-    // A directory read started before this acknowledgement cannot confirm its result.
+  /** Retain visible rows while preventing older reads from satisfying a new owner invalidation. */
+  invalidateRoot(): void {
     this.generation += 1
     this.refreshInFlight = undefined
     this.refreshedAtMillis = 0
-    this.isRefreshing = false
+    this.setRefreshing(false)
+  }
+
+  confirmPin(source: ArkmeSourceItem, pinned: boolean): void {
+    if (source.kind !== 'private_chat' && source.kind !== 'group_chat') return
+    this.invalidateRoot()
     const targetKey = arkmeSourceIdentityKey(source)
     this.commit(this.snapshot.sources.map(item =>
       arkmeSourceIdentityKey(item) === targetKey ? { ...item, isPinned: pinned } : item))

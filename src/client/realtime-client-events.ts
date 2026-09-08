@@ -196,6 +196,11 @@ export function useArkmeRealtimeClientEvents(
           arkmeCalendarInvalidations.publishAll()
           return
         }
+        if (update.type === 'chat-policy-invalidated') {
+          arkmeChatDirectory.invalidateRoot()
+          void refreshUnread(true).catch(() => undefined)
+          return
+        }
         if (update.type === 'conversation-list-preference-invalidated') {
           arkmeUi.chatChanged()
           return
