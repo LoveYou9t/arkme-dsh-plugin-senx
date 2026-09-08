@@ -1,3 +1,4 @@
+import { arkmeConversationMembers } from './conversation-members-store.js'
 import { useEffect } from 'react'
 import { publishMemberEventHint } from './member-event-hints.js'
 import { arkmeMemberEvents } from './member-event-cache.js'
@@ -67,6 +68,7 @@ export function useArkmeRealtimeClientEvents(
 
   useEffect(() => {
     if (auth?.status !== 'authenticated' || auth.userId === undefined) {
+      arkmeConversationMembers.activateAccount(undefined)
       arkmeMemberEvents.activateAccount(undefined)
       arkmeChatDirectory.activateAccount(undefined)
       arkmeChatTimelineDelta.activateAccount(undefined)
@@ -78,18 +80,20 @@ export function useArkmeRealtimeClientEvents(
     }
     const authenticatedUserId = auth.userId
     const authenticatedAccountScope = `${auth.environment}:${String(authenticatedUserId)}`
+    arkmeConversationMembers.activateAccount(authenticatedAccountScope)
     arkmeMemberEvents.activateAccount(authenticatedAccountScope)
     arkmeChatDirectory.activateAccount(authenticatedAccountScope)
     arkmeChatTimelineDelta.activateAccount(authenticatedAccountScope)
     arkmeInterwovenInvalidation.activateAccount(authenticatedAccountScope)
     arkmeAttentionSummary.activateAccount(authenticatedUserId, authenticatedAccountScope)
-    arkmeMessageReadReceipts.activateAccount(authenticatedUserId)
+    arkmeMessageReadReceipts.activateAccount(authenticatedUserId, authenticatedAccountScope)
     // Only the persistent runtime owns transient presence; optional surfaces must not clear it.
     if (ownsMessagePreparing) arkmeMessagePreparing.activateAccount(authenticatedAccountScope)
     let stopped = false
     let observedRevision: number | undefined
     let events: EventSource | undefined
     const updateForeground = () => {
+      arkmeConversationMembers.setForeground(typeof document === 'undefined' || document.visibilityState !== 'hidden')
       arkmeMessageReadReceipts.setForeground(typeof document === 'undefined' || document.visibilityState !== 'hidden')
     }
     const reconcileReceipts = () => { arkmeMessageReadReceipts.reconcile() }
@@ -103,10 +107,12 @@ export function useArkmeRealtimeClientEvents(
       if (stopped) return
       if (ownsMessagePreparing) arkmeMessagePreparing.reset()
       reconcileReceipts()
+      arkmeConversationMembers.refreshActive()
       invalidateDirectMessageAdmission()
       void reconcileArkmeProviderInstance()
         .then(async changed => {
           if (!changed || stopped) return
+          arkmeConversationMembers.reset()
           try {
             await recoverArkmeProviderInstanceDirectory({
               accountScope: authenticatedAccountScope,
@@ -133,6 +139,7 @@ export function useArkmeRealtimeClientEvents(
           || (observedRevision !== undefined && update.revision <= observedRevision)) return
         observedRevision = update.revision
         if (update.type === 'member-events-invalidated') {
+          arkmeConversationMembers.invalidate(authenticatedAccountScope, { sourceKey: update.sourceKey, sourceRef: '' })
           publishMemberEventHint({ account:authenticatedAccountScope, sourceKey:update.sourceKey,
             eventId:update.eventId, occurredAtMillis:update.occurredAtMillis })
           return
@@ -265,6 +272,7 @@ export function useArkmeRealtimeClientEvents(
     connectEvents()
     browserDocument?.addEventListener('visibilitychange', handleVisibilityChange)
     const handleWindowFocus = () => {
+      arkmeConversationMembers.refreshActive()
       reconcileReceipts()
       arkmeUi.chatChanged()
     }

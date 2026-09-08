@@ -1,3 +1,4 @@
+import { arkmeConversationMembers } from '../src/client/conversation-members-store.js'
 import { emojiSample } from './fixtures/emoji.js'
 import { act, create, type ReactTestRenderer } from 'react-test-renderer'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -847,6 +848,7 @@ describe('conversation send directory projection', () => {
   afterEach(async () => {
     await act(async () => { renderer?.unmount() })
     renderer = undefined
+    arkmeConversationMembers.activateAccount(undefined)
     arkmeComposerDraftStore.clearAccount(42)
     arkmeChatDirectory.clear()
     arkmeChatTimelineDelta.publish([])
@@ -1048,6 +1050,7 @@ describe('conversation send directory projection', () => {
       renderer!.unmount()
     })
     renderer = undefined
+    arkmeConversationMembers.activateAccount(undefined)
     tasks = [{
       ...failedTask,
       taskRef: 'task-uncertain-file',
@@ -1666,6 +1669,7 @@ describe('conversation send directory projection', () => {
     } finally {
       await act(async () => { pending.resolve(null); await vi.advanceTimersByTimeAsync(0); renderer?.unmount() })
       renderer = undefined
+    arkmeConversationMembers.activateAccount(undefined)
       vi.useRealTimers()
     }
   })

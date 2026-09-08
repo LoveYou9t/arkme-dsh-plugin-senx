@@ -1,3 +1,4 @@
+import { arkmeConversationMembers } from '../src/client/conversation-members-store.js'
 import { act, create, type ReactTestRenderer } from 'react-test-renderer'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ArkmeGroupActionTarget, ArkmeSourceItem } from '../src/types.js'
@@ -37,6 +38,7 @@ function controls(currentSource: ArkmeSourceItem, options: {
   return <ArkmeGroupChatControls
     key={options.componentKey ?? arkmeSourceIdentityKey(currentSource)}
     source={currentSource}
+    accountScope="test:42"
     overlayHostRef={{ current: {} as HTMLElement }}
     aiPolishSettings={aiSettings}
     onAiPolishSettingsChanged={() => {}}
@@ -71,6 +73,8 @@ describe('group settings menu', () => {
   afterEach(async () => {
     await act(async () => { renderer?.unmount() })
     renderer = undefined
+    arkmeConversationMembers.activateAccount(undefined)
+    arkmeConversationMembers.activateAccount(undefined)
     vi.unstubAllGlobals()
   })
 
