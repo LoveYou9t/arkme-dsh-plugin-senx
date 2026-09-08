@@ -1,3 +1,4 @@
+import { memberPageToolModules } from './conversation/member-pages.js'
 import { arkoToolModules } from './arko/index.js'
 import { botToolModules } from './bots/index.js'
 import { callHistoryToolModules } from './calls/index.js'
@@ -76,6 +77,7 @@ export const businessToolModules: readonly ArkmeToolModule[] = [
   readSourceToolModule,
   copyLinkExtendToolModule,
   sourceMembersToolModule,
+  ...memberPageToolModules,
   sourceMemberRecordsToolModule,
   ...messageReadReceiptToolModules,
   conversationMarkReadToolModule,
