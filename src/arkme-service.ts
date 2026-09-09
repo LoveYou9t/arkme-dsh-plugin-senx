@@ -425,8 +425,12 @@ export class ArkmeService {
     this.directory = new ConversationDirectoryService(this.runtime, this.source, this.conversationDirectoryVisibility,
       async signal => await this.botConversation.directory({ signal }),
       async (ref, signal) => await this.media.readImage(ref, { signal, refresh: true }),
-      page => { this.realtime.emitChatClientEvent({ type: 'directory-update', revision: this.realtime.nextChatClientRevision(), page }) },
+      page => {
+        this.realtime.emitChatClientEvent({ type: 'directory-update', revision: this.realtime.nextChatClientRevision(), page })
+        void this.realtime.refreshAttentionSummary()
+      },
       async (bots, userId) => await this.bot.restoreDirectoryBots(bots, userId))
+    this.realtime.directoryAttention = async retry => await this.directory.attentionSummary(retry)
     this.realtime.directoryBaseline = async () => await this.directory.complete()
     this.realtime.subscribeChatRealtime(event => { if (event.type !== 'directory-update') void this.directory.accept(event).catch(() => undefined) })
     this.chat = new ChatService(

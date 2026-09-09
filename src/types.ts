@@ -3196,6 +3196,8 @@ export interface ArkmeChatRealtimeState {
 
 /** Server-owned unread attention summary across every visible conversation. */
 export interface ArkmeChatAttentionSummary {
+  /** Last visible directory snapshot is usable while its background refresh recovers. */
+  stale?: boolean
   badgeCount: number
   mutedUnreadCount: number
   sessionCountWithUnread: number
@@ -3205,6 +3207,9 @@ export interface ArkmeChatAttentionSummary {
 }
 
 export type ArkmeChatClientEvent = {
+  /** Local Host epoch; revisions are comparable only within this instance. */
+  providerInstanceId?: string
+} & ({
   type: 'directory-update'
   revision: number
   page: ArkmeSourceList
@@ -3305,7 +3310,7 @@ export type ArkmeChatClientEvent = {
   sourceKey: string
   eventId: string
   occurredAtMillis: number
-}
+})
 
 export type ArkmePluginOperation =
   | 'provider.capabilities'
