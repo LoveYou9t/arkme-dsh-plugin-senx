@@ -1791,11 +1791,14 @@ export function ArkmeMemberLeaveNotice(props: { rowId:string; event:ArkmeMemberE
 export function ArkmeTimelineMessageHeader({
   item,
   profile,
+  member,
 }: {
   item: ArkmeTimelineItem
   profile?: ArkmeUserProfile
+  member?: Pick<ArkmeConversationMemberItem, 'displayName'>
 }) {
-  const senderName = arkmeTimelineSenderName(item, profile)
+  const memberDisplayName = member?.displayName.trim()
+  const senderName = memberDisplayName && memberDisplayName !== '群成员' ? memberDisplayName : arkmeTimelineSenderName(item, profile)
   return <span style={styles.messageHeader}>
     {item.isMe && <span style={styles.meta}>{timeLabel(item.sendAtMillis)}</span>}
     <span style={styles.sender}>{senderName}</span>
@@ -7057,6 +7060,11 @@ export function ArkmeSurface({
                 const messageMember = item.memberRef === undefined
                   ? (item.isMe ? selfConversationMember : undefined)
                   : conversationMemberByRef.get(item.memberRef)
+                const messageHeader = item.isMe ? null : <ArkmeTimelineMessageHeader
+                  item={item}
+                  {...(selfProfile === undefined ? {} : { profile: selfProfile })}
+                  {...(source.kind === 'group_chat' && messageMember !== undefined ? { member: messageMember } : {})}
+                />
                 const polishStatus = aiPolishStatus(item)
                 const selectedForAction = activeSelectMode?.selectedIds.has(arkmeTimelineOccurrenceKey(item)) === true
                 const canSelect = canSelectTimelineItem(item)
@@ -7124,7 +7132,7 @@ export function ArkmeSurface({
                         ...(isForwardMessageCard ? styles.forwardMessageBody : {}),
                         ...(isSharedRecordingCard ? styles.sharedRecordingMessageBody : {}),
                       }}>
-                        {!isSharedRecordingCard && !isExtensionMessage && !item.isMe && <ArkmeTimelineMessageHeader item={item} {...(selfProfile === undefined ? {} : { profile: selfProfile })} />}
+                        {!isSharedRecordingCard && !isExtensionMessage && messageHeader}
                         {(() => {
                           const messageBubble = <div
                             role="button"
@@ -7248,7 +7256,7 @@ export function ArkmeSurface({
                                 ...styles.extensionChildBody,
                                 ...(item.isMe ? styles.extensionChildBodyMe : {}),
                               }}>
-                                {!item.isMe && <ArkmeTimelineMessageHeader item={item} {...(selfProfile === undefined ? {} : { profile: selfProfile })} />}
+                                {messageHeader}
                                 {messageContentLine}
                                 {topicBadge}
                               </div>

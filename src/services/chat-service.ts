@@ -1116,12 +1116,12 @@ function resolveChatMemberDisplayNames(input: {
 function projectChatMemberDisplayNames(
   item: Record<string, unknown>,
   userId: number,
-  viewerLabel?: string,
+  viewerRemark?: string,
   publicDisplayName?: string,
 ): ChatMemberDisplayNames {
   return resolveChatMemberDisplayNames({
     userId,
-    remarkCandidates: [viewerLabel, item.remark],
+    remarkCandidates: [viewerRemark, item.remark],
     memberNameCandidates: [item.display_name_snapshot],
     userNameCandidates: [item.display_name, publicDisplayName],
   })
@@ -5481,7 +5481,7 @@ export class ChatService {
       const profile = profiles.get(userId)
       const viewerLabel = viewerLabels.get(userId)
       const names = projectChatMemberDisplayNames(
-        item, userId, viewerLabel?.displayName, profile?.displayName,
+        item, userId, viewerLabel?.remark, profile?.displayName,
       )
       const { displayName, memberName, secondaryName } = names
       const { mentionDisplayName, mentionSecondaryName } = projectChatMemberMentionDisplayNames(

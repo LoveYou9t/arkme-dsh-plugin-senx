@@ -81,6 +81,31 @@ async function chatTimelineItemKeyForTest(
 }
 
 describe('ChatService', () => {
+  it.each([
+    ['', '', '群内昵称'],
+    ['', '成员接口备注', '成员接口备注'],
+    ['私人备注', '', '私人备注'],
+    ['用户昵称', '', '用户昵称'],
+  ])('projects only exact remarks ahead of group names (%j, %j)', async (privateRemark, memberRemark, displayName) => {
+    const session = { userId: 42, accessToken: 'fixture', refreshToken: 'fixture' }
+    const runtime = { config, stateStore: { uniqueCode: async () => 'member-signing-key' },
+      requireSession: async () => session,
+      authenticatedChatPost: async () => ({ items: [{ user_id: 7, status: 1, role: 3,
+        remark: memberRemark, display_name_snapshot: '群内昵称', display_name: '用户昵称' }] }),
+    }
+    const source = {
+      openSourceRef: async () => ({ kind: 'group_chat', ownerRef: 'group' }),
+      sourceItem: async () => ({ kind: 'group_chat' }),
+      privateChatViewerLabelsByUserIds: async () => new Map([[7, { displayName: privateRemark || '私聊旧快照', remark: privateRemark }]]),
+    }
+    const profile = { publicProfileSummariesByUserIds: async () => new Map([[7, { displayName: '用户昵称' }]]) }
+    const chat = new ChatService(runtime as never, source as never, profile as never,
+      {} as never, {} as never, {} as never, {} as never, {} as never, {} as never)
+    const result = await chat.listSourceMembers('source')
+    expect(result.items[0]).toMatchObject({ displayName, memberName: '群内昵称', mentionDisplayName: '群内昵称' })
+    expect(result.items[0]?.mentionSecondaryName).toBe(privateRemark || memberRemark || undefined)
+  })
+
   it.each(['private_chat', 'group_chat'] as const)('carries partial media evidence through %s page and realtime projections', async kind => {
     const session = { userId: 42, accessToken: 'fixture', refreshToken: 'fixture' }
     const raw = { relation: { record_uid: 'r', sender_user_id: 42 }, record: { version: 8, status: 1,
