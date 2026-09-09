@@ -60,7 +60,7 @@ export function ArkmeMarkdownBody({ text, highlightMentions = true, renderLink, 
       {...(onMentionClick === undefined ? {} : { onMentionClick })}
       {...(isMentionClickable === undefined ? {} : { isMentionClickable })}
     /> : child)
-  return <div style={{ minWidth: 0, maxWidth: '100%' }} data-arkme-text-format="markdown">
+  return <div style={{ minWidth: 0, maxWidth: '100%', overflow: 'hidden' }} data-arkme-text-format="markdown">
     <style>{arkmeMarkdownStyles}</style>
     <div className="arkme-markdown" style={textStyle}>
       <Markdown remarkPlugins={[remarkGfm, remarkBreaks, arkmeMarkdownBusinessNodes, arkmeLiteralMarkdownNodes]} components={{
