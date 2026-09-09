@@ -1584,6 +1584,8 @@ export interface ArkmeMessageSnapshotDetail {
 export interface ArkmeTimelineItem {
   /** Signed observed personal-topic membership; distinct from forwarding snapshots. */
   recordTopicAssignmentRef?: string
+  /** Stable topic identity from assignment membership evidence, not the display card. */
+  recordTopicAssignmentTopicKey?: string
   itemUid: string
   /** Account- and conversation-bound stable key used only for realtime timeline invalidation. */
   timelineItemKey?: string
