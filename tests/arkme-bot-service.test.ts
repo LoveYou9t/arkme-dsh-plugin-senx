@@ -291,6 +291,7 @@ describe('ArkmeService Bot owner adapter', () => {
 
     expect(requests).toEqual([{ body: {
       name: '八卦雷达', provider: 'openclaw', description: '高亮八卦', avatar: 'file_asset://avatar-asset-1',
+      direct_chat_owner: 'jotmo-chat', request_uid: expect.any(String),
     } }])
     expect(result.bot).toMatchObject({
       botRef: expect.stringMatching(/^arkme-bot-v2\./),

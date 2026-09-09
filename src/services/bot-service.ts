@@ -252,7 +252,10 @@ export class BotService {
     let data: Record<string, unknown>
     try {
       data = await this.runtime.authenticatedBotPost<Record<string, unknown>>(
-        '/api/v1/bot/create', { name, provider, description, avatar }, session, options.signal,
+        '/api/v1/bot/create', {
+          name, provider, description, avatar,
+          ...(provider === 'openclaw' ? { direct_chat_owner: BOT_CONVERSATION_OWNER.chat, request_uid: input.requestUid?.trim() || randomUUID() } : {}),
+        }, session, options.signal,
       )
     } catch (error) {
       if (error instanceof ArkmePluginError && ['arkme-network-error', 'arkme-timeout'].includes(error.code)) {
