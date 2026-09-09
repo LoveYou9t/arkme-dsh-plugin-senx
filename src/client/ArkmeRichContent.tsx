@@ -1,4 +1,5 @@
 import { arkmeMarkdownPlainText } from '../markdown.js'
+import { expandTextUpwards } from './expand-text-upwards.js'
 import { ArkmeMarkdownBody } from './ArkmeMarkdownBody.js'
 import { useEffect, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from 'react'
 import { createPortal } from 'react-dom'
@@ -266,7 +267,10 @@ function LongText({
   return <div style={styles.textFrame} data-arkme-text-collapsible="true">
     <p style={{ ...styles.text, ...(collapsed ? styles.collapsedText : {}) }}>{content}</p>
     {collapsed && <span aria-hidden style={styles.textFade} />}
-    <button type="button" style={styles.collapseToggle} aria-expanded={!collapsed} onClick={() => { setCollapsed(value => !value) }}>
+    <button type="button" style={styles.collapseToggle} aria-expanded={!collapsed} onClick={event => {
+      if (collapsed) expandTextUpwards(event.currentTarget, () => { setCollapsed(false) })
+      else setCollapsed(true)
+    }}>
       {collapsed ? '展开' : '收起'}
     </button>
   </div>
