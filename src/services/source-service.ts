@@ -624,7 +624,7 @@ export class SourceService {
         options.signal,
         {
           lane: 'background-read',
-          key: `private-remarks:${String(offset)}`,
+          key: `private-remarks:${this.runtime.memberCacheEpoch()}:${String(offset)}`,
           failureCooldownMs: 2_000,
         },
       )
@@ -660,7 +660,7 @@ export class SourceService {
         options.signal,
         {
           lane: 'background-read',
-          key: `private-remarks:direct:${pageCursor === undefined ? 'first' : String(page)}`,
+          key: `private-remarks:${this.runtime.memberCacheEpoch()}:direct:${pageCursor === undefined ? 'first' : String(page)}`,
           failureCooldownMs: 2_000,
         },
       )

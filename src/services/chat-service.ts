@@ -1077,6 +1077,7 @@ interface ChatMemberMentionDisplayNames {
 }
 
 interface ChatMemberProjectionOptions {
+  privateRemarks?: ReadonlyMap<number, string>
   basicOnly?: boolean
   profiles?: Awaited<ReturnType<ProfileService['publicProfileSummariesByUserIds']>>
   includeViewerLabels: boolean
@@ -1746,12 +1747,20 @@ export class ChatService {
       || returnedIds.some(id => !ids.includes(id)) || raw.some(item => chatMemberStatus(item.status) !== 'active')) {
       throw new ArkmePluginError('member-presentation-invalid-response', '成员资料响应无效', true, 502)
     }
-    const profiles = await this.profile.publicProfileSummariesByUserIds(returnedIds, session, options.signal).catch(error => {
-      if (options.signal?.aborted) throw error
-      return new Map()
-    })
+    const missingRemarkIds = raw.filter(item => stringValue(item.remark).trim() === '').map(item => numberValue(item.user_id))
+    const [profiles, privateRemarks] = await Promise.all([
+      this.profile.publicProfileSummariesByUserIds(returnedIds, session, options.signal).catch(error => {
+        if (options.signal?.aborted) throw error
+        return new Map()
+      }),
+      missingRemarkIds.length === 0 ? Promise.resolve(new Map<number, string>())
+        : this.source.privateRemarksByUserIds(missingRemarkIds, options).catch(error => {
+            if (options.signal?.aborted) throw error
+            throw new ArkmePluginError('member-remark-unavailable', '私人备注暂时无法加载，请重试', true, 502, { cause: error })
+          }),
+    ])
     const items = await this.projectChatMembers(source.ownerRef, raw, session, {
-      includeViewerLabels: false, includeHumanMentionRefs: source.kind === 'group_chat', profiles,
+      includeViewerLabels: false, includeHumanMentionRefs: source.kind === 'group_chat', profiles, privateRemarks,
       ...(options.signal === undefined ? {} : { signal: options.signal }),
     })
     options.signal?.throwIfAborted()
@@ -5481,11 +5490,11 @@ export class ChatService {
       const profile = profiles.get(userId)
       const viewerLabel = viewerLabels.get(userId)
       const names = projectChatMemberDisplayNames(
-        item, userId, viewerLabel?.displayName, profile?.displayName,
+        item, userId, options.privateRemarks?.get(userId) ?? viewerLabel?.displayName, profile?.displayName,
       )
       const { displayName, memberName, secondaryName } = names
       const { mentionDisplayName, mentionSecondaryName } = projectChatMemberMentionDisplayNames(
-        names, [viewerLabel?.remark, item.remark], userId,
+        names, [options.privateRemarks?.get(userId), viewerLabel?.remark, item.remark], userId,
       )
       const role = chatMemberRole(item.role)
       const status = chatMemberStatus(item.status)
