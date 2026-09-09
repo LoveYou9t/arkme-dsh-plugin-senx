@@ -1736,7 +1736,7 @@ export class ChatService {
     const references = await Promise.all(memberRefs.map(ref => this.openChatMemberRef(ref, session.userId, source.ownerRef)))
     const ids = references.map(ref => ref.targetUserId)
     const data = await this.memberRead(session, source.ownerRef, '/api/v1/chats/members/by-user-ids', {
-      chat_session_uid: source.ownerRef, user_ids: ids, active_only: true,
+      chat_session_uid: source.ownerRef, user_ids: ids, active_only: true, include_stats: true,
     }, options.signal)
     options.signal?.throwIfAborted()
     const raw = listValue(data.items).map(objectValue)
@@ -5486,6 +5486,8 @@ export class ChatService {
       const role = chatMemberRole(item.role)
       const status = chatMemberStatus(item.status)
       const extra = parsedObject(item.extra)
+      const statsKnown = Number.isSafeInteger(extra.record_count) && numberValue(extra.record_count) >= 0
+        && Number.isSafeInteger(extra.mention_count) && numberValue(extra.mention_count) >= 0
       members.push({
         memberRef: await this.sealChatMemberRef(session.userId, chatSessionUid, userId),
         ...(options.includeHumanMentionRefs && status === 'active' && userId !== session.userId ? {
@@ -5502,8 +5504,9 @@ export class ChatService {
         isSelf: userId === session.userId,
         isOwner: role === 'owner',
         joinedAtMillis: Math.max(0, Math.trunc(numberValue(item.join_at))),
-        recordCount: Math.max(0, Math.trunc(numberValue(extra.record_count))),
-        mentionCount: Math.max(0, Math.trunc(numberValue(extra.mention_count))),
+        statsKnown,
+        recordCount: statsKnown ? numberValue(extra.record_count) : 0,
+        mentionCount: statsKnown ? numberValue(extra.mention_count) : 0,
       })
     }
     const roleRank = (role: ArkmeGroupMemberRole) => role === 'owner' ? 0 : role === 'admin' ? 1 : role === 'member' ? 2 : 3
