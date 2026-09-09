@@ -1,3 +1,4 @@
+import { sealRecordTopicAssignmentRef } from '../record-topic-assignment-ref.js'
 import { invalidatesMemberSnapshot } from '../member-directory.js'
 import { arkmeRecordTextFormat, arkmeMarkdownHashTagRanges, arkmeMarkdownPlainText, arkmeMarkdownTextRanges } from '../markdown.js'
 import { createHash, createHmac, randomUUID, timingSafeEqual } from 'node:crypto'
@@ -1322,7 +1323,7 @@ function selfTopicIdentityFromHomeFeed(raw: unknown): { topicUid: string; title:
   const item = objectValue(raw)
   const recordCore = objectValue(item.record_core)
   const topicCore = objectValue(item.topic_core ?? item.topicCore ?? recordCore.topic_core ?? recordCore.topicCore)
-  const sourceKind = stringValue(item.source_kind ?? item.sourceKind ?? recordCore.source_kind ?? recordCore.sourceKind).trim().toLowerCase()
+  const sourceKind = String(item.source_kind ?? item.sourceKind ?? recordCore.source_kind ?? recordCore.sourceKind ?? '').trim().toLowerCase()
   const sourceIsTopic = sourceKind === '2' || sourceKind === 'topic'
   const explicitTopicUid = stringValue(topicCore.topic_uid ?? topicCore.topicUid).trim()
   if ((!sourceIsTopic && explicitTopicUid === '') || arkmePrivacyLockedTopic({ topic_core: topicCore })) return undefined
@@ -2136,7 +2137,7 @@ export class ChatService {
           const recordUid = this.record.recordUid(raw)
           const displayItems = media.displayItemsByRecordUid.get(recordUid)
           const topic = selfTopicIdentityFromHomeFeed(raw)
-          return this.record.recordTimelineItemFromRaw(raw, session.userId, {
+          const item = this.record.recordTimelineItemFromRaw(raw, session.userId, {
             ...(displayItems === undefined ? {} : { displayItems }),
             isMe: true,
             ...(topic === undefined ? {} : { selfTopic: {
@@ -2148,14 +2149,15 @@ export class ChatService {
             } }),
             mediaUnavailable: media.unavailableRecordUids.has(recordUid),
           })
+          const entry = objectValue(raw)
+          const core = objectValue(entry.record_core)
+          const sourceTopicUid = entry.source_kind === 1 ? ''
+            : entry.source_kind === 2 ? stringValue(entry.source_uid).trim() || undefined : undefined
+          return this.withRecordTopicAssignmentRef(source, item, session.userId, signingKey,
+            numberValue(core.owner_user_id), sourceTopicUid)
         }))).filter(item => item.itemUid !== '')
         this.hydrateTimelineExtensionParents(items)
-        const projectedItems = items.map(item => this.withRecordMessageActionRef(
-          source,
-          item,
-          session.userId,
-          signingKey,
-        ))
+        const projectedItems = items.map(item => this.withRecordMessageActionRef(source, item, session.userId, signingKey))
         const nextSendAt = numberValue(data.next_cursor_send_at)
         const nextUid = stringValue(data.next_cursor_record_uid).trim()
         return {
@@ -2176,7 +2178,7 @@ export class ChatService {
           source: await this.source.sourceItem(source),
           items: page.items.map(item => this.withRecordMessageActionRef(
             source,
-            this.record.recordTimelineItem(item),
+            this.withRecordTopicAssignmentRef(source, this.record.recordTimelineItem(item), session.userId, signingKey, session.userId, ''),
             session.userId,
             signingKey,
           )),
@@ -2209,10 +2211,12 @@ export class ChatService {
         const records = rawRecords.map(raw => {
           const recordUid = this.record.recordUid(raw)
           const displayItems = media.displayItemsByRecordUid.get(recordUid)
-          return this.record.recordTimelineItemFromRaw(raw, session.userId, {
+          const item = this.record.recordTimelineItemFromRaw(raw, session.userId, {
             ...(displayItems === undefined ? {} : { displayItems }),
             mediaUnavailable: media.unavailableRecordUids.has(recordUid),
           })
+          return this.withRecordTopicAssignmentRef(source, item, session.userId, signingKey,
+            numberValue(objectValue(raw).owner_user_id), source.ownerRef)
         })
         const nextSendAt = numberValue(data.next_cursor_send_at)
         const nextUid = stringValue(data.next_cursor_record_uid).trim()
@@ -3652,7 +3656,7 @@ export class ChatService {
           ...(options.captureContext === undefined ? {} : { captureContext: options.captureContext }),
         })
         if (result.localState !== 'failed') await this.realtime.invalidateRecordProjection()
-        return await this.withSentMessageActionRef({
+        return await this.withConfirmedSendReferences({
           sourceRef,
           itemUid: result.recordUid,
           status: result.status,
@@ -3695,7 +3699,7 @@ export class ChatService {
           session.userId,
         )
         await this.realtime.invalidateRecordProjection()
-        return await this.withSentMessageActionRef({
+        return await this.withConfirmedSendReferences({
           sourceRef,
           itemUid: stringValue(result.record_uid).trim() || recordUid,
           status: numberValue(result.status),
@@ -4083,7 +4087,7 @@ export class ChatService {
       )
       const sequence = numberValue(result.seq)
       this.realtime.scheduleChatSessionProjection(chatSessionUid, sequence)
-      return await this.withSentMessageActionRef({
+      return await this.withConfirmedSendReferences({
         sourceRef,
         itemUid: stringValue(result.record_uid).trim() || recordUid,
         status: numberValue(result.audit_status),
@@ -4219,7 +4223,7 @@ export class ChatService {
           session.userId, options.signal, input.textFormat,
         )
         await this.realtime.invalidateRecordProjection()
-        return await this.withSentMessageActionRef({
+        return await this.withConfirmedSendReferences({
           sourceRef,
           itemUid: stringValue(result.record_uid).trim() || recordUid,
           status: numberValue(result.status),
@@ -4248,7 +4252,7 @@ export class ChatService {
           session.userId, options.signal, input.textFormat,
         )
         await this.realtime.invalidateRecordProjection()
-        return await this.withSentMessageActionRef({
+        return await this.withConfirmedSendReferences({
           sourceRef,
           itemUid: stringValue(result.record_uid).trim() || recordUid,
           status: numberValue(result.status),
@@ -4275,7 +4279,7 @@ export class ChatService {
       )
       const sequence = numberValue(result.seq)
       this.realtime.scheduleChatSessionProjection(source.ownerRef, sequence)
-      return await this.withSentMessageActionRef({
+      return await this.withConfirmedSendReferences({
         sourceRef,
         itemUid: stringValue(result.record_uid).trim() || recordUid,
         status: numberValue(result.audit_status ?? result.status),
@@ -5886,7 +5890,7 @@ export class ChatService {
    * write: a local key-store failure must never turn an accepted write into a
    * retryable send failure.
    */
-  private async withSentMessageActionRef(
+  private async withConfirmedSendReferences(
     sent: ArkmeSourceSendResult,
     session: ArkmeSessionCredentials,
     input: ArkmeSentMessageActionInput,
@@ -5906,7 +5910,7 @@ export class ChatService {
     }))
     try {
       const signingKey = await this.runtime.stateStore.uniqueCode()
-      return {
+      const withAction: ArkmeSourceSendResult = {
         ...sent,
         messageActionRef: this.sealMessageActionRef(this.messageActionRefPayload({
           sourceKind: input.sourceKind,
@@ -5928,9 +5932,29 @@ export class ChatService {
           ...(contentBlocks === undefined ? {} : { contentBlocks }),
         }), signingKey),
       }
+      if (input.sourceKind !== 'record' || sent.status !== 1) return withAction
+      try {
+        const source = await this.source.openSourceRef(sent.sourceRef, session.userId)
+        if (source.kind !== 'send_to_self' && source.kind !== 'default_category' && source.kind !== 'topic') return withAction
+        return { ...withAction, recordTopicAssignmentRef: sealRecordTopicAssignmentRef({
+          userId: session.userId, sourceKind: source.kind, sourceOwnerRef: source.ownerRef,
+          recordUid, sourceTopicUid: source.kind === 'topic' ? source.ownerRef : '',
+        }, signingKey) }
+      } catch { return withAction }
     } catch {
       return sent
     }
+  }
+
+  private withRecordTopicAssignmentRef(
+    source: ArkmeSourceRefPayload, item: ArkmeTimelineItem, userId: number, signingKey: string,
+    recordOwnerUserId: number, sourceTopicUid: string | undefined,
+  ): ArkmeTimelineItem {
+    if ((source.kind !== 'send_to_self' && source.kind !== 'default_category' && source.kind !== 'topic')
+      || recordOwnerUserId !== userId || item.status !== 1 || item.itemUid.trim() === '' || sourceTopicUid === undefined) return item
+    return { ...item, recordTopicAssignmentRef: sealRecordTopicAssignmentRef({
+      userId, sourceKind: source.kind, sourceOwnerRef: source.ownerRef, recordUid: item.itemUid, sourceTopicUid,
+    }, signingKey) }
   }
 
   private withRecordMessageActionRef(
