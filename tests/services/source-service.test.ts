@@ -1232,3 +1232,50 @@ describe('Chat directory pin owner boundary', () => {
     expect(requests).toEqual([])
   })
 })
+
+function createPrivateRemarkLookup(read: (path: string, body: Record<string, unknown>) => Promise<unknown>) {
+  const request = vi.fn(read)
+  const runtime = { requireSession: async () => ({ userId: 42 }), memberCacheEpoch: () => 0,
+    authenticatedChatPost: request } as unknown as ServiceRuntime
+  return { service: new SourceService(runtime, {} as never, {} as never), request }
+}
+
+describe('private remark lookup completeness', () => {
+  it('rejects an incomplete direct-chat lookup instead of treating an unvisited remark as absent', async () => {
+    const { service } = createPrivateRemarkLookup(async (path, body) => {
+      if (path.endsWith('/contacts/list')) return { items: [], has_more: false }
+      const page = Number((body.page_cursor as { page?: number } | undefined)?.page ?? 1)
+      return { items: Array.from({ length: 50 }, (_, i) => ({ session: { session_kind: 1 },
+        private_counterpart: { user_id: page === 21 && i === 0 ? 7 : 10000 + page * 50 + i },
+        private_supplement: { remark: '私人备注' } })),
+        has_more: page < 21, next_page_cursor: { page: page + 1 } }
+    })
+    await expect(service.privateRemarksByUserIds([7])).rejects.toMatchObject({ code: 'private-remark-pagination-invalid' })
+  })
+  it('accepts resolved targets on the last permitted page without requiring unrelated later pages', async () => {
+    const { service, request } = createPrivateRemarkLookup(async (path, body) => {
+      if (path.endsWith('/contacts/list')) return { items: [], has_more: false }
+      const page = Number((body.page_cursor as { page?: number } | undefined)?.page ?? 1)
+      return { items: [{ session: { session_kind: 1 },
+        private_counterpart: { user_id: page === 20 ? 7 : 10000 + page },
+        private_supplement: { remark: '私人备注' } }],
+        has_more: true, next_page_cursor: { page: page + 1 } }
+    })
+    expect(await service.privateRemarksByUserIds([7])).toEqual(new Map([[7, '私人备注']]))
+    expect(request).toHaveBeenCalledTimes(21)
+  })
+  it('does not report a missing direct-chat cursor as a completed remark lookup', async () => {
+    const { service } = createPrivateRemarkLookup(async path => path.endsWith('/contacts/list')
+      ? { items: [], has_more: false } : { items: [], has_more: true })
+    await expect(service.privateRemarksByUserIds([7])).rejects.toBeDefined()
+  })
+  it('does not use an old direct-chat remark when an authoritative cleared contact is beyond page 20', async () => {
+    const { service } = createPrivateRemarkLookup(async (path, body) => {
+      if (!path.endsWith('/contacts/list')) return { items: [{ session: { session_kind: 1 },
+        private_counterpart: { user_id: 7 }, private_supplement: { remark: '已清除的旧备注' } }], has_more: false }
+      const offset = Number(body.offset)
+      return { items: Array.from({ length: 50 }, (_, i) => ({ user_id: offset === 1000 && i === 0 ? 7 : 10000 + offset + i, remark: '' })), has_more: offset < 1000 }
+    })
+    await expect(service.privateRemarksByUserIds([7])).rejects.toMatchObject({ code: 'private-remark-pagination-invalid' })
+  })
+})

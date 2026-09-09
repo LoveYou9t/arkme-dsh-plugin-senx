@@ -641,7 +641,7 @@ export class SourceService {
         remaining.delete(targetUserId)
       }
       if (data.has_more !== true) break
-      if (rawItems.length === 0) {
+      if (remaining.size > 0 && (rawItems.length === 0 || page === PRIVATE_REMARK_MAX_PAGES - 1)) {
         throw new ArkmePluginError(
           'private-remark-pagination-invalid', '联系人备注分页响应不完整', true, 502,
         )
@@ -679,7 +679,11 @@ export class SourceService {
       }
       if (data.has_more !== true) break
       const next = objectValue(data.next_page_cursor)
-      if (Object.keys(next).length === 0) break
+      if (remaining.size > 0 && (Object.keys(next).length === 0 || page === PRIVATE_REMARK_MAX_PAGES - 1)) {
+        throw new ArkmePluginError(
+          'private-remark-pagination-invalid', '私聊备注分页响应不完整', true, 502,
+        )
+      }
       pageCursor = next
     }
     return remarks

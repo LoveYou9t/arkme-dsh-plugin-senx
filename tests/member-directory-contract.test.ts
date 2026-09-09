@@ -122,13 +122,15 @@ it('shares authorized pages, presentation and cache across Host, SDK and officia
       expect((await sdk.cachedSourceMembers(group.sourceRef))?.items[0]?.displayName).toBe(displayName)
     }
     expect(calls).toContain('/api/v1/chats/list')
-    const unavailableRemark = vi.spyOn(source, 'privateRemarksByUserIds')
-      .mockRejectedValueOnce(Object.assign(new Error('private-chat read unavailable'), { code: 'arkme-code-2001' }))
-    runtime.invalidateMemberCache()
-    await expect(sdk.sourceMembersPresentation(group.sourceRef, [first.items[0]!.memberRef]))
-      .rejects.toMatchObject({ code: 'member-remark-unavailable' })
-    expect((await sdk.cachedSourceMembers(group.sourceRef))?.items[0]?.displayName).toBe('私人备注')
-    unavailableRemark.mockRestore()
+    for (const code of ['arkme-code-2001', 'private-remark-pagination-invalid']) {
+      const unavailableRemark = vi.spyOn(source, 'privateRemarksByUserIds')
+        .mockRejectedValueOnce(Object.assign(new Error('private remark read incomplete'), { code }))
+      runtime.invalidateMemberCache()
+      await expect(sdk.sourceMembersPresentation(group.sourceRef, [first.items[0]!.memberRef]))
+        .rejects.toMatchObject({ code: 'member-remark-unavailable' })
+      expect((await sdk.cachedSourceMembers(group.sourceRef))?.items[0]?.displayName).toBe('私人备注')
+      unavailableRemark.mockRestore()
+    }
     malformed = true
     await expect(chat.sourceMembersPresentation(group.sourceRef, [first.items[0]!.memberRef])).rejects.toMatchObject({ code: 'member-presentation-invalid-response' })
     expect((await sdk.cachedSourceMembers(group.sourceRef))?.items).toHaveLength(1)
