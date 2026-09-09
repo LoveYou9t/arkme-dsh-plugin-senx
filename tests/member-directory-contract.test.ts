@@ -96,6 +96,13 @@ it('shares authorized pages, presentation and cache across Host, SDK and officia
     expect(calls.some(path => path.endsWith('/members/list'))).toBe(false)
     expect(calls.some(path => path.endsWith('/chats/list') || path.endsWith('/contacts/list'))).toBe(false)
     expect((await sdk.cachedSourceMembers(group.sourceRef))?.items[0]?.displayName).toBe('私人备注')
+    const privateChat = await source.sourceItem({ version: 1, userId: 1, kind: 'private_chat', ownerRef: 'private', displayName: '私聊' })
+    const privatePage = await sdk.pageSourceMembers(privateChat.sourceRef)
+    const privateLookup = vi.spyOn(source, 'privateRemarksByUserIds')
+    inlineRemark = false
+    await sdk.sourceMembersPresentation(privateChat.sourceRef, privatePage.items.map(item => item.memberRef))
+    expect(privateLookup).not.toHaveBeenCalled()
+    privateLookup.mockRestore()
     // Private-chat remarks remain meaningful even when the person is not an added contact.
     inlineRemark = false
     runtime.invalidateMemberCache()

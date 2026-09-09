@@ -614,6 +614,7 @@ export class SourceService {
       userId => Number.isSafeInteger(userId) && userId > 0 && userId !== session.userId,
     ))
     const remarks = new Map<number, string>()
+    const cacheEpoch = this.runtime.memberCacheEpoch()
     let offset = 0
 
     for (let page = 0; page < PRIVATE_REMARK_MAX_PAGES && remaining.size > 0; page += 1) {
@@ -624,7 +625,8 @@ export class SourceService {
         options.signal,
         {
           lane: 'background-read',
-          key: `private-remarks:${this.runtime.memberCacheEpoch()}:${String(offset)}`,
+          key: `private-remarks:${cacheEpoch}:${String(offset)}`,
+          cacheMs: 2_000,
           failureCooldownMs: 2_000,
         },
       )
@@ -634,10 +636,9 @@ export class SourceService {
         const targetUserId = integerIdentifierValue(raw.user_id)
         if (!remaining.has(targetUserId)) continue
         const remark = stringValue(raw.remark).trim()
-        if (remark !== '') {
-          remarks.set(targetUserId, remark)
-          remaining.delete(targetUserId)
-        }
+        if (remark !== '') remarks.set(targetUserId, remark)
+        // An empty contact remark is a known cleared value, not a missing contact.
+        remaining.delete(targetUserId)
       }
       if (data.has_more !== true) break
       if (rawItems.length === 0) {
@@ -660,7 +661,8 @@ export class SourceService {
         options.signal,
         {
           lane: 'background-read',
-          key: `private-remarks:${this.runtime.memberCacheEpoch()}:direct:${pageCursor === undefined ? 'first' : String(page)}`,
+          key: `private-remarks:${cacheEpoch}:direct:${JSON.stringify(pageCursor ?? null)}`,
+          cacheMs: 2_000,
           failureCooldownMs: 2_000,
         },
       )

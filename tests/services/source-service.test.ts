@@ -508,7 +508,7 @@ describe('SourceService', () => {
             {
               session: { session_kind: 1 },
               private_counterpart: { user_id: '8' },
-              private_supplement: { remark: '' },
+              private_supplement: { remark: '已清除的旧备注' },
             },
             {
               session: { session_kind: 1 },
@@ -536,6 +536,71 @@ describe('SourceService', () => {
       { path: '/api/v1/chats/contacts/list', body: { limit: 50, offset: 0 } },
       { path: '/api/v1/chats/list', body: { limit: 50 } },
     ])
+  })
+
+  it('shares private remark pages across member batches and refreshes them after a remark save', async () => {
+    let remark = '当前备注'
+    const fetchImpl = vi.fn(async (input) => {
+      const path = new URL(String(input)).pathname
+      const data = path.endsWith('/contacts/list') ? { items: [], has_more: false }
+        : { items: [7, 8].map(userId => ({ session: { session_kind: 1 },
+            private_counterpart: { user_id: userId }, private_supplement: { remark, counterpart_name_snapshot: '旧名称' },
+          })), has_more: false }
+      return new Response(JSON.stringify({ code: 200, data }))
+    }) as typeof fetch
+    const runtime = new ServiceRuntime(config, {
+      async read() { return { userId: 42, accessToken: 'access', refreshToken: 'refresh' } },
+      async write() {}, async delete() {},
+    }, { async uniqueCode() { return 'device-secret' } } as StateStore, fetchImpl)
+    const service = new SourceService(runtime, new ProfileService(runtime), {} as never)
+    try {
+      expect(await service.privateRemarksByUserIds([7])).toEqual(new Map([[7, '当前备注']]))
+      expect(await service.privateRemarksByUserIds([8])).toEqual(new Map([[8, '当前备注']]))
+      expect(fetchImpl).toHaveBeenCalledTimes(2)
+      remark = ''
+      runtime.invalidateMemberCache()
+      expect(await service.privateRemarksByUserIds([8])).toEqual(new Map())
+      expect(fetchImpl).toHaveBeenCalledTimes(4)
+    } finally { service.dispose(); runtime.dispose() }
+  })
+
+  it('does not coalesce different private-chat cursors at the same page number', async () => {
+    let now = Date.now()
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => now)
+    let firstPages = 0
+    let oldPageStarted = false
+    let releaseOld!: () => void
+    const oldPage = new Promise<void>(resolve => { releaseOld = resolve })
+    const runtime = new ServiceRuntime(config, {
+      async read() { return { userId: 42, accessToken: 'access', refreshToken: 'refresh' } },
+      async write() {}, async delete() {},
+    }, { async uniqueCode() { return 'device-secret' } } as StateStore, async (input, init) => {
+      const path = new URL(String(input)).pathname
+      const body = JSON.parse(String(init?.body))
+      let data: unknown
+      if (path.endsWith('/contacts/list')) data = { items: [], has_more: false }
+      else if (body.page_cursor === undefined) data = { items: [], has_more: true,
+        next_page_cursor: { last_active_at: ++firstPages } }
+      else {
+        if (body.page_cursor.last_active_at === 1) { oldPageStarted = true; await oldPage }
+        data = { items: [{ session: { session_kind: 1 }, private_counterpart: { user_id: 7 },
+          private_supplement: { remark: body.page_cursor.last_active_at === 1 ? '旧页备注' : '新页备注' },
+        }], has_more: false }
+      }
+      return new Response(JSON.stringify({ code: 200, data }))
+    })
+    const service = new SourceService(runtime, new ProfileService(runtime), {} as never)
+    const first = service.privateRemarksByUserIds([7])
+    try {
+      await vi.waitFor(() => expect(oldPageStarted).toBe(true))
+      now += 3_000
+      let second: Map<number, string> | undefined
+      const next = service.privateRemarksByUserIds([7]).then(value => { second = value })
+      try {
+        await vi.waitFor(() => expect(second?.get(7)).toBe('新页备注'))
+      } finally { releaseOld(); await next }
+      expect(await first).toEqual(new Map([[7, '旧页备注']]))
+    } finally { releaseOld(); await first; service.dispose(); runtime.dispose(); clock.mockRestore() }
   })
 
   it('does not let an invalidated in-flight send-to-self read repopulate the cache', async () => {

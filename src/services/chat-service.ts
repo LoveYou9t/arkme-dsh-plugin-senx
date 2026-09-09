@@ -1747,7 +1747,8 @@ export class ChatService {
       || returnedIds.some(id => !ids.includes(id)) || raw.some(item => chatMemberStatus(item.status) !== 'active')) {
       throw new ArkmePluginError('member-presentation-invalid-response', '成员资料响应无效', true, 502)
     }
-    const missingRemarkIds = raw.filter(item => stringValue(item.remark).trim() === '').map(item => numberValue(item.user_id))
+    const missingRemarkIds = source.kind === 'group_chat'
+      ? raw.filter(item => stringValue(item.remark).trim() === '').map(item => numberValue(item.user_id)) : []
     const [profiles, privateRemarks] = await Promise.all([
       this.profile.publicProfileSummariesByUserIds(returnedIds, session, options.signal).catch(error => {
         if (options.signal?.aborted) throw error
