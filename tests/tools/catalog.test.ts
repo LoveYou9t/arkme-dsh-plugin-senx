@@ -71,8 +71,6 @@ describe('Arkme tool catalog', () => {
       'arkme_world_publish_text',
       'arkme_extension_reviews_read',
       'arkme_extension_review_create',
-      'arkme_recording_days_list',
-      'arkme_recording_read',
       'arkme_recording_import',
       'arkme_recording_import_folder',
       'arkme_wechat_conversations',
