@@ -151,7 +151,7 @@ import {
   type ArkmeComposerAttachment,
 } from './composer-draft-store.js'
 import { arkmeConversationComposerLayout } from './conversation-composer-presentation.js'
-import { restoreArkmeComposerFocus } from './composer-focus.js'
+import { focusArkmeComposerFromClick, restoreArkmeComposerFocus } from './composer-focus.js'
 import { arkmeDesktopNotifications } from './desktop-notification-runtime.js'
 import {
   arkmeNotificationActivation,
@@ -7532,6 +7532,7 @@ export function ArkmeSurface({
           </div>}
           {messageActionStatus !== '' && <div role="status" aria-live="polite" style={styles.messageActionToast}>{messageActionStatus}</div>}
           {activeSelectMode === undefined && <footer className="arkme-conversation-composer" style={styles.composer}
+            onClick={event => { focusArkmeComposerFromClick(textareaRef.current, event) }}
             onDragOver={event => { if (!composerFileAddingDisabled && Array.from(event.dataTransfer.types).includes('Files')) { event.preventDefault(); event.dataTransfer.dropEffect = 'copy' } }}
             onDrop={event => { if (!composerFileAddingDisabled && event.dataTransfer.files.length > 0) { event.preventDefault(); void selectFiles(event.dataTransfer.files) } }}
           ><div style={styles.composerStack}>
@@ -7810,7 +7811,7 @@ export function ArkmeSurface({
                 }
               }} />
             </div>
-            <div style={styles.tools}><div style={styles.toolGroup}><button ref={addMenuTriggerRef} type="button" style={styles.plus} aria-label="添加内容" aria-haspopup="menu" aria-expanded={addMenuOpen} disabled={composerFileAddingDisabled} onClick={() => { setAddMenuOpen(value => !value) }}>{(activeRecordReeditComposer === undefined ? preparingFiles : preparingReeditFiles) ? <ArkmeFilePreparingIndicator /> : '+'}</button><ArkmeEmojiPicker
+            <div data-arkme-composer-footer="tools" style={styles.tools}><div style={styles.toolGroup}><button ref={addMenuTriggerRef} type="button" style={styles.plus} aria-label="添加内容" aria-haspopup="menu" aria-expanded={addMenuOpen} disabled={composerFileAddingDisabled} onClick={() => { setAddMenuOpen(value => !value) }}>{(activeRecordReeditComposer === undefined ? preparingFiles : preparingReeditFiles) ? <ArkmeFilePreparingIndicator /> : '+'}</button><ArkmeEmojiPicker
               key={`emoji-picker:${conversationOverlayKey}`}
               disabled={preparingFiles || directAdmission.blocked || activeRecordReeditComposer !== undefined}
               scopeKey={composerDraftKey}
@@ -7864,7 +7865,7 @@ export function ArkmeSurface({
               draftKey={composerDraftKey}
             />}
           </div>
-            <div style={styles.composerHint}>Enter发送 / Shift+Enter换行</div>
+            <div data-arkme-composer-footer="hint" style={styles.composerHint}>Enter发送 / Shift+Enter换行</div>
           </div></footer>}
         </>}
         {activeConversation && forwardTargetPicker !== undefined && <div
