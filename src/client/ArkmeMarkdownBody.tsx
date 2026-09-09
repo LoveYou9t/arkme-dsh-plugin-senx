@@ -1,4 +1,5 @@
 import { Children, isValidElement, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react'
+import { expandTextUpwards } from './expand-text-upwards.js'
 import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import remarkBreaks from 'remark-breaks'
@@ -103,7 +104,10 @@ export function ArkmeMarkdownBody({ text, highlightMentions = true, renderLink, 
         }}>{text}</Markdown>
       </div>
     </div>
-    {collapse && overflow && <button type="button" aria-expanded={expanded} onClick={() => setExpanded(!expanded)}
+    {collapse && overflow && <button type="button" aria-expanded={expanded} onClick={event => {
+      if (!expanded) expandTextUpwards(event.currentTarget, () => { setExpanded(true) })
+      else setExpanded(false)
+    }}
       style={{ border: 0, padding: '4px 0', background: 'none', color: 'var(--dsw-alias-state-business-primary,#3964fe)', cursor: 'pointer' }}>
       {expanded ? '收起' : '展开'}
     </button>}
