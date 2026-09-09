@@ -874,6 +874,49 @@ describe('conversation send directory projection', () => {
     vi.unstubAllGlobals()
   })
 
+  it('settles the uncached send-to-self entry while the topic directory is still paging', async () => {
+    vi.useFakeTimers()
+    try {
+      const uncategorized = { ...sendToSelf, sourceRef: 'source-uncategorized', kind: 'default_category' as const, displayName: '未分类' }
+      arkmeUi.focusSendToSelf()
+      const previous = mocks.callArkme.getMockImplementation()!
+      let directoryReads = 0
+      let timelineReads = 0
+      mocks.callArkme.mockImplementation(async (operation, params, signal) => {
+        if (operation === 'sources.list' && params?.directory === 'send_to_self') {
+          directoryReads += 1
+          await new Promise<void>((resolve, reject) => {
+            const abort = () => { clearTimeout(timer); reject(new DOMException('aborted', 'AbortError')) }
+            const timer = setTimeout(() => {
+              signal?.removeEventListener('abort', abort)
+              resolve()
+            }, params.cursor === undefined ? 50 : 200)
+            if (signal?.aborted) abort()
+            else signal?.addEventListener('abort', abort, { once: true })
+          })
+          return params.cursor === undefined
+            ? { items: [sendToSelf, uncategorized], hasMore: true, nextCursor: 'second-page' }
+            : { items: [], hasMore: false }
+        }
+        if (operation === 'source.timeline') {
+          timelineReads += 1
+          return { source: sendToSelf, items: [], hasMore: false }
+        }
+        return await previous(operation, params, signal)
+      })
+      await act(async () => { renderer = create(<ArkmeSurface productChrome={false} productNavigation={false} />) })
+      for (let tick = 0; tick < 100; tick += 1) {
+        await act(async () => { await vi.advanceTimersByTimeAsync(50) })
+      }
+      expect(directoryReads).toBeLessThanOrEqual(4)
+      expect(timelineReads).toBe(1)
+      expect(JSON.stringify(renderer!.toJSON())).not.toContain('正在加载发给自己的内容')
+    } finally {
+      await act(async () => { renderer?.unmount(); renderer = undefined })
+      vi.useRealTimers()
+    }
+  })
+
   it.each([target, group])('keeps $kind preparing inside the message viewport after records, without changing records', async chat => {
     activeSource = chat
     arkmeChatDirectory.publish([chat])
