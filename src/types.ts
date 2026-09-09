@@ -1413,6 +1413,8 @@ export interface ArkmeSourceItem {
   isPinned?: boolean
   /** Chat policy.update_at for ordering pin projections; independent of message sequence. */
   chatPolicyUpdatedAtMillis?: number
+  /** Policy version proving mute/notify projection; pin-only events cannot advance it. */
+  chatNotificationPolicyUpdatedAtMillis?: number
   latestSequence?: number
   /** Current viewer's confirmed Chat read cursor; distinct from the last message sequence. */
   readSequence?: number
@@ -2573,10 +2575,12 @@ export interface ArkmeGroupSettingsSnapshot {
   canDissolve: boolean
   canLeave: boolean
   messageDnd: boolean
+  chatNotificationPolicyUpdatedAtMillis: number
 }
 
 export interface ArkmeGroupNotificationResult {
   messageDnd: boolean
+  chatNotificationPolicyUpdatedAtMillis: number
 }
 
 export interface ArkmeGroupProjectionResult {

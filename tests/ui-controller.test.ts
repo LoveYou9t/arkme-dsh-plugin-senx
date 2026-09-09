@@ -73,6 +73,14 @@ describe('ArkmeUiController', () => {
     expect(controller.getChatRevision()).toBe(0)
   })
 
+  it('retains newer policy evidence when presentation is unchanged', () => {
+    const controller = new ArkmeUiController()
+    const source = { sourceRef: 'group-1', kind: 'group_chat' as const, displayName: '群', isMuted: false, isPinned: true }
+    controller.selectSource({ ...source, chatPolicyUpdatedAtMillis: 1000, chatNotificationPolicyUpdatedAtMillis: 1000 })
+    controller.updateSelectedSourceProjection({ ...source, chatPolicyUpdatedAtMillis: 3000, chatNotificationPolicyUpdatedAtMillis: 2000 })
+    expect(controller.getSnapshot().selectedSource).toMatchObject({ chatPolicyUpdatedAtMillis: 3000, chatNotificationPolicyUpdatedAtMillis: 2000 })
+  })
+
   it('clears Contacts mode on every non-Contacts route and authenticated account reset', () => {
     const controller = new ArkmeUiController()
 

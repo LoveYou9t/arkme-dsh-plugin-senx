@@ -1,3 +1,4 @@
+import { patchChatPolicy, type ChatPolicySnapshot } from './chat-policy.js'
 import { arkmeRecordTextFormat, arkmeMarkdownPlainText } from '../markdown.js'
 import { createHmac, timingSafeEqual } from 'node:crypto'
 import { logArkmeAvatarDiagnostic } from '../avatar-diagnostics.js'
@@ -30,7 +31,7 @@ import { ArkmePluginError, ServiceRuntime, objectValue, stringValue } from './se
 import { arkmeMentionMetadataMentionsViewer } from '../mention-metadata.js'
 import { arkmeMediaKind } from '../file-transfer-contract.js'
 import { projectArkmeChatAttention, projectArkmeChatAttentionFromMuted } from '../chat-attention.js'
-import { retainNewerArkmeChatPin } from '../chat-pin-projection.js'
+import { retainNewerArkmeChatPolicy } from '../chat-policy-projection.js'
 import { arkmeEmojiTokenSafePrefix, arkmeHasKnownEmojiToken } from '../arkme-emoji-text.js'
 
 export interface ArkmeSourceRefPayload {
@@ -420,6 +421,19 @@ export class SourceService {
     return this.chatSourceCache.get(cacheKey)
   }
 
+  applyConfirmedChatPolicy(policy: ChatPolicySnapshot): void {
+    const cacheKey = `${String(policy.user_id)}:${policy.chat_session_uid}`
+    const cached = this.chatSourceCache.get(cacheKey)
+    if (cached !== undefined) this.storeChatSourceByKey(cacheKey, {
+      ...cached,
+      isPinned: policy.pin_state === 2,
+      isMuted: policy.mute_state === 2 || policy.notify_state === 2,
+      chatPolicyUpdatedAtMillis: policy.update_at,
+      chatNotificationPolicyUpdatedAtMillis: policy.update_at,
+    })
+    this.invalidateSourceListCache(policy.user_id, 'root')
+  }
+
   private projectChatSourceAttention(source: ArkmeSourceItem): ArkmeSourceItem {
     if (source.kind !== 'private_chat' && source.kind !== 'group_chat') return source
     const attention = projectArkmeChatAttentionFromMuted(source.unreadCount, source.isMuted === true)
@@ -427,7 +441,7 @@ export class SourceService {
   }
 
   private storeChatSourceByKey(cacheKey: string, source: ArkmeSourceItem): void {
-    const projected = retainNewerArkmeChatPin(this.chatSourceCache.get(cacheKey), source)
+    const projected = retainNewerArkmeChatPolicy(this.chatSourceCache.get(cacheKey), source)
     this.chatSourceCache.set(cacheKey, cloneSourceItem(this.projectChatSourceAttention(projected)))
   }
 
@@ -1157,45 +1171,10 @@ export class SourceService {
       throw new ArkmePluginError('chat-directory-policy-invalid', '仅支持更新私聊或群聊的会话列表状态', false)
     }
     if (signal?.aborted === true) throw new DOMException('The operation was aborted', 'AbortError')
-    const current = await this.runtime.authenticatedChatPost<Record<string, unknown>>(
-      '/api/v1/chats/policy/get', { chat_session_uid: source.ownerRef }, session, signal,
-    )
-    const policyFields = ['show_in_home_state', 'privacy_state', 'mute_state', 'pin_state', 'notify_state', 'status'] as const
-    if (policyFields.some(field => !Number.isSafeInteger(current[field]) || Number(current[field]) <= 0)) {
-      throw new ArkmePluginError('chat-pin-policy-invalid', '会话设置读取不完整，请重试', true, 502)
-    }
-    // Chat owns conversation pinning. A legacy subject UID is not a personal topic UID.
-    // The Chat endpoint requires a full policy, so preserve its unrelated fields.
-    const updated = await this.runtime.authenticatedChatPost<Record<string, unknown>>(
-      '/api/v1/chats/policy/update',
-      {
-        chat_session_uid: source.ownerRef,
-        show_in_home_state: current.show_in_home_state,
-        privacy_state: current.privacy_state,
-        mute_state: current.mute_state,
-        pin_state: pinned ? 2 : 1,
-        notify_state: current.notify_state,
-        status: current.status,
-        update_at: Date.now(),
-      },
-      session,
-      signal,
-    )
-    if (updated.chat_session_uid !== source.ownerRef || (updated.pin_state !== 1 && updated.pin_state !== 2)
-      || !Number.isSafeInteger(updated.update_at) || Number(updated.update_at) <= 0) {
-      throw new ArkmePluginError('chat-pin-result-invalid', '无法确认置顶结果，请刷新后重试', true, 502)
-    }
+    const updated = await patchChatPolicy(this.runtime, session, source.ownerRef, { pin_state: pinned ? 2 : 1 }, signal)
     const effectivePinned = updated.pin_state === 2
     const policyUpdatedAtMillis = Number(updated.update_at)
-    const cacheKey = `${String(session.userId)}:${source.ownerRef}`
-    const cached = this.chatSourceCache.get(cacheKey)
-    if (cached !== undefined) this.storeChatSourceByKey(cacheKey, {
-      ...cached, isPinned: effectivePinned, chatPolicyUpdatedAtMillis: policyUpdatedAtMillis,
-    })
-    this.invalidateSourceListCache(session.userId, 'root')
-    if (effectivePinned !== pinned) {
-      throw new ArkmePluginError('chat-pin-conflict', '会话置顶状态已变化，请刷新后重试', true, 409)
-    }
+    this.applyConfirmedChatPolicy(updated)
     return { sourceRef, pinned: effectivePinned, policyUpdatedAtMillis }
   }
 
@@ -1541,7 +1520,7 @@ export class SourceService {
       const botGroupTarget = kind === 'group_chat' ? arkmeGroupBotBindingTargetFromBundle(bundle) : undefined
       const cached = this.chatSourceCache.get(`${String(session.userId)}:${uid}`)
       const chatDirectoryMetadata = arkmeChatDirectoryMetadataFromBundle(bundle, kind === 'group_chat' ? uid : '')
-      const item = retainNewerArkmeChatPin(cached, {
+      const item = retainNewerArkmeChatPolicy(cached, {
         sourceRef: await this.sealSourceRef(
           session.userId,
           kind,
@@ -1572,6 +1551,7 @@ export class SourceService {
         readSequence: numberValue(unread.read_seq),
         isPinned,
         chatPolicyUpdatedAtMillis: numberValue(currentPolicy.update_at),
+        chatNotificationPolicyUpdatedAtMillis: numberValue(currentPolicy.update_at),
         ...((numberValue(unread.session_last_seq ?? chatSession.last_seq)) > 0
           ? { latestSequence: numberValue(unread.session_last_seq ?? chatSession.last_seq) }
           : {}),
@@ -2010,7 +1990,7 @@ export class SourceService {
           : backendMentionState === true || latestMentionsViewer
     const botGroupTarget = kind === 'group_chat' ? arkmeGroupBotBindingTargetFromBundle(bundle) : undefined
     const chatDirectoryMetadata = arkmeChatDirectoryMetadataFromBundle(bundle, kind === 'group_chat' ? uid : '')
-    return retainNewerArkmeChatPin(cached, {
+    return retainNewerArkmeChatPolicy(cached, {
       sourceRef: await this.sealSourceRef(
         session.userId,
         kind,
@@ -2037,6 +2017,7 @@ export class SourceService {
       ...(hasUnreadMention === undefined ? {} : { hasUnreadMention }),
       isPinned,
       chatPolicyUpdatedAtMillis: numberValue(currentPolicy.update_at),
+      chatNotificationPolicyUpdatedAtMillis: numberValue(currentPolicy.update_at),
       ...(latestSequence > 0 ? { latestSequence } : {}),
     })
   }

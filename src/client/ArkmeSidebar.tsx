@@ -1,3 +1,4 @@
+import { retainNewerArkmeChatPolicy } from '../chat-policy-projection.js'
 import { arkmeMarkdownPlainText } from '../markdown.js'
 import {
   Fragment, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore,
@@ -17,7 +18,7 @@ import { retainPartialTimelineMedia } from './timeline-media.js'
 import { ArkmeRichText } from './ArkmeRichText.js'
 import { arkmeEmojiPlainText } from './arkme-emoji.js'
 import type {
-  ArkmeAuthSnapshot, ArkmeGroupAiPolishNotice, ArkmeGroupAiPolishSnapshot, ArkmeSourceReadResult,
+  ArkmeGroupNotificationResult, ArkmeAuthSnapshot, ArkmeGroupAiPolishNotice, ArkmeGroupAiPolishSnapshot, ArkmeSourceReadResult,
   ArkmeRelatedRecordingItem, ArkmeRelatedRecordingMonthBucket, ArkmeRelatedRecordingPage,
   ArkmeRelatedRecordingPageState, ArkmeSourceItem, ArkmeSourceSendResult, ArkmeTimelineAroundPage, ArkmeTimelineCursor, ArkmeTimelineItem, ArkmeTimelinePage, ArkmeMessageSnapshotDetail,
   ArkmeInterwovenBootstrap, ArkmeInterwovenDetail, ArkmeInterwovenMention, ArkmePluginResponse,
@@ -5306,16 +5307,21 @@ export function ArkmeSurface({
     }
     void arkmeChatDirectory.refreshRoot({ force: true }).catch(() => undefined)
   }, [authenticatedAccountKey])
-  const updateSourceMessageDndProjection = useCallback((targetSource: ArkmeSourceIdentityFacts, messageDnd: boolean) => {
+  const updateSourceMessageDndProjection = useCallback((targetSource: ArkmeSourceIdentityFacts, result: ArkmeGroupNotificationResult) => {
     const sourceIdentity = arkmeSourceIdentityKey(targetSource)
     const selectedSource = arkmeUi.getSnapshot().selectedSource
-    const currentSource = selectedSource !== undefined && arkmeSourceIdentityKey(selectedSource) === sourceIdentity
-      ? selectedSource
-      : arkmeChatDirectory.getSnapshot().sources.find(item => arkmeSourceIdentityKey(item) === sourceIdentity)
-    if (currentSource !== undefined) updateSourceProjection({
+    const directorySource = arkmeChatDirectory.getSnapshot().sources.find(item => arkmeSourceIdentityKey(item) === sourceIdentity)
+    const selected = selectedSource !== undefined && arkmeSourceIdentityKey(selectedSource) === sourceIdentity
+      ? selectedSource : undefined
+    const currentSource = selected === undefined ? directorySource : retainNewerArkmeChatPolicy(directorySource, selected)
+    if (currentSource === undefined) return result.messageDnd
+    const projected = retainNewerArkmeChatPolicy(currentSource, {
       ...currentSource,
-      ...projectArkmeChatAttentionFromMuted(currentSource.unreadCount, messageDnd),
+      ...projectArkmeChatAttentionFromMuted(currentSource.unreadCount, result.messageDnd),
+      chatNotificationPolicyUpdatedAtMillis: result.chatNotificationPolicyUpdatedAtMillis,
     })
+    updateSourceProjection(projected)
+    return projected.isMuted === true
   }, [updateSourceProjection])
   const conversationMemberByRef = useMemo(
     () => new Map(conversationMembers.map(member => [member.memberRef, member])),
