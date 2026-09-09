@@ -41,31 +41,62 @@ export function arkmeVisibleMentionRuns(text: string, highlightTags = true): Ark
 }
 
 const mentionStyle: CSSProperties = { color: 'var(--dsw-alias-state-business-primary, #3964fe)' }
+const clickableMentionStyle: CSSProperties = { ...mentionStyle, cursor: 'pointer' }
 const tagStyle: CSSProperties = { ...mentionStyle, fontWeight: 500 }
 const clickableTagStyle: CSSProperties = { ...tagStyle, cursor: 'pointer' }
 
-export function ArkmeMentionText({ text, interactive = true, highlightTags = true, onTagClick = tagText => { arkmeUi.showTagSearch(tagText) } }: {
+export type ArkmeMentionClickHandler = (mentionText: string) => void
+export type ArkmeMentionClickPredicate = (mentionText: string) => boolean
+
+export function ArkmeMentionText({
+  text,
+  interactive = true,
+  highlightTags = true,
+  onTagClick = tagText => { arkmeUi.showTagSearch(tagText) },
+  onMentionClick,
+  isMentionClickable,
+}: {
   text: string
   interactive?: boolean
   highlightTags?: boolean
   onTagClick?: (tagText: string) => void
+  onMentionClick?: ArkmeMentionClickHandler
+  isMentionClickable?: ArkmeMentionClickPredicate
 }) {
-  return <>{arkmeVisibleMentionRuns(text, highlightTags).map((run, index) => run.kind === 'tag' && interactive
-    ? <span
-      key={`${String(index)}:${run.kind}:${run.text}`}
-      role="link"
-      tabIndex={0}
-      style={clickableTagStyle}
-      onClick={event => { event.preventDefault(); event.stopPropagation(); onTagClick(run.text) }}
-      onKeyDown={event => {
-        if (event.key !== 'Enter' && event.key !== ' ') return
-        event.preventDefault(); event.stopPropagation(); onTagClick(run.text)
-      }}
-    >{run.text}</span>
-    : <span
-      key={`${String(index)}:${run.kind}:${run.text}`}
-      style={run.kind === 'mention' ? mentionStyle : run.kind === 'tag' ? tagStyle : undefined}
-    >{run.text}</span>)}</>
+  return <>{arkmeVisibleMentionRuns(text, highlightTags).map((run, index) => {
+    const canClickMention = run.kind === 'mention' && interactive && onMentionClick !== undefined
+      && (isMentionClickable?.(run.text) ?? true)
+    const mentionClick = canClickMention ? onMentionClick : undefined
+    return run.kind === 'tag' && interactive
+      ? <span
+        key={`${String(index)}:${run.kind}:${run.text}`}
+        role="link"
+        tabIndex={0}
+        style={clickableTagStyle}
+        onClick={event => { event.preventDefault(); event.stopPropagation(); onTagClick(run.text) }}
+        onKeyDown={event => {
+          if (event.key !== 'Enter' && event.key !== ' ') return
+          event.preventDefault(); event.stopPropagation(); onTagClick(run.text)
+        }}
+      >{run.text}</span>
+      : mentionClick !== undefined
+        ? <span
+          key={`${String(index)}:${run.kind}:${run.text}`}
+          role="link"
+          tabIndex={0}
+          aria-label={`查看 ${run.text}`}
+          style={clickableMentionStyle}
+          onClick={event => { event.preventDefault(); event.stopPropagation(); mentionClick(run.text) }}
+          onKeyDown={event => {
+            if (event.key !== 'Enter' && event.key !== ' ') return
+            event.preventDefault(); event.stopPropagation(); mentionClick(run.text)
+          }}
+        >{run.text}</span>
+        : <span
+          key={`${String(index)}:${run.kind}:${run.text}`}
+          style={run.kind === 'mention' ? mentionStyle : run.kind === 'tag' ? tagStyle : undefined}
+        >{run.text}</span>
+  })}</>
 }
 
 function ArkmeInlineEmoji({ emoji, size }: { emoji: ArkmeEmoji; size: number | string }) {
@@ -105,7 +136,18 @@ function copyRichText(event: ClipboardEvent<HTMLSpanElement>) {
   event.preventDefault()
 }
 
-export function ArkmeRichText({ text, presentation = 'body', highlightMentions = false, highlightTags = true, renderLink, emojiSize, linkLabelMode = 'resolved', onTagClick }: {
+export function ArkmeRichText({
+  text,
+  presentation = 'body',
+  highlightMentions = false,
+  highlightTags = true,
+  renderLink,
+  emojiSize,
+  linkLabelMode = 'resolved',
+  onTagClick,
+  onMentionClick,
+  isMentionClickable,
+}: {
   text: string
   presentation?: 'body' | 'preview'
   highlightMentions?: boolean
@@ -114,6 +156,8 @@ export function ArkmeRichText({ text, presentation = 'body', highlightMentions =
   emojiSize?: number
   linkLabelMode?: ArkmeLinkLabelMode
   onTagClick?: (tagText: string) => void
+  onMentionClick?: ArkmeMentionClickHandler
+  isMentionClickable?: ArkmeMentionClickPredicate
 }) {
   const renderText = (value: string) => arkmeEmojiTextRuns(value).map((run, index) => run.kind === 'emoji'
     ? <ArkmeInlineEmoji
@@ -122,7 +166,14 @@ export function ArkmeRichText({ text, presentation = 'body', highlightMentions =
       size={emojiSize ?? (presentation === 'preview' ? '1.25em' : 22)}
     />
     : <Fragment key={`${String(index)}:text`}>{highlightMentions
-      ? <ArkmeMentionText text={run.text} highlightTags={highlightTags} interactive={presentation === 'body'} {...(onTagClick === undefined ? {} : { onTagClick })} />
+      ? <ArkmeMentionText
+        text={run.text}
+        highlightTags={highlightTags}
+        interactive={presentation === 'body'}
+        {...(onTagClick === undefined ? {} : { onTagClick })}
+        {...(onMentionClick === undefined ? {} : { onMentionClick })}
+        {...(isMentionClickable === undefined ? {} : { isMentionClickable })}
+      />
       : run.text}</Fragment>)
   return <span onCopy={copyRichText}><ArkmeLinkText
     text={text}

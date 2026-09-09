@@ -18,6 +18,7 @@ import { createOpenClawCliAdapter, createOpenClawCommandRunner, createOpenClawFi
 import type {} from '@deepseek-ai/dsh-host-webserver'
 import { registerDSHAgentInputRecordSync } from './dsh-agent-input-sync.js'
 import { createArkmeHostApi } from './host-api.js'
+import { readDirectoryPage } from './directory-reader.js'
 import { openDshHostPath } from './dsh-host-capabilities.js'
 import { ARKME_HARNESS_EMBED_PATH, ARKME_HARNESS_MODEL_CLIENT_PATH } from './harness-embed-contract.js'
 import {
@@ -281,7 +282,7 @@ export function apply(ctx: Context, config: Config): void {
   const rawSessionStore = createArkmeSessionStore(`${config.keychainServicePrefix}.${config.environment}`)
   const sessionStore = new ObservedArkmeSessionStore(rawSessionStore)
   const pendingSessionStore = createArkmeSessionStore(`${config.keychainServicePrefix}.${config.environment}.pending-binding`)
-  const service = new ArkmeService({ ...config, fileStateDirectory: join(stateDirectory, 'files') }, sessionStore, localDatabase, fetch, pendingSessionStore)
+  const service = new ArkmeService({ ...config, fileStateDirectory: join(stateDirectory, 'files'), recordingImportDirectory: join(stateDirectory, 'recording-imports') }, sessionStore, localDatabase, fetch, pendingSessionStore)
   const openApiMcpCredentialNamespace = `${config.keychainServicePrefix}.${config.environment}.openapi-mcp`
   const openApiMcpController = new ManagedOpenApiMcpController({
     mountMcp: config.openApiMcpEnabled,
@@ -297,7 +298,9 @@ export function apply(ctx: Context, config: Config): void {
   const teamService = new TeamService(
     new HttpOpenApiCapabilityGateway(config.openApiBaseUrl, openApiMcpController, fetch),
     service,
+    service.ownerReads,
   )
+  ctx.provide('arkmeDirectory', { list: (section, options) => readDirectoryPage(service, teamService, section, options) })
   sessionStore.attach(openApiMcpController)
   ctx.effect(
     () => ctx.tools.guard(execution => openApiMcpController.guardToolExecution(execution.name)),

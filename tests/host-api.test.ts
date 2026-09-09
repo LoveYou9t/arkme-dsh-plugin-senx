@@ -3,6 +3,50 @@ import { once } from 'node:events'
 import { describe, expect, it, vi } from 'vitest'
 import { createArkmeHostApi, dispatchArkmeHostOperation } from '../src/host-api.js'
 import { ARKME_RUNTIME_INSTANCE_ID } from '../src/runtime-instance.js'
+import { ArkmePluginError } from '../src/services/service.js'
+
+it('passes contact detail request cancellation to each existing business owner', async () => {
+  const controller = new AbortController()
+  const service = {
+    directoryContactProfile: vi.fn(), directoryContactWorld: vi.fn(), openDirectoryContactChat: vi.fn(),
+  }
+  for (const operation of ['directory.contact.profile', 'directory.contact.world', 'directory.contact.open-chat'] as const) {
+    await dispatchArkmeHostOperation(service as never, operation, { contactRef: 'contact-ref' }, undefined, undefined, undefined, undefined, controller.signal)
+  }
+  expect(service.directoryContactProfile).toHaveBeenCalledWith('contact-ref', controller.signal)
+  expect(service.directoryContactWorld).toHaveBeenCalledWith('contact-ref', expect.objectContaining({ signal: controller.signal }))
+  expect(service.openDirectoryContactChat).toHaveBeenCalledWith('contact-ref', controller.signal)
+})
+
+it('serializes only safe Host recovery metadata across the real HTTP boundary', async () => {
+  const service = { listDirectory: async () => {
+    throw new ArkmePluginError('arkme-code-1002', '服务器繁忙', true, 502, {
+      failureKind: 'rate_limited', retryAfterMillis: 1200, retryScope: 'route',
+      recovery: { owner: 'host', attempts: 3, exhausted: true },
+      responseData: { accessToken: 'must-not-leak' }, cause: new Error('private-upstream-details'),
+    })
+  } }
+  const server = createServer(createArkmeHostApi(service as never, { expectedPort: 0, allowNonLoopback: false }))
+  server.listen(0, '127.0.0.1')
+  await once(server, 'listening')
+  const address = server.address()
+  if (address === null || typeof address === 'string') throw new Error('test server address missing')
+  try {
+    const response = await fetch(`http://127.0.0.1:${address.port}/arkme-self/api`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ operation: 'directory.list', params: { section: 'contacts', limit: 1 } }),
+    })
+    expect(response.status).toBe(502)
+    expect(await response.json()).toEqual({ ok: false, error: {
+      code: 'arkme-code-1002', message: '服务器繁忙', retryable: true,
+      failureKind: 'rate_limited', retryAfterMillis: 1200, retryScope: 'route',
+      recovery: { owner: 'host', attempts: 3, exhausted: true },
+    } })
+  } finally {
+    server.close()
+    await once(server, 'close')
+  }
+})
 
 function fakeService() {
   return {
@@ -153,6 +197,16 @@ describe('account settings Host API dispatch', () => {
 })
 
 describe('user-ban Host API dispatch', () => {
+  it('preserves cancellation through both related-recording routes', async () => {
+    const controller = new AbortController()
+    const service = { relatedRecordingEligibility: vi.fn(), relatedRecordings: vi.fn() }
+    await dispatchArkmeHostOperation(service as never, 'related-recordings.eligibility', { sourceRef: 'source' },
+      undefined, undefined, undefined, undefined, controller.signal)
+    await dispatchArkmeHostOperation(service as never, 'related-recordings.page', { sourceRef: 'source' },
+      undefined, undefined, undefined, undefined, controller.signal)
+    expect(service.relatedRecordingEligibility).toHaveBeenCalledWith('source', controller.signal)
+    expect(service.relatedRecordings).toHaveBeenCalledWith('source', expect.objectContaining({ signal: controller.signal }))
+  })
   it('forwards only the account-bound private-chat source and bounded remark', async () => {
     const service = fakeService()
 
@@ -173,6 +227,47 @@ describe('user-ban Host API dispatch', () => {
     expect(banned).not.toHaveProperty('targetUserId')
     expect(banned).not.toHaveProperty('operatorUserId')
     expect(unbanned).not.toHaveProperty('targetUserId')
+  })
+
+  it('passes the creating conversation capability and cancellation signal to the existing topic owner', async () => {
+    const service = { createTopic: vi.fn(async () => ({ source: {} })) }
+    const signal = new AbortController().signal
+    await dispatchArkmeHostOperation(service as never, 'topic.create', { title: '新主题', contextSourceRef: 'signed-self' },
+      undefined, undefined, undefined, undefined, signal)
+    expect(service.createTopic).toHaveBeenCalledWith('新主题', undefined, { contextSourceRef: 'signed-self', signal })
+  })
+
+  it('routes topic candidates separately from conversation directory reads with cancellation', async () => {
+    const service = { listTopicCandidates: vi.fn(async () => ({ items: [], hasMore: false })) }
+    const signal = new AbortController().signal
+    await dispatchArkmeHostOperation(service as never, 'topic.candidates', { keyword: '工作', cursor: 'opaque-cursor' },
+      undefined, undefined, undefined, undefined, signal)
+    expect(service.listTopicCandidates).toHaveBeenCalledWith('工作', 'opaque-cursor', signal)
+  })
+
+  it('dispatches topic assignment with exact references and the request cancellation signal', async () => {
+    const service = { assignRecordTopic: vi.fn(async () => ({ movedRecordUids: ['r1'], projectionRefreshPending: false })) }
+    const signal = new AbortController().signal
+    const params = { sourceRef: 'self', assignmentRefs: ['signed-r1'], targetSourceRef: 'topic' }
+    await dispatchArkmeHostOperation(service as never, 'source.record-topic.assign', params,
+      undefined, undefined, undefined, undefined, signal)
+    expect(service.assignRecordTopic).toHaveBeenCalledWith(params, signal)
+  })
+
+  it.each([null, 1, {}, []])('never coerces a malformed assignment target into release: %j', async targetSourceRef => {
+    const service = { assignRecordTopic: vi.fn() }
+    await expect(dispatchArkmeHostOperation(service as never, 'source.record-topic.assign', {
+      sourceRef: 'topic', assignmentRefs: ['signed-r1'], targetSourceRef,
+    })).rejects.toMatchObject({ code: 'record-topic-target-invalid' })
+    expect(service.assignRecordTopic).not.toHaveBeenCalled()
+  })
+
+  it.each([undefined, 'ref', ['ref', null]])('rejects malformed assignment arrays: %j', async assignmentRefs => {
+    const service = { assignRecordTopic: vi.fn() }
+    await expect(dispatchArkmeHostOperation(service as never, 'source.record-topic.assign', {
+      sourceRef: 'topic', assignmentRefs,
+    })).rejects.toMatchObject({ code: 'record-topic-selection-invalid' })
+    expect(service.assignRecordTopic).not.toHaveBeenCalled()
   })
 
   it('requires the active same-origin Browser before a ban mutation', async () => {

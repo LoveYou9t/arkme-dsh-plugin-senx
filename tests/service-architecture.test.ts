@@ -7,7 +7,7 @@ import { describe, expect, it } from 'vitest'
 const root = fileURLToPath(new URL('..', import.meta.url))
 
 const expectedPublicMethods = [
-  'directMessageAdmission', 'setDirectMessageRefusal',
+  'directMessageAdmission', 'setDirectMessageRefusal', 'assignRecordTopic', 'listTopicCandidates',
   'fileCapabilities', 'fileSearch', 'fileSessionUser', 'fileStage', 'fileList', 'fileReadLocal', 'attachLocalFileOpener', 'fileOpenLocal', 'fileRemove', 'fileSend',
   'fileSendTasks', 'fileSendRetry', 'fileStageBytes', 'fileSendDiscard', 'fileSendReconcile', 'fileReceive',
   'startChatRealtime', 'chatRealtimeState', 'subscribeChatRealtime', 'chatRealtimeInitialEvent',
@@ -27,12 +27,12 @@ const expectedPublicMethods = [
   'createExtensionReview', 'recordingCalendar', 'recordingTranscript', 'recordingProjection',
   'recordingComparison', 'startRecordingComparison', 'recordingForwardCapabilities', 'forwardRecording',
   'recordingSummaryModelConfig', 'setRecordingSummaryModelRoute', 'generateRecordingProjection',
-  'sealRecordingCursor', 'openRecordingCursor', 'recordingDay', 'recordingPlayback',
+  'recordingDay', 'recordingPlayback',
   'recordingSpeakerOptions', 'assignRecordingSpeaker',
-  'acceptRecordingImport', 'recordingImportUserId', 'recordingImportPreflight', 'recordingImportStatus', 'recordingImportList', 'recordingImportHistory', 'retryRecordingImport',
+  'importRecordingFile', 'prepareRecordingDirectory', 'importRecordingDirectory', 'acceptRecordingImport', 'recordingImportUserId', 'recordingImportPreflight', 'recordingImportStatus', 'recordingImportList', 'recordingImportHistory', 'retryRecordingImport',
   'cancelRecordingImport', 'updateRecordingImportSessionStart', 'updateRecordingImportSessionOwnership', 'deleteRecordingImportSession', 'resumeRecordingImports', 'refreshProfile', 'arkoProfile',
   'arkoEnsureSession', 'arkoCreateSession', 'arkoModelCatalog', 'arkoActivateModel', 'arkoHistoryPage',
-  'arkoAsk', 'arkoRunStatus', 'arkoCancel', 'aiVideoPreflight', 'aiVideoCreate', 'aiVideoStatus',
+  'arkoAsk', 'arkoRunStatus', 'arkoCancel', 'aiVideoResolveSelection', 'aiVideoPreflight', 'aiVideoCreate', 'aiVideoStatus',
   'aiVideoList', 'queryFileAssets', 'textAiVideoPreflight', 'textAiVideoCreate',
   'checkArkmeIdAvailability', 'setArkmeIdOnce', 'createTopic', 'renameTopic', 'dissolveTopic', 'topicDissolveStatus', 'activeTopicDissolve', 'moveTopicHierarchy', 'listSources', 'setBotDirectoryPin', 'setChatDirectoryPin', 'conversationDirectoryVisibilitySnapshot', 'setConversationDirectoryVisibility', 'cachedSourceMembers', 'pageSourceMembers', 'sourceMembersPresentation', 'listSourceMembers', 'sourceMemberRecords',
   'dshBetaCommunityEntryState', 'dshRemoteGet', 'dshRemotePost', 'interwovenMoments', 'interwovenMomentDetail',
@@ -78,7 +78,9 @@ const expectedPublicMethods = [
 ].sort()
 
 const expectedServiceFiles = [
+  'chat-policy.ts',
   'direct-message-admission-service.ts',
+  'record-topic-assignment-service.ts',
   'background-sound-preference-service.ts',
   'background-sound-membership-service.ts',
   'file-transfers.ts',
@@ -93,7 +95,7 @@ const expectedServiceFiles = [
   'media-service.ts', 'world-service.ts', 'arrangement-service.ts', 'wechat-service.ts',
   'arko-service.ts', 'ai-video-service.ts', 'outgoing-call-service.ts', 'interwoven-service.ts',
   'community-service.ts', 'extension-review-service.ts', 'calendar-service.ts',
-  'contact-service.ts', 'contact-directory-service.ts', 'unmarked-speaker-service.ts',
+  'contact-service.ts', 'contact-directory-service.ts', 'directory-snapshot.ts', 'unmarked-speaker-service.ts',
   'team-service.ts',
   'voiceprint-service.ts', 'user-ban-service.ts', 'call-history-service.ts', 'privacy-visibility.ts',
   'link-metadata-service.ts', 'message-action-infrastructure.ts', 'message-action-service.ts',
@@ -119,6 +121,15 @@ describe('Arkme service architecture', () => {
     expect(dialog).not.toMatch(/RecordingForwardInput|RecordingForwardReceipt|randomUUID|setTimeout|['"]recordings\.forward['"]/)
     expect(attempt).not.toMatch(/from ['"]react['"]|callArkme|setTimeout|AbortController|services\/|node:/)
     expect(projection).not.toMatch(/services\/|ServiceRuntime|node:/)
+  })
+
+  it('keeps personal membership UI independent from transport and forwarding identities', () => {
+    const dialog = readFileSync(join(root, 'src/client/ArkmeRecordTopicAssignmentDialog.tsx'), 'utf8')
+    const service = readFileSync(join(root, 'src/services/record-topic-assignment-service.ts'), 'utf8')
+    const contract = readFileSync(join(root, 'src/record-topic-assignment-contract.ts'), 'utf8')
+    expect(dialog).not.toMatch(/callArkme|\/api\/|node:|source_topic_uid|record_uid/)
+    expect(service).not.toMatch(/forwardSourceMessages|messageActionRef|chat_session_uid|records\/create/)
+    expect(contract).not.toMatch(/from ['"]react|services\/|node:/)
   })
 
   it('preserves the public facade method contract', () => {
@@ -164,6 +175,7 @@ describe('Arkme service architecture', () => {
     const refCodec = readFileSync(join(root, 'src/recording-import-ref.ts'), 'utf8')
     const recordingService = readFileSync(join(root, 'src/services/recording-service.ts'), 'utf8')
     const coordinator = readFileSync(join(root, 'src/recording-import-coordinator.ts'), 'utf8')
+    const directory = readFileSync(join(root, 'src/recording-directory-import.ts'), 'utf8')
 
     expect(contract).toContain('sourceHandle')
     expect(contract).not.toContain('sourceRef')
@@ -182,6 +194,12 @@ describe('Arkme service architecture', () => {
     expect(coordinator).not.toMatch(/from ['"]node:fs/)
     expect(coordinator).not.toContain('pc_upload/')
     expect(coordinator).not.toContain('arkme_')
+    expect(directory).not.toMatch(/from ['"]node:/)
+    expect(directory).not.toMatch(/from ['"].*(?:recording-directory-source|recording-import-probe|services\/recording-service)/)
+    expect(directory).not.toMatch(/\bRecordingImportJob\b/)
+    expect(directory).not.toContain('isUnresolvedRecordingImportJob')
+    expect(directory).not.toContain('temporaryDirectory')
+    expect(recordingService).not.toContain("from '../recording-directory-import.js'")
 
     const gateway = readFileSync(join(root, 'src/services/recording-import-gateway.ts'), 'utf8')
     const source = readFileSync(join(root, 'src/recording-import-probe.ts'), 'utf8')

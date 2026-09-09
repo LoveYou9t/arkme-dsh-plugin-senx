@@ -132,6 +132,7 @@ export interface ArkmeDirectoryPage {
   hasMore: boolean
   nextCursor?: string
   projectionState?: 'fresh' | 'stale' | 'building' | 'failed'
+  coverage?: 'complete' | 'partial'
   retryAfterMillis?: number
   cursorStale?: boolean
 }
@@ -1105,6 +1106,8 @@ export interface ArkmeCallTranscriptSegment {
   text: string
   startMillis: number
   endMillis: number
+  /** Absolute speech timestamp, when supplied by the call transcript service. */
+  spokenAtMillis?: number
 }
 
 export interface ArkmeCallVideoRecord {
@@ -1116,6 +1119,7 @@ export interface ArkmeCallVideoRecord {
 }
 
 export interface ArkmeCallVideoPerspective {
+  userId?: number
   perspective: 'self' | 'peer' | 'main' | 'unknown'
   label?: string
   videoUrl?: string
@@ -1140,6 +1144,8 @@ export interface ArkmeCallDetail {
   videoRecord?: ArkmeCallVideoRecord
   participants: ArkmeCallParticipant[]
   transcriptSegments: ArkmeCallTranscriptSegment[]
+  /** Actual final hangup event, not inferred from the caller or peer. */
+  hangupParticipant?: ArkmeCallParticipant
 }
 
 export interface ArkmeCallSummaryRetryResult {
@@ -1170,6 +1176,8 @@ export interface ArkmeProviderCapabilities {
     imageLibrary?: true
     sourceDirectory: true
     localFirstDirectory?: true
+    /** Paged five-section directory, including coverage and Host-owned recovery. */
+    contactDirectoryReads?: true
     sourceTimeline: true
     /** Forward snapshots include typed transcripts and account-bound attachment references. */
     forwardContent?: true
@@ -1413,6 +1421,8 @@ export interface ArkmeSourceItem {
   isPinned?: boolean
   /** Chat policy.update_at for ordering pin projections; independent of message sequence. */
   chatPolicyUpdatedAtMillis?: number
+  /** Policy version proving mute/notify projection; pin-only events cannot advance it. */
+  chatNotificationPolicyUpdatedAtMillis?: number
   latestSequence?: number
   /** Current viewer's confirmed Chat read cursor; distinct from the last message sequence. */
   readSequence?: number
@@ -1580,6 +1590,20 @@ export interface ArkmeMessageSnapshotDetail {
 }
 
 export interface ArkmeTimelineItem {
+  /** Display-only call status; room, participant and call identifiers stay host-side. */
+  callRecord?: {
+    mediaType: 'audio' | 'video'
+    text: string
+    /** Account-bound encrypted reference accepted by calls.history.detail. */
+    callRef?: string
+    direction?: 'outgoing' | 'incoming'
+    startedAtMillis?: number
+    durationSeconds?: number
+  }
+  /** Signed observed personal-topic membership; distinct from forwarding snapshots. */
+  recordTopicAssignmentRef?: string
+  /** Stable topic identity from assignment membership evidence, not the display card. */
+  recordTopicAssignmentTopicKey?: string
   itemUid: string
   /** Account- and conversation-bound stable key used only for realtime timeline invalidation. */
   timelineItemKey?: string
@@ -2201,6 +2225,8 @@ export interface ArkmeSourceSendResult {
   itemUid: string
   /** Host-signed reference for immediate actions before timeline convergence. */
   messageActionRef?: string
+  /** Observed membership for a confirmed personal Record creation. */
+  recordTopicAssignmentRef?: string
   status: number
   sequence?: number
   localState: 'synced' | 'failed'
@@ -2573,10 +2599,12 @@ export interface ArkmeGroupSettingsSnapshot {
   canDissolve: boolean
   canLeave: boolean
   messageDnd: boolean
+  chatNotificationPolicyUpdatedAtMillis: number
 }
 
 export interface ArkmeGroupNotificationResult {
   messageDnd: boolean
+  chatNotificationPolicyUpdatedAtMillis: number
 }
 
 export interface ArkmeGroupProjectionResult {
@@ -2602,7 +2630,6 @@ export interface ArkmeRecordingCalendarMonth {
 }
 
 export type ArkmeRecordingProjectionKind = 'summary' | 'timeline'
-export type ArkmeRecordingToolContent = 'transcript' | ArkmeRecordingProjectionKind
 export type ArkmeRecordingTranscriptSource = 'system' | 'doubao'
 
 export interface ArkmeRecordingSummaryModelRouteOption {
@@ -2622,16 +2649,6 @@ export interface ArkmeRecordingSummaryModelConfig {
 
 export interface ArkmeRecordingSummaryModelRouteUpdate {
   effectiveRouteKey: string
-}
-
-export interface ArkmeRecordingCursorPayload {
-  version: 1
-  dateStamp: number
-  content: ArkmeRecordingToolContent
-  versionId?: string
-  itemOffset: number
-  textOffset: number
-  fingerprint: string
 }
 
 export interface ArkmeRecordingTranscriptItem {
@@ -2923,6 +2940,12 @@ export interface ArkmeWechatLocationPage {
 
 export type ArkmeAiVideoTranscriptSource = 'system' | 'doubao'
 
+export interface ArkmeRecordingMaterialUtterance {
+  startOffsetMillis: number
+  endOffsetMillis: number
+  text: string
+}
+
 export interface ArkmeAiVideoSegmentSelector {
   childId: string
   asrItemIndex: number
@@ -3173,6 +3196,8 @@ export interface ArkmeChatRealtimeState {
 
 /** Server-owned unread attention summary across every visible conversation. */
 export interface ArkmeChatAttentionSummary {
+  /** Last visible directory snapshot is usable while its background refresh recovers. */
+  stale?: boolean
   badgeCount: number
   mutedUnreadCount: number
   sessionCountWithUnread: number
@@ -3182,6 +3207,9 @@ export interface ArkmeChatAttentionSummary {
 }
 
 export type ArkmeChatClientEvent = {
+  /** Local Host epoch; revisions are comparable only within this instance. */
+  providerInstanceId?: string
+} & ({
   type: 'directory-update'
   revision: number
   page: ArkmeSourceList
@@ -3282,7 +3310,7 @@ export type ArkmeChatClientEvent = {
   sourceKey: string
   eventId: string
   occurredAtMillis: number
-}
+})
 
 export type ArkmePluginOperation =
   | 'provider.capabilities'
@@ -3320,6 +3348,7 @@ export type ArkmePluginOperation =
   | 'billing.order.create'
   | 'billing.order.status'
   | 'contacts.search'
+  | 'directory.list'
   | 'contacts.add'
   | 'chat.private.open-from-contact'
   | 'group.create'
@@ -3513,9 +3542,10 @@ export type ArkmePluginOperation =
   | 'topic.dissolve.active'
 
 export type ArkmeHostOperation = ArkmePluginOperation
+  | 'topic.candidates'
+  | 'source.record-topic.assign'
   | 'provider.instance'
   | 'link.metadata'
-  | 'directory.list'
   | 'directory.contact.profile'
   | 'directory.contact.remark.update'
   | 'directory.contact.world'
@@ -3622,6 +3652,10 @@ export interface ArkmePluginErrorBody {
   code: string
   message: string
   retryable: boolean
+  failureKind?: 'rate_limited' | 'concurrency_limited' | 'service_unavailable'
+  retryAfterMillis?: number
+  retryScope?: 'request' | 'route'
+  recovery?: { owner: 'host'; attempts: number; exhausted: true }
   /** Sanitized Chat Handler result, not a global error-code taxonomy. */
   directMessageAdmission?: import('./direct-message-admission.js').ArkmeDirectMessageAdmission
 }

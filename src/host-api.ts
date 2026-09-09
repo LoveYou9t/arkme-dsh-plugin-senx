@@ -1,4 +1,5 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
+import { readDirectoryPage } from './directory-reader.js'
 import { ArkmePluginError, ArkmeService } from './arkme-service.js'
 import { ArkmeDirectMessageAdmissionError } from './services/direct-message-admission-service.js'
 import { isArkmeBotAvatarRef } from './bot-avatar-ref.js'
@@ -936,6 +937,10 @@ export function createArkmeHostApi(service: ArkmeService, options: ArkmeHostApiO
       writeJson(res, known.httpStatus, {
         ok: false,
         error: { code: known.code, message: known.message, retryable: known.retryable,
+          ...(known.failureKind === undefined ? {} : { failureKind: known.failureKind }),
+          ...(known.retryAfterMillis === undefined ? {} : { retryAfterMillis: known.retryAfterMillis }),
+          ...(known.retryScope === undefined ? {} : { retryScope: known.retryScope }),
+          ...(known.recovery === undefined ? {} : { recovery: known.recovery }),
           ...(known instanceof ArkmeDirectMessageAdmissionError ? { directMessageAdmission: known.admission } : {}) },
       })
     } finally {
@@ -1140,14 +1145,14 @@ export async function dispatchArkmeHostOperation(
         limit: countOnly ? 0 : directoryLimitParam(params),
         ...(countOnly ? { countOnly: true } : {}),
         ...(!countOnly && cursor !== '' ? { cursor } : {}),
+        ...(booleanParam(params, 'refresh') ? { refresh: true } : {}),
         ...(requestSignal === undefined ? {} : { signal: requestSignal }),
       }
-      return section === 'teams'
-        ? await requireTeamService(teamService).listDirectory(options)
-        : await service.listDirectory(section, options)
+      return await readDirectoryPage(service, teamService, section, options)
     }
     case 'directory.contact.profile': return await service.directoryContactProfile(
       stringParam(params, 'contactRef').trim(),
+      requestSignal,
     )
     case 'directory.contact.remark.update': {
       if (typeof params.remark !== 'string') throw new ArkmePluginError('directory-contact-remark-invalid', '备注必须为文本', false, 400)
@@ -1158,10 +1163,12 @@ export async function dispatchArkmeHostOperation(
       {
         limit: Math.min(20, Math.max(1, Math.trunc(numberParam(params, 'limit', 20)))),
         offset: Math.max(0, Math.trunc(numberParam(params, 'offset', 0))),
+        ...(requestSignal === undefined ? {} : { signal: requestSignal }),
       },
     )
     case 'directory.contact.open-chat': return await service.openDirectoryContactChat(
       stringParam(params, 'contactRef').trim(),
+      requestSignal,
     )
     case 'directory.group.open-chat': return await service.openDirectoryGroupChat(
       stringParam(params, 'sourceRef').trim(),
@@ -1548,6 +1555,10 @@ export async function dispatchArkmeHostOperation(
     case 'topic.create': return await service.createTopic(
       stringParam(params, 'title'),
       stringParam(params, 'parentSourceRef') || undefined,
+      {
+        ...(params.contextSourceRef === undefined ? {} : { contextSourceRef: stringParam(params, 'contextSourceRef') }),
+        ...(requestSignal === undefined ? {} : { signal: requestSignal }),
+      },
     )
     case 'topic.rename': return await service.renameTopic(
       stringParam(params, 'sourceRef'),
@@ -1567,6 +1578,9 @@ export async function dispatchArkmeHostOperation(
       stringParam(params, 'currentParentSourceRef') || undefined,
       stringParam(params, 'nextParentSourceRef') || undefined,
       stringParam(params, 'insertBeforeSourceRef') || undefined,
+    )
+    case 'topic.candidates': return await service.listTopicCandidates(
+      stringParam(params, 'keyword'), stringParam(params, 'cursor') || undefined, requestSignal,
     )
     case 'sources.list': return await service.listSources(
       stringParam(params, 'directory') as ArkmeSourceDirectory,
@@ -1781,6 +1795,19 @@ export async function dispatchArkmeHostOperation(
       )
       return { ok: true }
     }
+    case 'source.record-topic.assign': {
+      if (!Array.isArray(params.assignmentRefs) || params.assignmentRefs.some(ref => typeof ref !== 'string')) {
+        throw new ArkmePluginError('record-topic-selection-invalid', '快记归属引用无效', false, 400)
+      }
+      if (params.targetSourceRef !== undefined && typeof params.targetSourceRef !== 'string') {
+        throw new ArkmePluginError('record-topic-target-invalid', '主题引用无效', false, 400)
+      }
+      return await service.assignRecordTopic({
+        sourceRef: stringParam(params, 'sourceRef'),
+        assignmentRefs: params.assignmentRefs as string[],
+        ...(typeof params.targetSourceRef === 'string' ? { targetSourceRef: params.targetSourceRef } : {}),
+      }, requestSignal)
+    }
     case 'source.forward-messages': return await service.forwardSourceMessages(
       stringParam(params, 'sourceRef'),
       messageActionRefsParam(params),
@@ -1829,6 +1856,7 @@ export async function dispatchArkmeHostOperation(
     }
     case 'related-recordings.eligibility': return await service.relatedRecordingEligibility(
       stringParam(params, 'sourceRef'),
+      requestSignal,
     )
     case 'related-recordings.page': return await service.relatedRecordings(
       stringParam(params, 'sourceRef'),
@@ -1838,6 +1866,7 @@ export async function dispatchArkmeHostOperation(
         ...(stringParam(params, 'monthKey') === '' ? {} : { monthKey: stringParam(params, 'monthKey') }),
         timezoneOffsetMillis: numberParam(params, 'timezoneOffsetMillis', 0),
         includeTimeIndex: booleanParam(params, 'includeTimeIndex'),
+        ...(requestSignal === undefined ? {} : { signal: requestSignal }),
       },
     )
     case 'source.ai-polish.settings': return await service.inspectGroupAiPolish(
