@@ -1106,6 +1106,8 @@ export interface ArkmeCallTranscriptSegment {
   text: string
   startMillis: number
   endMillis: number
+  /** Absolute speech timestamp, when supplied by the call transcript service. */
+  spokenAtMillis?: number
 }
 
 export interface ArkmeCallVideoRecord {
@@ -1117,6 +1119,7 @@ export interface ArkmeCallVideoRecord {
 }
 
 export interface ArkmeCallVideoPerspective {
+  userId?: number
   perspective: 'self' | 'peer' | 'main' | 'unknown'
   label?: string
   videoUrl?: string
@@ -1141,6 +1144,8 @@ export interface ArkmeCallDetail {
   videoRecord?: ArkmeCallVideoRecord
   participants: ArkmeCallParticipant[]
   transcriptSegments: ArkmeCallTranscriptSegment[]
+  /** Actual final hangup event, not inferred from the caller or peer. */
+  hangupParticipant?: ArkmeCallParticipant
 }
 
 export interface ArkmeCallSummaryRetryResult {
@@ -1586,7 +1591,15 @@ export interface ArkmeMessageSnapshotDetail {
 
 export interface ArkmeTimelineItem {
   /** Display-only call status; room, participant and call identifiers stay host-side. */
-  callRecord?: { mediaType: 'audio' | 'video'; text: string }
+  callRecord?: {
+    mediaType: 'audio' | 'video'
+    text: string
+    /** Account-bound encrypted reference accepted by calls.history.detail. */
+    callRef?: string
+    direction?: 'outgoing' | 'incoming'
+    startedAtMillis?: number
+    durationSeconds?: number
+  }
   /** Signed observed personal-topic membership; distinct from forwarding snapshots. */
   recordTopicAssignmentRef?: string
   /** Stable topic identity from assignment membership evidence, not the display card. */
