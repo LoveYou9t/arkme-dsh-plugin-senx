@@ -1320,6 +1320,33 @@ export function arkmeGroupMentionCandidates(
   return candidates
 }
 
+function arkmeVisibleMentionLabel(mentionText: string): string {
+  const trimmed = mentionText.trim()
+  return trimmed.startsWith('@') ? trimmed.slice(1).trim() : trimmed
+}
+
+export function arkmeMemberForVisibleMention(
+  mentionText: string,
+  members: readonly ArkmeConversationMemberItem[],
+): ArkmeConversationMemberItem | undefined {
+  const label = arkmeVisibleMentionLabel(mentionText)
+  if (label === '' || label === '所有人') return undefined
+  const matches = new Map<string, ArkmeConversationMemberItem>()
+  for (const member of members) {
+    if (member.status !== 'active') continue
+    if ([
+      member.mentionDisplayName,
+      member.displayName,
+      member.memberName,
+      member.secondaryName,
+      member.mentionSecondaryName,
+    ].some(value => (value ?? '').trim() === label)) {
+      matches.set(member.memberRef, member)
+    }
+  }
+  return matches.size === 1 ? matches.values().next().value : undefined
+}
+
 export interface ArkmeAccountSelfSourcesResolution {
   userId: number
   resolution: ArkmeSelfSourcesResolution
@@ -1331,6 +1358,10 @@ export function arkmeAggregateSourceForUser(
 ): ArkmeSourceItem | undefined {
   if (userId === undefined || state?.userId !== userId || state.resolution.status !== 'ready') return undefined
   return state.resolution.aggregateSource
+}
+
+export function arkmeSendToSelfRootSource(sources: readonly ArkmeSourceItem[]): ArkmeSourceItem | undefined {
+  return sources.find(source => source.kind === 'send_to_self')
 }
 
 function mergeItems(current: ArkmeTimelineItem[], incoming: ArkmeTimelineItem[]): ArkmeTimelineItem[] {
@@ -5371,6 +5402,16 @@ export function ArkmeSurface({
     setMemberRecords(undefined)
     setMemberProfile(member)
   }, [source?.kind])
+  const mentionOpensMemberProfile = useCallback((mentionText: string): boolean => (
+    source?.kind === 'group_chat'
+    && arkmeMemberForVisibleMention(mentionText, conversationMembers) !== undefined
+  ), [conversationMembers, source?.kind])
+  const openMentionMemberProfile = useCallback((mentionText: string) => {
+    if (source?.kind !== 'group_chat') return
+    const member = arkmeMemberForVisibleMention(mentionText, conversationMembers)
+    if (member === undefined) return
+    openMemberProfile(member)
+  }, [conversationMembers, openMemberProfile, source?.kind])
   const openMemberRecords = useCallback((member: ArkmeConversationMemberItem, mode: ArkmeConversationMemberRecordMode) => {
     setMemberMenu(undefined)
     setMemberEventProfile(undefined)
@@ -5510,20 +5551,55 @@ export function ArkmeSurface({
     }
     setMentionTrigger(arkmeComposerMentionTrigger(text, selectionStart, selectionEnd))
   }, [activeRecordReeditComposer, composerMentionsEnabled])
+  const resolveSendToSelfSource = useCallback(async (signal: AbortSignal): Promise<ArkmeSourceItem> => {
+    if (aggregateSource !== undefined) return aggregateSource
+    if (authenticatedUserId === undefined) {
+      throw new Error('发给自己暂不可用，请稍后重试')
+    }
+    const page = await callArkme<ArkmeSourceList>('sources.list', {
+      directory: 'send_to_self',
+      limit: 100,
+    }, signal)
+    if (signal.aborted) throw new Error('发给自己已取消')
+    const sendToSelfSource = arkmeSendToSelfRootSource(page.items)
+    if (sendToSelfSource === undefined) {
+      throw new Error('发给自己暂不可用，请稍后重试')
+    }
+    const defaultCategorySource = page.items.find(item => item.kind === 'default_category')
+    if (defaultCategorySource !== undefined) {
+      setSelfSourcesResolution({
+        userId: authenticatedUserId,
+        resolution: {
+          status: 'ready',
+          aggregateSource: sendToSelfSource,
+          defaultCategorySource,
+          sources: page.items,
+          loading: false,
+        },
+      })
+    }
+    return sendToSelfSource
+  }, [aggregateSource, authenticatedUserId])
   const openPrivateChatForMember = useCallback((member: ArkmeConversationMemberItem) => {
     if (source === undefined || privateChatBusy || privateChatAbortRef.current !== undefined) return
     setPrivateChatBusy(true)
     setError('')
     if (arkmeMemberConversationAction(member) === 'send_to_self') {
-      if (aggregateSource === undefined) {
-        setError('发给自己暂不可用，请稍后重试')
-        setPrivateChatBusy(false)
-        return
-      }
-      setMemberProfile(undefined)
-      setMemberRecords(undefined)
-      activateSource(aggregateSource)
-      setPrivateChatBusy(false)
+      const controller = new AbortController()
+      privateChatAbortRef.current = controller
+      void resolveSendToSelfSource(controller.signal)
+        .then(result => {
+          if (controller.signal.aborted) return
+          setMemberProfile(undefined)
+          setMemberRecords(undefined)
+          activateSource(result)
+        })
+        .catch(caught => { if (!controller.signal.aborted) setError(errorMessage(caught)) })
+        .finally(() => {
+          if (privateChatAbortRef.current !== controller) return
+          privateChatAbortRef.current = undefined
+          setPrivateChatBusy(false)
+        })
       return
     }
     const controller = new AbortController()
@@ -5544,7 +5620,7 @@ export function ArkmeSurface({
         privateChatAbortRef.current = undefined
         setPrivateChatBusy(false)
       })
-  }, [activateSource, aggregateSource, privateChatBusy, source])
+  }, [activateSource, privateChatBusy, resolveSendToSelfSource, source])
   useEffect(() => {
     if (memberMenu === undefined) return
     const close = () => { setMemberMenu(undefined) }
@@ -7269,6 +7345,8 @@ export function ArkmeSurface({
                               highlightMentions
                               shareWebsite={shareWebsite}
                               onMessageCopyLinkOpen={openMessageCopyLinkDetail}
+                              onMentionClick={openMentionMemberProfile}
+                              isMentionClickable={mentionOpensMemberProfile}
                               onLongArticleUpdated={detail => {
                                 setItems(current => current.map(candidate => candidate.itemUid === detail.itemUid
                                   ? {

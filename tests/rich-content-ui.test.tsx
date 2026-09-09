@@ -1,5 +1,5 @@
 import { renderToStaticMarkup } from 'react-dom/server'
-import { create } from 'react-test-renderer'
+import { act, create } from 'react-test-renderer'
 import { describe, expect, it, vi } from 'vitest'
 import { emojiSample } from './fixtures/emoji.js'
 import {
@@ -305,6 +305,29 @@ describe('Arkme rich content presentation', () => {
     expect(highlightedHtml).toContain('<span style="color:var(--dsw-alias-state-business-primary, #3964fe)">@小林</span>')
     expect(highlightedHtml).toContain('<span style="color:var(--dsw-alias-state-business-primary, #3964fe)">@🚀助手</span>')
     expect(highlightedHtml).toContain(' 处理一下')
+  })
+
+  it('turns resolvable visible mentions into isolated profile links', () => {
+    const onMentionClick = vi.fn()
+    const renderer = create(<ArkmeMessageContent
+      item={{
+        itemUid: 'mention-link', senderName: '我', isMe: true, sendAtMillis: 1, status: 1,
+        title: '', textContent: '@小林 看一下 @所有人',
+      }}
+      highlightMentions
+      onMentionClick={onMentionClick}
+      isMentionClickable={text => text === '@小林'}
+    />)
+    const memberMention = renderer.root.findByProps({ 'aria-label': '查看 @小林' })
+    expect(memberMention.props.role).toBe('link')
+    expect(renderer.root.findAllByProps({ 'aria-label': '查看 @所有人' })).toHaveLength(0)
+    const event = { preventDefault: vi.fn(), stopPropagation: vi.fn() }
+
+    act(() => { memberMention.props.onClick(event) })
+
+    expect(event.preventDefault).toHaveBeenCalled()
+    expect(event.stopPropagation).toHaveBeenCalled()
+    expect(onMentionClick).toHaveBeenCalledWith('@小林')
   })
 
   it.each([

@@ -3,7 +3,9 @@ import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import remarkBreaks from 'remark-breaks'
 import { arkmeLiteralMarkdownNodes, arkmeMarkdownBusinessNodes } from '../markdown.js'
-import { ArkmeRichText, ArkmeMentionText } from './ArkmeRichText.js'
+import {
+  ArkmeRichText, ArkmeMentionText, type ArkmeMentionClickHandler, type ArkmeMentionClickPredicate,
+} from './ArkmeRichText.js'
 import type { ArkmeLinkRenderer } from './ArkmeLinkText.js'
 
 function markdownLinkLabel(children: ReactNode): string {
@@ -40,12 +42,14 @@ export const arkmeMarkdownStyles = `
 .arkme-markdown .ProseMirror > :first-child { margin-top:0; }
 `
 
-export function ArkmeMarkdownBody({ text, highlightMentions = true, renderLink, collapse = false, textStyle }: {
+export function ArkmeMarkdownBody({ text, highlightMentions = true, renderLink, collapse = false, textStyle, onMentionClick, isMentionClickable }: {
   text: string
   highlightMentions?: boolean
   renderLink?: ArkmeLinkRenderer
   collapse?: boolean
   textStyle?: Pick<CSSProperties, 'fontSize' | 'lineHeight'> | undefined
+  onMentionClick?: ArkmeMentionClickHandler
+  isMentionClickable?: ArkmeMentionClickPredicate
 }) {
   const body = useRef<HTMLDivElement>(null)
   const [overflow, setOverflow] = useState(false)
@@ -62,14 +66,26 @@ export function ArkmeMarkdownBody({ text, highlightMentions = true, renderLink, 
     return () => observer.disconnect()
   }, [text, collapse])
   const rich = (children: ReactNode) => Children.map(children, child => typeof child === 'string'
-    ? <ArkmeRichText text={child} highlightMentions={highlightMentions} highlightTags={false} linkLabelMode="raw" {...(renderLink === undefined ? {} : { renderLink })} /> : child)
+    ? <ArkmeRichText
+      text={child}
+      highlightMentions={highlightMentions}
+      highlightTags={false}
+      linkLabelMode="raw"
+      {...(renderLink === undefined ? {} : { renderLink })}
+      {...(onMentionClick === undefined ? {} : { onMentionClick })}
+      {...(isMentionClickable === undefined ? {} : { isMentionClickable })}
+    /> : child)
   return <div style={{ minWidth: 0, maxWidth: '100%' }} data-arkme-text-format="markdown">
     <style>{arkmeMarkdownStyles}</style>
     <div style={{ maxHeight: collapse && !expanded ? height : undefined, overflow: 'hidden' }}>
       <div ref={body} className="arkme-markdown" style={textStyle}>
         <Markdown remarkPlugins={[remarkGfm, remarkBreaks, arkmeMarkdownBusinessNodes, arkmeLiteralMarkdownNodes]} components={{
           span: ({ children, node }) => (node?.properties['data-arkme-markdown-run'] ?? node?.properties['dataArkmeMarkdownRun']) === 'tag' && highlightMentions
-            ? <ArkmeMentionText text={String(children)} /> : <span>{rich(children)}</span>,
+            ? <ArkmeMentionText
+              text={String(children)}
+              {...(onMentionClick === undefined ? {} : { onMentionClick })}
+              {...(isMentionClickable === undefined ? {} : { isMentionClickable })}
+            /> : <span>{rich(children)}</span>,
           p: ({ children }) => <p>{rich(children)}</p>,
           h1: ({ children }) => <h1>{rich(children)}</h1>, h2: ({ children }) => <h2>{rich(children)}</h2>,
           h3: ({ children }) => <h3>{rich(children)}</h3>, h4: ({ children }) => <h4>{rich(children)}</h4>,
