@@ -95,6 +95,24 @@ export function useArkmeRealtimeClientEvents(
     if (ownsMessagePreparing) arkmeMessagePreparing.activateAccount(authenticatedAccountScope)
     let stopped = false
     let observedRevision: number | undefined
+    let providerInstanceId: string | undefined
+    let awaitingBaseline = false
+    let connectionGeneration = 0
+    let lastAttentionDiagnosticAt = 0
+    const diagnoseAttention = (reason: string, update: ArkmeChatClientEvent) => {
+      if (update.type !== 'attention-summary' && update.type !== 'reconcile') return
+      try {
+        if (typeof localStorage === 'undefined' || localStorage.getItem('arkme:attention-diagnostics') !== '1') return
+        const now = Date.now()
+        if (now - lastAttentionDiagnosticAt < 1000) return
+        lastAttentionDiagnosticAt = now
+        const summary = update.type === 'attention-summary' ? update.summary : update.attentionSummary
+        console.info('dsh-arkme: attention_browser', { reason, accountScope: authenticatedAccountScope,
+          providerInstanceId: update.providerInstanceId, revision: update.revision,
+          summaryVersion: summary?.summaryVersion, badgeCount: summary?.badgeCount,
+          directoryBadgeCount: arkmeChatDirectory.totalBadgeUnreadCount(authenticatedAccountScope) })
+      } catch { /* Optional diagnostics cannot affect event delivery. */ }
+    }
     let events: EventSource | undefined
     const updateForeground = () => {
       arkmeConversationMembers.setForeground(typeof document === 'undefined' || document.visibilityState !== 'hidden')
@@ -109,13 +127,15 @@ export function useArkmeRealtimeClientEvents(
     if (refreshDirectoryBaseline) void refreshUnread().catch(() => undefined)
     const handleOpen = () => {
       if (stopped) return
+      const generation = ++connectionGeneration
+      awaitingBaseline = true
       if (ownsMessagePreparing) arkmeMessagePreparing.reset()
       reconcileReceipts()
       arkmeConversationMembers.refreshActive()
       invalidateDirectMessageAdmission()
       void reconcileArkmeProviderInstance()
         .then(async changed => {
-          if (!changed || stopped) return
+          if (!changed || stopped || generation !== connectionGeneration) return
           arkmeConversationMembers.reset()
           try {
             await recoverArkmeProviderInstanceDirectory({
@@ -139,9 +159,26 @@ export function useArkmeRealtimeClientEvents(
       if (stopped) return
       try {
         const update = JSON.parse(event.data) as ArkmeChatClientEvent
+        if (update.providerInstanceId !== undefined) {
+          if (awaitingBaseline || providerInstanceId === undefined) {
+            if (update.type !== 'reconcile') { diagnoseAttention('awaiting-baseline', update); return }
+            if (providerInstanceId !== update.providerInstanceId) {
+              if (providerInstanceId !== undefined) {
+                arkmeChatDirectory.activateAccount(undefined)
+                arkmeChatDirectory.activateAccount(authenticatedAccountScope)
+                void refreshUnread(true).catch(() => undefined)
+              }
+              observedRevision = undefined
+              arkmeAttentionSummary.clear()
+            }
+            providerInstanceId = update.providerInstanceId
+            awaitingBaseline = false
+          } else if (update.providerInstanceId !== providerInstanceId) { diagnoseAttention('old-instance', update); return }
+        }
         if (!Number.isSafeInteger(update.revision) || update.revision < 0
-          || (observedRevision !== undefined && update.revision <= observedRevision)) return
+          || (observedRevision !== undefined && update.revision <= observedRevision)) { diagnoseAttention('old-revision', update); return }
         observedRevision = update.revision
+        diagnoseAttention('accepted', update)
         if (update.type === 'directory-update') {
           arkmeChatDirectory.applyHostPage(update.page)
           if (update.page.projection?.avatarRefs !== undefined) void arkmeAvatarImages.revalidateActive(update.page.projection.avatarRefs)
@@ -266,8 +303,8 @@ export function useArkmeRealtimeClientEvents(
     const connectEvents = () => {
       if (stopped || events !== undefined) return
       const next = new EventSource('/arkme-self/api/events')
-      next.onopen = handleOpen
-      next.onmessage = handleMessage
+      next.onopen = () => { if (events === next) handleOpen() }
+      next.onmessage = event => { if (events === next) handleMessage(event) }
       next.onerror = () => { if (!stopped && ownsMessagePreparing) arkmeMessagePreparing.reset() }
       events = next
     }
@@ -284,7 +321,14 @@ export function useArkmeRealtimeClientEvents(
     updateForeground()
     connectEvents()
     browserDocument?.addEventListener('visibilitychange', handleVisibilityChange)
+    const recoverDirectory = () => {
+      if (!ownsMessagePreparing) return
+      if (browserWindow?.navigator?.onLine === false) return
+      void refreshUnread(true).catch(() => undefined)
+    }
+    browserWindow?.addEventListener('online', recoverDirectory)
     const handleWindowFocus = () => {
+      if (ownsMessagePreparing) recoverDirectory()
       arkmeConversationMembers.refreshActive()
       reconcileReceipts()
       arkmeUi.chatChanged()
@@ -296,6 +340,7 @@ export function useArkmeRealtimeClientEvents(
       disconnectEvents()
       browserDocument?.removeEventListener('visibilitychange', handleVisibilityChange)
       browserWindow?.removeEventListener('focus', handleWindowFocus)
+      browserWindow?.removeEventListener('online', recoverDirectory)
     }
   }, [auth?.environment, auth?.status, auth?.userId, authRevision, refreshDirectoryBaseline, ownsMessagePreparing])
 }

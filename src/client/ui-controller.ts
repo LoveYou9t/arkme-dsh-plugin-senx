@@ -46,6 +46,7 @@ export interface ArkmeUiState {
   selectedBot?: ArkmeBotSummary
   /** Forces a real conversation-surface commit for every native notification click, including the current source. */
   notificationActivationRevision?: number
+  conversationUnreadJumpRevision?: number
   conversationTarget?: { revision: number; itemUid: string; sendAtMillis: number; recordOwnerUserId?: number }
   recordingTarget?: { dateStamp: number; startAtMillis: number }
   searchTarget?: { revision: number; query: string }
@@ -141,6 +142,7 @@ export class ArkmeUiController {
         ...state,
         mode: startsClientConversation ? 'harness' : state.mode,
         authRevision: this.state.authRevision + 1,
+        conversationUnreadJumpRevision: 0,
       })
       return
     }
@@ -150,6 +152,7 @@ export class ArkmeUiController {
       ...rest,
       mode: 'login',
       authRevision: this.state.authRevision + 1,
+        conversationUnreadJumpRevision: 0,
     })
   }
 
@@ -307,6 +310,11 @@ export class ArkmeUiController {
     })
   }
 
+  locateNextUnreadConversation(): void {
+    this.showConversations()
+    this.publish({ ...this.state, conversationUnreadJumpRevision: (this.state.conversationUnreadJumpRevision ?? 0) + 1 })
+  }
+
   showContacts(): void {
     const { recordingTarget: _recordingTarget, calendarOpen: _calendarOpen, ...rest } = this.state
     this.publish({ ...rest, mode: 'source', productMode: 'contacts' })
@@ -429,6 +437,7 @@ export class ArkmeUiController {
       && next.productMode === this.state.productMode
       && next.calendarOpen === this.state.calendarOpen
       && next.notificationActivationRevision === this.state.notificationActivationRevision
+      && next.conversationUnreadJumpRevision === this.state.conversationUnreadJumpRevision
       && next.conversationTarget?.revision === this.state.conversationTarget?.revision
       && next.conversationTarget?.itemUid === this.state.conversationTarget?.itemUid
       && next.conversationTarget?.sendAtMillis === this.state.conversationTarget?.sendAtMillis

@@ -1,3 +1,4 @@
+import { projectArkmeConversationAttention } from '../conversation-attention.js'
 import type { ArkmeBotSummary, ArkmeChatClientEvent, ArkmeConversationDirectoryVisibilityItem, ArkmeSourceItem, ArkmeSourceList } from '../types.js'
 import { projectArkmeChatAttentionFromMuted } from '../chat-attention.js'
 import { retainNewerArkmeChatPolicy } from '../chat-policy-projection.js'
@@ -164,6 +165,28 @@ export class ConversationDirectoryService {
     await this.activate()
     if (this.scan === undefined) this.startScan()
     return structuredClone(await this.rawBaseline!)
+  }
+
+  /** Join the directory owner; never combine its rows with a separately refreshed global count. */
+  async attentionSummary(retry = false): Promise<import('../types.js').ArkmeChatAttentionSummary> {
+    // Bootstrap is owned by the directory/connection baseline, not by each attention trigger.
+    if (retry && this.userId !== undefined && this.phase === 'failed') await this.read()
+    const generation = this.generation
+    if (this.scan !== undefined) await this.scan.catch(() => undefined)
+    if (generation !== this.generation) throw new DOMException('Account changed', 'AbortError')
+    const sources = [...this.sources.values()]
+    const visibility = [...this.visibility.values()]
+    const visible = projectArkmeConversationAttention(sources, this.bots, visibility)
+    const rows = [...visible.sources, ...visible.bots]
+    const version = Math.max(1, this.cachedAtMillis, this.revision)
+    return {
+      ...(this.phase === 'failed' ? { stale: true } : {}),
+      badgeCount: visible.badgeCount,
+      mutedUnreadCount: rows.reduce((sum, row) => sum + (row.isMuted ? Math.max(0, row.unreadCount ?? 0) : 0), 0),
+      sessionCountWithUnread: rows.filter(row => (row.unreadCount ?? 0) > 0).length,
+      hasAttention: visible.sources.some(row => row.hasUnreadMention === true),
+      summaryVersion: version, updatedAtMillis: version,
+    }
   }
 
   async settled(): Promise<void> { while (this.scan !== undefined) await this.scan; while (this.avatarWork !== undefined) await this.avatarWork; while (this.diskWriting) await this.persistence }

@@ -173,8 +173,8 @@ describe('Arkme conversation directory load state', () => {
 
   it('does not render a newly loaded owner row before visibility hydration settles', () => {
     expect(workspaceSource).toContain('const [conversationVisibilityHydrated, setConversationVisibilityHydrated]')
-    expect(workspaceSource).toContain('conversationVisibilityHydrated.has(sourceKey)')
-    expect(workspaceSource).toContain('conversationVisibilityHydrated.has(botKey)')
+    expect(workspaceSource).toContain('conversationVisibilityHydrated.has(key)')
+    expect(workspaceSource).toContain('arkmeChatDirectory.getConversationSnapshot')
     expect(workspaceSource).toContain('setConversationVisibilityHydrated(current => markConversationVisibilityScopeHydrated(')
   })
 

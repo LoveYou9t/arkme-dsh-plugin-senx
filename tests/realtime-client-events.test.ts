@@ -1,3 +1,4 @@
+import { arkmeAttentionSummary } from '../src/client/attention-summary-store.js'
 import { createElement, useSyncExternalStore } from 'react'
 import * as clientApi from '../src/client/api.js'
 import { act, create, type ReactTestRenderer } from 'react-test-renderer'
@@ -347,5 +348,49 @@ describe('realtime reconcile routing', () => {
       changeKind: 'deleted', changeVersion: 123456, relationTerminal: true, throughSequence: 9,
     })
     await act(async () => { renderer.unmount() })
+  })
+})
+
+
+describe('Host epoch recovery', () => {
+  it('accepts a new Host zero baseline, rejects old Host frames, and keeps same-Host revision ordering', async () => {
+    let channel!: FakeEventSource
+    class FakeEventSource {
+      onopen: (() => void) | null = null
+      onmessage: ((event: MessageEvent<string>) => void) | null = null
+      constructor() { channel = this }
+      close() {}
+    }
+    vi.stubGlobal('EventSource', FakeEventSource)
+    vi.spyOn(arkmeAuthStore, 'refresh').mockResolvedValue()
+    vi.spyOn(clientApi, 'callArkme').mockResolvedValue({ instanceId: 'host-for-recovery-test' })
+    vi.spyOn(arkmeChatDirectory, 'refreshRoot').mockResolvedValue([])
+    function Harness() {
+      useArkmeRealtimeClientEvents({ status: 'authenticated', userId: 789, environment: 'test' }, 1, false)
+      return null
+    }
+    let renderer!: ReactTestRenderer
+    const send = async (providerInstanceId: string, revision: number, count: number, type = 'attention-summary') => {
+      const summary = { badgeCount: count, mutedUnreadCount: 0, sessionCountWithUnread: count > 0 ? 1 : 0,
+        hasAttention: false, summaryVersion: 100 + revision, updatedAtMillis: 100 + revision }
+      await act(async () => { channel.onmessage?.({ data: JSON.stringify({ providerInstanceId, revision, type,
+        ...(type === 'reconcile' ? { refresh: 'none', attentionSummary: summary } : { summary }),
+      }) } as MessageEvent<string>) })
+    }
+    try {
+      await act(async () => { renderer = create(createElement(Harness)) })
+      await send('old', 100, 3, 'reconcile')
+      expect(arkmeAttentionSummary.getSnapshot().summary?.badgeCount).toBe(3)
+      await act(async () => { channel.onopen?.() })
+      await send('new', 1, 0, 'reconcile')
+      expect(arkmeAttentionSummary.getSnapshot().summary?.badgeCount).toBe(0)
+      await send('old', 101, 3)
+      await send('new', 0, 9)
+      expect(arkmeAttentionSummary.getSnapshot().summary?.badgeCount).toBe(0)
+      await send('new', 2, 4)
+      await act(async () => { channel.onopen?.() })
+      await send('new', 1, 0, 'reconcile')
+      expect(arkmeAttentionSummary.getSnapshot().summary?.badgeCount).toBe(4)
+    } finally { await act(async () => { renderer?.unmount() }) }
   })
 })

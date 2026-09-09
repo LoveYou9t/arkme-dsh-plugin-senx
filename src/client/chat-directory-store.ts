@@ -1,3 +1,5 @@
+import { mergeBotDirectorySnapshots } from '../bot-chat-directory-projection.js'
+import { projectArkmeConversationAttention } from '../conversation-attention.js'
 import type { ArkmeChatPinProjection, ArkmeSourceItem, ArkmeSourceList } from '../types.js'
 import { retainNewerArkmeChatPolicy } from '../chat-policy-projection.js'
 import { arkmeBadgeUnreadCount, projectArkmeChatAttentionFromMuted } from '../chat-attention.js'
@@ -30,6 +32,11 @@ export interface ArkmeChatDirectorySnapshot {
   sources: ArkmeSourceItem[]
   baselineReady: boolean
   isRefreshing: boolean
+}
+
+export type ArkmeConversationSnapshot = Readonly<ReturnType<typeof projectArkmeConversationAttention>> & {
+  accountScope: string | undefined
+  baselineReady: boolean
 }
 
 export interface ArkmeChatDirectorySourceUpdate {
@@ -343,6 +350,14 @@ function applyDirectoryMutations(
 
 export class ArkmeChatDirectoryStore {
   private snapshot: ArkmeChatDirectorySnapshot = { revision: 0, sources: [], baselineReady: false, isRefreshing: false }
+  private conversationInputs: {
+    sources: ArkmeSourceItem[]
+    bots: NonNullable<ArkmeSourceList['projection']>['bots'] | undefined
+    visibility: NonNullable<ArkmeSourceList['projection']>['visibility'] | undefined
+    accountScope: string | undefined
+    baselineReady: boolean
+  } | undefined
+  private conversationSnapshot: ArkmeConversationSnapshot | undefined
   private readonly listeners = new Set<() => void>()
   private readonly loadPage: (cursor?: string, force?: boolean) => Promise<ArkmeSourceList>
   private readonly maxAgeMs: number
@@ -371,6 +386,21 @@ export class ArkmeChatDirectoryStore {
 
   readonly getSnapshot = (): ArkmeChatDirectorySnapshot => this.snapshot
 
+  /** Like computed: one bounded cache shared by every consumer, invalidated only by its input references. */
+  readonly getConversationSnapshot = (): ArkmeConversationSnapshot => {
+    const { sources, projection, baselineReady } = this.snapshot
+    const previous = this.conversationInputs
+    if (previous?.sources === sources && previous.bots === projection?.bots
+      && previous.visibility === projection?.visibility && previous.accountScope === this.accountScopeKey
+      && previous.baselineReady === baselineReady) return this.conversationSnapshot!
+    this.conversationInputs = { sources, bots: projection?.bots, visibility: projection?.visibility,
+      accountScope: this.accountScopeKey, baselineReady }
+    const visible = projectArkmeConversationAttention(sources, projection?.bots ?? [], projection?.visibility
+      ?? sources.map(source => ({ entryKind: 'source' as const, entryRef: source.sourceRef, hidden: false })))
+    this.conversationSnapshot = { ...visible, accountScope: this.accountScopeKey, baselineReady }
+    return this.conversationSnapshot
+  }
+
   readonly subscribe = (listener: () => void): (() => void) => {
     this.listeners.add(listener)
     return () => { this.listeners.delete(listener) }
@@ -380,6 +410,8 @@ export class ArkmeChatDirectoryStore {
     const normalized = clientAccountScopeKey(scope)
     if (normalized === this.accountScopeKey) return
     this.projection = undefined
+    this.conversationInputs = undefined
+    this.conversationSnapshot = undefined
     this.accountScopeKey = normalized
     this.generation += 1
     this.refreshInFlight = undefined
@@ -456,19 +488,27 @@ export class ArkmeChatDirectoryStore {
         const key = `${item.entryKind}:${item.entryRef}`
         if (!visibility.has(key)) visibility.set(key, item)
       }
-      this.projection = { ...this.projection, visibility: [...visibility.values()] }
+      this.projection = { ...this.projection, visibility: visibility.size === count ? this.projection.visibility : [...visibility.values()] }
       if (missing.length > 0) this.upsertMany(missing)
       else if (visibility.size !== count) this.commit(this.snapshot.sources)
       return
     }
     const visibility = new Map((this.projection?.visibility ?? []).map(item => [`${item.entryKind}:${item.entryRef}`, item]))
+    let visibilityChanged = false
     for (const incoming of page.items) {
       const previous = this.snapshot.sources.find(item => arkmeSourceIdentityKey(item) === arkmeSourceIdentityKey(incoming))
-      if (previous !== undefined && previous.sourceRef !== incoming.sourceRef) visibility.delete(`source:${previous.sourceRef}`)
+      if (previous !== undefined && previous.sourceRef !== incoming.sourceRef) {
+        visibilityChanged = visibility.delete(`source:${previous.sourceRef}`) || visibilityChanged
+      }
     }
-    for (const item of projection.visibility) visibility.set(`${item.entryKind}:${item.entryRef}`, item)
+    for (const item of projection.visibility) {
+      const key = `${item.entryKind}:${item.entryRef}`
+      if (visibility.get(key)?.hidden !== item.hidden) visibilityChanged = true
+      visibility.set(key, item)
+    }
     const previousProjection = this.projection
-    this.projection = { ...projection, visibility: [...visibility.values()] }
+    this.projection = { ...projection, visibility: !visibilityChanged && previousProjection !== undefined
+      ? previousProjection.visibility : [...visibility.values()] }
     for (const field of ['bots', 'botPinnedKeys', 'arkoProfile', 'arkoPreview', 'sendToSelf'] as const) {
       if (previousProjection?.[field] !== undefined && JSON.stringify(previousProjection[field]) === JSON.stringify(projection[field])) Object.assign(this.projection, { [field]: previousProjection[field] })
     }
@@ -562,10 +602,31 @@ export class ArkmeChatDirectoryStore {
   }
 
   private commit(sources: ArkmeSourceItem[]): void {
+    const sameSources = sources.length === this.snapshot.sources.length
+      && sources.every((source, index) => source === this.snapshot.sources[index])
+    if (!sameSources && this.projection !== undefined && this.snapshot.projection !== undefined) {
+      const previousByKey = new Map(this.snapshot.sources.map(source => [directorySourceIdentity(source), source]))
+      let visibility: Map<string, NonNullable<ArkmeSourceList['projection']>['visibility'][number]> | undefined
+      let previousVisibility: typeof visibility
+      for (const source of sources) {
+        const previous = previousByKey.get(directorySourceIdentity(source))
+        if (previous === undefined || previous.kind !== source.kind || previous.sourceRef === source.sourceRef) continue
+        visibility ??= new Map(this.projection.visibility.map(item => [`${item.entryKind}:${item.entryRef}`, item]))
+        previousVisibility ??= new Map(this.snapshot.projection.visibility.map(item => [`${item.entryKind}:${item.entryRef}`, item]))
+        const oldKey = `source:${previous.sourceRef}`
+        const newKey = `source:${source.sourceRef}`
+        const confirmed = previousVisibility.get(oldKey)
+        // sourceRef includes message activity, so a new message rotates it without changing conversation identity.
+        // Retain its confirmed visibility until an explicit current-ref receipt overrides it; never infer "visible".
+        if (!visibility.has(newKey) && confirmed !== undefined) visibility.set(newKey, { ...confirmed, entryRef: source.sourceRef })
+        visibility.delete(oldKey)
+      }
+      if (visibility !== undefined) this.projection = { ...this.projection, visibility: [...visibility.values()] }
+    }
     this.snapshot = {
       ...(this.projection === undefined ? {} : { projection: this.projection }),
       revision: this.snapshot.revision + 1,
-      sources: [...sources],
+      sources: sameSources ? this.snapshot.sources : [...sources],
       baselineReady: this.baselineReady,
       isRefreshing: this.isRefreshing,
     }
@@ -617,14 +678,28 @@ export class ArkmeChatDirectoryStore {
       : sum + normalizedCount(source.unreadCount), 0)
   }
 
-  totalBadgeUnreadCount(): number {
-    const sources = applyDirectoryMutations(
-      this.snapshot.sources,
-      this.pendingMutations,
-      this.combinedReadWatermarks(),
-      { sourceKeysByRef: new Map(this.sourceKeysByRef) },
-    )
-    return sources.reduce((sum, source) => sum + arkmeBadgeUnreadCount(source), 0)
+  updateBots(update: import('../types.js').ArkmeBotSummary[] | ((current: import('../types.js').ArkmeBotSummary[]) => import('../types.js').ArkmeBotSummary[])): void {
+    if (this.projection === undefined) return
+    const bots = typeof update === 'function' ? update(this.projection.bots) : update
+    const next = mergeBotDirectorySnapshots([], bots, this.projection.removedBotRefs)
+    if (JSON.stringify(next) === JSON.stringify(this.projection.bots)) return
+    this.projection = { ...this.projection, bots: next }
+    this.commit(this.snapshot.sources)
+  }
+
+  hydrateVisibility(items: import('../types.js').ArkmeConversationDirectoryVisibilityItem[]): void {
+    if (this.projection === undefined) return
+    const visibility = new Map(this.projection.visibility.map(item => [`${item.entryKind}:${item.entryRef}`, item]))
+    // A separately hydrated new row must never overwrite the Host's newer policy.
+    for (const item of items) if (!visibility.has(`${item.entryKind}:${item.entryRef}`)) visibility.set(`${item.entryKind}:${item.entryRef}`, item)
+    if (visibility.size === this.projection.visibility.length) return
+    this.projection = { ...this.projection, visibility: [...visibility.values()] }
+    this.commit(this.snapshot.sources)
+  }
+
+  totalBadgeUnreadCount(accountScope?: string): number {
+    const snapshot = this.getConversationSnapshot()
+    return accountScope !== undefined && accountScope !== snapshot.accountScope ? 0 : snapshot.badgeCount
   }
 
   markReadOptimistic(

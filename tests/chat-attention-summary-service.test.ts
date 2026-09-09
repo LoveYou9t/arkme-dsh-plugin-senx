@@ -25,6 +25,99 @@ function summary(badgeCount: number) {
 }
 
 describe('Chat attention summary owner', () => {
+  it('keeps one bounded retry beyond five failures and cancels it after recovery or disposal', async () => {
+    vi.useFakeTimers()
+    const runtime = new ServiceRuntime(config, {
+      async read() { return { userId: 1, accessToken: 'access', refreshToken: 'refresh' } },
+      async write() {}, async delete() {},
+    }, { async uniqueCode() { return 'secret' } } as StateStore, vi.fn() as typeof fetch)
+    const readSummary = vi.fn().mockResolvedValue(summary(0))
+    for (let i = 0; i < 7; i++) readSummary.mockRejectedValueOnce(new Error('offline'))
+    const native = { showNotification: vi.fn(), resetBadgeCount: vi.fn(async () => true), applyBadgeSummary: vi.fn(async () => true) }
+    const service = new ChatRealtimeService(runtime, { chatUnreadBadgeSummary: readSummary } as unknown as SourceService,
+      { chatTimelineItems: vi.fn(async () => []) }, native)
+    try {
+      await service.refreshAttentionSummary()
+      for (const delay of [1000, 2000, 4000, 8000, 16000, 30000, 30000]) {
+        expect(vi.getTimerCount()).toBe(1)
+        await vi.advanceTimersByTimeAsync(delay)
+      }
+      expect(readSummary).toHaveBeenCalledTimes(8)
+      expect(native.applyBadgeSummary).toHaveBeenCalledWith({ count: 0, revision: 100 })
+      expect(vi.getTimerCount()).toBe(0)
+      readSummary.mockRejectedValueOnce(new Error('offline'))
+      await service.refreshAttentionSummary()
+      service.dispose()
+      await vi.advanceTimersByTimeAsync(60000)
+      expect(readSummary).toHaveBeenCalledTimes(9)
+      expect(vi.getTimerCount()).toBe(0)
+    } finally { service.dispose(); vi.useRealTimers() }
+  })
+
+  it('does not restart attention work after the realtime lifecycle stops during a read', async () => {
+    vi.useFakeTimers()
+    let reject!: (error: Error) => void
+    const read = vi.fn(() => new Promise<ArkmeChatAttentionSummary>((_, fail) => { reject = fail }))
+    const runtime = new ServiceRuntime(config, { async read() { return { userId: 1, accessToken: 'a', refreshToken: 'r' } },
+      async write() {}, async delete() {} }, { async uniqueCode() { return 'secret' } } as StateStore,
+      vi.fn(async (_input, init) => new Response(new ReadableStream({ start(controller) {
+        init?.signal?.addEventListener('abort', () => controller.error(new DOMException('aborted', 'AbortError')), { once: true })
+      } }), { headers: { 'content-type': 'text/event-stream' } })) as typeof fetch)
+    const service = new ChatRealtimeService(runtime, { chatUnreadBadgeSummary: read } as unknown as SourceService, { chatTimelineItems: vi.fn(async () => []) })
+    try {
+      const stop = service.startChatRealtime()
+      await vi.advanceTimersByTimeAsync(0)
+      expect(read).toHaveBeenCalled()
+      stop()
+      reject(new Error('late offline failure'))
+      await vi.advanceTimersByTimeAsync(60000)
+      const count = read.mock.calls.length
+      await service.refreshAttentionSummary()
+      expect(read).toHaveBeenCalledTimes(count)
+      expect(vi.getTimerCount()).toBe(0)
+    } finally { service.dispose(); vi.useRealTimers() }
+  })
+
+  it('retries a failed trailing read even after the preceding native apply succeeded', async () => {
+    vi.useFakeTimers()
+    let release!: () => void
+    const pending = new Promise<void>(resolve => { release = resolve })
+    const read = vi.fn().mockImplementationOnce(async () => { await pending; return summary(3) })
+      .mockRejectedValueOnce(new Error('trailing read failed')).mockResolvedValue(summary(0))
+    const runtime = new ServiceRuntime(config, { async read() { return { userId: 1, accessToken: 'a', refreshToken: 'r' } },
+      async write() {}, async delete() {} }, { async uniqueCode() { return 'secret' } } as StateStore, vi.fn() as typeof fetch)
+    const service = new ChatRealtimeService(runtime, { chatUnreadBadgeSummary: read } as unknown as SourceService,
+      { chatTimelineItems: vi.fn(async () => []) }, { showNotification: vi.fn(), applyBadgeSummary: vi.fn(async () => true) })
+    try {
+      const first = service.refreshAttentionSummary()
+      await vi.advanceTimersByTimeAsync(0)
+      const trailing = service.refreshAttentionSummary()
+      await vi.advanceTimersByTimeAsync(0)
+      release()
+      await Promise.all([first, trailing])
+      expect(read).toHaveBeenCalledTimes(2)
+      expect(vi.getTimerCount()).toBe(1)
+      await vi.advanceTimersByTimeAsync(1000)
+      expect(service.chatRealtimeInitialEvent()).toMatchObject({ attentionSummary: { badgeCount: 0 } })
+      expect(vi.getTimerCount()).toBe(0)
+    } finally { service.dispose(); vi.useRealTimers() }
+  })
+
+  it('uses the directory total for native and SSE instead of a disagreeing upstream total', async () => {
+    const runtime = new ServiceRuntime(config, { async read() { return { userId: 1, accessToken: 'a', refreshToken: 'r' } },
+      async write() {}, async delete() {} }, { async uniqueCode() { return 'secret' } } as StateStore, vi.fn() as typeof fetch)
+    const upstream = vi.fn(async () => summary(99))
+    const native = { showNotification: vi.fn(), applyBadgeSummary: vi.fn(async () => true) }
+    const service = new ChatRealtimeService(runtime, { chatUnreadBadgeSummary: upstream } as unknown as SourceService,
+      { chatTimelineItems: vi.fn(async () => []) }, native)
+    service.directoryAttention = async () => summary(5)
+    await service.refreshAttentionSummary()
+    expect(upstream).not.toHaveBeenCalled()
+    expect(service.chatRealtimeInitialEvent()).toMatchObject({ attentionSummary: { badgeCount: 5 } })
+    expect(native.applyBadgeSummary).toHaveBeenCalledWith({ count: 5, revision: 100 })
+    service.dispose()
+  })
+
   it('refreshes the authoritative summary at startup without waiting for IM SSE reconcile', async () => {
     const fetchImpl = vi.fn(async () => new Response(new ReadableStream<Uint8Array>({ start() {} }), {
       status: 200,
