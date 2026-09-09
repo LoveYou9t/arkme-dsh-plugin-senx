@@ -86,10 +86,24 @@ describe('composer container click focus', () => {
     expect(changed).not.toHaveBeenCalled()
   })
 
-  it.each(['tools', 'hint'])('excludes the complete %s footer, including its children and whitespace', async footer => {
+  it.each([false, true])('focuses from toolbar whitespace while leaving its buttons alone (Markdown: %s)', async markdown => {
+    await mount(markdown)
+    const toolbar = host.querySelector('[data-arkme-composer-footer="tools"]')!
+    click(toolbar.querySelector('span')!)
+    expect(document.activeElement).toBe(editor())
+    act(() => editor().blur())
+    click(toolbar)
+    expect(document.activeElement).toBe(editor())
+    act(() => editor().blur())
+    click(toolbar.querySelector('button')!)
+    expect(document.activeElement).not.toBe(editor())
+    expect(changed).not.toHaveBeenCalled()
+  })
+
+  it('excludes the complete shortcut hint, including its children and whitespace', async () => {
     await mount()
     const focus = vi.spyOn(handle.current!, 'focus')
-    const region = host.querySelector(`[data-arkme-composer-footer="${footer}"]`)!
+    const region = host.querySelector('[data-arkme-composer-footer="hint"]')!
     for (const element of [region, ...region.querySelectorAll('*')]) click(element)
     expect(focus).not.toHaveBeenCalled()
     expect(document.activeElement).not.toBe(editor())

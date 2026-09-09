@@ -13,9 +13,8 @@ export function focusArkmeComposerFromClick(
   const container = event.currentTarget
   const clicked = event.target
   if (!(clicked instanceof Element) || !container.contains(clicked)) return false
-  // The outer composer is itself a footer. Only its two marked bottom regions
-  // are excluded; editable content and controls keep their native interaction.
-  if (clicked.closest('[data-arkme-composer-footer], button, a[href], input, select, textarea, [contenteditable], [role="button"], [role="link"], [role="option"], [role="menuitem"], [role="separator"], [draggable="true"]')) return false
+  // Toolbar whitespace can focus the editor; its controls keep their own action.
+  if (clicked.closest('[data-arkme-composer-footer="hint"], button, a[href], input, select, textarea, [contenteditable], [role="button"], [role="link"], [role="option"], [role="menuitem"], [role="separator"], [draggable="true"]')) return false
   const active = container.ownerDocument.activeElement
   if (active !== null && container.contains(active) && active.matches('[data-arkme-rich-composer]')) return false
   // A drag can end in a click after selecting reference text or crossing padding.
