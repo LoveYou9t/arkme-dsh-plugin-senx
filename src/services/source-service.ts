@@ -735,7 +735,6 @@ export class SourceService {
     }
 
     const sourceRef = await this.sealSourceRef(session.userId, 'topic', topicUid, title)
-    const topicHierarchyKey = await this.topicHierarchyKey(session.userId, topicUid)
     if (parentTopicUid !== undefined) {
       try {
         const bound = await this.runtime.authenticatedPost<Record<string, unknown>>(
@@ -767,7 +766,6 @@ export class SourceService {
           return {
             source: {
               sourceRef,
-              topicHierarchyKey,
               kind: 'topic',
               displayName: title,
               activeAtMillis: createdAtMillis,
@@ -784,19 +782,13 @@ export class SourceService {
           409,
           { cause: bindError },
         )
-      } finally {
-        this.invalidateSourceListCache(session.userId, 'send_to_self')
       }
     }
 
     return {
       source: {
         sourceRef,
-        topicHierarchyKey,
-        ...(parentSourceRef !== undefined && parentTopicUid !== undefined ? {
-          parentSourceRef,
-          parentTopicHierarchyKey: await this.topicHierarchyKey(session.userId, parentTopicUid),
-        } : {}),
+        ...(parentSourceRef !== undefined ? { parentSourceRef } : {}),
         kind: 'topic',
         displayName: title,
         activeAtMillis: createdAtMillis,
