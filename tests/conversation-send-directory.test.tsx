@@ -2925,6 +2925,176 @@ describe('conversation send directory projection', () => {
     expect(rendered).not.toContain('A 成员')
   })
 
+  it('opens the group member profile card from a visible message mention', async () => {
+    const mentionedMember: ArkmeConversationMemberItem = {
+      memberRef: 'member-mentioned-cruisin',
+      mentionRef: 'mention-mentioned-cruisin',
+      mentionDisplayName: 'cruisin',
+      displayName: '-',
+      memberName: 'cruisin',
+      role: 'member',
+      status: 'active',
+      isSelf: false,
+      isOwner: false,
+      joinedAtMillis: 1,
+      recordCount: 0,
+      mentionCount: 1,
+    }
+    const privateSource: ArkmeSourceItem = {
+      sourceRef: 'source-mentioned-cruisin-private',
+      sourceKey: 'chat:mentioned-cruisin-private',
+      kind: 'private_chat',
+      displayName: '-',
+      activeAtMillis: 49,
+      unreadCount: 0,
+    }
+    activeSource = group
+    arkmeChatDirectory.publish([group])
+    arkmeUi.selectSource(group)
+    timeline = [{
+      itemUid: 'message-visible-mention',
+      senderName: '同事',
+      isMe: false,
+      sendAtMillis: 1,
+      title: '',
+      textContent: '麻烦 @cruisin 看看，@所有人 先不用处理',
+      status: 1,
+      sequence: 1,
+    }]
+    const baseCall = mocks.callArkme.getMockImplementation()!
+    mocks.callArkme.mockImplementation(async (operation: string, params?: Record<string, unknown>, signal?: AbortSignal) => {
+      if (operation === 'source.members') return {
+        source: group,
+        items: [mentionedMember],
+        total: 1,
+        activeCount: 1,
+      }
+      if (operation === 'source.timeline') return { source: group, items: timeline, hasMore: false }
+      if (operation === 'group.bots') return { source: group, items: [], total: 0 }
+      if (operation === 'chat.member.private.open') return { source: privateSource }
+      return await baseCall(operation, params, signal)
+    })
+
+    await act(async () => {
+      renderer = create(<ArkmeSurface productChrome={false} productNavigation={false} />)
+      await Promise.resolve()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    const mention = renderer!.root.findByProps({ 'aria-label': '查看 @cruisin' })
+    expect(renderer!.root.findAllByProps({ 'aria-label': '查看 @所有人' })).toHaveLength(0)
+    const clickEvent = { preventDefault: vi.fn(), stopPropagation: vi.fn() }
+    await act(async () => {
+      mention.props.onClick(clickEvent)
+      await Promise.resolve()
+    })
+
+    expect(clickEvent.preventDefault).toHaveBeenCalled()
+    expect(clickEvent.stopPropagation).toHaveBeenCalled()
+    const card = renderer!.root.findByType(ArkmeMemberProfileCard)
+    const rendered = JSON.stringify(renderer!.toJSON())
+    expect(rendered).toContain('主题内昵称：')
+    expect(rendered).toContain('cruisin')
+
+    await act(async () => {
+      card.props.onSend()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(mocks.callArkme).toHaveBeenCalledWith('chat.member.private.open', {
+      sourceRef: group.sourceRef,
+      memberRef: mentionedMember.memberRef,
+    }, expect.any(AbortSignal))
+    expect(arkmeUi.getSnapshot().selectedSource?.sourceKey).toBe(privateSource.sourceKey)
+  })
+
+  it('opens send-to-self when the current user sends from a self mention profile card', async () => {
+    const selfMember: ArkmeConversationMemberItem = {
+      memberRef: 'member-mentioned-self',
+      mentionDisplayName: '狗才',
+      displayName: '狗才',
+      memberName: '狗才',
+      role: 'member',
+      status: 'active',
+      isSelf: true,
+      isOwner: false,
+      joinedAtMillis: 1,
+      recordCount: 0,
+      mentionCount: 1,
+    }
+    const defaultCategory: ArkmeSourceItem = {
+      sourceRef: 'source-self-default',
+      sourceKey: 'record:self-default',
+      kind: 'default_category',
+      displayName: '未分类',
+      activeAtMillis: 0,
+      unreadCount: 0,
+    }
+    activeSource = group
+    arkmeChatDirectory.publish([group])
+    arkmeUi.selectSource(group)
+    timeline = [{
+      itemUid: 'message-visible-self-mention',
+      senderName: '同事',
+      isMe: false,
+      sendAtMillis: 1,
+      title: '',
+      textContent: '请 @狗才 看一下',
+      status: 1,
+      sequence: 1,
+    }]
+    const baseCall = mocks.callArkme.getMockImplementation()!
+    mocks.callArkme.mockImplementation(async (operation: string, params?: Record<string, unknown>, signal?: AbortSignal) => {
+      if (operation === 'source.members') return {
+        source: group,
+        items: [selfMember],
+        total: 1,
+        activeCount: 1,
+      }
+      if (operation === 'source.timeline') {
+        return params?.sourceRef === sendToSelf.sourceRef
+          ? { source: sendToSelf, items: [], hasMore: false }
+          : { source: group, items: timeline, hasMore: false }
+      }
+      if (operation === 'group.bots') return { source: group, items: [], total: 0 }
+      if (operation === 'sources.list' && params?.directory === 'send_to_self') return {
+        directory: 'send_to_self',
+        items: [sendToSelf, defaultCategory],
+        hasMore: false,
+      }
+      return await baseCall(operation, params, signal)
+    })
+
+    await act(async () => {
+      renderer = create(<ArkmeSurface productChrome={false} productNavigation={false} />)
+      await Promise.resolve()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    const mention = renderer!.root.findByProps({ 'aria-label': '查看 @狗才' })
+    const clickEvent = { preventDefault: vi.fn(), stopPropagation: vi.fn() }
+    await act(async () => {
+      mention.props.onClick(clickEvent)
+      await Promise.resolve()
+    })
+    const card = renderer!.root.findByType(ArkmeMemberProfileCard)
+
+    await act(async () => {
+      card.props.onSend()
+      await Promise.resolve()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(mocks.callArkme).toHaveBeenCalledWith('sources.list', {
+      directory: 'send_to_self',
+      limit: 100,
+    }, expect.any(AbortSignal))
+    expect(mocks.callArkme.mock.calls.some(call => call[0] === 'chat.member.private.open')).toBe(false)
+    expect(arkmeUi.getSnapshot().selectedSource?.sourceKey).toBe(sendToSelf.sourceKey)
+  })
+
   it('cancels a pending member private-chat open when the selected conversation changes or the card closes', async () => {
     const groupA: ArkmeSourceItem = {
       ...group, sourceRef: 'source-private-open-a', sourceKey: 'chat:private-open-a', displayName: 'A 群', latestSequence: 1,

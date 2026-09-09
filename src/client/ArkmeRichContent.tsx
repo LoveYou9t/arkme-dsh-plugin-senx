@@ -15,7 +15,7 @@ import { ArkmeVoiceContent, arkmeVoiceMediaUrl } from './ArkmeVoiceContent.js'
 import { ArkmeFileViewer, ArkmeFileActions, arkmeLocalFileUrl, arkmeFileSize, useArkmeOriginal } from './ArkmeFileViewer.js'
 import { arkmeCanInlineLocalFile, arkmeVisibleUploadFraction } from '../file-transfer-contract.js'
 import { createArkmeSdk } from '../sdk/index.js'
-import { ArkmeRichText } from './ArkmeRichText.js'
+import { ArkmeRichText, type ArkmeMentionClickHandler, type ArkmeMentionClickPredicate } from './ArkmeRichText.js'
 import { arkmeEmojiPlainText } from './arkme-emoji.js'
 import type { ArkmeLinkLabelMode, ArkmeLinkRenderer } from './ArkmeLinkText.js'
 import { retainPartialTimelineMedia } from './timeline-media.js'
@@ -166,6 +166,8 @@ function ArkmeMessageRichText({
   linkLabelMode,
   shareWebsite,
   onMessageCopyLinkOpen,
+  onMentionClick,
+  isMentionClickable,
 }: {
   text: string
   textFormat?: 'plain' | 'markdown'
@@ -175,6 +177,8 @@ function ArkmeMessageRichText({
   linkLabelMode: ArkmeLinkLabelMode
   shareWebsite?: string
   onMessageCopyLinkOpen?: (sid: string) => void
+  onMentionClick?: ArkmeMentionClickHandler
+  isMentionClickable?: ArkmeMentionClickPredicate
 }) {
   const renderLink: ArkmeLinkRenderer = link => {
     const sid = arkmeMessageCopyLinkSidFromUrl(link.href, shareWebsite)
@@ -187,8 +191,23 @@ function ArkmeMessageRichText({
       {...(onMessageCopyLinkOpen === undefined ? {} : { onMessageCopyLinkOpen })}
     />
   }
-  if (textFormat === 'markdown') return <ArkmeMarkdownBody text={text} textStyle={textStyle} highlightMentions={highlightMentions} collapse={collapse} renderLink={renderLink} />
-  return <ArkmeRichText text={text} highlightMentions={highlightMentions} linkLabelMode={linkLabelMode} renderLink={renderLink} />
+  if (textFormat === 'markdown') return <ArkmeMarkdownBody
+    text={text}
+    textStyle={textStyle}
+    highlightMentions={highlightMentions}
+    collapse={collapse}
+    renderLink={renderLink}
+    {...(onMentionClick === undefined ? {} : { onMentionClick })}
+    {...(isMentionClickable === undefined ? {} : { isMentionClickable })}
+  />
+  return <ArkmeRichText
+    text={text}
+    highlightMentions={highlightMentions}
+    linkLabelMode={linkLabelMode}
+    renderLink={renderLink}
+    {...(onMentionClick === undefined ? {} : { onMentionClick })}
+    {...(isMentionClickable === undefined ? {} : { isMentionClickable })}
+  />
 }
 
 export function arkmeContentMediaUrl(block: ArkmeContentBlock): string {
@@ -239,6 +258,8 @@ function LongText({
   linkLabelMode,
   shareWebsite,
   onMessageCopyLinkOpen,
+  onMentionClick,
+  isMentionClickable,
 }: {
   text: string
   textFormat?: 'plain' | 'markdown'
@@ -248,6 +269,8 @@ function LongText({
   linkLabelMode: ArkmeLinkLabelMode
   shareWebsite?: string
   onMessageCopyLinkOpen?: (sid: string) => void
+  onMentionClick?: ArkmeMentionClickHandler
+  isMentionClickable?: ArkmeMentionClickPredicate
 }) {
   const collapsible = collapseText && !expanded && shouldCollapseText(text)
   const [collapsed, setCollapsed] = useState(collapsible)
@@ -260,6 +283,8 @@ function LongText({
     linkLabelMode={linkLabelMode}
     {...(shareWebsite === undefined ? {} : { shareWebsite })}
     {...(onMessageCopyLinkOpen === undefined ? {} : { onMessageCopyLinkOpen })}
+    {...(onMentionClick === undefined ? {} : { onMentionClick })}
+    {...(isMentionClickable === undefined ? {} : { isMentionClickable })}
   />
   if (textFormat === 'markdown') return content
   if (!collapsible) return <p style={{ ...styles.text, ...(expanded ? { width: '100%', lineHeight: 1.7 } : {}) }}>{content}</p>
@@ -687,7 +712,7 @@ export function arkmeRelatedRecordingItemFromSharedRecording(item: ArkmeTimeline
     : arkmeRelatedRecordingItemFromSharedRecordingPreview(item.sharedRecording, item)
 }
 
-export function ArkmeMessageContent({ item, sourceRef, onLongArticleUpdated, highlightMentions = false, collapseText = true, presentation = 'bubble', shareWebsite, onMessageCopyLinkOpen, mediaSelectionIsExplicit = false }: {
+export function ArkmeMessageContent({ item, sourceRef, onLongArticleUpdated, highlightMentions = false, collapseText = true, presentation = 'bubble', shareWebsite, onMessageCopyLinkOpen, onMentionClick, isMentionClickable, mediaSelectionIsExplicit = false }: {
   item: ArkmeTimelineItem
   presentation?: 'bubble' | 'detail'
   sourceRef?: string
@@ -696,6 +721,8 @@ export function ArkmeMessageContent({ item, sourceRef, onLongArticleUpdated, hig
   collapseText?: boolean
   shareWebsite?: string
   onMessageCopyLinkOpen?: (sid: string) => void
+  onMentionClick?: ArkmeMentionClickHandler
+  isMentionClickable?: ArkmeMentionClickPredicate
   mediaSelectionIsExplicit?: boolean
 }) {
   const lastMedia = useRef<{ sourceRef: string | undefined; item: ArkmeTimelineItem }>()
@@ -785,6 +812,8 @@ export function ArkmeMessageContent({ item, sourceRef, onLongArticleUpdated, hig
       linkLabelMode={linkLabelMode}
       {...(shareWebsite === undefined ? {} : { shareWebsite })}
       {...(onMessageCopyLinkOpen === undefined ? {} : { onMessageCopyLinkOpen })}
+      {...(onMentionClick === undefined ? {} : { onMentionClick })}
+      {...(isMentionClickable === undefined ? {} : { isMentionClickable })}
     /> : undefined}</ArkmeVoiceContent>
   const renderRows = splitVisualRuns(blocks).map((row, rowIndex) => {
     if (Array.isArray(row)) {
@@ -823,6 +852,8 @@ export function ArkmeMessageContent({ item, sourceRef, onLongArticleUpdated, hig
             linkLabelMode={linkLabelMode}
             {...(shareWebsite === undefined ? {} : { shareWebsite })}
             {...(onMessageCopyLinkOpen === undefined ? {} : { onMessageCopyLinkOpen })}
+            {...(onMentionClick === undefined ? {} : { onMentionClick })}
+            {...(isMentionClickable === undefined ? {} : { isMentionClickable })}
           />}
         </>}
         {renderRows}
