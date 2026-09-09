@@ -182,7 +182,7 @@ export function ArkmeProductNavigation({
     : ui.mode === 'calls' ? 'calls'
     : ui.mode === 'recordings' ? 'recordings'
       : ui.mode === 'source' && ui.productMode === 'contacts' ? 'contacts' : 'conversations'
-  const conversationUnreadCount = authState.auth?.status === 'authenticated' && directory.baselineReady
+  const conversationUnreadCount = authState.auth?.status === 'authenticated'
     && directory.accountScope === `${authState.auth.environment}:${String(authState.auth.userId)}`
     ? directory.badgeCount
     : 0

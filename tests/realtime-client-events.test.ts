@@ -394,3 +394,50 @@ describe('Host epoch recovery', () => {
     } finally { await act(async () => { renderer?.unmount() }) }
   })
 })
+
+it('does not clear a new Host directory again when the slower provider-instance lookup completes', async () => {
+  let channel!: { onopen: (() => void) | null; onmessage: ((event: MessageEvent<string>) => void) | null }
+  vi.stubGlobal('EventSource', class {
+    onopen = null; onmessage = null
+    constructor() { channel = this }
+    close() {}
+  })
+  const provider = await import('../src/client/provider-instance-runtime.js')
+  let release!: (changed: boolean) => void
+  vi.spyOn(provider, 'reconcileArkmeProviderInstance').mockImplementation(() => new Promise(resolve => { release = resolve }))
+  vi.spyOn(arkmeAuthStore, 'refresh').mockResolvedValue()
+  vi.spyOn(arkmeChatDirectory, 'refreshRoot').mockResolvedValue([])
+  function Harness() { useArkmeRealtimeClientEvents({ status: 'authenticated', userId: 3456, environment: 'test' }, 1, false); return null }
+  let renderer!: ReactTestRenderer
+  const emit = async (update: unknown) => { await act(async () => { channel.onmessage?.({ data: JSON.stringify(update) } as MessageEvent<string>) }) }
+  try {
+    await act(async () => { renderer = create(createElement(Harness)) })
+    await emit({ type: 'reconcile', revision: 100, providerInstanceId: 'old', refresh: 'none' })
+    await act(async () => { channel.onopen?.() })
+    await emit({ type: 'reconcile', revision: 1, providerInstanceId: 'new', refresh: 'none' })
+    await emit({ type: 'directory-update', revision: 2, providerInstanceId: 'new', page: { directory: 'root', items: [{ sourceRef: 'new-ref', sourceKey: 'stable-key', kind: 'private_chat', displayName: 'Recovered', unreadCount: 0, activeAtMillis: 1 }], hasMore: false,
+      projection: { revision: 2, phase: 'complete', cachedAtMillis: 1, bots: [], visibility: [{ entryKind: 'source', entryRef: 'new-ref', hidden: false }] } } })
+    await act(async () => { release(true) })
+    expect(arkmeChatDirectory.getConversationSnapshot().sources).toHaveLength(1)
+  } finally { await act(async () => { renderer.unmount() }) }
+})
+
+it('revalidates the local directory cache on same-Host reconnect without forcing an upstream scan', async () => {
+  let channel!: { onopen: (() => void) | null; onmessage: ((event: MessageEvent<string>) => void) | null }
+  vi.stubGlobal('EventSource', class { onopen = null; onmessage = null; constructor() { channel = this } close() {} })
+  const provider = await import('../src/client/provider-instance-runtime.js')
+  vi.spyOn(provider, 'reconcileArkmeProviderInstance').mockResolvedValue(false)
+  vi.spyOn(arkmeAuthStore, 'refresh').mockResolvedValue()
+  const refresh = vi.spyOn(arkmeChatDirectory, 'refreshRoot').mockResolvedValue([])
+  const invalidate = vi.spyOn(arkmeChatDirectory, 'invalidateRoot')
+  function Harness() { useArkmeRealtimeClientEvents({ status: 'authenticated', userId: 4567, environment: 'test' }, 1, false); return null }
+  let renderer!: ReactTestRenderer
+  try {
+    await act(async () => { renderer = create(createElement(Harness)) })
+    await act(async () => { channel.onmessage?.({ data: JSON.stringify({ type: 'reconcile', revision: 1, providerInstanceId: 'same', refresh: 'none' }) } as MessageEvent<string>) })
+    await act(async () => { channel.onopen?.() })
+    await act(async () => { channel.onmessage?.({ data: JSON.stringify({ type: 'reconcile', revision: 2, providerInstanceId: 'same', refresh: 'if-stale' }) } as MessageEvent<string>) })
+    expect(invalidate).toHaveBeenCalledOnce()
+    expect(refresh).toHaveBeenLastCalledWith({ force: false })
+  } finally { await act(async () => { renderer.unmount() }) }
+})

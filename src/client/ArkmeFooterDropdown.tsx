@@ -19,7 +19,7 @@ export function ArkmeFooterDropdown(props: ArkmeFooterDropdownProps) {
   const authState = useSyncExternalStore(arkmeAuthStore.subscribe, arkmeAuthStore.getSnapshot, arkmeAuthStore.getSnapshot)
   const directory = useSyncExternalStore(arkmeChatDirectory.subscribe, arkmeChatDirectory.getConversationSnapshot, arkmeChatDirectory.getConversationSnapshot)
   const auth = authState.auth
-  const unreadCount = auth?.status === 'authenticated' && directory.baselineReady
+  const unreadCount = auth?.status === 'authenticated'
     && directory.accountScope === `${auth.environment}:${String(auth.userId)}`
     ? directory.badgeCount
     : 0

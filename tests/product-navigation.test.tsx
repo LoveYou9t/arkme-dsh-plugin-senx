@@ -153,6 +153,7 @@ describe('Arkme product navigation', () => {
       sourceRef: 'muted-group-chat-1', kind: 'group_chat', displayName: '免打扰群',
       activeAtMillis: 3, unreadCount: 80, isMuted: true,
     }])
+    arkmeChatDirectory.hydrateVisibility(arkmeChatDirectory.getSnapshot().sources.map(source => ({ entryKind: 'source', entryRef: source.sourceRef, hidden: false })))
     arkmeAttentionSummary.apply({
       badgeCount: 999, mutedUnreadCount: 80, sessionCountWithUnread: 3,
       hasAttention: false, summaryVersion: 1, updatedAtMillis: 1,

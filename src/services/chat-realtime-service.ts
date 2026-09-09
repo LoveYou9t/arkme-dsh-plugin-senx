@@ -500,8 +500,17 @@ export class ChatRealtimeService {
 
   async refreshAttentionSummary(retry = false): Promise<void> {
     if (this.disposed || this.attentionStopped) return
-    const session = await this.runtime.sessionStore.read()
-    if (this.disposed || this.attentionStopped) return
+    const readGeneration = this.attentionOwnerGeneration
+    let session: ArkmeSessionCredentials | undefined
+    try { session = await this.runtime.sessionStore.read() }
+    catch (error) {
+      if (this.disposed || this.attentionStopped || readGeneration !== this.attentionOwnerGeneration) return
+      this.attentionStale = true
+      if (this.attentionRetryCount < 2) console.warn('dsh-arkme: attention session read failed:', safeFailureMessage(error))
+      this.scheduleAttentionSummaryRetry()
+      return
+    }
+    if (this.disposed || this.attentionStopped || readGeneration !== this.attentionOwnerGeneration) return
     if (session === undefined) {
       this.clearAttentionOwner()
       this.clearAttentionSummaryRetry()
@@ -526,7 +535,7 @@ export class ChatRealtimeService {
         this.attentionRefreshStarted = true
         await this.refreshAttentionSummarySerial(this.attentionOwnerGeneration, retry)
         this.attentionRefreshStarted = false
-      } while (this.attentionRefreshDirty && !this.disposed)
+      } while (this.attentionRefreshDirty && !this.disposed && !this.attentionStopped)
     })
     this.attentionRefreshInFlight = pending
     try { await pending }
@@ -540,16 +549,20 @@ export class ChatRealtimeService {
   }
 
   private async refreshAttentionSummarySerial(ownerGeneration: number, retry: boolean): Promise<void> {
+    const isCurrent = () => !this.disposed && !this.attentionStopped && ownerGeneration === this.attentionOwnerGeneration
     try {
-      if (await this.runtime.sessionStore.read() === undefined) {
+      const session = await this.runtime.sessionStore.read()
+      if (!isCurrent()) return
+      if (session === undefined) {
         this.clearAttentionSummaryRetry()
         return
       }
       const summary = this.directoryAttention === undefined
         ? await this.source.chatUnreadBadgeSummary(this.attentionController.signal)
         : await this.directoryAttention(retry)
-      if (this.disposed || ownerGeneration !== this.attentionOwnerGeneration
-        || (await this.runtime.sessionStore.read())?.userId !== this.attentionOwnerUserId) return
+      if (!isCurrent()) return
+      const currentSession = await this.runtime.sessionStore.read()
+      if (!isCurrent() || currentSession?.userId !== this.attentionOwnerUserId) return
       notificationDiagnostic('attention_summary_received', { ownerGeneration, summaryVersion: summary.summaryVersion, badgeCount: summary.badgeCount })
       const fingerprint = JSON.stringify(summary)
       if (summary.summaryVersion < this.attentionSummaryVersion) {
@@ -589,8 +602,10 @@ export class ChatRealtimeService {
       if (applied && summary.stale !== true) this.clearAttentionSummaryRetry()
       else this.scheduleAttentionSummaryRetry(summary.stale ? MAX_ATTENTION_SUMMARY_RETRY_DELAY_MS : 0)
     } catch (error) {
-      if (this.disposed || ownerGeneration !== this.attentionOwnerGeneration) return
-      if (await this.runtime.sessionStore.read().catch(() => undefined) === undefined) {
+      if (!isCurrent()) return
+      const currentSession = await this.runtime.sessionStore.read().catch(() => null)
+      if (!isCurrent()) return
+      if (currentSession === undefined) {
         this.clearAttentionOwner()
         this.clearAttentionSummaryRetry()
         return

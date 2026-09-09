@@ -98,6 +98,9 @@ export function useArkmeRealtimeClientEvents(
     let providerInstanceId: string | undefined
     let awaitingBaseline = false
     let connectionGeneration = 0
+    let handledInstanceGeneration = 0
+    let localReconnectGap = false
+    let recoveryController: AbortController | undefined
     let lastAttentionDiagnosticAt = 0
     const diagnoseAttention = (reason: string, update: ArkmeChatClientEvent) => {
       if (update.type !== 'attention-summary' && update.type !== 'reconcile') return
@@ -128,6 +131,10 @@ export function useArkmeRealtimeClientEvents(
     const handleOpen = () => {
       if (stopped) return
       const generation = ++connectionGeneration
+      localReconnectGap = observedRevision !== undefined
+      recoveryController?.abort()
+      const recovery = new AbortController()
+      recoveryController = recovery
       awaitingBaseline = true
       if (ownsMessagePreparing) arkmeMessagePreparing.reset()
       reconcileReceipts()
@@ -135,21 +142,29 @@ export function useArkmeRealtimeClientEvents(
       invalidateDirectMessageAdmission()
       void reconcileArkmeProviderInstance()
         .then(async changed => {
-          if (!changed || stopped || generation !== connectionGeneration) return
+          if (!changed || stopped || generation !== connectionGeneration || recovery.signal.aborted) return
+          if (handledInstanceGeneration === generation) return
+          if (providerInstanceId !== undefined && !awaitingBaseline) {
+            // A stamped baseline already established the current owner; only revalidate its cache.
+            await refreshUnread(true)
+            return
+          }
+          observedRevision = undefined
           arkmeConversationMembers.reset()
           try {
             await recoverArkmeProviderInstanceDirectory({
               accountScope: authenticatedAccountScope,
+              signal: recovery.signal,
               activateAccount: scope => { arkmeChatDirectory.activateAccount(scope) },
               refreshRoot: async force => { await refreshUnread(force) },
               onRefreshed: () => {
-                if (stopped) return
+                if (stopped || recovery.signal.aborted || generation !== connectionGeneration) return
                 arkmeCalendarInvalidations.publishAll()
                 arkmeUi.chatChanged()
               },
             })
           } catch (error) {
-            forgetNavigationProviderInstance()
+            if (!stopped && !recovery.signal.aborted && generation === connectionGeneration) forgetNavigationProviderInstance()
             throw error
           }
         })
@@ -159,11 +174,15 @@ export function useArkmeRealtimeClientEvents(
       if (stopped) return
       try {
         const update = JSON.parse(event.data) as ArkmeChatClientEvent
+        if (!Number.isSafeInteger(update.revision) || update.revision < 0) return
+        if (update.providerInstanceId !== undefined && (typeof update.providerInstanceId !== 'string'
+          || update.providerInstanceId.length === 0 || update.providerInstanceId.length > 160)) return
         if (update.providerInstanceId !== undefined) {
           if (awaitingBaseline || providerInstanceId === undefined) {
             if (update.type !== 'reconcile') { diagnoseAttention('awaiting-baseline', update); return }
             if (providerInstanceId !== update.providerInstanceId) {
               if (providerInstanceId !== undefined) {
+                handledInstanceGeneration = connectionGeneration
                 arkmeChatDirectory.activateAccount(undefined)
                 arkmeChatDirectory.activateAccount(authenticatedAccountScope)
                 void refreshUnread(true).catch(() => undefined)
@@ -175,8 +194,7 @@ export function useArkmeRealtimeClientEvents(
             awaitingBaseline = false
           } else if (update.providerInstanceId !== providerInstanceId) { diagnoseAttention('old-instance', update); return }
         }
-        if (!Number.isSafeInteger(update.revision) || update.revision < 0
-          || (observedRevision !== undefined && update.revision <= observedRevision)) { diagnoseAttention('old-revision', update); return }
+        if (observedRevision !== undefined && update.revision <= observedRevision) { diagnoseAttention('old-revision', update); return }
         observedRevision = update.revision
         diagnoseAttention('accepted', update)
         if (update.type === 'directory-update') {
@@ -209,6 +227,12 @@ export function useArkmeRealtimeClientEvents(
           reconcileReceipts()
           invalidateDirectMessageAdmission()
           if (update.refresh === 'none') return
+          if (update.refresh === 'if-stale' && localReconnectGap && handledInstanceGeneration !== connectionGeneration) {
+            // A short local SSE gap may lose deltas even while the Browser's time-based cache is fresh.
+            // Read the Host's current cached directory; the Host already owns upstream reconciliation.
+            arkmeChatDirectory.invalidateRoot()
+          }
+          localReconnectGap = false
           void refreshUnread(update.refresh === 'force')
             .then(() => {
               if (stopped) return
@@ -336,6 +360,7 @@ export function useArkmeRealtimeClientEvents(
     browserWindow?.addEventListener('focus', handleWindowFocus)
     return () => {
       stopped = true
+      recoveryController?.abort()
       if (ownsMessagePreparing) arkmeMessagePreparing.reset()
       disconnectEvents()
       browserDocument?.removeEventListener('visibilitychange', handleVisibilityChange)

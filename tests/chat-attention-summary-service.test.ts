@@ -397,3 +397,36 @@ describe('Chat attention summary owner', () => {
     expect(native.resetBadgeCount).toHaveBeenCalledOnce()
   })
 })
+
+it('does not let an old pending session read reactivate the previous account', async () => {
+  let release!: () => void
+  const waiting = new Promise<void>(resolve => { release = resolve })
+  let first = true
+  const sessions = { async read() { if (first) { first = false; await waiting; return { userId: 1, accessToken: 'old', refreshToken: 'old' } } return { userId: 2, accessToken: 'new', refreshToken: 'new' } }, async write() {}, async delete() {} }
+  const runtime = new ServiceRuntime(config, sessions, { async uniqueCode() { return 'secret' } } as StateStore, vi.fn() as typeof fetch)
+  const native = { showNotification: vi.fn(), applyBadgeSummary: vi.fn(async () => true), resetBadgeCount: vi.fn(async () => true) }
+  const service = new ChatRealtimeService(runtime, { chatUnreadBadgeSummary: vi.fn(async () => summary(2)) } as unknown as SourceService, { chatTimelineItems: vi.fn(async () => []) }, native)
+  const old = service.refreshAttentionSummary()
+  service.resetAttentionSummary()
+  await service.refreshAttentionSummary()
+  release(); await old
+  expect(service.chatRealtimeInitialEvent()).toMatchObject({ attentionSummary: { badgeCount: 2 } })
+  expect(native.resetBadgeCount).toHaveBeenCalledTimes(1)
+  service.dispose()
+})
+
+it('preserves the last summary and retries a transient session-store failure', async () => {
+  vi.useFakeTimers()
+  const readSession = vi.fn(async () => ({ userId: 1, accessToken: 'a', refreshToken: 'r' }))
+  const runtime = new ServiceRuntime(config, { read: readSession, async write() {}, async delete() {} }, { async uniqueCode() { return 'secret' } } as StateStore, vi.fn() as typeof fetch)
+  const readSummary = vi.fn().mockResolvedValueOnce(summary(3)).mockResolvedValue(summary(0))
+  const service = new ChatRealtimeService(runtime, { chatUnreadBadgeSummary: readSummary } as unknown as SourceService, { chatTimelineItems: vi.fn(async () => []) }, { showNotification: vi.fn(), applyBadgeSummary: vi.fn(async () => true) })
+  try {
+    await service.refreshAttentionSummary()
+    readSession.mockRejectedValueOnce(new Error('temporary credential store failure'))
+    await expect(service.refreshAttentionSummary()).resolves.toBeUndefined()
+    expect(service.chatRealtimeInitialEvent()).toMatchObject({ attentionSummary: { badgeCount: 3 } })
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(service.chatRealtimeInitialEvent()).toMatchObject({ attentionSummary: { badgeCount: 0 } })
+  } finally { service.dispose(); vi.useRealTimers() }
+})

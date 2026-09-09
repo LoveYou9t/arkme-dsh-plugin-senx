@@ -503,3 +503,11 @@ it('publishes each unread-directory jump without changing the selected conversat
   expect(controller.getSnapshot().selectedSource).toEqual(source)
   expect(controller.getSnapshot().chatRevision).toBe(before.chatRevision)
 })
+
+it('clears the previous account Bot selection before publishing an authenticated account replacement', () => {
+  const controller = new ArkmeUiController()
+  controller.openBotConversation({ botRef: 'old-account', directoryKey: 'old-account-bot', name: 'Old', provider: 'openclaw', description: '', status: 'offline', directChatAvailable: true })
+  controller.authChanged(true, true)
+  expect(controller.getSnapshot().mode).toBe('source')
+  expect(controller.getSnapshot().selectedBot).toBeUndefined()
+})

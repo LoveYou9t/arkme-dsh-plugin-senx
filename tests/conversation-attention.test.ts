@@ -140,3 +140,34 @@ it('keeps confirmed visibility across capability rotation until an explicit new 
   expect(store.getSnapshot().projection?.visibility).toEqual([{ entryKind: 'source', entryRef: 'capability-seq13', hidden: true }])
   stop()
 })
+
+it('loads and replays a full cached directory without changing the computed result (workload)', () => {
+  const size = 2000
+  const rows = Array.from({ length: size }, (_, i) => source(String(i), 1, { activeAtMillis: size - i }))
+  const visibility = rows.map(row => ({ entryKind: 'source' as const, entryRef: row.sourceRef, hidden: false }))
+  const page = { directory: 'root' as const, items: rows, hasMore: false, projection: { revision: 1, phase: 'complete' as const, cachedAtMillis: 1, bots: [], visibility } }
+  const store = new ArkmeChatDirectoryStore()
+  store.activateAccount('test:bulk')
+  let start = performance.now()
+  store.applyHostPage(page)
+  const coldMs = performance.now() - start
+  const computed = store.getConversationSnapshot()
+  expect(computed.badgeCount).toBe(size)
+  start = performance.now()
+  store.applyHostPage(structuredClone(page))
+  const replayMs = performance.now() - start
+  expect(store.getConversationSnapshot()).toBe(computed)
+  process.stdout.write(JSON.stringify({ workload: 'full-cached-directory', size, coldMs, replayMs }) + '\n')
+}, 10000)
+
+it('retains a Bot visibility decision when its opaque handle changes but its stable directory key does not', () => {
+  const store = new ArkmeChatDirectoryStore()
+  store.activateAccount('test:bot-rotation')
+  const bot = { botRef: 'old', directoryKey: 'stable-bot', name: 'Bot', unreadCount: 2 } as ArkmeBotSummary
+  store.updateBots([bot])
+  store.hydrateVisibility([{ entryKind: 'bot', entryRef: 'old', hidden: false }])
+  store.updateBots([{ ...bot, botRef: 'new' }])
+  expect(store.getConversationSnapshot().badgeCount).toBe(2)
+  expect(store.getConversationSnapshot().bots[0]?.botRef).toBe('new')
+  expect(store.getConversationSnapshot().visibility).toEqual([{ entryKind: 'bot', entryRef: 'new', hidden: false }])
+})

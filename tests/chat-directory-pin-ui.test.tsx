@@ -457,3 +457,16 @@ it('does not unmount a row between a new-message sourceRef and its visibility re
     ] } }) })
   expect(renderer!.root.findByProps({ 'data-arkme-directory-row': 'source' })).toBe(firstRow)
 })
+
+it('keeps a Bot opened before the Host directory snapshot in the same row-and-total owner', async () => {
+  mocks.callArkme.mockImplementation(async (operation: string, params: { botRefs?: string[]; sourceRefs?: string[] }) => {
+    if (operation === 'conversation.directory.visibility.query') return { items: [
+      ...(params.sourceRefs ?? []).map(entryRef => ({ entryKind: 'source', entryRef, hidden: false })),
+      ...(params.botRefs ?? []).map(entryRef => ({ entryKind: 'bot', entryRef, hidden: false })),
+    ] }
+    return {}
+  })
+  await act(async () => { arkmeUi.openBotConversation({ botRef: 'early-bot', directoryKey: 'stable-early-bot', name: 'Early Bot', provider: 'openclaw', description: '', status: 'offline', directChatAvailable: true, unreadCount: 2 }) })
+  expect(renderer!.root.findAllByProps({ role: 'treeitem' }).some(node => node.props['aria-label'] === 'Early Bot，2 条未读')).toBe(true)
+  expect(arkmeChatDirectory.totalBadgeUnreadCount()).toBe(2)
+})

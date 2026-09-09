@@ -22,7 +22,7 @@ function sameSelectedSource(left: ArkmeSourceItem | undefined, right: ArkmeSourc
 
 function sameBot(left: ArkmeBotSummary | undefined, right: ArkmeBotSummary | undefined): boolean {
   if (left === undefined || right === undefined) return left === right
-  return left.botRef === right.botRef && left.name === right.name && left.provider === right.provider
+  return left.botRef === right.botRef && left.directoryKey === right.directoryKey && left.name === right.name && left.provider === right.provider
     && left.description === right.description && left.status === right.status && left.avatarRef === right.avatarRef
     && left.directChatAvailable === right.directChatAvailable
     && left.privateChatOutboundEnabled === right.privateChatOutboundEnabled
@@ -133,21 +133,21 @@ export class ArkmeUiController {
     this.leaveContacts()
     if (authenticated) {
       if (resetSelection) this.lastConversationDestination = undefined
-      const { selectedSource: _selectedSource, calendarOpen: _calendarOpen, productMode: _productMode, webLoginDialogOpen: _dialogFromSelection, ...stateWithoutSelection } = this.state
+      const { selectedSource: _selectedSource, selectedBot: _selectedBot, conversationTarget: _conversationTarget, searchTarget: _searchTarget, recordingTarget: _recordingTarget, calendarOpen: _calendarOpen, productMode: _productMode, webLoginDialogOpen: _dialogFromSelection, ...stateWithoutSelection } = this.state
       const { calendarOpen: _activeCalendar, productMode: _activeProductMode, webLoginDialogOpen: _dialogFromCalendar, ...stateWithoutCalendar } = this.state
       const state = resetSelection ? stateWithoutSelection : stateWithoutCalendar
       const startsClientConversation = state.mode === 'login'
       if (startsClientConversation) this.lastConversationDestination = { kind: 'harness' }
       this.publish({
         ...state,
-        mode: startsClientConversation ? 'harness' : state.mode,
+        mode: startsClientConversation ? 'harness' : resetSelection && state.mode === 'bot' ? 'source' : state.mode,
         authRevision: this.state.authRevision + 1,
         conversationUnreadJumpRevision: 0,
       })
       return
     }
     this.lastConversationDestination = undefined
-    const { selectedSource: _selectedSource, calendarOpen: _calendarOpen, productMode: _productMode, webLoginDialogOpen: _webLoginDialogOpen, ...rest } = this.state
+    const { selectedSource: _selectedSource, selectedBot: _selectedBot, conversationTarget: _conversationTarget, searchTarget: _searchTarget, recordingTarget: _recordingTarget, calendarOpen: _calendarOpen, productMode: _productMode, webLoginDialogOpen: _webLoginDialogOpen, ...rest } = this.state
     this.publish({
       ...rest,
       mode: 'login',
