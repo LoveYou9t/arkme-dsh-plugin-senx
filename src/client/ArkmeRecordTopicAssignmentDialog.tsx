@@ -8,7 +8,7 @@ import { recordTopicAssignmentPort, type RecordTopicAssignmentPort, type RecordT
 const styles = {
   header: { display: 'flex', alignItems: 'center', gap: 19, margin: 16 },
   search: { flex: 1, minWidth: 0, height: 40, boxSizing: 'border-box', padding: '8px 10px', borderRadius: 8,
-    border: 0, background: arkmeTheme.input, color: arkmeTheme.text, font: 'inherit', fontSize: 16 },
+    border: 0, background: arkmeTheme.subtle, color: arkmeTheme.text, font: 'inherit', fontSize: 16 },
   action: { display: 'grid', placeItems: 'center', flexShrink: 0, width: 20, height: 20, padding: 0,
     border: 0, background: 'transparent', color: arkmeTheme.text, cursor: 'pointer' },
   list: { maxHeight: 'min(384px, calc(100vh - 136px))', overflowY: 'auto', margin: '0 16px 16px' },
