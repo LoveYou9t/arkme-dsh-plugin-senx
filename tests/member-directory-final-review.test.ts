@@ -6,6 +6,33 @@ const source = { sourceRef: 'ref', sourceKey: 'group', kind: 'group_chat' as con
 const self: ArkmeConversationMemberItem = { memberRef: 'self', role: 'owner', status: 'active', isSelf: true, isOwner: true,
   displayName: '我', joinedAtMillis: 1, recordCount: 0, mentionCount: 0 }
 
+it.each([
+  [undefined, 'owner'],
+  ['arkme-code-2001', 'unknown'],
+  ['arkme-code-2002', 'unknown'],
+] as const)('separates display refresh failures from access revocation (%s)', async (code, expectedRole) => {
+  let failure: Error | undefined
+  const store = new ConversationMembersStore({ cached: async () => null,
+    page: async () => {
+      if (failure !== undefined) throw failure
+      return { kind: 'membership', selfRole: 'owner', source, items: [self], removedMemberRefs: [], hasMore: false }
+    },
+    presentation: async () => ({ kind: 'presentation', source, items: [self], removedMemberRefs: [], unavailableProfileMemberRefs: [] }),
+  })
+  store.activateAccount('test:1')
+  const release = store.subscribe('test:1', source, () => {})
+  await store.ensure('test:1', source)
+  expect(store.get('test:1', source).selfRole).toBe('owner')
+  failure = Object.assign(new Error('刷新失败'), code === undefined ? {} : { body: { code } })
+  store.invalidateAccountPresentation('test:1')
+  const refreshing = store.ensure('test:1', source)
+  expect(store.get('test:1', source).selfRole).toBe('owner')
+  await refreshing
+  expect(store.get('test:1', source).selfRole).toBe(expectedRole)
+  expect(store.get('test:1', source).items).toHaveLength(code === undefined ? 1 : 0)
+  release(); store.activateAccount(undefined)
+})
+
 it.each(['arkme-code-2001', 'arkme-code-2002'])('clears advisory members for the actual Chat access response %s', async code => {
   let reject!: (error: unknown) => void
   const store = new ConversationMembersStore({ cached: async () => ({ items: [self], joinEvents: [], cachedAtMillis: 1 }),

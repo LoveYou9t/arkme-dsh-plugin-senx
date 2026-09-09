@@ -1802,11 +1802,17 @@ export function ArkmeMemberLeaveNotice(props: { rowId:string; event:ArkmeMemberE
 export function ArkmeTimelineMessageHeader({
   item,
   profile,
+  groupMember,
 }: {
   item: ArkmeTimelineItem
   profile?: ArkmeUserProfile
+  groupMember?: ArkmeConversationMemberItem
 }) {
-  const senderName = arkmeTimelineSenderName(item, profile)
+  // Reuse the viewer-specific member presentation without changing the message's public name.
+  const memberDisplayName = groupMember?.displayName.trim() ?? ''
+  const senderName = !item.isMe && memberDisplayName !== '' && memberDisplayName !== '群成员' && memberDisplayName !== '成员'
+    ? memberDisplayName
+    : arkmeTimelineSenderName(item, profile)
   return <span style={styles.messageHeader}>
     {item.isMe && <span style={styles.meta}>{timeLabel(item.sendAtMillis)}</span>}
     <span style={styles.sender}>{senderName}</span>
@@ -7357,7 +7363,7 @@ export function ArkmeSurface({
                         ...(isForwardMessageCard ? styles.forwardMessageBody : {}),
                         ...(isSharedRecordingCard ? styles.sharedRecordingMessageBody : {}),
                       }}>
-                        {!isSharedRecordingCard && !isExtensionMessage && !item.isMe && <ArkmeTimelineMessageHeader item={item} {...(selfProfile === undefined ? {} : { profile: selfProfile })} />}
+                        {!isSharedRecordingCard && !isExtensionMessage && !item.isMe && <ArkmeTimelineMessageHeader item={item} {...(selfProfile === undefined ? {} : { profile: selfProfile })} {...(source?.kind === 'group_chat' && messageMember !== undefined ? { groupMember: messageMember } : {})} />}
                         {(() => {
                           const messageBubble = <div
                             role="button"
@@ -7481,7 +7487,7 @@ export function ArkmeSurface({
                                 ...styles.extensionChildBody,
                                 ...(item.isMe ? styles.extensionChildBodyMe : {}),
                               }}>
-                                {!item.isMe && <ArkmeTimelineMessageHeader item={item} {...(selfProfile === undefined ? {} : { profile: selfProfile })} />}
+                                {!item.isMe && <ArkmeTimelineMessageHeader item={item} {...(selfProfile === undefined ? {} : { profile: selfProfile })} {...(source?.kind === 'group_chat' && messageMember !== undefined ? { groupMember: messageMember } : {})} />}
                                 {messageContentLine}
                                 {topicBadge}
                               </div>

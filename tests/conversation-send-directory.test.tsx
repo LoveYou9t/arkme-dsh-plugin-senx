@@ -957,6 +957,172 @@ describe('conversation send directory projection', () => {
     expect(renderer!.root.findAllByProps({ 'data-arkme-message-preparing': true })).toHaveLength(1)
   })
 
+  it.each([
+    [group, '私人备注', false, '私人备注'],
+    [group, '群内昵称', false, '群内昵称'],
+    [group, '用户昵称', false, '用户昵称'],
+    [group, '私人备注', true, '私人备注'],
+    [group, '群成员', false, '消息公开名称'],
+    [group, '', false, '消息公开名称'],
+    [target, '私人备注', false, '消息公开名称'],
+  ] as const)('renders only the %s message header from member presentation %s (extension %s)', async (chat, displayName, extension, expected) => {
+    activeSource = chat
+    arkmeChatDirectory.publish([chat])
+    arkmeUi.selectSource(chat)
+    timeline = [{
+      itemUid: 'sender-name-message', memberRef: 'member-0', senderName: '消息公开名称',
+      isMe: false, sendAtMillis: 12, title: '', textContent: '原正文', status: 1,
+      ...(extension ? { extensionParentRecordUid: 'parent', extensionParent: {
+        itemUid: 'parent', senderName: '引用名称', title: '', textContent: '原引用',
+        recordOwnerUserId: 7, sequence: 11, sendAtMillis: 11,
+      } } : {}),
+    }]
+    const baseCall = mocks.callArkme.getMockImplementation()!
+    mocks.callArkme.mockImplementation(async (operation: string, params?: unknown, signal?: AbortSignal) => {
+      if (operation === 'source.members') return { source: chat, items: [{ ...activeMembers(1)[0]!, displayName }], total: 1, activeCount: 1 }
+      return await baseCall(operation, params, signal)
+    })
+    await act(async () => { renderer = create(<ArkmeSurface productChrome={false} productNavigation={false} />) })
+    const row = renderer!.root.findByProps({ 'data-arkme-message-item-uid': 'sender-name-message' })
+    const header = row.findByType(ArkmeTimelineMessageHeader)
+    expect(header.findAllByType('span').some(span => span.children.includes(expected))).toBe(true)
+    expect(header.props.item.senderName).toBe('消息公开名称')
+    expect(timeline[0]!.senderName).toBe('消息公开名称')
+    expect(timeline[0]!.textContent).toBe('原正文')
+    if (extension) expect(timeline[0]!.extensionParent!.senderName).toBe('引用名称')
+  })
+
+  it('updates group message headers when delayed member presentation arrives', async () => {
+    activeSource = group
+    arkmeChatDirectory.publish([group])
+    arkmeUi.selectSource(group)
+    timeline = [{ itemUid: 'delayed-sender', memberRef: 'member-0', senderName: '消息公开名称',
+      isMe: false, sendAtMillis: 12, title: '', textContent: '正文', status: 1 }]
+    const pending = deferred<unknown>()
+    const baseCall = mocks.callArkme.getMockImplementation()!
+    mocks.callArkme.mockImplementation(async (operation: string, params?: unknown, signal?: AbortSignal) =>
+      operation === 'source.members' ? await pending.promise : await baseCall(operation, params, signal))
+    await act(async () => { renderer = create(<ArkmeSurface productChrome={false} productNavigation={false} />) })
+    const headerNames = () => renderer!.root.findByType(ArkmeTimelineMessageHeader).findAllByType('span')
+      .flatMap(span => span.children).filter(child => typeof child === 'string')
+    expect(headerNames()).toContain('消息公开名称')
+    await act(async () => {
+      pending.resolve({ source: group, items: [{ ...activeMembers(1)[0]!, displayName: '私人备注' }], total: 1, activeCount: 1 })
+      await pending.promise
+    })
+    expect(headerNames()).toContain('私人备注')
+  })
+
+  it('refreshes group sender remarks without confusing same-name members or changing the message', async () => {
+    activeSource = group
+    arkmeChatDirectory.publish([group])
+    arkmeUi.selectSource(group)
+    const received: ArkmeTimelineItem = { itemUid: 'first-sender', memberRef: 'member-0', senderName: '同名用户',
+      isMe: false, sendAtMillis: 12, title: '', textContent: '正文', status: 1 }
+    timeline = [received, { ...received, itemUid: 'second-sender', memberRef: 'member-1' },
+      { ...received, itemUid: 'unknown-sender', memberRef: 'unknown-member' }]
+    let name = '第一人的备注'
+    const baseCall = mocks.callArkme.getMockImplementation()!
+    mocks.callArkme.mockImplementation(async (operation: string, params?: unknown, signal?: AbortSignal) => {
+      if (operation === 'source.members') return { source: group, items: activeMembers(2).map((member, index) => ({
+        ...member, displayName: index === 0 ? name : '第二人的备注',
+      })), total: 2, activeCount: 2 }
+      return await baseCall(operation, params, signal)
+    })
+    await act(async () => { renderer = create(<ArkmeSurface productChrome={false} productNavigation={false} />) })
+    const names = (uid: string) => renderer!.root.findByProps({ 'data-arkme-message-item-uid': uid })
+      .findByType(ArkmeTimelineMessageHeader).findAllByType('span')
+      .flatMap(span => span.children).filter(child => typeof child === 'string')
+    expect(names('first-sender')).toContain('第一人的备注')
+    expect(names('second-sender')).toContain('第二人的备注')
+    expect(names('unknown-sender')).toContain('同名用户')
+    for (const nextName of ['修改后的备注', '群昵称', '用户昵称']) {
+      name = nextName
+      await act(async () => { await arkmeConversationMembers.ensure('test:42', group, true) })
+      expect(names('first-sender')).toContain(nextName)
+      expect(names('second-sender')).toContain('第二人的备注')
+      expect(received.senderName).toBe('同名用户')
+    }
+  })
+
+  it('keeps group messaging available when sender member loading fails', async () => {
+    activeSource = group
+    arkmeChatDirectory.publish([group])
+    arkmeUi.selectSource(group)
+    timeline = [{ itemUid: 'offline-sender', memberRef: 'member-0', senderName: '消息公开名称',
+      isMe: false, sendAtMillis: 12, title: '', textContent: '正文', status: 1 }]
+    const baseCall = mocks.callArkme.getMockImplementation()!
+    mocks.callArkme.mockImplementation(async (operation: string, params?: unknown, signal?: AbortSignal) => {
+      if (operation === 'source.members') throw new Error('成员刷新失败')
+      return await baseCall(operation, params, signal)
+    })
+    await act(async () => { renderer = create(<ArkmeSurface productChrome={false} productNavigation={false} />) })
+    expect(renderer!.root.findByType(ArkmeTimelineMessageHeader).findAllByType('span')
+      .some(span => span.children.includes('消息公开名称'))).toBe(true)
+    await act(async () => { renderer!.root.findByType(ArkmeRichComposerInput).props.onTextChange('继续发送') })
+    expect(renderer!.root.findByProps({ 'aria-label': '发送消息' }).props.disabled).not.toBe(true)
+    await act(async () => { renderer!.root.findByProps({ 'aria-label': '发送消息' }).props.onClick() })
+    const sends = mocks.callArkme.mock.calls.filter(([operation]) => operation === 'source.send-text')
+    expect(sends).toHaveLength(1)
+    expect(sends[0]![1]).toMatchObject({ sourceRef: group.sourceRef, textContent: '继续发送' })
+  })
+
+  it('keeps historical message headers readable when a member leaves the active directory', async () => {
+    activeSource = group
+    arkmeChatDirectory.publish([group])
+    arkmeUi.selectSource(group)
+    timeline = [{ itemUid: 'departed-sender', memberRef: 'member-0', senderName: '群昵称',
+      isMe: false, sendAtMillis: 12, title: '', textContent: '历史消息', status: 1 }]
+    let members = [{ ...activeMembers(1)[0]!, displayName: '私人备注' }]
+    const baseCall = mocks.callArkme.getMockImplementation()!
+    mocks.callArkme.mockImplementation(async (operation: string, params?: unknown, signal?: AbortSignal) => {
+      if (operation === 'source.members') return { source: group, items: members, total: members.length, activeCount: members.length }
+      return await baseCall(operation, params, signal)
+    })
+    await act(async () => { renderer = create(<ArkmeSurface productChrome={false} productNavigation={false} />) })
+    const headerNames = () => renderer!.root.findByType(ArkmeTimelineMessageHeader).findAllByType('span')
+      .flatMap(span => span.children).filter(child => typeof child === 'string')
+    expect(headerNames()).toContain('私人备注')
+    members = []
+    await act(async () => { await arkmeConversationMembers.ensure('test:42', group, true) })
+    expect(headerNames()).toContain('群昵称')
+    expect(headerNames()).not.toContain('私人备注')
+    expect(renderer!.root.findByProps({ 'data-arkme-message-item-uid': 'departed-sender' })).toBeDefined()
+  })
+
+  it('does not apply a late group sender name after switching conversations', async () => {
+    const nextGroup = { ...group, sourceRef: 'next-group-ref', sourceKey: 'next-group-key', displayName: '另一个群' }
+    const pending = deferred<unknown>()
+    activeSource = group
+    arkmeChatDirectory.publish([group, nextGroup])
+    arkmeUi.selectSource(group)
+    const baseCall = mocks.callArkme.getMockImplementation()!
+    mocks.callArkme.mockImplementation(async (operation: string, params?: Record<string, unknown>, signal?: AbortSignal) => {
+      const current = params?.sourceRef === nextGroup.sourceRef ? nextGroup : group
+      if (operation === 'sources.list') return { items: [group, nextGroup], hasMore: false }
+      if (operation === 'source.timeline') return { source: current, items: [{
+        itemUid: current.sourceRef, memberRef: 'member-0', senderName: '公开名称', isMe: false,
+        sendAtMillis: 12, title: '', textContent: '正文', status: 1,
+      }], hasMore: false }
+      if (operation === 'source.members') return current === group ? await pending.promise : {
+        source: nextGroup, items: [{ ...activeMembers(1)[0]!, displayName: '另一个群的名称' }], total: 1, activeCount: 1,
+      }
+      return await baseCall(operation, params, signal)
+    })
+    await act(async () => { renderer = create(<ArkmeSurface productChrome={false} productNavigation={false} />) })
+    await act(async () => { activeSource = nextGroup; arkmeUi.selectSource(nextGroup) })
+    const names = () => renderer!.root.findByProps({ 'data-arkme-message-item-uid': nextGroup.sourceRef })
+      .findByType(ArkmeTimelineMessageHeader).findAllByType('span')
+      .flatMap(span => span.children).filter(child => typeof child === 'string')
+    expect(names()).toContain('另一个群的名称')
+    await act(async () => {
+      pending.resolve({ source: group, items: [{ ...activeMembers(1)[0]!, displayName: '旧群晚到的名称' }], total: 1, activeCount: 1 })
+      await pending.promise
+    })
+    expect(names()).toContain('另一个群的名称')
+    expect(names()).not.toContain('旧群晚到的名称')
+  })
+
   it('does not expose a human mention action without a mention-scoped capability ref', () => {
     const member: ArkmeConversationMemberItem = {
       memberRef: 'member-action-only',

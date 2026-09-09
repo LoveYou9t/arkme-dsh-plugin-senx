@@ -194,6 +194,7 @@ export class ContactDirectoryService {
     )
     // Invalidate even if the reply is malformed: the write may have succeeded.
     this.runtime.invalidateKey(this.runtime.requestScope(session.userId), 'directory:contacts:')
+    this.runtime.invalidateMemberCache()
     const contact = objectValue(data.contact)
     if (stringValue(contact.chat_session_uid) !== entry.chatSessionUid
       || numberValue(contact.user_id) !== entry.targetUserId

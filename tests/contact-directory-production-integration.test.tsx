@@ -4,6 +4,7 @@ import type { ComponentType, ReactElement } from 'react'
 import { arkmeAuthStore } from '../src/client/auth-store.js'
 import { arkmeUi } from '../src/client/ui-controller.js'
 import { arkmeContactsTab } from '../src/client/redesign/contacts/contacts-tab-store.js'
+import { arkmeConversationMembers } from '../src/client/conversation-members-store.js'
 
 const testState = vi.hoisted(() => ({ callArkme: vi.fn() }))
 const mountedRenderers = new Set<ReactTestRenderer>()
@@ -95,6 +96,7 @@ afterEach(async () => {
   vi.unstubAllGlobals()
   arkmeAuthStore.setAuth({ status: 'logged-out', environment: 'test' })
   arkmeContactsTab.activateAccount(undefined)
+  arkmeConversationMembers.activateAccount(undefined)
   arkmeUi.showLogin()
   vi.clearAllMocks()
 })
@@ -213,9 +215,25 @@ describe('production sibling Contacts tab', () => {
 
 it('saves a remark through real sibling seats and immediately updates the selected directory row and cached round trip', async () => {
   const original = testState.callArkme.getMockImplementation()!
-  testState.callArkme.mockImplementation(async (operation, params) => operation === 'directory.contact.remark.update'
-    ? { contactRef: params.contactRef, remark: params.remark, displayName: params.remark, nickname: '选择联系人' }
-    : original(operation, params))
+  const memberSource = { sourceRef: 'group-ref', sourceKey: 'group-key' }
+  const member = { memberRef: 'member-ref', role: 'member', status: 'active', isSelf: false, isOwner: false, joinedAtMillis: 1 }
+  let savedRemark = '原备注'
+  testState.callArkme.mockImplementation(async (operation, params) => {
+    if (operation === 'source.members.cached') return null
+    if (operation === 'source.members.page') return { kind: 'membership', source: memberSource, selfRole: 'member',
+      items: [member], hasMore: false, removedMemberRefs: [] }
+    if (operation === 'source.members.presentation') return { kind: 'presentation', source: memberSource,
+      items: [{ ...member, displayName: savedRemark, recordCount: 0, mentionCount: 0 }], removedMemberRefs: [], unavailableProfileMemberRefs: [] }
+    if (operation === 'directory.contact.remark.update') {
+      savedRemark = params.remark
+      return { contactRef: params.contactRef, remark: params.remark, displayName: params.remark, nickname: '选择联系人' }
+    }
+    return original(operation, params)
+  })
+  arkmeConversationMembers.activateAccount('test:101')
+  const releaseMembers = arkmeConversationMembers.subscribe('test:101', memberSource, () => {})
+  await arkmeConversationMembers.ensure('test:101', memberSource)
+  expect(arkmeConversationMembers.get('test:101', memberSource).items[0]?.displayName).toBe('原备注')
   const seats = applyProductionSeats()
   const Sidebar = seats.get('sidebar')!
   const Workspace = seats.get('conversation')!
@@ -231,6 +249,10 @@ it('saves a remark through real sibling seats and immediately updates the select
   await act(async () => { renderer.root.findByType('form').props.onSubmit({ preventDefault() {} }) })
   expect(text(renderer.root.findByType('h1'))).toBe('设计同事')
   expect(text(renderer.root.findByProps({ 'data-directory-row-ref': 'contact-1' }))).toBe('设计同事')
+  await act(async () => { await arkmeConversationMembers.ensure('test:101', memberSource) })
+  expect(arkmeConversationMembers.get('test:101', memberSource).items[0]?.displayName).toBe('设计同事')
+  releaseMembers()
+  arkmeConversationMembers.activateAccount(undefined)
   expect(arkmeContactsTab.getSnapshot().selection).toEqual({ kind: 'contact', contactRef: 'contact-1' })
   await act(async () => { button(renderer, '对话').props.onClick() })
   await act(async () => { button(renderer, '联系人').props.onClick() })

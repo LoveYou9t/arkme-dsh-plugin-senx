@@ -33,6 +33,8 @@ it('shares authorized pages, presentation and cache across Host, SDK and officia
   let pageHasMember = true
   let deferredPage: Promise<void> | undefined
   let unblockPage: (() => void) | undefined
+  let memberRemark = '私人备注'
+  let memberGroupName = '群内昵称'
   const fetchImpl: typeof fetch = async (input, init) => {
     const endpoint = new URL(String(input)).pathname
     calls.push(endpoint)
@@ -44,7 +46,7 @@ it('shares authorized pages, presentation and cache across Host, SDK and officia
       const after = body.after_user_id ?? 0
       data = { chat_session_uid: body.chat_session_uid, self_role: 1, items: after === 0 && pageHasMember ? [{ user_id: 2, status: 1, role: 3, display_name_snapshot: '群内昵称', join_at: 1 }] : [], has_more: after === 0 && pageHasMember, ...(after === 0 && pageHasMember ? { next_user_id: 2 } : {}) }
       if (deferredPage !== undefined) await deferredPage
-    } else if (endpoint.endsWith('/members/by-user-ids')) data = malformed ? { chat_session_uid: body.chat_session_uid } : { chat_session_uid: body.chat_session_uid, items: active ? [{ user_id: 2, status: 1, role: 3, extra: body.include_stats ? stats : undefined, remark: '私人备注', display_name_snapshot: '群内昵称', display_name: '公开昵称', join_at: 1 }] : [] }
+    } else if (endpoint.endsWith('/members/by-user-ids')) data = malformed ? { chat_session_uid: body.chat_session_uid } : { chat_session_uid: body.chat_session_uid, items: active ? [{ user_id: 2, status: 1, role: 3, extra: body.include_stats ? stats : undefined, remark: memberRemark, display_name_snapshot: memberGroupName, display_name: '公开昵称', join_at: 1 }] : [] }
     else if (endpoint.endsWith('/get-public-users-by-ids')) data = { items: [{ user_id: 2, nick_name: '公开昵称' }] }
     else if (endpoint.endsWith('/read-receipts/detail')) data = { chat_session_uid: body.chat_session_uid, record_uid: body.record_uid, seq: body.seq,
       items: [{ user_id: 2, read_status: 'unread', read_at: 0, remark: receiptName }] }
@@ -91,6 +93,20 @@ it('shares authorized pages, presentation and cache across Host, SDK and officia
     expect(calls.some(path => path.endsWith('/members/list'))).toBe(false)
     expect(calls.some(path => path.endsWith('/chats/list') || path.endsWith('/contacts/list'))).toBe(false)
     expect((await sdk.cachedSourceMembers(group.sourceRef))?.items[0]?.displayName).toBe('私人备注')
+    // Removing a private remark must reveal the group nickname, then the public name.
+    for (const [remark, groupName, displayName, mentionName] of [
+      ['', '群内昵称', '群内昵称', '群内昵称'],
+      ['', '', '公开昵称', '公开昵称'],
+      ['私人备注', '群内昵称', '私人备注', '群内昵称'],
+    ] as const) {
+      memberRemark = remark
+      memberGroupName = groupName
+      runtime.invalidateMemberCache()
+      const presentation = await sdk.sourceMembersPresentation(group.sourceRef, [first.items[0]!.memberRef])
+      expect(presentation.items[0]).toMatchObject({ displayName, mentionDisplayName: mentionName })
+      expect((await sdk.cachedSourceMembers(group.sourceRef))?.items[0]?.displayName).toBe(displayName)
+    }
+    expect(calls.some(path => path.endsWith('/chats/list') || path.endsWith('/contacts/list'))).toBe(false)
     malformed = true
     await expect(chat.sourceMembersPresentation(group.sourceRef, [first.items[0]!.memberRef])).rejects.toMatchObject({ code: 'member-presentation-invalid-response' })
     expect((await sdk.cachedSourceMembers(group.sourceRef))?.items).toHaveLength(1)

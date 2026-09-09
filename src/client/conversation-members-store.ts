@@ -132,7 +132,7 @@ export class ConversationMembersStore {
     const controller = new AbortController()
     entry.controller = controller
     entry.stale = false
-    this.publish(entry, { refreshing: true, complete: false, selfRole: 'unknown', error: undefined })
+    this.publish(entry, { refreshing: true, complete: false, error: undefined })
     entry.pending = Promise.resolve().then(() => this.loadPages(account, entry, revision, controller))
       .catch(error => {
         if (controller.signal.aborted || account !== this.account || this.entries.get(entryKey(account, source)) !== entry) return
@@ -243,6 +243,17 @@ export class ConversationMembersStore {
     const items = changed ? [...entry.members.values()].sort((left, right) => rank(left.role) - rank(right.role)
       || left.joinedAtMillis - right.joinedAtMillis || left.displayName.localeCompare(right.displayName)) : entry.snapshot.items
     this.publish(entry, { items, selfRole, ready: true, joinEvents: JSON.stringify(joins) === JSON.stringify(entry.snapshot.joinEvents) ? entry.snapshot.joinEvents : joins })
+  }
+
+  invalidateAccountPresentation(account: string | undefined): void {
+    if (account === undefined || account !== this.account) return
+    // Display changes do not revoke membership or change read-receipt facts.
+    for (const entry of this.entries.values()) {
+      entry.revision += 1
+      entry.stale = true
+      this.cancel(entry)
+      this.schedule(entry)
+    }
   }
 
   invalidate(account: string | undefined, source: Source): void {

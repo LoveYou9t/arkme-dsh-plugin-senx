@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { memberPageFixture } from './helpers/member-page-fixture.js'
 import { ConversationMembersStore } from '../src/client/conversation-members-store.js'
+import { arkmeMessageReadReceipts } from '../src/client/message-read-receipt-store.js'
 import type { ArkmeConversationMemberItem, ArkmeConversationMemberList, ArkmeSourceItem } from '../src/types.js'
 
 const account = 'test:42'
@@ -29,9 +30,60 @@ function createStore(load: (ref: string, signal: AbortSignal) => Promise<ArkmeCo
   return store
 }
 
-afterEach(() => { vi.useRealTimers() })
+afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks() })
 
 describe('shared conversation members', () => {
+  it('invalidates account presentations without clearing visible members or accepting another account hint', async () => {
+    let name = '原备注'
+    const load = vi.fn(async () => result([{ ...member('a', name), role: 'owner', isSelf: true, isOwner: true }]))
+    const store = createStore(load)
+    const release = store.subscribe(account, source, vi.fn())
+    await store.ensure(account, source)
+    const before = store.get(account, source).items
+    expect(store.get(account, source).selfRole).toBe('owner')
+    const invalidateReceipts = vi.spyOn(arkmeMessageReadReceipts, 'invalidate')
+    name = '新备注'
+    store.invalidateAccountPresentation('prod:42')
+    await store.ensure(account, source)
+    expect(load).toHaveBeenCalledTimes(1)
+    store.invalidateAccountPresentation(account)
+    expect(store.get(account, source).items).toBe(before)
+    expect(store.get(account, source).selfRole).toBe('owner')
+    const refresh = store.ensure(account, source)
+    expect(store.get(account, source).selfRole).toBe('owner')
+    await refresh
+    expect(store.get(account, source).items[0]?.displayName).toBe('新备注')
+    expect(invalidateReceipts).not.toHaveBeenCalled()
+    release(); store.activateAccount(undefined)
+  })
+
+  it('refreshes all cached groups after a remark change and rejects an older in-flight result', async () => {
+    const other = { ...source, sourceRef: 'other-ref', sourceKey: 'other-key' }
+    const pending = deferred<ArkmeConversationMemberList>()
+    let staleRead = false
+    let name = '原备注'
+    let oldSignal: AbortSignal | undefined
+    const store = createStore(async (ref, signal) => {
+      if (staleRead && ref === source.sourceRef) { staleRead = false; oldSignal = signal; return await pending.promise }
+      return result([member('same-person', name)], ref === source.sourceRef ? source : other)
+    })
+    const release = store.subscribe(account, source, vi.fn())
+    const releaseOther = store.subscribe(account, other, vi.fn())
+    await Promise.all([store.ensure(account, source), store.ensure(account, other)])
+    staleRead = true
+    const oldRead = store.ensure(account, source, true)
+    await Promise.resolve()
+    name = '新备注'
+    store.invalidateAccountPresentation(account)
+    expect(oldSignal?.aborted).toBe(true)
+    await Promise.all([store.ensure(account, source), store.ensure(account, other)])
+    pending.resolve(result([member('same-person', '过期备注')]))
+    await oldRead
+    expect(store.get(account, source).items[0]?.displayName).toBe('新备注')
+    expect(store.get(account, other).items[0]?.displayName).toBe('新备注')
+    release(); releaseOther(); store.activateAccount(undefined)
+  })
+
   it('joins conversation and drawer loads and reuses the snapshot when reopened', async () => {
     const pending = deferred<ArkmeConversationMemberList>()
     const load = vi.fn(() => pending.promise)

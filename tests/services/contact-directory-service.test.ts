@@ -21,6 +21,7 @@ function fixture(options: FixtureOptions = {}) {
     requestScope: (userId: number) => `user:${userId}`,
     invalidateScope: vi.fn(),
     invalidateKey: vi.fn(),
+    invalidateMemberCache: vi.fn(),
     stateStore: { async uniqueCode() { return 'directory-test-secret' } },
     requireSession: vi.fn(async () => currentSession),
     authenticatedChatPost: vi.fn(async (path: string) => {
@@ -502,6 +503,7 @@ describe('directory contact remark mutation', () => {
     expect(chat.openPrivateChatFromUser).not.toHaveBeenCalled()
     expect(runtime.invalidateKey).toHaveBeenCalledWith('user:7', 'directory:contacts:')
     expect(runtime.invalidateScope).not.toHaveBeenCalled()
+    expect(runtime.invalidateMemberCache).toHaveBeenCalledTimes(2)
   })
   it('rejects wrong-account, malformed, overlong, and aborted writes without changing a remark', async () => {
     const { service, runtime, setSession, contactRef } = await setup()
@@ -513,8 +515,10 @@ describe('directory contact remark mutation', () => {
     const controller = new AbortController(); controller.abort()
     await expect(service.updateContactRemark(contactRef, '已取消', controller.signal)).rejects.toMatchObject({ name: 'AbortError' })
     expect(runtime.authenticatedChatPost.mock.calls.length).toBe(before)
+    expect(runtime.invalidateMemberCache).not.toHaveBeenCalled()
     runtime.authenticatedChatPost.mockResolvedValueOnce({ contact: { chat_session_uid: 'other', user_id: 88, remark: '错误' } })
     await expect(service.updateContactRemark(contactRef, '同事')).rejects.toThrow()
+    expect(runtime.invalidateMemberCache).toHaveBeenCalledTimes(1)
     await expect(service.contactProfile(contactRef)).resolves.toMatchObject({ remark: '' })
   })
 })

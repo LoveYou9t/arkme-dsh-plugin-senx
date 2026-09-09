@@ -26,6 +26,7 @@ import { startupAuthGateEnabled } from './ArkmeStartupAuthGate.js'
 import { arkmeAuthStore } from './auth-store.js'
 import { arkmeAvatarImages } from './avatar-image-runtime.js'
 import { arkmeChatDirectory } from './chat-directory-store.js'
+import { arkmeConversationMembers } from './conversation-members-store.js'
 import { arkmePresentationMaintenance } from './presentation-maintenance-runtime.js'
 import { useArkmeRealtimeClientEvents } from './realtime-client-events.js'
 import { arkmeUi } from './ui-controller.js'
@@ -563,7 +564,11 @@ export function ArkmePersistentWorkspace({
       {scopedContacts.selection.kind !== 'none' && <button type="button" className="arkme-directory-mobile-back" onClick={() => { arkmeContactsTab.clear() }}>返回联系人目录</button>}
       <DirectoryDetailPane
         accountKey={contactsAccountKey ?? ''} selection={scopedContacts.selection}
-        onProfileUpdated={profile => { if (contactsAccountKey !== undefined) arkmeContactsTab.updateContactProfile(contactsAccountKey, profile) }}
+        onProfileUpdated={profile => {
+          if (contactsAccountKey === undefined) return
+          arkmeContactsTab.updateContactProfile(contactsAccountKey, profile)
+          arkmeConversationMembers.invalidateAccountPresentation(contactsAccountKey)
+        }}
         onSelectionChange={selection => { arkmeContactsTab.activateAccount(contactsAccountKey); arkmeContactsTab.select(selection) }}
         onSourceActivated={source => {
           const current = arkmeContactsTab.getSnapshot()
