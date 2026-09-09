@@ -1,6 +1,6 @@
 import { arkmeConversationMembers } from '../src/client/conversation-members-store.js'
 import { emojiSample } from './fixtures/emoji.js'
-import { act, create, type ReactTestRenderer } from 'react-test-renderer'
+import { act, create, type ReactTestInstance, type ReactTestRenderer } from 'react-test-renderer'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { arkmeMessagePreparing } from '../src/client/message-preparing-store.js'
 import { invalidateDirectMessageAdmission } from '../src/client/direct-message-admission.js'
@@ -1286,13 +1286,13 @@ describe('conversation send directory projection', () => {
     return renderer!.root.findByProps({ 'aria-labelledby': 'arkme-forward-target-title' })
   }
 
-  async function enterMessageSelectMode(item: ArkmeTimelineItem, additionalItems: ArkmeTimelineItem[] = []) {
+  async function enterMessageSelectMode(item: ArkmeTimelineItem, additionalItems: ArkmeTimelineItem[] = [], body?: unknown, beforeSelect?: () => void) {
     timeline = [item, ...additionalItems]
     await act(async () => {
       renderer = create(<ArkmeSurface productChrome={false} productNavigation={false} />, {
         createNodeMock: element => element.props.className === 'arkme-conversation-panel'
           ? { getBoundingClientRect: () => ({ left: 0, top: 0, width: 960, height: 720 }) }
-          : null,
+          : element.props.className === 'arkme-conversation-body' ? body ?? null : null,
       })
       await Promise.resolve()
     })
@@ -1307,9 +1307,95 @@ describe('conversation send directory projection', () => {
       })
     })
     const menu = renderer!.root.findByProps({ 'aria-label': '消息操作' })
+    beforeSelect?.()
     act(() => { menu.findAllByProps({ role: 'menuitem' }).find(button => button.findAllByType('span')
       .some(span => span.children.includes('多选')))!.props.onClick() })
   }
+
+  it.each([500, 1400])('keeps the clicked message at its viewport offset when entering selection from scrollTop %s', async initialTop => {
+    const scrollIntoView = vi.fn()
+    let capturing = false
+    const body = {
+      scrollTop: initialTop, scrollHeight: 2000, clientHeight: 600,
+      getBoundingClientRect: () => ({ top: 100, bottom: 700 }),
+      querySelectorAll: () => {
+        if (!capturing || renderer === undefined) return []
+        const row = renderer.root.findByProps({ 'data-arkme-message-item-uid': 'selected-anchor' })
+        const selecting = renderer.root.findAllByProps({ 'aria-label': '退出多选' }).length > 0
+        body.scrollHeight = selecting ? 2300 : 2000
+        return [{
+          dataset: { arkmeConversationRow: row.props['data-arkme-conversation-row'], arkmeMessageItemUid: 'selected-anchor' },
+          getBoundingClientRect: () => ({
+            top: 220 + (selecting ? 120 : 0) + initialTop - body.scrollTop,
+            bottom: 280 + (selecting ? 120 : 0) + initialTop - body.scrollTop,
+          }),
+          scrollIntoView,
+        }]
+      },
+      scrollTo: vi.fn(),
+    }
+    await enterMessageSelectMode({ itemUid: 'selected-anchor', messageActionRef: 'select-ref',
+      itemType: 'private_chat', senderUid: 'peer', senderName: 'Peer', isMe: false,
+      sendAtMillis: 1, textContent: 'Selected message', status: 1 }, [], body, () => {
+        capturing = true
+        body.scrollTop = initialTop
+      })
+    expect(body.scrollTop).toBe(initialTop + 120)
+    expect(scrollIntoView).not.toHaveBeenCalled()
+    act(() => { renderer!.root.findByProps({ 'aria-label': '退出多选' }).props.onClick() })
+    expect(body.scrollTop).toBe(initialTop)
+    capturing = false
+  })
+
+  it('keeps the desktop composer mounted beneath the selection overlay on entry and exit', async () => {
+    let before: ReactTestInstance | undefined
+    await enterMessageSelectMode({ itemUid: 'composer-selection', messageActionRef: 'select-ref',
+      senderName: 'Peer', isMe: false, sendAtMillis: 1, textContent: 'Select me', status: 1 }, [], undefined, () => {
+        before = renderer!.root.findByType(ArkmeRichComposerInput)
+      })
+    const slot = renderer!.root.findByProps({ className: 'arkme-conversation-input-slot' })
+    expect(slot.findByType(ArkmeRichComposerInput)).toBe(before)
+    expect(slot.findByType('footer').props.style.visibility).toBe('hidden')
+    expect(slot.findByType('footer').props.inert).toBe('')
+    expect(slot.findByProps({ role: 'toolbar' }).props.style).toMatchObject({ position: 'absolute', inset: 0 })
+    act(() => { slot.findByProps({ 'aria-label': '退出多选' }).props.onClick() })
+    expect(slot.findByType(ArkmeRichComposerInput)).toBe(before)
+    expect(slot.findByType('footer').props.style.visibility).toBeUndefined()
+    expect(slot.findByType('footer').props.inert).toBeUndefined()
+  })
+
+  it('exits at the newly visible message after scrolling away from the initial selection', async () => {
+    let measuring = false
+    const body = {
+      scrollTop: 500, scrollHeight: 3000, clientHeight: 600,
+      getBoundingClientRect: () => ({ top: 100, bottom: 700 }),
+      querySelectorAll: () => {
+        if (!measuring) return []
+        const selecting = renderer!.root.findAllByProps({ 'aria-label': '退出多选' }).length > 0
+        return ['original', 'reading'].map((id, index) => {
+          const row = renderer!.root.findByProps({ 'data-arkme-message-item-uid': id })
+          const top = 720 + index * 340 + (selecting ? (index + 1) * 120 : 0) - body.scrollTop
+          return {
+            dataset: { arkmeConversationRow: row.props['data-arkme-conversation-row'] },
+            getBoundingClientRect: () => ({ top, bottom: top + 60 }),
+          }
+        })
+      },
+      scrollTo: vi.fn(),
+    }
+    const item = { itemUid: 'original', messageActionRef: 'select-ref', senderName: 'Peer',
+      isMe: false, sendAtMillis: 1, textContent: 'Original', status: 1 }
+    await enterMessageSelectMode(item, [{ ...item, itemUid: 'reading', sendAtMillis: 2 }], body, () => {
+      measuring = true
+      body.scrollTop = 500
+    })
+    body.scrollTop = 920
+    const before = body.querySelectorAll()[1]!.getBoundingClientRect().top
+    act(() => { renderer!.root.findByProps({ 'aria-label': '退出多选' }).props.onClick() })
+    expect(body.scrollTop).toBe(680)
+    expect(body.querySelectorAll()[1]!.getBoundingClientRect().top).toBe(before)
+    measuring = false
+  })
 
   it.each([false, true])('assigns selected self Records without confusing display and membership: %s', async staleDisplay => {
     activeSource = sendToSelf
@@ -1528,7 +1614,13 @@ describe('conversation send directory projection', () => {
         prepareAtMillis: 48, expireAtMillis: 5048, preparingState: 1, stateVersion: 48, eventAtMillis: 48,
         chatConnectionGeneration: 1, chatRevision: 1 })
     })
-    expect(renderer!.root.findAllByProps({ 'data-arkme-message-preparing': true })).toHaveLength(0)
+    const accessory = renderer!.root.findByProps({ 'data-arkme-conversation-end-accessory': true })
+    expect(accessory.props['aria-hidden']).toBe(true)
+    expect(accessory.props.style.visibility).toBe('hidden')
+    expect(accessory.findAllByProps({ 'data-arkme-message-preparing': true })).toHaveLength(1)
+    act(() => { renderer!.root.findByProps({ 'aria-label': '退出多选' }).props.onClick() })
+    expect(accessory.props['aria-hidden']).toBeUndefined()
+    expect(accessory.props.style.visibility).toBe('visible')
   })
 
   it.each([
