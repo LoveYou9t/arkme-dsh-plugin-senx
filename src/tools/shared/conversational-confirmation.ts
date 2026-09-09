@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { CallId } from '@deepseek-ai/dsh-llm'
 import type { ToolDefinition } from '@deepseek-ai/dsh-tools'
+import { readSessionEvents } from '../../dsh-session-events.js'
 
 const DEFAULT_CONFIRMATION_TTL_MILLIS = 10 * 60_000
 const MAX_PENDING_CONFIRMATIONS = 1024
@@ -188,7 +189,7 @@ export class ArkmeConversationalConfirmation {
 
 export function hasLaterDirectUserMessage(agent: Agent, preparedAfterSeq: number): boolean {
   const arrivalByMessageId = new Map<string, number>()
-  for (const event of agent.session.events) {
+  for (const event of readSessionEvents(agent.session)) {
     if (event.type === 'agent/inbox/spliced') {
       for (const message of event.data.inserted) {
         if (message.source.kind === 'user' && !arrivalByMessageId.has(message.id)) {
@@ -204,7 +205,7 @@ export function hasLaterDirectUserMessage(agent: Agent, preparedAfterSeq: number
 }
 
 function hasLaterDirectUserInput(agent: Agent, afterSeq: number): boolean {
-  return agent.session.events.some(event => {
+  return readSessionEvents(agent.session).some(event => {
     if (event.seq <= afterSeq) return false
     if (event.type === 'user/message') return event.data.source.kind === 'user'
     return event.type === 'agent/inbox/spliced'
@@ -214,7 +215,7 @@ function hasLaterDirectUserInput(agent: Agent, afterSeq: number): boolean {
 
 function confirmationResult(agent: Agent, pending: PendingConfirmation): { seq: number; isError: boolean } | undefined {
   let preparedSucceeded = pending.preparedCallId === pending.preparedRootCallId
-  for (const event of agent.session.events) {
+  for (const event of readSessionEvents(agent.session)) {
     if (event.seq <= pending.preparedAfterSeq) continue
     if (event.type === 'tool/code-dispatch' && event.data.rootCallId === pending.preparedRootCallId
       && event.data.subCallId === pending.preparedCallId) {
@@ -231,7 +232,7 @@ function confirmationResult(agent: Agent, pending: PendingConfirmation): { seq: 
 }
 
 export function lastSessionSeq(agent: Agent): number {
-  return agent.session.events.at(-1)?.seq ?? -1
+  return readSessionEvents(agent.session).at(-1)?.seq ?? -1
 }
 
 function requiredAgentId(agent: Agent): string {

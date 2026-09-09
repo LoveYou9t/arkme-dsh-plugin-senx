@@ -9,7 +9,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { registerArkmeTools, type ArkmeToolPorts } from '../../src/tools/index.js'
 import { preparedDirectory, directoryResult } from '../helpers/recording-directory.js'
 
-async function fixture(code = false) {
+async function fixture(code = false, snapshotOnly = false) {
   const ctx = new Context()
   await ctx.plugin(SystemPrompt)
   await ctx.plugin(ToolRuntime, code ? { mode: 'both' } : {})
@@ -35,7 +35,8 @@ async function fixture(code = false) {
   const mounted = await mount()
   const session = Session.create(SessionId('confirmation-runtime'))
   const inbox = new Inbox(session, { inserted() {}, discarded() {}, claimed() {} })
-  const agent = { id: session.id, session, inbox } as unknown as Agent
+  const agentSession = snapshotOnly ? { snapshotEvents: () => [...session.events], append: session.append.bind(session) } : session
+  const agent = { id: session.id, session: agentSession, inbox } as unknown as Agent
   let count = 0
   const invoke = async (args: Record<string, unknown> = { action: 'prepare' }, name = 'arkme_recording_import_folder') => {
     const callId = CallId(`call-${++count}`)
@@ -56,9 +57,10 @@ async function fixture(code = false) {
   return { ctx, mounted, mount, session, agent, prepare, upload, importFile, invoke, enqueue, consume }
 }
 
-describe('conversational confirmation with durable DSH inbox events', () => {
+describe.each([false, true])('conversational confirmation with durable DSH inbox events (snapshotOnly=%s)', snapshotOnly => {
+  const fixtureForSession = (code = false) => fixture(code, snapshotOnly)
   it.each(['invalid', 'conflict', 'time_required'] as const)('returns a read-only result without confirmation when all files are %s', async outcome => {
-    const f = await fixture()
+    const f = await fixtureForSession()
     f.prepare.mockResolvedValue({ ...preparedDirectory(), preview: [{ relativePath: 'meeting.wav', outcome }] })
     const result = await f.invoke()
     expect(result.isError).toBe(false)
@@ -68,7 +70,7 @@ describe('conversational confirmation with durable DSH inbox events', () => {
   })
 
   it('does not grant upload when a successful run_code root caught a failed preflight sub-call', async () => {
-    const f = await fixture(true)
+    const f = await fixtureForSession(true)
     let reject = true
     f.ctx.on('tools/post-execute', async (exec, _result, next) => {
       if (reject && exec.name === 'arkme_recording_import_folder') { reject = false; throw new Error('preflight result rejected') }
@@ -85,7 +87,7 @@ describe('conversational confirmation with durable DSH inbox events', () => {
   })
 
   it('rebinds a fresh question when the original root result was lost', async () => {
-    const f = await fixture()
+    const f = await fixtureForSession()
     const args = { action: 'upload', file_ref: 'arkme-file-v1.00000000-0000-4000-8000-000000000001', start_at_millis: 1_700_000_000_000 }
     await f.ctx.tools.execute({ callId: CallId('lost-root'), name: 'arkme_recording_import', arguments: args,
       agent: f.agent, signal: new AbortController().signal })
@@ -100,7 +102,7 @@ describe('conversational confirmation with durable DSH inbox events', () => {
   })
 
   it('starts a fresh preflight after the previous result failed to publish', async () => {
-    const f = await fixture()
+    const f = await fixtureForSession()
     let reject = true
     f.ctx.on('tools/post-execute', async (_exec, _result, next) => {
       if (reject) { reject = false; throw new Error('result publication failed') }
@@ -119,7 +121,7 @@ describe('conversational confirmation with durable DSH inbox events', () => {
   })
 
   it('allows a new human-requested operation while an earlier result awaits publication', async () => {
-    const f = await fixture()
+    const f = await fixtureForSession()
     let release!: () => void
     let finishing = false
     const gate = new Promise<void>(resolve => { release = resolve })
@@ -145,7 +147,7 @@ describe('conversational confirmation with durable DSH inbox events', () => {
   })
 
   it('waits for the root result of a code-mode sub-call before accepting a later confirmation', async () => {
-    const f = await fixture()
+    const f = await fixtureForSession()
     const rootCallId = CallId('run-code-root')
     f.session.append('tool/call', { turn: 1, step: 1, callId: rootCallId, name: 'run_code', arguments: '{}' })
     const input = { rootCallId, name: 'arkme_recording_import_folder',
@@ -168,7 +170,7 @@ describe('conversational confirmation with durable DSH inbox events', () => {
   })
 
   it('rejects confirmation that arrived while the prepared result was still being finalized', async () => {
-    const f = await fixture()
+    const f = await fixtureForSession()
     let release!: () => void
     let finishing = false
     const gate = new Promise<void>(resolve => { release = resolve })
@@ -191,7 +193,7 @@ describe('conversational confirmation with durable DSH inbox events', () => {
   })
 
   it('rejects a late preflight when the human steers through the inbox', async () => {
-    const f = await fixture()
+    const f = await fixtureForSession()
     let release!: () => void
     const gate = new Promise<void>(resolve => { release = resolve })
     f.prepare.mockImplementationOnce(async () => { await gate; return preparedDirectory() })
@@ -205,7 +207,7 @@ describe('conversational confirmation with durable DSH inbox events', () => {
   })
 
   it('does not treat a previously queued confirmation as a later reply when consumed', async () => {
-    const f = await fixture()
+    const f = await fixtureForSession()
     f.enqueue('确认上传')
     expect((await f.invoke()).isError).toBe(false)
     f.consume()
@@ -219,7 +221,7 @@ describe('conversational confirmation with durable DSH inbox events', () => {
   })
 
   it('does not invalidate preparation or grant approval for plugin inbox messages', async () => {
-    const f = await fixture()
+    const f = await fixtureForSession()
     f.prepare.mockImplementationOnce(async () => { f.enqueue('确认', 'plugin'); return preparedDirectory() })
     expect((await f.invoke()).isError).toBe(false)
     f.consume()
@@ -228,7 +230,7 @@ describe('conversational confirmation with durable DSH inbox events', () => {
   })
 
   it.each([{}, { action: 'delete' }, { start_at_millis: 'yesterday' }])('keeps a confirmed single-file upload after invalid arguments: %j', async invalid => {
-    const f = await fixture()
+    const f = await fixtureForSession()
     const args = { action: 'upload', file_ref: 'arkme-file-v1.00000000-0000-4000-8000-000000000001', start_at_millis: 1_700_000_000_000 }
     await f.invoke(args, 'arkme_recording_import')
     f.enqueue('确认上传')
@@ -241,7 +243,7 @@ describe('conversational confirmation with durable DSH inbox events', () => {
   })
 
   it('requires fresh confirmation after re-registering the tools', async () => {
-    const f = await fixture()
+    const f = await fixtureForSession()
     await f.invoke()
     f.enqueue('确认上传')
     f.consume()
