@@ -364,6 +364,7 @@ function cloneSourceList(value: ArkmeSourceList): ArkmeSourceList {
 }
 
 export class SourceService {
+  private readonly loadedPrivateRemarks = new Map<string, { remark: string; updatedAtMillis: number }>()
   private readonly chatSourceCache = new Map<string, ArkmeSourceItem>()
   private readonly sourceListCache = new Map<string, CacheEntry<ArkmeSourceList>>()
   private readonly sourceListInFlight = new Map<string, Promise<ArkmeSourceList>>()
@@ -411,6 +412,36 @@ export class SourceService {
     const existing = this.topicDissolveProgress.get(normalized)
     if (existing === undefined || existing.userId !== userId) return
     this.topicDissolveProgress.set(normalized, { ...existing, progress: { requestId: normalized, ...progress } })
+  }
+
+  loadedPrivateRemarksByUserIds(viewerUserId: number, userIds: readonly number[]): Map<number, string> {
+    const remarks = new Map<number, string>()
+    for (const userId of userIds) {
+      const known = this.loadedPrivateRemarks.get(`${viewerUserId}:${userId}`)
+      if (known !== undefined) remarks.set(userId, known.remark)
+    }
+    return remarks
+  }
+
+  rememberPrivateRemark(viewerUserId: number, targetUserId: number, remark: string, updatedAtMillis: number): void {
+    if (!Number.isSafeInteger(viewerUserId) || viewerUserId <= 0 || !Number.isSafeInteger(targetUserId)
+      || targetUserId <= 0 || targetUserId === viewerUserId) return
+    const key = `${viewerUserId}:${targetUserId}`
+    const known = this.loadedPrivateRemarks.get(key)
+    if (known !== undefined && known.updatedAtMillis > updatedAtMillis) return
+    this.loadedPrivateRemarks.delete(key)
+    this.loadedPrivateRemarks.set(key, { remark: remark.trim(), updatedAtMillis })
+    while (this.loadedPrivateRemarks.size > 1_000) this.loadedPrivateRemarks.delete(this.loadedPrivateRemarks.keys().next().value!)
+  }
+
+  private rememberPrivateRemarkFromBundle(viewerUserId: number, bundle: Record<string, unknown>): void {
+    const sessionKind = numberValue(objectValue(bundle.session).session_kind)
+    if (sessionKind !== 1 && sessionKind !== 3) return
+    const supplement = objectValue(bundle.private_supplement)
+    if (Object.keys(supplement).length === 0 || (supplement.remark !== undefined && typeof supplement.remark !== 'string')) return
+    const targetUserId = integerIdentifierValue(objectValue(bundle.private_counterpart).user_id)
+    this.rememberPrivateRemark(viewerUserId, targetUserId,
+      supplement.status === 2 ? '' : stringValue(supplement.remark), numberValue(supplement.updated_at))
   }
 
   cachedChatSource(userId: number, chatSessionUid: string): ArkmeSourceItem | undefined {
@@ -694,6 +725,7 @@ export class SourceService {
   }
 
   dispose(): void {
+    this.loadedPrivateRemarks.clear()
     this.chatSourceCache.clear()
     this.sourceListCache.clear()
     this.sourceListInFlight.clear()
@@ -1508,6 +1540,7 @@ export class SourceService {
     const pageCursor = options.cursor === undefined || options.cursor.trim() === ''
       ? undefined
       : this.decodeCursor(options.cursor)
+    const remarkEpoch = this.runtime.memberCacheEpoch()
     const data = await this.runtime.authenticatedChatPost<Record<string, unknown>>(
       '/api/v1/chats/list',
       {
@@ -1628,6 +1661,9 @@ export class SourceService {
     // Cache the final hydrated projection as an owned snapshot. Realtime updates
     // must not depend on later mutation of the directory row object.
     if (options.isCurrent?.() !== false) {
+      if (!options.signal?.aborted && remarkEpoch === this.runtime.memberCacheEpoch()) {
+        for (const raw of listValue(data.items)) this.rememberPrivateRemarkFromBundle(session.userId, objectValue(raw))
+      }
       for (const [index, uid] of chatSessionUidByIndex) {
         const item = items[index]
         if (item !== undefined) this.storeChatSourceByKey(`${String(session.userId)}:${uid}`, item)
@@ -2010,6 +2046,7 @@ export class SourceService {
       ? 'group_chat'
       : sessionKind === 1 || sessionKind === 3 ? 'private_chat' : undefined
     if (uid === '' || kind === undefined) throw new Error('invalid chat display snapshot')
+    this.rememberPrivateRemarkFromBundle(session.userId, bundle)
     const displayName = (kind === 'private_chat'
       ? stringValue(
         supplement.remark ?? supplement.counterpart_name_snapshot ?? counterpart.display_name_snapshot

@@ -202,6 +202,7 @@ export class ContactDirectoryService {
       throw new ArkmePluginError('directory-contact-remark-response-invalid', '备注保存响应不完整，请重试', true, 502)
     }
     const savedRemark = stringValue(contact.remark).trim()
+    this.source.rememberPrivateRemark(session.userId, entry.targetUserId, savedRemark, numberValue(contact.updated_at) || Date.now())
     this.remarkRevision += 1
     this.recentRemarks.set(`${session.userId}:${entry.targetUserId}`, { revision: this.remarkRevision, remark: savedRemark })
     for (const [ref, current] of this.contactRefs) {

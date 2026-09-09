@@ -49,7 +49,7 @@ it('shares authorized pages, presentation and cache across Host, SDK and officia
       if (deferredPage !== undefined) await deferredPage
     } else if (endpoint.endsWith('/members/by-user-ids')) data = malformed ? { chat_session_uid: body.chat_session_uid } : { chat_session_uid: body.chat_session_uid, items: active ? [{ user_id: 2, status: 1, role: 3, extra: body.include_stats ? stats : undefined, ...(inlineRemark ? { remark: memberRemark } : {}), display_name_snapshot: memberGroupName, display_name: '公开昵称', join_at: 1 }] : [] }
     else if (endpoint.endsWith('/contacts/list')) data = { items: [], has_more: false }
-    else if (endpoint.endsWith('/chats/list')) data = { items: [{ session: { session_kind: 1 }, private_counterpart: { user_id: 2 }, private_supplement: { contact_state: 2, remark: memberRemark, counterpart_name_snapshot: '不能当备注的旧快照' } }], has_more: false }
+    else if (endpoint.endsWith('/chats/list')) data = { items: [{ session: { chat_session_uid: 'private', session_kind: 1 }, private_counterpart: { user_id: 2 }, private_supplement: { contact_state: 2, remark: memberRemark, counterpart_name_snapshot: '不能当备注的旧快照' } }], has_more: false }
     else if (endpoint.endsWith('/get-public-users-by-ids')) data = { items: [{ user_id: 2, nick_name: '公开昵称' }] }
     else if (endpoint.endsWith('/read-receipts/detail')) data = { chat_session_uid: body.chat_session_uid, record_uid: body.record_uid, seq: body.seq,
       items: [{ user_id: 2, read_status: 'unread', read_at: 0, remark: receiptName }] }
@@ -103,12 +103,18 @@ it('shares authorized pages, presentation and cache across Host, SDK and officia
     await sdk.sourceMembersPresentation(privateChat.sourceRef, privatePage.items.map(item => item.memberRef))
     expect(privateLookup).not.toHaveBeenCalled()
     privateLookup.mockRestore()
-    // Private-chat remarks remain meaningful even when the person is not an added contact.
+    // Unloaded private chats do not trigger a directory scan.
     inlineRemark = false
     runtime.invalidateMemberCache()
+    const scan = vi.spyOn(source, 'privateRemarksByUserIds').mockRejectedValue(new Error('directory unavailable'))
+    expect((await sdk.sourceMembersPresentation(group.sourceRef, [first.items[0]!.memberRef])).items[0])
+      .toMatchObject({ displayName: '群内昵称', mentionDisplayName: '群内昵称' })
+    expect(scan).not.toHaveBeenCalled()
+    expect(calls.some(path => path.endsWith('/chats/list') || path.endsWith('/contacts/list'))).toBe(false)
+    // Ordinary sidebar reads supply non-contact remarks without new member-time requests.
+    await source.listSources('root', { firstPaint: true, refresh: true })
     expect((await sdk.sourceMembersPresentation(group.sourceRef, [first.items[0]!.memberRef])).items[0])
       .toMatchObject({ displayName: '私人备注', mentionDisplayName: '群内昵称' })
-    // Removing a private remark must reveal the group nickname, then the public name.
     for (const [remark, groupName, displayName, mentionName] of [
       ['', '群内昵称', '群内昵称', '群内昵称'],
       ['', '', '公开昵称', '公开昵称'],
@@ -116,21 +122,24 @@ it('shares authorized pages, presentation and cache across Host, SDK and officia
     ] as const) {
       memberRemark = remark
       memberGroupName = groupName
+      await source.listSources('root', { firstPaint: true, refresh: true })
       runtime.invalidateMemberCache()
       const presentation = await sdk.sourceMembersPresentation(group.sourceRef, [first.items[0]!.memberRef])
       expect(presentation.items[0]).toMatchObject({ displayName, mentionDisplayName: mentionName })
       expect((await sdk.cachedSourceMembers(group.sourceRef))?.items[0]?.displayName).toBe(displayName)
     }
-    expect(calls).toContain('/api/v1/chats/list')
-    for (const code of ['arkme-code-2001', 'private-remark-pagination-invalid']) {
-      const unavailableRemark = vi.spyOn(source, 'privateRemarksByUserIds')
-        .mockRejectedValueOnce(Object.assign(new Error('private remark read incomplete'), { code }))
-      runtime.invalidateMemberCache()
-      await expect(sdk.sourceMembersPresentation(group.sourceRef, [first.items[0]!.memberRef]))
-        .rejects.toMatchObject({ code: 'member-remark-unavailable' })
-      expect((await sdk.cachedSourceMembers(group.sourceRef))?.items[0]?.displayName).toBe('私人备注')
-      unavailableRemark.mockRestore()
-    }
+    source.rememberPrivateRemark(session.userId, 2, '', 100)
+    inlineRemark = true
+    memberRemark = '旧接口备注'
+    const cleared = await sdk.sourceMembersPresentation(group.sourceRef, [first.items[0]!.memberRef])
+    expect(cleared.items[0]).toMatchObject({ displayName: '群内昵称', mentionDisplayName: '群内昵称' })
+    expect(cleared.items[0]?.mentionSecondaryName).not.toBe('旧接口备注')
+    source.rememberPrivateRemark(session.userId, 2, '私人备注', 101)
+    inlineRemark = false
+    memberRemark = '私人备注'
+    await sdk.sourceMembersPresentation(group.sourceRef, [first.items[0]!.memberRef])
+    expect(scan).not.toHaveBeenCalled()
+    scan.mockRestore()
     malformed = true
     await expect(chat.sourceMembersPresentation(group.sourceRef, [first.items[0]!.memberRef])).rejects.toMatchObject({ code: 'member-presentation-invalid-response' })
     expect((await sdk.cachedSourceMembers(group.sourceRef))?.items).toHaveLength(1)

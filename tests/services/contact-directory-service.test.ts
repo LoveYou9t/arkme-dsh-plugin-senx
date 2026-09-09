@@ -22,6 +22,7 @@ function fixture(options: FixtureOptions = {}) {
     invalidateScope: vi.fn(),
     invalidateKey: vi.fn(),
     invalidateMemberCache: vi.fn(),
+    memberCacheEpoch: () => 0,
     stateStore: { async uniqueCode() { return 'directory-test-secret' } },
     requireSession: vi.fn(async () => currentSession),
     authenticatedChatPost: vi.fn(async (path: string) => {
@@ -492,14 +493,16 @@ describe('directory contact remark mutation', () => {
     return { ...f, contactRef: first.contactRef, secondRef: second.contactRef }
   }
   it('writes an account-bound session remark, updates every issued ref, and supports clearing', async () => {
-    const { service, runtime, chat, contactRef, secondRef } = await setup()
+    const { service, runtime, source, chat, contactRef, secondRef } = await setup()
     runtime.authenticatedChatPost.mockResolvedValueOnce({ contact: { chat_session_uid: 'private-88', user_id: 88, remark: '同事' } })
     const signal = new AbortController().signal
     await expect(service.updateContactRemark(contactRef, '  同事  ', signal)).resolves.toMatchObject({ contactRef, remark: '同事', displayName: '同事', nickname: '小满' })
     expect(runtime.authenticatedChatPost).toHaveBeenLastCalledWith('/api/v1/chats/contacts/update-remark', { chat_session_uid: 'private-88', remark: '同事', update_at: expect.any(Number) }, session, signal)
     await expect(service.contactProfile(secondRef)).resolves.toMatchObject({ remark: '同事', displayName: '同事' })
+    expect(source.loadedPrivateRemarksByUserIds(session.userId, [88])).toEqual(new Map([[88, '同事']]))
     runtime.authenticatedChatPost.mockResolvedValueOnce({ contact: { chat_session_uid: 'private-88', user_id: 88 } })
     await expect(service.updateContactRemark(contactRef, '')).resolves.toMatchObject({ remark: '', displayName: '小满' })
+    expect(source.loadedPrivateRemarksByUserIds(session.userId, [88])).toEqual(new Map([[88, '']]))
     expect(chat.openPrivateChatFromUser).not.toHaveBeenCalled()
     expect(runtime.invalidateKey).toHaveBeenCalledWith('user:7', 'directory:contacts:')
     expect(runtime.invalidateScope).not.toHaveBeenCalled()
