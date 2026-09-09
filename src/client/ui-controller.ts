@@ -13,6 +13,8 @@ function sameSelectedSource(left: ArkmeSourceItem | undefined, right: ArkmeSourc
     && left.notificationAllowed === right.notificationAllowed
     && left.directMessageAdmissionApplicable === right.directMessageAdmissionApplicable
     && left.isMuted === right.isMuted && left.isPinned === right.isPinned
+    && left.chatPolicyUpdatedAtMillis === right.chatPolicyUpdatedAtMillis
+    && left.chatNotificationPolicyUpdatedAtMillis === right.chatNotificationPolicyUpdatedAtMillis
     && left.latestSequence === right.latestSequence
     && left.avatarRef === right.avatarRef && (left.avatarRefs ?? []).join('|') === (right.avatarRefs ?? []).join('|')
     && JSON.stringify(left.groupAvatar) === JSON.stringify(right.groupAvatar)

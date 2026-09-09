@@ -1,4 +1,5 @@
 import { ArkmeRecordTopicAssignmentDialog } from './ArkmeRecordTopicAssignmentDialog.js'
+import { retainNewerArkmeChatPolicy } from '../chat-policy-projection.js'
 import { arkmeMarkdownPlainText } from '../markdown.js'
 import {
   Fragment, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore,
@@ -18,7 +19,7 @@ import { retainPartialTimelineMedia } from './timeline-media.js'
 import { ArkmeRichText } from './ArkmeRichText.js'
 import { arkmeEmojiPlainText } from './arkme-emoji.js'
 import type {
-  ArkmeAuthSnapshot, ArkmeGroupAiPolishNotice, ArkmeGroupAiPolishSnapshot, ArkmeSourceReadResult,
+  ArkmeGroupNotificationResult, ArkmeAuthSnapshot, ArkmeGroupAiPolishNotice, ArkmeGroupAiPolishSnapshot, ArkmeSourceReadResult,
   ArkmeRelatedRecordingItem, ArkmeRelatedRecordingMonthBucket, ArkmeRelatedRecordingPage,
   ArkmeRelatedRecordingPageState, ArkmeSourceItem, ArkmeSourceSendResult, ArkmeTimelineAroundPage, ArkmeTimelineCursor, ArkmeTimelineItem, ArkmeTimelinePage, ArkmeMessageSnapshotDetail,
   ArkmeInterwovenBootstrap, ArkmeInterwovenDetail, ArkmeInterwovenMention, ArkmePluginResponse,
@@ -152,7 +153,7 @@ import {
   type ArkmeComposerAttachment,
 } from './composer-draft-store.js'
 import { arkmeConversationComposerLayout } from './conversation-composer-presentation.js'
-import { restoreArkmeComposerFocus } from './composer-focus.js'
+import { focusArkmeComposerFromClick, restoreArkmeComposerFocus } from './composer-focus.js'
 import { arkmeDesktopNotifications } from './desktop-notification-runtime.js'
 import {
   arkmeNotificationActivation,
@@ -5327,16 +5328,21 @@ export function ArkmeSurface({
     }
     void arkmeChatDirectory.refreshRoot({ force: true }).catch(() => undefined)
   }, [authenticatedAccountKey])
-  const updateSourceMessageDndProjection = useCallback((targetSource: ArkmeSourceIdentityFacts, messageDnd: boolean) => {
+  const updateSourceMessageDndProjection = useCallback((targetSource: ArkmeSourceIdentityFacts, result: ArkmeGroupNotificationResult) => {
     const sourceIdentity = arkmeSourceIdentityKey(targetSource)
     const selectedSource = arkmeUi.getSnapshot().selectedSource
-    const currentSource = selectedSource !== undefined && arkmeSourceIdentityKey(selectedSource) === sourceIdentity
-      ? selectedSource
-      : arkmeChatDirectory.getSnapshot().sources.find(item => arkmeSourceIdentityKey(item) === sourceIdentity)
-    if (currentSource !== undefined) updateSourceProjection({
+    const directorySource = arkmeChatDirectory.getSnapshot().sources.find(item => arkmeSourceIdentityKey(item) === sourceIdentity)
+    const selected = selectedSource !== undefined && arkmeSourceIdentityKey(selectedSource) === sourceIdentity
+      ? selectedSource : undefined
+    const currentSource = selected === undefined ? directorySource : retainNewerArkmeChatPolicy(directorySource, selected)
+    if (currentSource === undefined) return result.messageDnd
+    const projected = retainNewerArkmeChatPolicy(currentSource, {
       ...currentSource,
-      ...projectArkmeChatAttentionFromMuted(currentSource.unreadCount, messageDnd),
+      ...projectArkmeChatAttentionFromMuted(currentSource.unreadCount, result.messageDnd),
+      chatNotificationPolicyUpdatedAtMillis: result.chatNotificationPolicyUpdatedAtMillis,
     })
+    updateSourceProjection(projected)
+    return projected.isMuted === true
   }, [updateSourceProjection])
   const conversationMemberByRef = useMemo(
     () => new Map(conversationMembers.map(member => [member.memberRef, member])),
@@ -7590,6 +7596,7 @@ export function ArkmeSurface({
           </div>}
           {messageActionStatus !== '' && <div role="status" aria-live="polite" style={styles.messageActionToast}>{messageActionStatus}</div>}
           {activeSelectMode === undefined && <footer className="arkme-conversation-composer" style={styles.composer}
+            onClick={event => { focusArkmeComposerFromClick(textareaRef.current, event) }}
             onDragOver={event => { if (!composerFileAddingDisabled && Array.from(event.dataTransfer.types).includes('Files')) { event.preventDefault(); event.dataTransfer.dropEffect = 'copy' } }}
             onDrop={event => { if (!composerFileAddingDisabled && event.dataTransfer.files.length > 0) { event.preventDefault(); void selectFiles(event.dataTransfer.files) } }}
           ><div style={styles.composerStack}>
@@ -7868,7 +7875,7 @@ export function ArkmeSurface({
                 }
               }} />
             </div>
-            <div style={styles.tools}><div style={styles.toolGroup}><button ref={addMenuTriggerRef} type="button" style={styles.plus} aria-label="添加内容" aria-haspopup="menu" aria-expanded={addMenuOpen} disabled={composerFileAddingDisabled} onClick={() => { setAddMenuOpen(value => !value) }}>{(activeRecordReeditComposer === undefined ? preparingFiles : preparingReeditFiles) ? <ArkmeFilePreparingIndicator /> : '+'}</button><ArkmeEmojiPicker
+            <div data-arkme-composer-footer="tools" style={styles.tools}><div style={styles.toolGroup}><button ref={addMenuTriggerRef} type="button" style={styles.plus} aria-label="添加内容" aria-haspopup="menu" aria-expanded={addMenuOpen} disabled={composerFileAddingDisabled} onClick={() => { setAddMenuOpen(value => !value) }}>{(activeRecordReeditComposer === undefined ? preparingFiles : preparingReeditFiles) ? <ArkmeFilePreparingIndicator /> : '+'}</button><ArkmeEmojiPicker
               key={`emoji-picker:${conversationOverlayKey}`}
               disabled={preparingFiles || directAdmission.blocked || activeRecordReeditComposer !== undefined}
               scopeKey={composerDraftKey}
@@ -7922,7 +7929,7 @@ export function ArkmeSurface({
               draftKey={composerDraftKey}
             />}
           </div>
-            <div style={styles.composerHint}>Enter发送 / Shift+Enter换行</div>
+            <div data-arkme-composer-footer="hint" style={styles.composerHint}>Enter发送 / Shift+Enter换行</div>
           </div></footer>}
         </>}
         {activeConversation && forwardTargetPicker !== undefined && <div

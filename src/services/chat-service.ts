@@ -1,4 +1,5 @@
 import { sealRecordTopicAssignmentRef } from '../record-topic-assignment-ref.js'
+import { patchChatPolicy } from './chat-policy.js'
 import { invalidatesMemberSnapshot } from '../member-directory.js'
 import { arkmeRecordTextFormat, arkmeMarkdownHashTagRanges, arkmeMarkdownPlainText, arkmeMarkdownTextRanges } from '../markdown.js'
 import { createHash, createHmac, randomUUID, timingSafeEqual } from 'node:crypto'
@@ -1608,39 +1609,11 @@ export class ChatService {
     muted: boolean,
     options: { signal?: AbortSignal } = {},
   ): Promise<ArkmeBotNotificationPreference> {
-    const { session, sessionUid, policy } = await this.directBotPolicy(chatSessionUid, options.signal)
-    const updateAt = Math.max(Date.now(), numberValue(policy.update_at) + 1)
-    const updated = await this.runtime.authenticatedChatPost<Record<string, unknown>>(
-      '/api/v1/chats/policy/update',
-      {
-        chat_session_uid: sessionUid,
-        show_in_home_state: numberValue(policy.show_in_home_state),
-        privacy_state: numberValue(policy.privacy_state),
-        mute_state: muted ? 2 : 1,
-        pin_state: numberValue(policy.pin_state),
-        notify_state: muted ? 2 : 1,
-        status: numberValue(policy.status),
-        update_at: updateAt,
-      },
-      session,
-      options.signal,
-    )
-    if (stringValue(updated.chat_session_uid).trim() !== sessionUid
-      || numberValue(updated.user_id) !== session.userId
-      || numberValue(updated.show_in_home_state) !== numberValue(policy.show_in_home_state)
-      || numberValue(updated.privacy_state) !== numberValue(policy.privacy_state)
-      || numberValue(updated.mute_state) !== (muted ? 2 : 1)
-      || numberValue(updated.pin_state) !== numberValue(policy.pin_state)
-      || numberValue(updated.notify_state) !== (muted ? 2 : 1)
-      || numberValue(updated.status) !== numberValue(policy.status)
-      || !Number.isSafeInteger(numberValue(updated.update_at))
-      || numberValue(updated.update_at) < updateAt) {
-      throw new ArkmePluginError('bot-chat-policy-contract-invalid', 'Bot Chat 通知策略更新确认不完整', true, 502)
-    }
-    const cacheKey = `${String(session.userId)}:${sessionUid}`
-    const cached = this.source.cachedChatSourceByKey(cacheKey)
-    if (cached !== undefined) this.source.setChatSourceByKey(cacheKey, { ...cached, isMuted: muted })
-    this.source.invalidateSourceListCache(session.userId, 'root')
+    const sessionUid = chatSessionUid.trim()
+    if (sessionUid === '') throw new ArkmePluginError('bot-chat-target-invalid', 'Bot Chat 会话目标无效', false, 400)
+    const session = await this.runtime.requireSession()
+    const updated = await patchChatPolicy(this.runtime, session, sessionUid, { mute_state: muted ? 2 : 1, notify_state: muted ? 2 : 1 }, options.signal)
+    this.source.applyConfirmedChatPolicy(updated)
     void this.realtime.refreshAttentionSummary()
     return { muted }
   }

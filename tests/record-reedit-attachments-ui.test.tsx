@@ -23,6 +23,7 @@ import { ArkmeAttachmentStrip } from '../src/client/ArkmeAttachmentStrip.js'
 import { ArkmeConfirmDialog } from '../src/client/ArkmeConfirmDialog.js'
 import { ArkmeClientError } from '../src/client/api.js'
 import { ArkmeRichComposerInput } from '../src/client/ArkmeRichComposerInput.js'
+import * as composerFocus from '../src/client/composer-focus.js'
 import { ArkmeMediaPreview } from '../src/client/ArkmeRichContent.js'
 import { arkmeAuthStore } from '../src/client/auth-store.js'
 import { arkmeChatDirectory, arkmeChatTimelineDelta } from '../src/client/chat-directory-store.js'
@@ -86,6 +87,24 @@ describe('record re-edit attachment UI', () => {
       await flush()
     })
   }
+
+  it('routes outer composer whitespace to the current handle and marks only its two bottom regions', async () => {
+    const focus = vi.spyOn(composerFocus, 'focusArkmeComposerFromClick').mockReturnValue(false)
+    await mount()
+    const outer = renderer!.root.findByProps({ className: 'arkme-conversation-composer' })
+    const footers = outer.findAll(node => typeof node.type === 'string' && node.props['data-arkme-composer-footer'] !== undefined)
+    expect(footers.map(node => node.props['data-arkme-composer-footer'])).toEqual(['tools', 'hint'])
+    expect(footers[0]!.findByProps({ 'aria-label': '发送消息' })).toBeDefined()
+    expect(footers[1]!.children).toEqual(['Enter发送 / Shift+Enter换行'])
+    const event = { currentTarget: {}, target: {}, button: 0, defaultPrevented: false }
+    act(() => outer.props.onClick(event))
+    expect(focus).toHaveBeenLastCalledWith(expect.objectContaining({ disabled: false, focus: expect.any(Function) }), event)
+    const ordinaryHandle = focus.mock.calls.at(-1)![0]
+    await open()
+    act(() => renderer!.root.findByProps({ className: 'arkme-conversation-composer' }).props.onClick(event))
+    expect(focus.mock.calls.at(-1)![0]).not.toBe(ordinaryHandle)
+    expect(focus.mock.calls.at(-1)![0]?.value).toBe('原正文')
+  })
   const pick = async () => {
     const input = renderer!.root.findAllByType('input').find(node => node.props.type === 'file')!
     await act(async () => { input.props.onChange({ currentTarget: { files: [new File(['x'], 'new.pdf', { type: 'application/pdf' })] } }); await flush() })

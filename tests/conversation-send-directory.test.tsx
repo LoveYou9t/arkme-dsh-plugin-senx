@@ -2725,8 +2725,8 @@ describe('conversation send directory projection', () => {
     activeSource = group
     arkmeChatDirectory.publish([group, other])
     arkmeUi.selectSource(group)
-    let resolveNotification: ((value: { messageDnd: boolean }) => void) | undefined
-    const notificationResult = new Promise<{ messageDnd: boolean }>(resolve => { resolveNotification = resolve })
+    let resolveNotification: ((value: { messageDnd: boolean; chatNotificationPolicyUpdatedAtMillis: number }) => void) | undefined
+    const notificationResult = new Promise<{ messageDnd: boolean; chatNotificationPolicyUpdatedAtMillis: number }>(resolve => { resolveNotification = resolve })
     const baseCall = mocks.callArkme.getMockImplementation()!
     mocks.callArkme.mockImplementation(async (operation: string, params?: Record<string, unknown>, signal?: AbortSignal) => {
       if (operation === 'group.settings') return {
@@ -2768,7 +2768,7 @@ describe('conversation send directory projection', () => {
     const timelineCallsAfterSwitch = mocks.callArkme.mock.calls
       .filter(([operation]) => operation === 'source.timeline').length
     await act(async () => {
-      resolveNotification?.({ messageDnd: true })
+      resolveNotification?.({ messageDnd: true, chatNotificationPolicyUpdatedAtMillis: 2000 })
       await notificationResult
       await Promise.resolve()
     })
@@ -2776,6 +2776,64 @@ describe('conversation send directory projection', () => {
     expect(arkmeUi.getSnapshot().selectedSource).toEqual(other)
     expect(mocks.callArkme.mock.calls.filter(([operation]) => operation === 'source.timeline'))
       .toHaveLength(timelineCallsAfterSwitch)
+  })
+
+  it('keeps newer unmute evidence when an earlier DND confirmation arrives', async () => {
+    activeSource = group
+    arkmeChatDirectory.publish([group, other])
+    arkmeUi.selectSource(group)
+    let resolveNotification: ((value: { messageDnd: boolean; chatNotificationPolicyUpdatedAtMillis: number }) => void) | undefined
+    const notificationResult = new Promise<{ messageDnd: boolean; chatNotificationPolicyUpdatedAtMillis: number }>(resolve => { resolveNotification = resolve })
+    const baseCall = mocks.callArkme.getMockImplementation()!
+    mocks.callArkme.mockImplementation(async (operation: string, params?: Record<string, unknown>, signal?: AbortSignal) => {
+      if (operation === 'group.settings') return {
+        target: group, selfRole: 'member', selfStatus: 'active', canRename: false,
+        canDissolve: false, canLeave: true, messageDnd: false,
+      }
+      if (operation === 'source.ai-polish.settings') return {
+        sourceRef: group.sourceRef, groupName: group.displayName, enabled: false,
+        canManage: false, viewerRole: 1, activeRuleName: '', updatedAtMillis: 1, rules: [],
+      }
+      if (operation === 'group.notification.set') return await notificationResult
+      return await baseCall(operation, params, signal)
+    })
+    await act(async () => {
+      renderer = create(<ArkmeSurface productChrome={false} productNavigation={false} />, {
+        createNodeMock: element => element.props.className === 'arkme-conversation-panel'
+          ? { getBoundingClientRect: () => ({ left: 0, top: 0, width: 960, height: 720 }) }
+          : null,
+      })
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    await act(async () => {
+      renderer!.root.findByProps({ 'aria-label': '群聊设置' }).props.onClick()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    await act(async () => {
+      renderer!.root.findByProps({ 'aria-label': '消息免打扰' }).props.onClick({ stopPropagation: vi.fn() })
+      await Promise.resolve()
+    })
+
+    await act(async () => {
+      const newer = { ...group, isMuted: false, notificationAllowed: true, badgeUnreadCount: 3, unreadCount: 3, chatNotificationPolicyUpdatedAtMillis: 3000 }
+      arkmeChatDirectory.upsert(newer)
+      arkmeUi.updateSelectedSourceProjection(newer)
+      await Promise.resolve()
+    })
+    await act(async () => {
+      resolveNotification?.({ messageDnd: true, chatNotificationPolicyUpdatedAtMillis: 2000 })
+      await notificationResult
+      await Promise.resolve()
+    })
+
+    expect(arkmeUi.getSnapshot().selectedSource).toMatchObject({
+      isMuted: false, notificationAllowed: true, badgeUnreadCount: 3, chatNotificationPolicyUpdatedAtMillis: 3000,
+    })
+    expect(arkmeChatDirectory.getSnapshot().sources.find(item => item.sourceKey === group.sourceKey)).toMatchObject({
+      isMuted: false, notificationAllowed: true, chatNotificationPolicyUpdatedAtMillis: 3000,
+    })
   })
 
   it('does not navigate back when a group membership change finishes after switching conversations', async () => {
@@ -2859,7 +2917,7 @@ describe('conversation send directory projection', () => {
         sourceRef: group.sourceRef, groupName: group.displayName, enabled: false,
         canManage: false, viewerRole: 1, activeRuleName: '', updatedAtMillis: 1, rules: [],
       }
-      if (operation === 'group.notification.set') return { messageDnd: true }
+      if (operation === 'group.notification.set') return { messageDnd: true, chatNotificationPolicyUpdatedAtMillis: 2000 }
       return await baseCall(operation, params, signal)
     })
     await act(async () => {

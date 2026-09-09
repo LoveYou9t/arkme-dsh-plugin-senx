@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import {
   ArkmeRequestQueueOverflowError,
   ArkmeRequestCoordinator,
@@ -231,7 +232,7 @@ export class ServiceRuntime {
   // A conservative runtime-wide fence drops old cache fills after confirmed member mutations.
   invalidateMemberCache(): void { this.memberCacheRevision += 1 }
   readonly requestCoordinator = new ArkmeRequestCoordinator()
-  private readonly refreshInFlightByUserId = new Map<number, Promise<ArkmeSessionCredentials>>()
+  private readonly refreshInFlightByUserId = new Map<number, { refreshToken: string; promise: Promise<ArkmeSessionCredentials> }>()
   private readonly accountSessions: ArkmeAccountSessionOwner
   private pendingBindingSession: ArkmeSessionCredentials | undefined
 
@@ -322,7 +323,9 @@ export class ServiceRuntime {
 
   async refreshAccessToken(session: ArkmeSessionCredentials): Promise<ArkmeSessionCredentials> {
     const existing = this.refreshInFlightByUserId.get(session.userId)
-    if (existing !== undefined) return await existing
+    if (existing?.refreshToken === session.refreshToken) return await existing.promise
+    const pendingBinding = this.isPendingBindingSession(session)
+    const contextChanged = () => new ArkmePluginError('login-context-changed', '登录账号或凭据已变化，请重试当前操作', false, 409)
     const refresh = (async () => {
       try {
         const data = await this.post<Record<string, unknown>>(
@@ -337,7 +340,7 @@ export class ServiceRuntime {
             scope: this.requestScope(session.userId),
             lane: 'auth',
             service: 'auth',
-            key: 'token-refresh',
+            key: `token-refresh:${createHash('sha256').update(session.refreshToken).digest('hex')}`,
             failureCooldownMs: 2_000,
           },
         )
@@ -346,29 +349,30 @@ export class ServiceRuntime {
           throw new ArkmePluginError('refresh-contract-invalid', 'Arkme 登录刷新响应不完整', true, 502)
         }
         const updated = { ...session, accessToken }
-        if (this.isPendingBindingSession(session)) await this.writePendingBindingSession(updated)
-        else await this.writeSession(updated)
+        if (pendingBinding) {
+          if (!this.isPendingBindingSession(session)) throw contextChanged()
+          await this.writePendingBindingSession(updated)
+        } else if (!await this.accountSessions.updateAccessToken(session, accessToken)) throw contextChanged()
         return updated
       } catch (error) {
-        if (error instanceof ArkmePluginError && error.code === 'arkme-code-1004') {
-          if (this.isPendingBindingSession(session)) await this.clearPendingBindingSession()
-          else await this.sessionStore.delete()
+        if (error instanceof ArkmePluginError
+          && ['arkme-code-1004', 'auth-http-401', 'auth-http-403'].includes(error.code)) {
+          if (pendingBinding) {
+            if (!this.isPendingBindingSession(session)) throw contextChanged()
+            await this.clearPendingBindingSession()
+          } else if (!await this.accountSessions.deleteIfCurrent(session)) throw contextChanged()
           // 1004 是通用“账号不可用”，也覆盖注销等既有状态，不能在客户端臆断为封禁。
-          throw new ArkmePluginError('account-unavailable', '当前即我账号暂不可用', false, 403)
-        }
-        if (error instanceof ArkmePluginError && ['auth-http-401', 'auth-http-403'].includes(error.code)) {
-          if (this.isPendingBindingSession(session)) await this.clearPendingBindingSession()
-          else await this.deleteSession()
+          if (error.code === 'arkme-code-1004') throw new ArkmePluginError('account-unavailable', '当前即我账号暂不可用', false, 403)
           throw new ArkmePluginError('login-expired', 'Arkme 登录已过期，请重新扫码', false, 401)
         }
         throw error
       }
     })()
-    this.refreshInFlightByUserId.set(session.userId, refresh)
+    this.refreshInFlightByUserId.set(session.userId, { refreshToken: session.refreshToken, promise: refresh })
     try {
       return await refresh
     } finally {
-      if (this.refreshInFlightByUserId.get(session.userId) === refresh) {
+      if (this.refreshInFlightByUserId.get(session.userId)?.promise === refresh) {
         this.refreshInFlightByUserId.delete(session.userId)
       }
     }

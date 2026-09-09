@@ -1,3 +1,4 @@
+import { patchChatPolicy } from './chat-policy.js'
 import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto'
 import type { ArkmeSessionCredentials } from '../keychain-store.js'
 import type {
@@ -538,6 +539,7 @@ export class GroupService {
       canDissolve: active && selfRole === 'owner',
       canLeave: active && selfRole !== 'owner',
       messageDnd,
+      chatNotificationPolicyUpdatedAtMillis: numberValue(objectValue(data.current_policy).update_at),
     }
   }
 
@@ -551,34 +553,12 @@ export class GroupService {
     if (source.kind !== 'group_chat') {
       throw new ArkmePluginError('group-source-invalid', '仅支持设置群聊消息免打扰', false)
     }
-    const current = await this.runtime.authenticatedChatPost<Record<string, unknown>>(
-      '/api/v1/chats/policy/get',
-      { chat_session_uid: source.ownerRef },
-      session,
-      signal,
-    )
-    await this.runtime.authenticatedChatPost<Record<string, unknown>>(
-      '/api/v1/chats/policy/update',
-      {
-        chat_session_uid: source.ownerRef,
-        show_in_home_state: numberValue(current.show_in_home_state) || 1,
-        privacy_state: numberValue(current.privacy_state) || 1,
-        mute_state: enabled ? 2 : 1,
-        pin_state: numberValue(current.pin_state) || 1,
-        notify_state: enabled ? 2 : 1,
-        status: numberValue(current.status) || 1,
-        update_at: Date.now(),
-      },
-      session,
-      signal,
-    )
-    const cacheKey = `${String(session.userId)}:${source.ownerRef}`
-    const cached = this.source.cachedChatSourceByKey(cacheKey)
-    if (cached !== undefined) this.source.setChatSourceByKey(cacheKey, { ...cached, isMuted: enabled })
-    this.source.invalidateSourceListCache(session.userId, 'root')
+    const updated = await patchChatPolicy(this.runtime, session, source.ownerRef, { mute_state: enabled ? 2 : 1, notify_state: enabled ? 2 : 1 }, signal)
+    this.source.applyConfirmedChatPolicy(updated)
     this.attentionInvalidated?.()
     return {
       messageDnd: enabled,
+      chatNotificationPolicyUpdatedAtMillis: updated.update_at,
     }
   }
 

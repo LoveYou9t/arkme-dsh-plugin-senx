@@ -5081,30 +5081,14 @@ describe('ArkmeService', () => {
         } })
       }
       if (url === 'https://chat.test/api/v1/chats/policy/update') {
-        return json({ code: 200, data: {} })
+        return json({ code: 200, data: {chat_session_uid:'group-1',user_id:10001,show_in_home_state:2,privacy_state:1,mute_state:2,pin_state:2,notify_state:2,status:1,update_at:1700000000100} })
       }
       throw new Error(`unexpected URL ${url}`)
     })
 
     await expect(service.setGroupMessageDnd(sourceRefFor('group_chat', 'group-1', '设计群'), true))
-      .resolves.toEqual({ messageDnd: true })
-    expect(requests[0]).toEqual({
-      url: 'https://chat.test/api/v1/chats/policy/get',
-      body: { chat_session_uid: 'group-1' },
-    })
-    expect(requests[1]).toMatchObject({
-      url: 'https://chat.test/api/v1/chats/policy/update',
-      body: {
-        chat_session_uid: 'group-1',
-        show_in_home_state: 2,
-        privacy_state: 1,
-        mute_state: 2,
-        pin_state: 2,
-        notify_state: 2,
-        status: 1,
-      },
-    })
-    expect(requests[1]?.body.update_at).toEqual(expect.any(Number))
+      .resolves.toEqual({ messageDnd: true, chatNotificationPolicyUpdatedAtMillis: 1700000000100 })
+    expect(requests).toEqual([{ url: 'https://chat.test/api/v1/chats/policy/update', body: {chat_session_uid:'group-1',patch:{mute_state:2,notify_state:2}} }])
   })
 
   it('opens a private chat from a user card through the create-private contract', async () => {

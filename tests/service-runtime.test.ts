@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
-import type { ArkmeSessionStore } from '../src/keychain-store.js'
+import type { ArkmeSessionCredentials, ArkmeSessionStore } from '../src/keychain-store.js'
+import { patchChatPolicy } from '../src/services/chat-policy.js'
 import { ArkmeRequestQueueOverflowError } from '../src/request-coordinator.js'
 import {
   ArkmePluginError,
@@ -93,6 +94,93 @@ describe('ServiceRuntime', () => {
 
     await expect(runtime.refreshAccessToken(stored)).resolves.toMatchObject({ accessToken: 'new-access' })
     expect(stored.accessToken).toBe('new-access')
+  })
+
+  it.each([
+    { name: 'another account', userId: 43, refreshToken: 'refresh-B' },
+    { name: 'new credentials for the same account', userId: 42, refreshToken: 'new-refresh-A' },
+  ])('does not restore stale credentials after switching to $name', async replacement => {
+    const initial = { userId: 42, accessToken: 'expired-A', refreshToken: 'refresh-A' }
+    const next = { userId: replacement.userId, accessToken: 'new-access', refreshToken: replacement.refreshToken }
+    let stored: ArkmeSessionCredentials | undefined = initial
+    const sessionStore: ArkmeSessionStore = {
+      async read() { return stored }, async write(session) { stored = session }, async delete() { stored = undefined },
+    }
+    let resolveRefresh!: (value: Response) => void
+    let refreshStarted!: () => void
+    const pending = new Promise<Response>(resolve => { resolveRefresh = resolve })
+    const started = new Promise<void>(resolve => { refreshStarted = resolve })
+    let policyRequests = 0
+    const runtime = runtimeFixture(async input => {
+      if (String(input).endsWith('/new-short')) { refreshStarted(); return await pending }
+      policyRequests += 1
+      if (policyRequests === 1) return new Response('', { status: 401 })
+      return new Response(JSON.stringify({ code: 200, data: {
+        chat_session_uid: 'chat-1', user_id: 42, show_in_home_state: 1, privacy_state: 1,
+        mute_state: 1, pin_state: 2, notify_state: 1, status: 1, update_at: 2000,
+      } }), { status: 200 })
+    }, sessionStore)
+    const write = patchChatPolicy(runtime, initial, 'chat-1', { pin_state: 2 })
+    const result = expect(write).rejects.toMatchObject({ code: 'login-context-changed' })
+    await started
+    await runtime.writeSession(next)
+    resolveRefresh(new Response(JSON.stringify({ code: 200, data: { access_token: 'refreshed-A' } }), { status: 200 }))
+    await result
+    expect(stored).toEqual(next)
+    expect(policyRequests).toBe(1)
+  })
+
+  it.each([401, 403, 1004])('does not clear a new account after stale refresh failure %s', async status => {
+    const initial = { userId: 42, accessToken: 'expired-A', refreshToken: 'refresh-A' }
+    const next = { userId: 43, accessToken: 'access-B', refreshToken: 'refresh-B' }
+    let stored: ArkmeSessionCredentials | undefined = initial
+    const sessionStore: ArkmeSessionStore = {
+      async read() { return stored }, async write(session) { stored = session }, async delete() { stored = undefined },
+    }
+    let resolveRefresh!: (value: Response) => void
+    let refreshStarted!: () => void
+    const pending = new Promise<Response>(resolve => { resolveRefresh = resolve })
+    const started = new Promise<void>(resolve => { refreshStarted = resolve })
+    const runtime = runtimeFixture(async () => { refreshStarted(); return await pending }, sessionStore)
+    const refresh = runtime.refreshAccessToken(initial)
+    const result = expect(refresh).rejects.toMatchObject({ code: 'login-context-changed' })
+    await started
+    await runtime.writeSession(next)
+    resolveRefresh(status === 1004
+      ? new Response(JSON.stringify({ code: 1004, message: '账号异常' }), { status: 200 })
+      : new Response('', { status }))
+    await result
+    expect(stored).toEqual(next)
+  })
+
+  it('does not join an old refresh after the same account receives new credentials', async () => {
+    const initial = { userId: 42, accessToken: 'expired-A', refreshToken: 'refresh-A' }
+    const next = { ...initial, refreshToken: 'new-refresh-A' }
+    let stored: ArkmeSessionCredentials | undefined = initial
+    const sessionStore: ArkmeSessionStore = {
+      async read() { return stored }, async write(session) { stored = session }, async delete() { stored = undefined },
+    }
+    let resolveOld!: (value: Response) => void
+    let refreshStarted!: () => void
+    const pending = new Promise<Response>(resolve => { resolveOld = resolve })
+    const started = new Promise<void>(resolve => { refreshStarted = resolve })
+    const authorizations: string[] = []
+    const runtime = runtimeFixture(async (_input, init) => {
+      const authorization = new Headers(init?.headers).get('Authorization') ?? ''
+      authorizations.push(authorization)
+      if (authorization === 'Bearer refresh-A') { refreshStarted(); return await pending }
+      return new Response(JSON.stringify({ code: 200, data: { access_token: 'fresh-new-session' } }), { status: 200 })
+    }, sessionStore)
+    const oldRefresh = runtime.refreshAccessToken(initial)
+    const oldResult = expect(oldRefresh).rejects.toMatchObject({ code: 'login-context-changed' })
+    await started
+    await runtime.writeSession(next)
+    const fresh = runtime.refreshAccessToken(next)
+    resolveOld(new Response(JSON.stringify({ code: 200, data: { access_token: 'stale-old-session' } }), { status: 200 }))
+    await oldResult
+    await expect(fresh).resolves.toMatchObject({ accessToken: 'fresh-new-session', refreshToken: 'new-refresh-A' })
+    expect(authorizations).toEqual(['Bearer refresh-A', 'Bearer new-refresh-A'])
+    expect(stored).toMatchObject({ accessToken: 'fresh-new-session', refreshToken: 'new-refresh-A' })
   })
 
   it('invalidates a legacy stored session without conflating generic account-inactive with a ban', async () => {
