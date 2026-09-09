@@ -96,10 +96,10 @@ describe('registerArkmeTools', () => {
     const directMessageAdmission = vi.fn(async () => admission)
     const setDirectMessageRefusal = vi.fn(async () => ({ ...admission, state: 'refused_by_self', canSend: false, ownRefused: true, ownRevision: 1 }))
     const registration = await mountArkmeTools(ctx, 'business', { ...ports, directMessageAdmission, setDirectMessageRefusal } as unknown as ArkmeToolPorts)
-    const events: Array<Record<string, unknown>> = [
+    const events = sessionEvents([
       { seq: 0, type: 'turn/start', data: { turn: 1 } },
       { seq: 1, type: 'user/message', data: { content: [{ type: 'text', text: '拒收这个私聊用户的消息' }], source: { kind: 'user' } } },
-    ]
+    ])
     const agent = { id: SessionId('session-personal-refusal'), session: { get events() { return events } } } as unknown as Agent
     const signal = new AbortController().signal
     const read = await ctx.tools.execute({ callId: CallId('refusal-read'), name: 'arkme_direct_message_admission', arguments: { source_ref: 'opaque' }, agent, signal })
