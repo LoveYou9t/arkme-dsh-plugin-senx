@@ -1,9 +1,9 @@
 import { flushSync } from 'react-dom'
 
-/** Preserve the expansion button's viewport position, matching Flutter's reverse list. */
-export function expandTextUpwards(button: HTMLElement, expand: () => void): void {
+/** Preserve the toggle's viewport position in both directions, as in a reverse list. */
+export function preserveTextTogglePosition(button: HTMLElement, toggle: () => void): void {
   const before = button.getBoundingClientRect().bottom
-  flushSync(expand)
+  flushSync(toggle)
   let scrollport = button.parentElement
   while (scrollport !== null && (
     !/^(auto|scroll|overlay)$/u.test(getComputedStyle(scrollport).overflowY)

@@ -3,7 +3,7 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { ArkmeMessageContent } from '../src/client/ArkmeRichContent.js'
-import { expandTextUpwards } from '../src/client/expand-text-upwards.js'
+import { preserveTextTogglePosition } from '../src/client/preserve-text-toggle-position.js'
 import { arkmeShouldToggleMessageSelectFromRowClick } from '../src/client/ArkmeSidebar.js'
 
 let host: HTMLDivElement
@@ -22,7 +22,7 @@ it('does not compensate again when browser anchoring already preserved the butto
   host.scrollTop = 200
   let growth = 0
   vi.spyOn(button, 'getBoundingClientRect').mockImplementation(() => new DOMRect(0, 300 + growth - host.scrollTop, 40, 20))
-  expandTextUpwards(button, () => { growth = 400; host.scrollTop += 400 })
+  preserveTextTogglePosition(button, () => { growth = 400; host.scrollTop += 400 })
   expect(host.scrollTop).toBe(600)
 })
 
@@ -30,7 +30,7 @@ it('still expands without a scroll container', () => {
   host.style.overflowY = 'visible'
   const button = document.createElement('button'); host.append(button)
   const expand = vi.fn()
-  expandTextUpwards(button, expand)
+  preserveTextTogglePosition(button, expand)
   expect(expand).toHaveBeenCalledOnce()
   expect(host.scrollTo).not.toHaveBeenCalled()
 })
@@ -40,7 +40,7 @@ it('finds the scroll container when expansion creates its first overflow', () =>
   let height = 300
   Object.defineProperty(host, 'scrollHeight', { get: () => height })
   vi.spyOn(button, 'getBoundingClientRect').mockImplementation(() => new DOMRect(0, height - host.scrollTop, 40, 20))
-  expandTextUpwards(button, () => { height = 900 })
+  preserveTextTogglePosition(button, () => { height = 900 })
   expect(host.scrollTo).toHaveBeenCalledWith({ top: 600, behavior: 'instant' })
 })
 
@@ -62,7 +62,7 @@ afterEach(() => { act(() => root.unmount()); host.remove(); vi.restoreAllMocks()
 it.each([
   { textFormat: 'plain', nested: false }, { textFormat: 'markdown', nested: false },
   { textFormat: 'plain', nested: true }, { textFormat: 'markdown', nested: true },
-] as const)('expands $textFormat upwards with nested=$nested, preserving existing collapse rules', ({ textFormat, nested }) => {
+] as const)('expands $textFormat upwards with nested=$nested, and collapses back to the same position', ({ textFormat, nested }) => {
   act(() => root.render(<div style={nested ? { overflowY: 'auto' } : undefined}><ArkmeMessageContent item={{ itemUid: 'long', senderName: '我', isMe: true, sendAtMillis: 1, status: 1, title: '', textContent: '长'.repeat(301), textFormat }} /></div>))
   const button = host.querySelector<HTMLButtonElement>('button[aria-expanded]')!
   expect(button.getAttribute('aria-expanded')).toBe('false')
@@ -77,6 +77,29 @@ it.each([
   expect(host.scrollTo).toHaveBeenCalledWith({ top: 600, behavior: 'instant' })
   act(() => button.click())
   expect(button.getAttribute('aria-expanded')).toBe('false')
-  // This fix is limited to expansion; retain the existing collapse behavior.
-  expect(host.scrollTop).toBe(600)
+  expect(host.scrollTop).toBe(200)
+  expect(button.getBoundingClientRect().bottom).toBe(previousBottom)
+  expect(host.querySelectorAll('button[aria-expanded]')).toHaveLength(1)
+})
+
+
+it('keeps a single toggle and expansion state when the body format changes', () => {
+  const item = { itemUid: 'format', senderName: '我', isMe: true, sendAtMillis: 1, status: 1, title: '', textContent: '长'.repeat(301) }
+  act(() => root.render(<ArkmeMessageContent item={{ ...item, textFormat: 'plain' }} />))
+  act(() => host.querySelector<HTMLButtonElement>('button[aria-expanded]')!.click())
+  act(() => root.render(<ArkmeMessageContent item={{ ...item, textFormat: 'markdown' }} />))
+  expect(host.querySelectorAll('button[aria-expanded]')).toHaveLength(1)
+  expect(host.querySelector('button[aria-expanded]')?.getAttribute('aria-expanded')).toBe('true')
+  expect(host.querySelector('[data-arkme-text-format="markdown"] button[aria-expanded]')).toBeNull()
+  act(() => host.querySelector<HTMLButtonElement>('button[aria-expanded]')!.click())
+  expect(host.querySelector('button[aria-expanded]')?.getAttribute('aria-expanded')).toBe('false')
+})
+
+it('uses rendered Markdown height rather than plain-text character count', () => {
+  const item = { itemUid: 'format', senderName: '我', isMe: true, sendAtMillis: 1, status: 1, title: '', textContent: '# A\n# B\n# C', textFormat: 'markdown' as const }
+  act(() => root.render(<ArkmeMessageContent item={item} />))
+  expect(host.querySelectorAll('button[aria-expanded]')).toHaveLength(1)
+  vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockReturnValue(100)
+  act(() => root.render(<ArkmeMessageContent item={{ ...item, textContent: '短正文' }} />))
+  expect(host.querySelector('button[aria-expanded]')).toBeNull()
 })
