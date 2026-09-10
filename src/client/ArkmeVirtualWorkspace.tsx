@@ -2,6 +2,7 @@ import { nextArkmeUnreadConversation } from '../conversation-attention.js'
 import { ArkmeDirectoryWindow } from './ArkmeDirectoryWindow.js'
 import { arkmeSourceAllowsUserWrite } from '../topic-policy.js'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode } from 'react'
+import type { PropsRenderSlots } from '@deepseek-ai/dsh-client-ui-slots'
 import { createPortal } from 'react-dom'
 import { MagnifyingGlass } from '@phosphor-icons/react/dist/icons/MagnifyingGlass'
 import { Plus } from '@phosphor-icons/react/dist/icons/Plus'
@@ -89,7 +90,7 @@ export interface ArkmeNavigationProps {
   onCreateTask?: () => void
   searchDshMessages?: (query: string, signal: AbortSignal) => Promise<ArkmeDshMessageSearchResult>
   onOpenDshSession?: (sessionId: string) => void
-  renderSlot?: (key: 'arkme.directory.entry', ownerProps: ArkmeDirectoryEntryOwnerProps) => ReactNode
+  renderSlot?: PropsRenderSlots<'arkme.directory.entry' | 'arkme.send-to-self.entry' | 'arkme.topic.actions'>['renderSlot']
 }
 
 export const ARKME_TOPIC_HIERARCHY_MAX_LEVEL = 5
@@ -640,11 +641,12 @@ export interface ArkmeTopicTreeRowProps {
   onToggle: () => void
   onSelect: () => void
   onCreateChild: () => void
+  actions?: ReactNode
 }
 
 export function ArkmeTopicTreeRow({
   row, selected, hovered, createdHighlightActive = false, createdHighlightVisible = false, rowRef,
-  onHoverChange, onToggle, onSelect, onCreateChild,
+  onHoverChange, onToggle, onSelect, onCreateChild, actions,
 }: ArkmeTopicTreeRowProps) {
   const source = row.source
   return <div
@@ -682,7 +684,8 @@ export function ArkmeTopicTreeRow({
         {source.recordCount !== undefined && !(source.kind === 'topic' && arkmeSourceAllowsUserWrite(source) && hovered) && <span style={styles.topicCount}>{source.recordCount}</span>}
       </span>
     </button>
-    {source.kind === 'topic' && arkmeSourceAllowsUserWrite(source) && hovered && <span
+    {source.kind === 'topic' && arkmeSourceAllowsUserWrite(source) && <div style={{ position: 'relative', flex: 'none' }}>{actions}</div>}
+    {source.kind === 'topic' && arkmeSourceAllowsUserWrite(source) && hovered && !actions && <span
       style={styles.topicCreateMask}
     >
       <button
@@ -697,6 +700,7 @@ export function ArkmeTopicTreeRow({
 }
 
 export interface ArkmeTopicCardProps {
+  actions?: ReactNode
   source: ArkmeSourceItem
   selected: boolean
   hovered: boolean
@@ -709,7 +713,7 @@ export interface ArkmeTopicCardProps {
 
 export function ArkmeTopicCard({
   source, selected, hovered, createdHighlightActive = false, createdHighlightVisible = false, rowRef,
-  onHoverChange, onSelect,
+  onHoverChange, onSelect, actions,
 }: ArkmeTopicCardProps) {
   const time = arkmeSourceTimeLabel(source.activeAtMillis)
   const preview = source.latestPreview?.trim() ?? ''
@@ -734,6 +738,7 @@ export function ArkmeTopicCard({
         {preview !== '' && <span style={styles.topicCardPreview}>{preview}</span>}
       </span>
     </button>
+    {source.kind === 'topic' && arkmeSourceAllowsUserWrite(source) && <div style={{ position: 'absolute', top: 8, right: 8 }}>{actions}</div>}
   </div>
 }
 
@@ -1871,6 +1876,49 @@ export function ArkmeNavigation({
       ? botDirectoryIsPinned(botDirectoryPreferences, directoryContextMenu.bot)
       : false
 
+  const renderTopicActions = (topic: ArkmeSourceItem) => {
+    if (topic.kind !== 'topic' || !arkmeSourceAllowsUserWrite(topic) || !authenticated || !renderSlot) return undefined
+    const accountKey = `${auth?.environment}:${auth?.userId}`
+    const isCurrent = () => {
+      const current = arkmeAuthStore.getSnapshot().auth
+      return activeRef.current && current?.status === 'authenticated' && `${current.environment}:${current.userId}` === accountKey
+    }
+    return renderSlot('arkme.topic.actions', {
+      source: topic, isCurrent,
+      renderDefault: () => !cardMode && hoveredSourceRef === topic.sourceRef ? <button type="button" style={styles.topicCreateIcon} aria-label={`在${topic.displayName}下创建子主题`} onClick={() => { if (isCurrent()) openTopicCreate(topic, arkmeTopicPathNames(topic, sources).length) }}>+</button> : null,
+      onCreateChild: () => { if (isCurrent()) openTopicCreate(topic, arkmeTopicPathNames(topic, sources).length) },
+      onChanged: renamed => {
+        if (!isCurrent()) return
+        const selected = arkmeUi.getSnapshot().selectedSource
+        if (renamed && selected?.sourceRef === topic.sourceRef) arkmeUi.selectSource(renamed)
+        arkmeUi.recordChanged()
+      },
+    })
+  }
+
+  const renderSelfEntry = (onClick?: () => void) => (<button
+          type="button" role="treeitem"
+          aria-selected={activeDirectoryEntryId === undefined && ui.mode === 'source' && isArkmeSelfWorkspaceSource(ui.selectedSource)}
+          style={{ ...styles.chatRow, ...(activeDirectoryEntryId === undefined && ui.mode === 'source' && isArkmeSelfWorkspaceSource(ui.selectedSource) ? styles.chatRowActive : {}) }}
+          onClick={onClick ?? (() => {
+            activateNativeEntry()
+            arkmeUi.focusSendToSelf()
+            persistCache({ directory: 'root', selectedSourceRef: null })
+            onActivateSurface?.()
+          })}
+        >
+          <SelfAvatar />
+          <span style={styles.chatContent}>
+            <span style={styles.chatTop}>
+              <span style={styles.entryName}>发给自己</span>
+              <ArkmeTopicTagBadge label="私密" selected={activeDirectoryEntryId === undefined && ui.mode === 'source' && isArkmeSelfWorkspaceSource(ui.selectedSource)} />
+              <span aria-hidden style={{ flex: 1 }} />
+              {sendToSelfPresentation.time !== '' && <span style={styles.chatTime}>{sendToSelfPresentation.time}</span>}
+            </span>
+            <span style={styles.chatBottom}><span style={styles.preview}>{sendToSelfPresentation.preview}</span></span>
+          </span>
+        </button>)
+
   if (!wide) {
     return <div style={styles.rail}><button
       type="button" style={styles.railButton} aria-label={authenticated ? 'Arkme' : bindingRequired ? 'Arkme · 待绑定' : 'Arkme · 未登录'}
@@ -1977,28 +2025,7 @@ export function ArkmeNavigation({
           {...(arkoLatestAtMillis === undefined ? {} : { latestAtMillis: arkoLatestAtMillis })}
           onClick={showArko}
         />}
-        {showSelfInSearch && <button
-          type="button" role="treeitem"
-          aria-selected={activeDirectoryEntryId === undefined && ui.mode === 'source' && isArkmeSelfWorkspaceSource(ui.selectedSource)}
-          style={{ ...styles.chatRow, ...(activeDirectoryEntryId === undefined && ui.mode === 'source' && isArkmeSelfWorkspaceSource(ui.selectedSource) ? styles.chatRowActive : {}) }}
-          onClick={() => {
-            activateNativeEntry()
-            arkmeUi.focusSendToSelf()
-            persistCache({ directory: 'root', selectedSourceRef: null })
-            onActivateSurface?.()
-          }}
-        >
-          <SelfAvatar />
-          <span style={styles.chatContent}>
-            <span style={styles.chatTop}>
-              <span style={styles.entryName}>发给自己</span>
-              <ArkmeTopicTagBadge label="私密" selected={activeDirectoryEntryId === undefined && ui.mode === 'source' && isArkmeSelfWorkspaceSource(ui.selectedSource)} />
-              <span aria-hidden style={{ flex: 1 }} />
-              {sendToSelfPresentation.time !== '' && <span style={styles.chatTime}>{sendToSelfPresentation.time}</span>}
-            </span>
-            <span style={styles.chatBottom}><span style={styles.preview}>{sendToSelfPresentation.preview}</span></span>
-          </span>
-        </button>}
+        {showSelfInSearch && (renderSlot ? renderSlot('arkme.send-to-self.entry', { renderEntry: renderSelfEntry, openTopicDirectory: () => { changeDirectory('send_to_self'); onActivateSurface?.() } }) : renderSelfEntry())}
         {!embeddedProductShell && <ArkmeCalendarRow selected={activeDirectoryEntryId === undefined && ui.calendarOpen === true} onClick={showCalendar} />}
         {!embeddedProductShell && <ArkmeCallsRow selected={activeDirectoryEntryId === undefined && ui.mode === 'calls'} onClick={showCalls} />}
         {!embeddedProductShell && <ArkmeRecordingsRow selected={activeDirectoryEntryId === undefined && ui.mode === 'recordings'} onClick={showRecordings} />}
@@ -2117,6 +2144,7 @@ export function ArkmeNavigation({
         const selected = activeDirectoryEntryId === undefined && ui.mode === 'source' && ui.selectedSource?.sourceRef === source.sourceRef
         return <ArkmeTopicTreeRow
           key={source.sourceRef} row={row} selected={selected}
+          actions={renderTopicActions(source)}
           hovered={hoveredSourceRef === source.sourceRef}
           createdHighlightActive={createdHighlight?.sourceRef === source.sourceRef}
           createdHighlightVisible={createdHighlight?.sourceRef === source.sourceRef && createdHighlight.visible}
@@ -2135,6 +2163,7 @@ export function ArkmeNavigation({
         const selected = activeDirectoryEntryId === undefined && ui.mode === 'source' && ui.selectedSource?.sourceRef === source.sourceRef
         return <ArkmeTopicCard
           key={source.sourceRef} source={source} selected={selected}
+          actions={renderTopicActions(source)}
           hovered={hoveredSourceRef === source.sourceRef}
           createdHighlightActive={createdHighlight?.sourceRef === source.sourceRef}
           createdHighlightVisible={createdHighlight?.sourceRef === source.sourceRef && createdHighlight.visible}

@@ -3331,6 +3331,9 @@ export type ArkmeChatClientEvent = {
 })
 
 export type ArkmePluginOperation =
+  | 'topic.dissolve.active'
+  | 'topic.rename'
+  | 'topic.dissolve'
   | 'provider.capabilities'
   | 'provider.state'
   | 'chat.realtime.state'
