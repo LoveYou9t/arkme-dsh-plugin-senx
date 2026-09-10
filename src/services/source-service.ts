@@ -33,6 +33,7 @@ import { arkmeMediaKind } from '../file-transfer-contract.js'
 import { projectArkmeChatAttention, projectArkmeChatAttentionFromMuted } from '../chat-attention.js'
 import { retainNewerArkmeChatPolicy } from '../chat-policy-projection.js'
 import { arkmeEmojiTokenSafePrefix, arkmeHasKnownEmojiToken } from '../arkme-emoji-text.js'
+import { arkmeSourceAllowsUserWrite, arkmeTopicDisplayName } from '../topic-policy.js'
 
 export interface ArkmeSourceRefPayload {
   version: 1
@@ -839,6 +840,25 @@ export class SourceService {
     }
   }
 
+  /** Reuse the record owner's topic policy, without replaying title/privacy defaults. */
+  async topicHomeVisibility(sourceRef: string, showInHome?: boolean, signal?: AbortSignal): Promise<{ showInHome: boolean }> {
+    const session = await this.runtime.requireSession()
+    const topic = await this.openSourceRef(sourceRef, session.userId)
+    if (topic.kind !== 'topic') throw new ArkmePluginError('topic-policy-invalid', '请选择主题', false)
+    const data = await this.runtime.authenticatedPost<Record<string, unknown>>(
+      showInHome === undefined ? '/api/v1/topics/display/detail' : '/api/v1/topics/display/policy/set',
+      { topic_uid: topic.ownerRef, ...(showInHome === undefined ? { limit: 1 } : { show_in_home: showInHome }) },
+      session,
+      // Detach obsolete reads, but let a submitted preference write complete
+      // and invalidate projections even if its settings surface has closed.
+      showInHome === undefined ? signal : undefined,
+    )
+    const value = showInHome === undefined ? objectValue(data.topic_core).show_in_home : data.show_in_home
+    if (typeof value !== 'boolean') throw new ArkmePluginError('topic-policy-contract-invalid', '主题设置响应不完整，请重试', true, 502)
+    if (showInHome !== undefined) this.invalidateSourceListCache(session.userId, 'send_to_self')
+    return { showInHome: value }
+  }
+
   /**
    * Dissolving a topic promotes its direct children and moves the topic's own
    * records into its parent. Root-topic records return to the default category.
@@ -1156,12 +1176,14 @@ export class SourceService {
       const entry = objectValue(raw)
       const core = objectValue(entry.topic_core)
       if (arkmePrivacyLockedTopic(entry) || core.status !== 1) continue
+      const topicKind = numberValue(core.kind) || 1
+      if (!arkmeSourceAllowsUserWrite({ kind: 'topic', topicKind })) continue
       const topicUid = stringValue(core.topic_uid).trim()
       const title = stringValue(core.title).trim()
       if (!topicUid || !title || seen.has(topicUid)) continue
       seen.add(topicUid)
       const recordCount = objectValue(entry.summary).record_count
-      items.push({ kind: 'topic', displayName: title, activeAtMillis: numberValue(core.update_at), unreadCount: 0,
+      items.push({ kind: 'topic', topicKind, displayName: title, activeAtMillis: numberValue(core.update_at), unreadCount: 0,
         ...(typeof recordCount === 'number' && Number.isSafeInteger(recordCount) && recordCount >= 0 ? { recordCount } : {}),
         sourceRef: await this.sealSourceRef(session.userId, 'topic', topicUid, title),
         topicHierarchyKey: await this.topicHierarchyKey(session.userId, topicUid),
@@ -1384,6 +1406,7 @@ export class SourceService {
       }
       const topicDescriptors: Array<{
         topicUid: string
+        topicKind: number
         parentTopicUid?: string
         siblingOrder: number
         title: string
@@ -1432,6 +1455,7 @@ export class SourceService {
         ).trim()
         topicDescriptors.push({
           topicUid,
+          topicKind: numberValue(core.kind) || 1,
           ...(parentTopicUid === '' || parentTopicUid === topicUid ? {} : { parentTopicUid }),
           siblingOrder: numberValue(siblingOrderByChild.get(topicUid) ?? core.sibling_order ?? item.sibling_order),
           title,
@@ -1467,7 +1491,8 @@ export class SourceService {
           ...(parentTopicHierarchyKey === undefined ? {} : { parentTopicHierarchyKey }),
           ...(topic.siblingOrder > 0 ? { siblingOrder: topic.siblingOrder } : {}),
           kind: 'topic',
-          displayName: topic.title,
+          topicKind: topic.topicKind,
+          displayName: arkmeTopicDisplayName(topic.title, topic.topicKind),
           ...(topic.latestPreview === '' ? {} : { latestPreview: topic.latestPreview }),
           activeAtMillis: topic.activeAtMillis,
           unreadCount: 0,

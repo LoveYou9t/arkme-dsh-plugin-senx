@@ -2,6 +2,9 @@ import { ArkmeRecordTopicAssignmentDialog } from './ArkmeRecordTopicAssignmentDi
 import { retainNewerArkmeChatPolicy } from '../chat-policy-projection.js'
 import { arkmeMarkdownPlainText } from '../markdown.js'
 import { arkmeCallRecordBubbleStyle } from './ArkmeCallRecordContent.js'
+import { arkmeSourceAllowsUserWrite, isArkmeDSHInputTopic, arkmeTopicDisplayName } from '../topic-policy.js'
+import { ArkmeTopicReadOnlyNotice } from './ArkmeTopicReadOnlyNotice.js'
+import { withArkmeReadDeadline } from './read-deadline.js'
 import { ArkmeCallDetailDrawer } from './ArkmeCallDetailDrawer.js'
 import {
   Fragment, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore,
@@ -1141,8 +1144,8 @@ export function arkmeForwardTargetVisibleSources(
   keyword: string,
 ): ArkmeSourceItem[] {
   const normalizedKeyword = keyword.trim().toLowerCase()
-  if (normalizedKeyword === '') return [...targets]
-  return targets.filter(target => {
+  if (normalizedKeyword === '') return targets.filter(arkmeSourceAllowsUserWrite)
+  return targets.filter(arkmeSourceAllowsUserWrite).filter(target => {
     const haystack = `${target.displayName} ${arkmeForwardTargetMeta(target)}`.toLowerCase()
     return haystack.includes(normalizedKeyword)
   })
@@ -1216,7 +1219,8 @@ export function arkmeVisibleMemberJoinInvitees(
 }
 
 export function arkmeSourceDestinationLabel(source: ArkmeSourceItem | undefined): string {
-  return source?.displayName ?? '发给自己'
+  return source === undefined ? '发给自己'
+    : arkmeTopicDisplayName(source.displayName, source.kind === 'topic' ? source.topicKind : undefined)
 }
 
 function arkmeComposerPlaceholderTargetForSource(
@@ -2813,8 +2817,9 @@ export function ArkmeSurface({
   })
   // Transport is per message.  It must never lock the next draft while a previous
   // message waits for the server, otherwise fast keyboard input is dropped.
+  const archiveReadOnly = isArkmeDSHInputTopic(source) || isArkmeDSHInputTopic(selectedSource)
   const canSend = activeRecordReeditComposer === undefined
-    ? !directAdmission.blocked && arkmeComposerCanSend(draft, attachments.length + (composerDraftKey !== undefined && preparingKeys.has(composerDraftKey) ? 1 : 0), preparingFiles)
+    ? !archiveReadOnly && !directAdmission.blocked && arkmeComposerCanSend(draft, attachments.length + (composerDraftKey !== undefined && preparingKeys.has(composerDraftKey) ? 1 : 0), preparingFiles)
     : activeRecordReeditComposer.snapshot !== undefined
       && !activeRecordReeditComposer.loading
       && !activeRecordReeditComposer.busy
@@ -3633,16 +3638,16 @@ export function ArkmeSurface({
     const readStartDeltas = new Map<string, ArkmeTimelineItem | undefined>()
     let page: ArkmeTimelinePage
     try {
-      const readPage = (pageCursor?: ArkmeTimelineCursor) => retryArkmeRead(async () => {
+      const readPage = (pageCursor?: ArkmeTimelineCursor) => withArkmeReadDeadline(signal => retryArkmeRead(async () => {
         const start = new Map((sourceIsChat ? arkmeChatTimelineDelta.getSnapshotForSource(sourceKey).items : [])
           .map(item => [item.itemUid, item]))
         const result = await callArkme<ArkmeTimelinePage>('source.timeline', {
           sourceRef, limit: refreshWindow === undefined ? limit : 100,
           ...(pageCursor === undefined ? {} : { cursor: pageCursor }),
-        }, controller.signal)
+        }, signal)
         for (const item of result.items) readStartDeltas.set(item.itemUid, start.get(item.itemUid))
         return result
-      }, { signal: controller.signal })
+      }, { signal }), controller.signal)
       page = refreshWindow === undefined ? await readPage(cursor)
         : await readConversationTimelineWindow(refreshWindow, readPage, controller.signal)
     } catch (caught) {
@@ -6973,6 +6978,12 @@ export function ArkmeSurface({
             ...(displayRows.length === 0 && interwovenWindow.prelude.length === 0 ? { display: 'flex', flexDirection: 'column' as const } : {}),
           }} onScroll={handleConversationScroll}>
             {error !== '' && <div style={styles.error}>{error}</div>}
+            {error !== '' && displayRows.length === 0 && timelineLoadingKey !== conversationKey && <button
+              type="button" style={styles.retry} onClick={() => {
+                setError('')
+                setTimelineLoadingKey(conversationKey)
+                setForegroundReadRevision(value => value + 1)
+              }}>重新加载</button>}
             {interwovenWindow.prelude.length > 0 && <ArkmeInterwovenPrelude
               key={conversationKey} moments={interwovenWindow.prelude} onOpen={openMomentDetail} />}
             <div ref={sentinelRef} style={styles.sentinel} />
@@ -7289,7 +7300,13 @@ export function ArkmeSurface({
           {messageActionStatus !== '' && <div role="status" aria-live="polite" style={styles.messageActionToast}>{messageActionStatus}</div>}
           {/* Match the desktop input Stack: the editor stays mounted beneath the selection overlay. */}
           <div className="arkme-conversation-input-slot" style={{ position: 'relative', flex: 'none' }}>
-          <footer className="arkme-conversation-composer"
+          {archiveReadOnly && source !== undefined && <div
+            aria-hidden={activeSelectMode !== undefined || undefined}
+            {...(activeSelectMode === undefined ? {} : { inert: '' })}
+            style={{ visibility: activeSelectMode === undefined ? 'visible' : 'hidden' }}>
+            <ArkmeTopicReadOnlyNotice />
+          </div>}
+          {(!archiveReadOnly || activeRecordReeditComposer !== undefined) && <footer className="arkme-conversation-composer"
             aria-hidden={activeSelectMode !== undefined || undefined}
             {...(activeSelectMode === undefined ? {} : { inert: '' })}
             style={{ ...styles.composer, ...(activeSelectMode === undefined ? {} : { visibility: 'hidden', pointerEvents: 'none' }) }}
@@ -7589,7 +7606,7 @@ export function ArkmeSurface({
             />}
           </div>
             <div data-arkme-composer-footer="hint" style={styles.composerHint}>Enter发送 / Shift+Enter换行</div>
-          </div></footer>
+          </div></footer>}
           {activeSelectMode !== undefined && <div style={styles.selectBar} role="toolbar" aria-label={`已选择 ${selectedMessageCount} 条消息`}>
             {source !== undefined && isArkmeSelfWorkspaceSource(source) && <button
               type="button" aria-label="指定主题" style={styles.selectBarButton}
@@ -7805,13 +7822,13 @@ export function ArkmeSurface({
             disabled={arkmeTimelineMessageActionRef(messageMenuItem) === ''}
             onClick={() => { void copyMessageLink([messageMenuItem]) }}
           ><span style={styles.messageActionMenuIcon} aria-hidden><ArkmeMessageActionIcon kind="link" /></span><span style={styles.messageActionMenuText}>{ARKME_MESSAGE_ACTION_MENU_LABELS[1]}</span></button>
-          <button
+          {!archiveReadOnly && <button
             type="button"
             role="menuitem"
             style={{ ...styles.messageActionMenuItem, opacity: arkmeTimelineMessageActionRef(messageMenuItem) === '' ? .45 : 1 }}
             disabled={arkmeTimelineMessageActionRef(messageMenuItem) === ''}
             onClick={() => { startMessageExtension(messageMenuItem) }}
-          ><span style={styles.messageActionMenuIcon} aria-hidden><ArkmeDesktopExtensionIcon /></span><span style={styles.messageActionMenuText}>{ARKME_MESSAGE_ACTION_MENU_LABELS[2]}</span></button>
+          ><span style={styles.messageActionMenuIcon} aria-hidden><ArkmeDesktopExtensionIcon /></span><span style={styles.messageActionMenuText}>{ARKME_MESSAGE_ACTION_MENU_LABELS[2]}</span></button>}
           {arkmeCanReeditTimelineMessage(messageMenuItem) && <button
             type="button"
             role="menuitem"
@@ -7974,6 +7991,7 @@ export function ArkmeSurface({
           key={detailItem.itemUid}
           item={detailItem}
           sourceRef={source?.sourceRef}
+          canExtend={!archiveReadOnly}
           sourceKind={source?.kind}
           conversationMembers={conversationMembers}
           showOriginal={showOriginal}

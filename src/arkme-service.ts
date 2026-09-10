@@ -743,6 +743,7 @@ export class ArkmeService {
         imageLibrary: true,
         sourceDirectory: true,
         localFirstDirectory: true,
+        topicHomeVisibility: true,
         contactDirectoryReads: true,
         sourceTimeline: true,
         forwardContent: true,
@@ -1098,6 +1099,12 @@ export class ArkmeService {
 
   async renameTopic(sourceRef: string, title: string): Promise<ArkmeTopicRenameResult> {
     return await this.source.renameTopic(sourceRef, title)
+  }
+
+  async topicHomeVisibility(sourceRef: string, showInHome?: boolean, signal?: AbortSignal): Promise<{ showInHome: boolean }> {
+    const result = await this.source.topicHomeVisibility(sourceRef, showInHome, signal)
+    if (showInHome !== undefined) await this.realtime.invalidateRecordProjection()
+    return result
   }
 
   async dissolveTopic(

@@ -1565,6 +1565,12 @@ export async function dispatchArkmeHostOperation(
       stringParam(params, 'sourceRef'),
       stringParam(params, 'title'),
     )
+    case 'topic.home-visibility': {
+      if (params.showInHome !== undefined && typeof params.showInHome !== 'boolean') {
+        throw new ArkmePluginError('topic-policy-invalid', '首页展示开关必须为布尔值', false)
+      }
+      return await service.topicHomeVisibility(stringParam(params, 'sourceRef'), params.showInHome as boolean | undefined, requestSignal)
+    }
     case 'topic.dissolve': return await service.dissolveTopic(
       stringParam(params, 'sourceRef'),
       stringParam(params, 'parentSourceRef') || undefined,
@@ -1624,7 +1630,8 @@ export async function dispatchArkmeHostOperation(
       const cursor = timelineCursorParam(params)
       return await service.readSource(
         stringParam(params, 'sourceRef'),
-        { limit: numberParam(params, 'limit', 30), ...(cursor === undefined ? {} : { cursor }) },
+        { limit: numberParam(params, 'limit', 30), ...(cursor === undefined ? {} : { cursor }),
+          ...(requestSignal === undefined ? {} : { signal: requestSignal }) },
       )
     }
     case 'source.timeline-around': return await service.readSourceAround(
