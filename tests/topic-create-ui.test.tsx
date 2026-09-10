@@ -229,6 +229,7 @@ describe('topic create UI', () => {
 
   it('renders the original directory trigger as the leading header action', () => {
     const markup = renderToStaticMarkup(<ArkmeTopicDirectoryPopover
+      onCreateWarning={() => undefined}
       userId={10001} selectedSource={undefined} onSelect={() => {}}
       onSelectionInvalidated={() => {}} onSelfSourcesResolution={() => {}} retryRevision={0}
     />)

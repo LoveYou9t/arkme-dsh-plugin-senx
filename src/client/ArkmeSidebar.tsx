@@ -6752,6 +6752,7 @@ export function ArkmeSurface({
               onSelect={activateSelfSource}
               onSelectionInvalidated={invalidateTopicSelection}
               onSelfSourcesResolution={acceptSelfSourcesResolution}
+              onCreateWarning={message => { showMessageActionStatus(message, false) }}
               onCreateTopicReady={open => { selfTopicCreateRef.current = open }}
               retryRevision={selfSourcesRetryRevision}
             />}
