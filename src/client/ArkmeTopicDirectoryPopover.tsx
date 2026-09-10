@@ -238,6 +238,7 @@ export function ArkmeTopicDirectoryPopover({
         loaded = mergeArkmeTopicSourcePages(loaded, page.items)
         sourcesRef.current = loaded
         setSources(loaded)
+        persist(loaded)
         const nextCursor = page.nextCursor
         hasNextPage = page.hasMore && nextCursor !== undefined
         if (!hasNextPage || nextCursor === undefined) break
@@ -405,9 +406,6 @@ export function ArkmeTopicDirectoryPopover({
       setTopicCreateParent(undefined)
       setTopicCreateParentLevel(undefined)
       setQuery('')
-      // A read started before this write result cannot replace its projection.
-      requestRef.current?.abort()
-      setBusy(false)
       if (result.warning !== undefined) {
         persist(nextSources)
         onCreateWarning(result.warning)
