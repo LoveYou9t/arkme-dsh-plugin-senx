@@ -21,6 +21,7 @@ import {
 } from './provider-instance-runtime.js'
 import { arkmeChatSourceIdentityKey } from './source-identity.js'
 import { arkmeUi } from './ui-controller.js'
+import { connectArkmeRealtime } from './realtime-connection.js'
 
 export function arkmeSelectedBotAffectedByChatDelta(
   selectedBot: ArkmeBotSummary | undefined,
@@ -116,7 +117,7 @@ export function useArkmeRealtimeClientEvents(
           directoryBadgeCount: arkmeChatDirectory.totalBadgeUnreadCount(authenticatedAccountScope) })
       } catch { /* Optional diagnostics cannot affect event delivery. */ }
     }
-    let events: EventSource | undefined
+    let events: ReturnType<typeof connectArkmeRealtime> | undefined
     const updateForeground = () => {
       arkmeConversationMembers.setForeground(typeof document === 'undefined' || document.visibilityState !== 'hidden')
       arkmeMessageReadReceipts.setForeground(typeof document === 'undefined' || document.visibilityState !== 'hidden')
@@ -228,7 +229,7 @@ export function useArkmeRealtimeClientEvents(
           invalidateDirectMessageAdmission()
           if (update.refresh === 'none') return
           if (update.refresh === 'if-stale' && localReconnectGap && handledInstanceGeneration !== connectionGeneration) {
-            // A short local SSE gap may lose deltas even while the Browser's time-based cache is fresh.
+            // A short local connection gap may lose deltas even while the Browser's time-based cache is fresh.
             // Read the Host's current cached directory; the Host already owns upstream reconciliation.
             arkmeChatDirectory.invalidateRoot()
           }
@@ -318,7 +319,7 @@ export function useArkmeRealtimeClientEvents(
         }
         if (foreground && arkmeSelectedBotAffectedByChatDelta(arkmeUi.getSnapshot().selectedBot, update)) arkmeUi.chatChanged()
         for (const sourceKey of arkmeChatDeltaSourceKeys(update)) arkmeInterwovenInvalidation.invalidate(sourceKey)
-      } catch { /* Ignore malformed local frames; EventSource keeps the channel alive. */ }
+      } catch { /* Ignore malformed local frames; transport keeps the channel alive. */ }
     }
     const disconnectEvents = () => {
       events?.close()
@@ -326,11 +327,11 @@ export function useArkmeRealtimeClientEvents(
     }
     const connectEvents = () => {
       if (stopped || events !== undefined) return
-      const next = new EventSource('/arkme-self/api/events')
-      next.onopen = () => { if (events === next) handleOpen() }
-      next.onmessage = event => { if (events === next) handleMessage(event) }
-      next.onerror = () => { if (!stopped && ownsMessagePreparing) arkmeMessagePreparing.reset() }
-      events = next
+      events = connectArkmeRealtime({
+        onOpen: handleOpen,
+        onMessage: handleMessage,
+        onDisconnect: () => { if (!stopped && ownsMessagePreparing) arkmeMessagePreparing.reset() },
+      })
     }
     const handleVisibilityChange = () => {
       updateForeground()

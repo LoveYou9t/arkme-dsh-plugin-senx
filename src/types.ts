@@ -1101,6 +1101,8 @@ export interface ArkmeCallParticipant {
 
 export interface ArkmeCallTranscriptSegment {
   segmentId: string
+  /** Standalone recording of this segment; playback starts at zero, not startMillis. */
+  audioUrl?: string
   speakerDisplayName: string
   speakerUserId?: number
   text: string
@@ -1176,6 +1178,8 @@ export interface ArkmeProviderCapabilities {
     imageLibrary?: true
     sourceDirectory: true
     localFirstDirectory?: true
+    /** Topic home preference uses the record-owned policy without changing topic contents. */
+    topicHomeVisibility?: true
     /** Paged five-section directory, including coverage and Host-owned recovery. */
     contactDirectoryReads?: true
     sourceTimeline: true
@@ -1382,6 +1386,8 @@ export interface ArkmeGroupAvatarPresentation {
 }
 
 export interface ArkmeSourceItem {
+  /** Record-owned topic container kind; never a chat kind or creation source. */
+  topicKind?: number
   sourceRef: string
   /** Established human Direct session, never PendingPrivate or Bot direct. */
   directMessageAdmissionApplicable?: boolean
@@ -1589,6 +1595,16 @@ export interface ArkmeMessageSnapshotDetail {
   syncState?: 'synced' | 'syncing' | 'failed' | 'not-synced'
 }
 
+export interface ArkmeTimelineMentionTarget {
+  kind: 'member' | 'all' | 'bot'
+  startIndex: number
+  length: number
+  displayName: string
+  /** Browser-safe account-and-session scoped member identity for opening the profile card. */
+  memberRef?: string
+  botRef?: string
+}
+
 export interface ArkmeTimelineItem {
   /** Display-only call status; room, participant and call identifiers stay host-side. */
   callRecord?: {
@@ -1599,6 +1615,8 @@ export interface ArkmeTimelineItem {
     direction?: 'outgoing' | 'incoming'
     startedAtMillis?: number
     durationSeconds?: number
+    summaryText?: string
+    summaryStatus?: ArkmeCallSummaryStatus
   }
   /** Signed observed personal-topic membership; distinct from forwarding snapshots. */
   recordTopicAssignmentRef?: string
@@ -1622,6 +1640,8 @@ export interface ArkmeTimelineItem {
   isMe: boolean
   /** Browser-safe projection of whether this incoming message mentions the current viewer. */
   mentionsViewer?: boolean
+  /** Browser-safe mention ranges projected from provider metadata; used for exact highlight and member cards. */
+  mentions?: ArkmeTimelineMentionTarget[]
   sendAtMillis: number
   title: string
   textContent: string
@@ -2005,6 +2025,7 @@ export interface ArkmeLongArticleDetail {
   title: string
   textContent: string
   textFormat?: 'plain' | 'markdown'
+  mentions?: ArkmeTimelineMentionTarget[]
   sendAtMillis: number
   updateAtMillis: number
   recordDurationMillis: number
@@ -2105,6 +2126,7 @@ export interface ArkmeMessageCopyLinkSnapshotItem {
   title: string
   textContent: string
   textFormat?: 'plain' | 'markdown'
+  mentions?: ArkmeTimelineMentionTarget[]
   sendAtMillis: number
   templateKind: number
   displayKind: number
@@ -3313,6 +3335,9 @@ export type ArkmeChatClientEvent = {
 })
 
 export type ArkmePluginOperation =
+  | 'topic.dissolve.active'
+  | 'topic.rename'
+  | 'topic.dissolve'
   | 'provider.capabilities'
   | 'provider.state'
   | 'chat.realtime.state'
@@ -3537,6 +3562,7 @@ export type ArkmePluginOperation =
   | 'extensions.classification.items'
   | 'topic.hierarchy.move'
   | 'topic.rename'
+  | 'topic.home-visibility'
   | 'topic.dissolve'
   | 'topic.dissolve.status'
   | 'topic.dissolve.active'
