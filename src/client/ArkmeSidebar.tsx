@@ -2462,6 +2462,9 @@ export function ArkmeSurface({
     }
   }, [activeConversation, authenticatedAccountKey, authenticatedUserId])
   const conversationOverlayKey = `${activeConversation ? 'active' : 'inactive'}:${conversationKey}:notification-${String(notificationActivationRevision)}`
+  // Directory resolution must not remount its own loader before pagination completes.
+  // Explicit navigation, account changes and visibility still reset its pending actions.
+  const selfDirectoryScopeKey = `${active && ui.calendarOpen !== true ? 'active' : 'inactive'}:${selectedSource === undefined ? 'aggregate' : arkmeSourceIdentityKey(selectedSource)}:notification-${String(notificationActivationRevision)}`
   const conversationOverlayScopeRef = useRef({ key: conversationOverlayKey, generation: 0 })
   if (conversationOverlayScopeRef.current.key !== conversationOverlayKey) {
     conversationOverlayScopeRef.current = {
@@ -6824,7 +6827,7 @@ export function ArkmeSurface({
           </span>}
           {authenticated && conversationBackdropVisible && isArkmeSelfWorkspaceSource(selectedSource)
             && auth?.userId !== undefined && <ArkmeTopicDirectoryPopover
-              key={`${String(auth.userId)}:${conversationOverlayKey}`}
+              key={`${String(auth.userId)}:${selfDirectoryScopeKey}`}
               userId={auth.userId}
               selectedSource={selectedSource}
               trigger="none"

@@ -874,7 +874,10 @@ describe('conversation send directory projection', () => {
     vi.unstubAllGlobals()
   })
 
-  it('settles the uncached send-to-self entry while the topic directory is still paging', async () => {
+  it.each([false, true])('settles the uncached send-to-self entry while paging (storage unavailable=%s)', async storageUnavailable => {
+    if (storageUnavailable) {
+      vi.spyOn(window.localStorage, 'setItem').mockImplementation(() => { throw new Error('storage unavailable') })
+    }
     vi.useFakeTimers()
     try {
       const uncategorized = { ...sendToSelf, sourceRef: 'source-uncategorized', kind: 'default_category' as const, displayName: '未分类' }
