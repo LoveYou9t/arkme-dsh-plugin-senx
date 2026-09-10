@@ -216,11 +216,11 @@ export function ArkmeBotCreateDialog({ onClose, onBotCreated, onBusyChange }: {
         avatar = await uploadBotAvatar(avatarFile)
       }
       setBusyLabel('创建中...')
-      if (provider === 'openclaw') createRequest.current ??= { uid: crypto.randomUUID(), name: normalizedName, description: description.trim(), provider, avatarFile, avatar }
+      createRequest.current ??= { uid: crypto.randomUUID(), name: normalizedName, description: description.trim(), provider, avatarFile, avatar }
       const bot = await callArkme<ArkmeBotSummary>('bots.create', {
         name: normalizedName,
         provider,
-        ...(createRequest.current === undefined ? {} : { requestUid: createRequest.current.uid }),
+        requestUid: createRequest.current.uid,
         ...(description.trim() === '' ? {} : { description: description.trim() }),
         ...(avatar === '' ? {} : { avatar }),
       })

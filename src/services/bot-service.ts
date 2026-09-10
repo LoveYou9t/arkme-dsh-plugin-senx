@@ -254,7 +254,7 @@ export class BotService {
       data = await this.runtime.authenticatedBotPost<Record<string, unknown>>(
         '/api/v1/bot/create', {
           name, provider, description, avatar,
-          ...(provider === 'openclaw' ? { direct_chat_owner: BOT_CONVERSATION_OWNER.chat, request_uid: input.requestUid?.trim() || randomUUID() } : {}),
+          direct_chat_owner: BOT_CONVERSATION_OWNER.chat, request_uid: input.requestUid?.trim() || randomUUID(),
         }, session, options.signal,
       )
     } catch (error) {

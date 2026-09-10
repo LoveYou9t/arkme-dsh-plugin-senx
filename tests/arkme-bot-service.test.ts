@@ -328,7 +328,7 @@ describe('ArkmeService Bot owner adapter', () => {
         data: {
           bot: {
             bot_id: 'webhook-owner-id-1', name: '回调测试', provider: 'webhook', description: '验证回调',
-            avatar: '', status: 'default', subject_uid: 'subject-webhook', chat_session_uid: '', token_preview: 'jbot_***',
+            avatar: '', status: 'default', subject_uid: '', chat_session_uid: 'chat-webhook', token_preview: 'jbot_***',
           },
           token_info: { token: 'jbot_webhook_secret', token_preview: 'jbot_***', issued_at: 123 },
           webhook_url: 'https://bot.test/api/public/v1/bot/webhook/webhook-owner-id-1',
@@ -337,16 +337,18 @@ describe('ArkmeService Bot owner adapter', () => {
     })
 
     const result = await service.createBot({
-      name: ' 回调测试 ', provider: 'webhook', description: ' 验证回调 ',
+      name: ' 回调测试 ', provider: 'webhook', description: ' 验证回调 ', requestUid: 'webhook-create-1',
     })
 
     expect(requests).toEqual([{ body: {
       name: '回调测试', provider: 'webhook', description: '验证回调', avatar: '',
+      direct_chat_owner: 'jotmo-chat', request_uid: 'webhook-create-1',
     } }])
     expect(result.bot).toMatchObject({
       botRef: expect.stringMatching(/^arkme-bot-v2\./),
       name: '回调测试',
       provider: 'webhook',
+      conversationProjection: 'chat',
     })
     expect(result.secret.reveal()).toBe('jbot_webhook_secret')
     expect(JSON.stringify(result.secret)).toBe('{}')
