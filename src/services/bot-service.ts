@@ -258,7 +258,10 @@ export class BotService {
         }, session, options.signal,
       )
     } catch (error) {
-      if (error instanceof ArkmePluginError && ['arkme-network-error', 'arkme-timeout'].includes(error.code)) {
+      if (error instanceof ArkmePluginError && (
+        ['arkme-network-error', 'arkme-timeout', 'arkme-response-invalid', 'arkme-code-1002'].includes(error.code)
+        || (error.code === 'arkme-http-error' && error.retryable)
+      )) {
         throw new ArkmePluginError(
           'bot-create-outcome-unknown',
           'Bot 创建结果未知，请刷新 Bot 列表确认；不会自动重试',
@@ -266,6 +269,9 @@ export class BotService {
           409,
           { cause: error },
         )
+      }
+      if (error instanceof ArkmePluginError && error.code === 'arkme-code-1001') {
+        throw new ArkmePluginError(error.code, error.message, false, 400, { cause: error })
       }
       throw error
     }

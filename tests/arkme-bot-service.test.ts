@@ -372,6 +372,30 @@ describe('ArkmeService Bot owner adapter', () => {
     expect(attempts).toBe(1)
   })
 
+  it.each(['openclaw', 'webhook'] as const)('%s creation treats incomplete upstream outcomes as unknown', async provider => {
+    for (const response of [
+      () => new Response('{', { status: 200 }),
+      () => new Response('gateway unavailable', { status: 502 }),
+      () => json({ code: 1002, message: '服务器繁忙' }),
+    ]) {
+      let attempts = 0
+      const sessions = new BotTestSessionStore({ userId: 10001, accessToken: 'access', refreshToken: 'refresh' })
+      const service = new ArkmeService(config, sessions, stateStore, async () => { attempts++; return response() })
+      await expect(service.createBot({ name: '只创建一次', provider })).rejects.toMatchObject({
+        code: 'bot-create-outcome-unknown', retryable: false,
+      })
+      expect(attempts).toBe(1)
+    }
+  })
+
+  it('does not mark a permanent create conflict as retryable', async () => {
+    const sessions = new BotTestSessionStore({ userId: 10001, accessToken: 'access', refreshToken: 'refresh' })
+    const service = new ArkmeService(config, sessions, stateStore, async () => json({ code: 1001, message: '参数错误' }))
+    await expect(service.createBot({ name: '冲突', provider: 'webhook' })).rejects.toMatchObject({
+      code: 'arkme-code-1001', retryable: false,
+    })
+  })
+
   it('rejects tampered and cross-account Bot references before revealing a secret', async () => {
     const requests: string[] = []
     const sessions = new BotTestSessionStore({ userId: 10001, accessToken: 'access', refreshToken: 'refresh' })
