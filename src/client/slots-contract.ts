@@ -6,10 +6,12 @@
  * Arkme surface code.
  */
 import type { PropsRenderSlots, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
+import type { ArkmeSourceItem } from '../types.js'
 import type { ReactNode } from 'react'
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {
   interface SlotMap {
+    'arkme.topic.actions': { kind: 'single'; scope: 'root'; owner: ArkmeTopicActionsOwnerProps }
     'arkme.send-to-self.entry': {
       kind: 'single'
       scope: 'root'
@@ -57,4 +59,12 @@ export type ArkmeDirectoryEntryComponentProps =
 export interface ArkmeSendToSelfEntryOwnerProps {
   renderEntry(onClick?: () => void): ReactNode
   openTopicDirectory(): void
+}
+
+export interface ArkmeTopicActionsOwnerProps {
+  source: Readonly<ArkmeSourceItem>
+  renderDefault(): ReactNode
+  isCurrent(): boolean
+  onCreateChild(): void
+  onChanged(renamed?: ArkmeSourceItem): void
 }
