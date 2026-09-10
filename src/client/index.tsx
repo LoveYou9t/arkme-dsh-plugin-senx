@@ -408,3 +408,6 @@ export {
   isOfficialConversationTarget, isOfficialNewSessionTarget,
   watchOfficialConversationSelection, watchOfficialNewSession,
 } from './new-session-activation.js'
+
+export { arkmeSourceNavigation } from './source-navigation.js'
+export type { ArkmeSourceNavigation, ArkmeSourceNavigationSnapshot } from './source-navigation.js'

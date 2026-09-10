@@ -3331,6 +3331,7 @@ export type ArkmeChatClientEvent = {
 })
 
 export type ArkmePluginOperation =
+  | 'topic.create'
   | 'provider.capabilities'
   | 'provider.state'
   | 'chat.realtime.state'
