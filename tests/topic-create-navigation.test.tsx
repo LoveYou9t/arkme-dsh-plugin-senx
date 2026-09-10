@@ -35,7 +35,7 @@ async function openCreate(child = false, trigger: 'none' | 'button' = 'none') {
   let opener: ArkmeTopicCreateOpener | undefined
   const onSelect = vi.fn()
   await act(async () => {
-    renderer = create(<ArkmeTopicDirectoryPopover userId={10001} selectedSource={parent} trigger={trigger}
+    renderer = create(<ArkmeTopicDirectoryPopover onCreateWarning={vi.fn()} userId={10001} selectedSource={parent} trigger={trigger}
       onSelect={onSelect} onSelectionInvalidated={vi.fn()} onSelfSourcesResolution={vi.fn()}
       onCreateTopicReady={open => { opener = open }} retryRevision={0} />)
   })
@@ -155,7 +155,7 @@ describe('navigate to a newly created self topic', () => {
     let finishRead!: (value: unknown) => void
     const onSelect = vi.fn()
     vi.mocked(callArkme).mockImplementationOnce(async () => await new Promise(resolve => { finishRead = resolve }))
-    await act(async () => { renderer = create(<ArkmeTopicDirectoryPopover userId={10001} selectedSource={undefined}
+    await act(async () => { renderer = create(<ArkmeTopicDirectoryPopover onCreateWarning={vi.fn()} userId={10001} selectedSource={undefined}
       onSelect={onSelect} onSelectionInvalidated={vi.fn()} onSelfSourcesResolution={vi.fn()}
       onCreateTopicReady={open => { if (open) opener = open }} retryRevision={0} />) })
     await act(async () => opener())
@@ -168,7 +168,7 @@ describe('navigate to a newly created self topic', () => {
     expect(onSelect).toHaveBeenCalledExactlyOnceWith(created)
   })
 
-  it.each(['success', 'failure'] as const)('ignores a late %s after switching to another account surface', async outcome => {
+  it.each(['success', 'failure', 'partial'] as const)('ignores a late %s after switching to another account surface', async outcome => {
     const oldSelect = await openCreate()
     await act(async () => { submit() })
     const props = renderer!.root.findByType(ArkmeTopicDirectoryPopover).props
@@ -177,8 +177,12 @@ describe('navigate to a newly created self topic', () => {
     await act(async () => { renderer = create(<ArkmeTopicDirectoryPopover {...props} userId={20002} onSelect={nextSelect} />) })
     nextSelect.mockClear()
     const before = readNavigationCache(20002)
-    await act(async () => { if (outcome === 'success') resolveCreate({ source: created }); else rejectCreate(new Error('旧请求失败')) })
+    await act(async () => {
+      if (outcome === 'failure') rejectCreate(new Error('旧请求失败'))
+      else resolveCreate({ source: created, ...(outcome === 'partial' ? { warning: '旧账号部分创建完成' } : {}) })
+    })
     expect(oldSelect).not.toHaveBeenCalled()
+    expect(props.onCreateWarning).not.toHaveBeenCalled()
     expect(nextSelect).not.toHaveBeenCalled()
     expect(readNavigationCache(20002)).toEqual(before)
     expect(renderer!.root.findAllByType(ArkmeTopicCreateDialog)).toHaveLength(0)
@@ -201,7 +205,9 @@ describe('navigate to a newly created self topic', () => {
     expect(readNavigationCache(10001)?.selectedSourceRef).toBe(parent.sourceRef)
     expect(readNavigationCache(10001)?.sources.send_to_self?.some(source => source.sourceRef === created.sourceRef)).toBe(true)
     const props = renderer!.root.findByType(ArkmeTopicDirectoryPopover).props
-    expect(props.onSelfSourcesResolution).toHaveBeenLastCalledWith(10001, expect.objectContaining({ status: 'ready', error: '层级同步提示' }))
+    expect(props.onCreateWarning).toHaveBeenCalledExactlyOnceWith('层级同步提示')
+    expect(props.onSelfSourcesResolution).toHaveBeenLastCalledWith(10001, expect.objectContaining({ status: 'ready', loading: false }))
+    expect(props.onSelfSourcesResolution.mock.lastCall[1].error).toBeUndefined()
   })
   it('binds root creation from the aggregate view to its existing account capability', async () => {
     await openCreate()
@@ -252,7 +258,7 @@ describe('navigate to a newly created self topic', () => {
       return <>
         <h1>{selected.displayName}</h1>
         <button onClick={() => opener.current?.()}>新建主题</button>
-        <ArkmeTopicDirectoryPopover key={selected.sourceRef} userId={10001} selectedSource={selected} trigger="none"
+        <ArkmeTopicDirectoryPopover onCreateWarning={vi.fn()} key={selected.sourceRef} userId={10001} selectedSource={selected} trigger="none"
           onSelect={onSelect} onSelectionInvalidated={onInvalidated} onSelfSourcesResolution={onResolution}
           onCreateTopicReady={open => { opener.current = open }} retryRevision={0} />
       </>

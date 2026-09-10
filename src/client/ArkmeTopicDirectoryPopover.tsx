@@ -29,6 +29,7 @@ export interface ArkmeTopicDirectoryPopoverProps {
   trigger?: 'button' | 'none'
   onSelect(source: ArkmeSourceItem): void
   onSelectionInvalidated(): void
+  onCreateWarning(message: string): void
   onSelfSourcesResolution(userId: number, resolution: ArkmeSelfSourcesResolution): void
   onCreateTopicReady?(open: ArkmeTopicCreateOpener | undefined): void
   retryRevision: number
@@ -183,7 +184,7 @@ function cacheWithTopics(
 }
 
 export function ArkmeTopicDirectoryPopover({
-  userId, selectedSource, trigger = 'button', onSelect, onSelectionInvalidated, onSelfSourcesResolution, onCreateTopicReady, retryRevision,
+  userId, selectedSource, trigger = 'button', onSelect, onSelectionInvalidated, onSelfSourcesResolution, onCreateWarning, onCreateTopicReady, retryRevision,
 }: ArkmeTopicDirectoryPopoverProps) {
   const initialCache = useMemo(() => readNavigationCache(userId), [userId])
   const requestRef = useRef<AbortController>()
@@ -404,12 +405,13 @@ export function ArkmeTopicDirectoryPopover({
       setTopicCreateParent(undefined)
       setTopicCreateParentLevel(undefined)
       setQuery('')
+      // A read started before this write result cannot replace its projection.
+      requestRef.current?.abort()
+      setBusy(false)
       if (result.warning !== undefined) {
         persist(nextSources)
-        setError(result.warning)
+        onCreateWarning(result.warning)
       } else {
-        requestRef.current?.abort()
-        setBusy(false)
         selectSource(result.source, nextSources)
       }
     } catch (caught) {

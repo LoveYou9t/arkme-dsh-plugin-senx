@@ -42,6 +42,8 @@ import { ArkmeClientError } from '../src/client/api.js'
 import * as memberApi from '../src/client/api.js'
 import { ArkmeRichComposerInput } from '../src/client/ArkmeRichComposerInput.js'
 import { ArkmeEmojiPicker } from '../src/client/ArkmeEmojiPicker.js'
+import { ArkmeSourceBreadcrumb } from '../src/client/ArkmeSourceBreadcrumb.js'
+import { ArkmeTopicCreateDialog } from '../src/client/ArkmeTopicCreateDialog.js'
 import { ArkmeMarkdownComposerInput } from '../src/client/ArkmeMarkdownComposerInput.js'
 import { ArkmeMemberProfileCard } from '../src/client/ArkmeChatMemberActions.js'
 import { arkmeAuthStore } from '../src/client/auth-store.js'
@@ -872,6 +874,43 @@ describe('conversation send directory projection', () => {
     arkmeMessagePreparing.activateAccount(undefined)
     vi.restoreAllMocks()
     vi.unstubAllGlobals()
+  })
+
+  it('shows a partial child-creation warning with the directory closed and retains it after an older read finishes', async () => {
+    vi.stubGlobal('document', { addEventListener: vi.fn(), removeEventListener: vi.fn() })
+    const uncategorized = { ...sendToSelf, sourceRef: 'default', kind: 'default_category' as const, displayName: '未分类' }
+    const parent = { ...sendToSelf, sourceRef: 'parent', kind: 'topic' as const, topicHierarchyKey: 'parent-key', displayName: '父主题' }
+    const orphan = { ...parent, sourceRef: 'orphan', topicHierarchyKey: 'orphan-key', displayName: '未绑定主题' }
+    const warning = '主题已创建，但父子关系添加及自动清理均未完成，请在根主题列表中检查后重试'
+    const previous = mocks.callArkme.getMockImplementation()!
+    let finishRead: ((value: unknown) => void) | undefined
+    let delayed = false
+    mocks.callArkme.mockImplementation(async (operation, params, signal) => {
+      if (operation === 'sources.list' && params?.directory === 'send_to_self') {
+        if (delayed) return await new Promise(resolve => { finishRead = resolve })
+        return { items: [sendToSelf, uncategorized, parent], hasMore: false }
+      }
+      if (operation === 'topic.create') return { source: orphan, warning }
+      if (operation === 'source.timeline') return { source: sendToSelf, items: [], hasMore: false }
+      return await previous(operation, params, signal)
+    })
+    arkmeUi.focusSendToSelf()
+    await act(async () => { renderer = create(<ArkmeSurface productChrome={false} productNavigation={false} />) })
+    delayed = true
+    await act(async () => { renderer!.root.findByType(ArkmeSourceBreadcrumb).props.onRetry() })
+    expect(finishRead).toBeDefined()
+    await act(async () => { renderer!.root.findByType(ArkmeSourceBreadcrumb).props.onCreateChildTopic(parent, 1) })
+    await act(async () => { renderer!.root.findByType(ArkmeTopicCreateDialog).props.onConfirm('未绑定主题') })
+    expect(renderer!.root.findAllByType(ArkmeTopicCreateDialog)).toHaveLength(0)
+    expect(JSON.stringify(renderer!.toJSON())).toContain(warning)
+    expect(arkmeUi.getSnapshot().selectedSource).toBeUndefined()
+    await act(async () => { finishRead!({ items: [sendToSelf, uncategorized, parent], hasMore: false }) })
+    expect(JSON.stringify(renderer!.toJSON())).toContain(warning)
+    const breadcrumb = renderer!.root.findByType(ArkmeSourceBreadcrumb)
+    expect(breadcrumb.props.sources.some((item: ArkmeSourceItem) => item.sourceRef === orphan.sourceRef)).toBe(true)
+    expect(breadcrumb.props.error).toBeUndefined()
+    expect(breadcrumb.props.loading).toBe(false)
+    expect(mocks.callArkme.mock.calls.filter(([operation]) => operation === 'topic.create')).toHaveLength(1)
   })
 
   it.each([false, true])('settles the uncached send-to-self entry while paging (storage unavailable=%s)', async storageUnavailable => {
