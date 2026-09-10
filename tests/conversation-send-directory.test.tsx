@@ -876,6 +876,51 @@ describe('conversation send directory projection', () => {
     vi.unstubAllGlobals()
   })
 
+  it.each([false, true])('creates and sends into the new topic without losing the previous draft (child=%s)', async child => {
+    vi.stubGlobal('document', { addEventListener: vi.fn(), removeEventListener: vi.fn() })
+    const uncategorized: ArkmeSourceItem = { ...sendToSelf, sourceRef: 'default', kind: 'default_category', displayName: '未分类' }
+    const parent: ArkmeSourceItem = { sourceRef: 'parent', kind: 'topic', topicHierarchyKey: 'parent-key', displayName: '父主题', activeAtMillis: 0, unreadCount: 0 }
+    const created: ArkmeSourceItem = { ...parent, sourceRef: 'created', topicHierarchyKey: 'created-key', displayName: '新主题',
+      ...(child ? { parentSourceRef: parent.sourceRef, parentTopicHierarchyKey: parent.topicHierarchyKey } : {}) }
+    let accepted = false
+    const previous = mocks.callArkme.getMockImplementation()!
+    mocks.callArkme.mockImplementation(async (operation, params, signal) => {
+      if (operation === 'sources.list' && params?.directory === 'send_to_self') return {
+        items: [sendToSelf, uncategorized, parent, ...(accepted ? [created] : [])], hasMore: false,
+      }
+      if (operation === 'topic.create') { accepted = true; return { source: created } }
+      if (operation === 'source.timeline') return {
+        source: params?.sourceRef === created.sourceRef ? created : parent, items: [], hasMore: false,
+      }
+      if (operation === 'source.send-text') return {
+        sourceRef: params?.sourceRef, itemUid: params?.recordUid, status: 1, localState: 'synced',
+      }
+      return await previous(operation, params, signal)
+    })
+    arkmeUi.selectSource(parent)
+    await act(async () => { renderer = create(<ArkmeSurface productChrome={false} productNavigation={false} />) })
+    await act(async () => { renderer!.root.findByType(ArkmeRichComposerInput).props.onTextChange('原主题未发送草稿') })
+    await act(async () => {
+      const breadcrumb = renderer!.root.findByType(ArkmeSourceBreadcrumb)
+      if (child) breadcrumb.props.onCreateChildTopic(parent, 1)
+      else breadcrumb.props.onCreateTopic()
+    })
+    await act(async () => { renderer!.root.findByType(ArkmeTopicCreateDialog).props.onConfirm('新主题') })
+    expect(arkmeUi.getSnapshot().selectedSource?.topicHierarchyKey).toBe(created.topicHierarchyKey)
+    expect(renderer!.root.findByType(ArkmeRichComposerInput).props.value).toBe('')
+    expect(renderer!.root.findByType(ArkmeRichComposerInput).props.disabled).toBe(false)
+    await act(async () => { renderer!.root.findByType(ArkmeRichComposerInput).props.onTextChange('新主题第一条消息') })
+    const send = renderer!.root.findByProps({ 'aria-label': '发送消息' })
+    expect(send.props.disabled).toBe(false)
+    await act(async () => { send.props.onClick() })
+    expect(mocks.callArkme.mock.calls.filter(([operation]) => operation === 'source.send-text')).toEqual([
+      ['source.send-text', expect.objectContaining({ sourceRef: created.sourceRef, textContent: '新主题第一条消息' })],
+    ])
+    expect(arkmeChatDirectory.getSnapshot().sources.some(source => source.kind === 'topic')).toBe(false)
+    await act(async () => { arkmeUi.selectSource(parent) })
+    expect(renderer!.root.findByType(ArkmeRichComposerInput).props.value).toBe('原主题未发送草稿')
+  })
+
   it('shows a partial child-creation warning with the directory closed and retains it after an older read finishes', async () => {
     vi.stubGlobal('document', { addEventListener: vi.fn(), removeEventListener: vi.fn() })
     const uncategorized = { ...sendToSelf, sourceRef: 'default', kind: 'default_category' as const, displayName: '未分类' }
@@ -892,6 +937,9 @@ describe('conversation send directory projection', () => {
       }
       if (operation === 'topic.create') return { source: orphan, warning }
       if (operation === 'source.timeline') return { source: sendToSelf, items: [], hasMore: false }
+      if (operation === 'source.send-text') return {
+        sourceRef: params?.sourceRef, itemUid: params?.recordUid, status: 1, localState: 'synced',
+      }
       return await previous(operation, params, signal)
     })
     arkmeUi.focusSendToSelf()
@@ -910,9 +958,17 @@ describe('conversation send directory projection', () => {
     expect(breadcrumb.props.error).toBeUndefined()
     expect(breadcrumb.props.loading).toBe(false)
     expect(mocks.callArkme.mock.calls.filter(([operation]) => operation === 'topic.create')).toHaveLength(1)
+    expect(renderer!.root.findByType(ArkmeRichComposerInput).props.disabled).toBe(false)
+    await act(async () => { renderer!.root.findByType(ArkmeRichComposerInput).props.onTextChange('部分创建后继续发送') })
+    const send = renderer!.root.findByProps({ 'aria-label': '发送消息' })
+    expect(send.props.disabled).toBe(false)
+    await act(async () => { send.props.onClick() })
+    expect(mocks.callArkme.mock.calls.filter(([operation]) => operation === 'source.send-text')).toEqual([
+      ['source.send-text', expect.objectContaining({ sourceRef: sendToSelf.sourceRef, textContent: '部分创建后继续发送' })],
+    ])
   })
 
-  it('settles the uncached send-to-self entry while the topic directory is still paging', async () => {
+  it.each([2, 25])('settles the uncached send-to-self entry while the topic directory has %s pages', async pageCount => {
     vi.useFakeTimers()
     try {
       const uncategorized = { ...sendToSelf, sourceRef: 'source-uncategorized', kind: 'default_category' as const, displayName: '未分类' }
@@ -932,9 +988,17 @@ describe('conversation send directory projection', () => {
             if (signal?.aborted) abort()
             else signal?.addEventListener('abort', abort, { once: true })
           })
-          return params.cursor === undefined
-            ? { items: [sendToSelf, uncategorized], hasMore: true, nextCursor: 'second-page' }
-            : { items: [], hasMore: false }
+          const pageIndex = params.cursor === undefined ? 0 : Number(params.cursor)
+          const topics: ArkmeSourceItem[] = Array.from({ length: 100 }, (_, index) => ({
+            sourceRef: `topic-${String(pageIndex * 100 + index)}`,
+            topicHierarchyKey: `topic-key-${String(pageIndex * 100 + index)}`,
+            kind: 'topic', displayName: `主题 ${String(pageIndex * 100 + index)}`, activeAtMillis: 0, unreadCount: 0,
+          }))
+          return {
+            items: [...(pageIndex === 0 ? [sendToSelf, uncategorized] : []), ...topics],
+            hasMore: pageIndex + 1 < pageCount,
+            ...(pageIndex + 1 < pageCount ? { nextCursor: String(pageIndex + 1) } : {}),
+          }
         }
         if (operation === 'source.timeline') {
           timelineReads += 1
@@ -946,9 +1010,12 @@ describe('conversation send directory projection', () => {
       for (let tick = 0; tick < 100; tick += 1) {
         await act(async () => { await vi.advanceTimersByTimeAsync(50) })
       }
-      expect(directoryReads).toBeLessThanOrEqual(4)
+      expect(directoryReads).toBeLessThanOrEqual(pageCount + 2)
       expect(timelineReads).toBe(1)
       expect(JSON.stringify(renderer!.toJSON())).not.toContain('正在加载发给自己的内容')
+      const breadcrumb = renderer!.root.findByType(ArkmeSourceBreadcrumb)
+      expect(breadcrumb.props.loading).toBe(false)
+      expect(breadcrumb.props.sources).toHaveLength(pageCount * 100 + 2)
     } finally {
       await act(async () => { renderer?.unmount(); renderer = undefined })
       vi.useRealTimers()
@@ -1049,8 +1116,9 @@ describe('conversation send directory projection', () => {
       joinedAtMillis: 1, recordCount: 0, mentionCount: 0,
     }
 
-    expect(arkmeGroupMentionCandidates('', [], [member]).map(candidate => candidate.kind))
-      .toEqual(['all'])
+    const candidates = arkmeGroupMentionCandidates('', [], [member])
+    expect(candidates.map(candidate => candidate.kind)).toEqual(['all', 'bot'])
+    expect(candidates.map(candidate => candidate.displayName)).toEqual(['所有人', '阿森'])
   })
 
   it('highlights visible @ mentions in private conversation bubbles for self and peer messages', async () => {
@@ -2680,6 +2748,15 @@ describe('conversation send directory projection', () => {
     )
     expect(arkmeComposerDraftStore.get(draftKey).text).toBe('')
     expect(arkmeChatDirectory.getSnapshot()).toEqual(directoryBeforeSend)
+    const sentMention = renderer!.root.findByProps({ 'aria-label': '查看 @Tison' })
+    await act(async () => {
+      sentMention.props.onClick({ preventDefault: vi.fn(), stopPropagation: vi.fn() })
+      await Promise.resolve()
+    })
+    expect(renderer!.root.findByType(ArkmeMemberProfileCard).props.member).toMatchObject({
+      memberRef: 'arkme-chat-member-v1.stable.signature',
+      displayName: '我的私有备注',
+    })
 
     await act(async () => {
       composer.props.onTextChange('  @T')
@@ -3425,7 +3502,14 @@ describe('conversation send directory projection', () => {
       isMe: false,
       sendAtMillis: 1,
       title: '',
-      textContent: '麻烦 @cruisin 看看，@所有人 先不用处理',
+      textContent: '麻烦 @历史昵称 看看，@所有人 先不用处理',
+      mentions: [{
+        kind: 'member',
+        memberRef: mentionedMember.memberRef,
+        displayName: '历史昵称',
+        startIndex: 3,
+        length: 5,
+      }],
       status: 1,
       sequence: 1,
     }]
@@ -3449,7 +3533,7 @@ describe('conversation send directory projection', () => {
       await Promise.resolve()
       await Promise.resolve()
     })
-    const mention = renderer!.root.findByProps({ 'aria-label': '查看 @cruisin' })
+    const mention = renderer!.root.findByProps({ 'aria-label': '查看 @历史昵称' })
     expect(renderer!.root.findAllByProps({ 'aria-label': '查看 @所有人' })).toHaveLength(0)
     const clickEvent = { preventDefault: vi.fn(), stopPropagation: vi.fn() }
     await act(async () => {
@@ -3475,6 +3559,65 @@ describe('conversation send directory projection', () => {
       memberRef: mentionedMember.memberRef,
     }, expect.any(AbortSignal))
     expect(arkmeUi.getSnapshot().selectedSource?.sourceKey).toBe(privateSource.sourceKey)
+  })
+
+  it('opens the group member profile card from a kaomoji visible mention', async () => {
+    const kaomojiMember: ArkmeConversationMemberItem = {
+      memberRef: 'member-kaomoji',
+      mentionRef: 'mention-kaomoji',
+      mentionDisplayName: '♪(▽*)',
+      displayName: '颜文字同事',
+      memberName: '♪(▽*)',
+      role: 'member',
+      status: 'active',
+      isSelf: false,
+      isOwner: false,
+      joinedAtMillis: 1,
+      recordCount: 0,
+      mentionCount: 1,
+    }
+    activeSource = group
+    arkmeChatDirectory.publish([group])
+    arkmeUi.selectSource(group)
+    timeline = [{
+      itemUid: 'message-kaomoji-visible-mention',
+      senderName: '同事',
+      isMe: false,
+      sendAtMillis: 1,
+      title: '',
+      textContent: '麻烦 @♪(▽*) 看看',
+      status: 1,
+      sequence: 1,
+    }]
+    const baseCall = mocks.callArkme.getMockImplementation()!
+    mocks.callArkme.mockImplementation(async (operation: string, params?: Record<string, unknown>, signal?: AbortSignal) => {
+      if (operation === 'source.members') return {
+        source: group,
+        items: [kaomojiMember],
+        total: 1,
+        activeCount: 1,
+      }
+      if (operation === 'source.timeline') return { source: group, items: timeline, hasMore: false }
+      if (operation === 'group.bots') return { source: group, items: [], total: 0 }
+      return await baseCall(operation, params, signal)
+    })
+
+    await act(async () => {
+      renderer = create(<ArkmeSurface productChrome={false} productNavigation={false} />)
+      await Promise.resolve()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    const mention = renderer!.root.findByProps({ 'aria-label': '查看 @♪(▽*)' })
+    await act(async () => {
+      mention.props.onClick({ preventDefault: vi.fn(), stopPropagation: vi.fn() })
+      await Promise.resolve()
+    })
+
+    expect(renderer!.root.findByType(ArkmeMemberProfileCard).props.member).toMatchObject({
+      memberRef: 'member-kaomoji',
+      displayName: '颜文字同事',
+    })
   })
 
   it('opens send-to-self when the current user sends from a self mention profile card', async () => {
