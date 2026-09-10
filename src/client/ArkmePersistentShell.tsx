@@ -142,7 +142,7 @@ export function shouldRestoreWebAuthenticatedWorkspace(
 }
 
 export type ArkmePersistentSidebarProps = PropsRuntime<'sidebar'>
-  & PropsRenderSlots<'arkme.directory.entry'>
+  & PropsRenderSlots<'arkme.directory.entry' | 'arkme.send-to-self.entry'>
   & {
     collapseSidebar(): void
     closeDetails(): void

@@ -186,6 +186,8 @@ export function apply(ctx: ClientContext): void {
     }
   }, 'dsh-arkme: activate message notification sources')
 
+  ctx.slots.inject('arkme.send-to-self.entry', () => ctx.slots.register({ name: 'arkme.send-to-self.entry', priority: 100 }, props => props.renderEntry()))
+
   ctx.effect(() => {
     let disposeSidebar: (() => void) | undefined
     let settingsTimer: number | undefined
@@ -199,6 +201,7 @@ export function apply(ctx: ClientContext): void {
         priority: -100,
         children: {
           'arkme.directory.entry': { kind: 'list', scope: 'root' },
+          'arkme.send-to-self.entry': { kind: 'single', scope: 'root' },
         },
         inject: () => ({
           collapseSidebar: () => { ctx.layout.toggleSidebar() },
@@ -401,13 +404,10 @@ export { ArkmeProductNavigation } from './ArkmeProductNavigation.js'
 export { ArkmeCallSurface } from './ArkmeCallSurface.js'
 export { ArkmeCallsRow, ArkmeDirectoryRow, ArkmeNavigation, ArkmeRecordingsRow, renderArkmeDirectoryRow } from './ArkmeVirtualWorkspace.js'
 export { ArkmeLayoutController } from './redesign/layout-controller.js'
-export type { ArkmeDirectoryEntryOwnerProps, ArkmeDirectoryRowProps } from './slots-contract.js'
+export type { ArkmeDirectoryEntryOwnerProps, ArkmeDirectoryRowProps, ArkmeSendToSelfEntryOwnerProps } from './slots-contract.js'
 export { outgoingCallUi } from './outgoing-call-ui-controller.js'
 export { ArkmeAppUpdateStore, arkmeAppUpdateStore } from './app-update-store.js'
 export {
   isOfficialConversationTarget, isOfficialNewSessionTarget,
   watchOfficialConversationSelection, watchOfficialNewSession,
 } from './new-session-activation.js'
-
-export { arkmeSourceNavigation } from './source-navigation.js'
-export type { ArkmeSourceNavigation, ArkmeSourceNavigationSnapshot } from './source-navigation.js'

@@ -1,4 +1,3 @@
-export type { ArkmeTopicCreateResult } from '../types.js'
 import { ARKME_MESSAGE_READ_RECEIPT_MAX_ITEMS, ARKME_PROVIDER_CONTRACT_VERSION } from '../types.js'
 import type { ArkmeDirectMessageAdmission } from '../direct-message-admission.js'
 export type { ArkmeDirectMessageAdmission, ArkmeDirectMessageAdmissionPort } from '../direct-message-admission.js'

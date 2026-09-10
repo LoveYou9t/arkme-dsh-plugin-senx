@@ -10,6 +10,11 @@ import type { ReactNode } from 'react'
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {
   interface SlotMap {
+    'arkme.send-to-self.entry': {
+      kind: 'single'
+      scope: 'root'
+      owner: ArkmeSendToSelfEntryOwnerProps
+    }
     /** Additive directory rows rendered inside the permanent Arkme directory. */
     'arkme.directory.entry': {
       kind: 'list'
@@ -47,3 +52,9 @@ export interface ArkmeDirectoryEntryOwnerProps {
 /** Full props of a component registered into `arkme.directory.entry`. */
 export type ArkmeDirectoryEntryComponentProps =
   PropsRuntime<'arkme.directory.entry'> & PropsRenderSlots<'arkme.directory.entry'>
+
+/** Original entry chrome and existing second-column navigation, owned by Arkme. */
+export interface ArkmeSendToSelfEntryOwnerProps {
+  renderEntry(onClick?: () => void): ReactNode
+  openTopicDirectory(): void
+}
