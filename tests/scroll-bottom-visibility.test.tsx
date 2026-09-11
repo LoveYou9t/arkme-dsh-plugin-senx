@@ -1,3 +1,5 @@
+import { useLayoutEffect } from 'react'
+import { useConversationResizeAnchor } from '../src/client/conversation-resize-anchor.js'
 import { act, create, type ReactTestRenderer } from 'react-test-renderer'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { useScrollBottomVisibility } from '../src/client/use-scroll-bottom-visibility.js'
@@ -26,6 +28,57 @@ describe('scroll bottom visibility (not auto-follow or unread state)', () => {
     expect(visible()).toBe(false)
     act(() => { body.clientHeight = 1600; body.scrollTop = 0; renderer!.update(<Harness />) })
     expect(visible()).toBe(false)
+  })
+
+  it('shares the list with auto-follow while keeping visibility and navigation intent separate', () => {
+    const callbacks = new Set<() => void>()
+    const listeners = new Set<() => void>()
+    vi.stubGlobal('ResizeObserver', class {
+      constructor(private callback: () => void) { callbacks.add(callback) }
+      observe() {}
+      disconnect() { callbacks.delete(this.callback) }
+    })
+    let top = 200
+    let contentHeight = 1500
+    const body = {
+      get scrollTop() { return top },
+      set scrollTop(value: number) { top = value },
+      scrollHeight: 1500, clientHeight: 600,
+      addEventListener: (_: string, listener: () => void) => { listeners.add(listener) },
+      removeEventListener: (_: string, listener: () => void) => { listeners.delete(listener) },
+    }
+    const viewport = { current: body as unknown as HTMLDivElement }
+    const content = { current: { getBoundingClientRect: () => ({ height: contentHeight }) } as HTMLElement }
+    const restoreIntent = { current: undefined as boolean | undefined }
+    function Harness({ follow }: { follow?: boolean }) {
+      useLayoutEffect(() => { restoreIntent.current = follow }, [follow])
+      useConversationResizeAnchor(viewport, 'chat', undefined, false, content, restoreIntent)
+      const visibility = useScrollBottomVisibility(viewport, content, true, 0)
+      return <button hidden={!visibility.visible} onClick={() => {
+        body.scrollTop = body.scrollHeight - body.clientHeight
+        listeners.forEach(listener => { listener() })
+        visibility.measure()
+      }} />
+    }
+    const resize = () => { callbacks.forEach(callback => { callback() }) }
+    act(() => { renderer = create(<Harness />) })
+    act(() => { contentHeight = body.scrollHeight = 1700; resize() })
+    expect(body.scrollTop).toBe(200)
+    expect(renderer!.root.findByType('button').props.hidden).toBe(false)
+    act(() => { renderer!.root.findByType('button').props.onClick() })
+    expect(body.scrollTop).toBe(1100)
+    act(() => { contentHeight = body.scrollHeight = 1900; resize() })
+    expect(body.scrollTop).toBe(1300)
+    expect(renderer!.root.findByType('button').props.hidden).toBe(true)
+    // A historical restore must supersede the previous bottom-follow intent.
+    act(() => { body.scrollTop = 300; renderer!.update(<Harness follow={false} />) })
+    act(() => { contentHeight = body.scrollHeight = 2100; resize() })
+    expect(body.scrollTop).toBe(300)
+    expect(renderer!.root.findByType('button').props.hidden).toBe(false)
+    act(() => { renderer!.unmount() })
+    renderer = undefined
+    expect(callbacks.size).toBe(0)
+    expect(listeners.size).toBe(0)
   })
 
   it('remeasures viewport and async content resize, and releases observers', () => {
