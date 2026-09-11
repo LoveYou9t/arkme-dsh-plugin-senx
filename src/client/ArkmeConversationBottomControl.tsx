@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type CSSProperties } from 'react'
-import { CaretDown } from '@phosphor-icons/react/dist/icons/CaretDown'
+import backBottomIcon from '../../assets/icons/icon_back_bottom_green.svg'
 import { arkmeTheme } from './arkme-theme.js'
 
 interface Props {
@@ -51,7 +51,7 @@ export function ArkmeConversationBottomControl({ showBackToBottom, newMessageCou
       {(showBackToBottom || pending || failed) && <button type="button" aria-label="回到底部"
         title={pending ? '正在回到底部…' : '回到底部'} aria-busy={pending} disabled={pending}
         onClick={() => { void activate() }} style={{ ...button, width: 50, height: 30, flexShrink: 0, opacity: pending ? 0.6 : 1 }}>
-        <CaretDown size={24} aria-hidden />
+        <img src={`data:image/svg+xml;base64,${backBottomIcon}`} width={24} height={24} style={{ objectFit: 'none' }} alt="" aria-hidden />
       </button>}
     </div>
     {failed && <div role="alert" data-arkme-bottom-error style={{ textAlign: 'right', color: arkmeTheme.danger, background: arkmeTheme.base, fontSize: 12, marginTop: 6 }}>
