@@ -50,7 +50,8 @@ import type {
   ArkmeRecordingTranscriptSection,
   ArkmeRecordingTranscriptItem,
   ArkmeRecordingWorkbenchItem,
-  ArkmeRecordingSpeakerOption,
+  ArkmeRecordingSpeakerCandidate,
+  ArkmeRecordingSpeakerRecommendation,
   ArkmeRecordingVersion,
 } from '../types.js'
 import { ArkmePluginError, ServiceRuntime, objectValue, stringValue } from './service.js'
@@ -282,24 +283,13 @@ export class RecordingService {
     }
   }
 
-  async recordingSpeakerOptions(itemRef: string, signal?: AbortSignal): Promise<ArkmeRecordingSpeakerOption[]> {
+  async recordingSpeakerOptions(signal?: AbortSignal): Promise<ArkmeRecordingSpeakerCandidate[]> {
     this.assertWorkbenchEnabled()
-    const payload = await this.openRecordingItemRef(itemRef)
     const session = await this.runtime.requireSession()
-    if (session.userId !== payload.viewerUserId) {
-      throw new ArkmePluginError('recording-ref-account-mismatch', '录音引用与当前账号不匹配', false, 403)
-    }
-    const [data, similar] = await Promise.all([
-      this.runtime.authenticatedAudioPost<Record<string, unknown>>(
-        '/api/v1/audio/get-speaker-ls', {}, session, signal,
-      ),
-      this.runtime.authenticatedAudioPost<Record<string, unknown>>(
-        '/api/v1/audio/similar-session-speaker',
-        { session_id: payload.sessionId, num: payload.assignmentSpeakerNumber }, session, signal,
-      ).catch((): Record<string, unknown> => ({})),
-    ])
+    const data = await this.runtime.authenticatedAudioPost<Record<string, unknown>>(
+      '/api/v1/audio/get-speaker-ls', {}, session, signal,
+    )
     const rows = listValue(data.spk_ls)
-    const recommendedSpeakerId = stringValue(similar.speaker_id).trim()
     const userIds = speakerUserIds(rows)
     const [profiles, candidateUsers] = await Promise.all([
       this.recordingSpeakerProfiles(userIds, session, signal),
@@ -315,19 +305,16 @@ export class RecordingService {
       const label = stringValue(speaker.nick_name ?? speaker.nickname ?? speaker.display_name ?? speaker.name).trim()
         || profile?.displayName || '未命名说话人'
       return [{ speakerId, label, avatarRef: profile?.avatarRef, userId }]
-    }).map((item): ArkmeRecordingSpeakerOption => ({
-      optionKey: createHmac('sha256', speakerRefKey)
-        .update(JSON.stringify([this.runtime.config.environment, session.userId, 'speaker', item.speakerId])).digest('base64url'),
+    }).map((item): ArkmeRecordingSpeakerCandidate => ({
+      optionKey: this.recordingSpeakerOptionKey(speakerRefKey, session.userId, 'speaker', item.speakerId),
       speakerRef: this.sealRecordingRefWithKey('arkme-recording-speaker-v1', {
-        version: 1, viewerUserId: payload.viewerUserId,
+        version: 1, viewerUserId: session.userId,
         target: { kind: 'speaker', speakerId: item.speakerId },
       }, speakerRefKey),
       label: item.label,
       ...(item.avatarRef === undefined ? {} : { avatarRef: item.avatarRef }),
       kind: 'speaker',
-      currentAssignment: item.speakerId === payload.formalSpeakerId,
       isCurrentUser: item.userId === session.userId,
-      recommended: item.speakerId === recommendedSpeakerId,
     }))
     const representedUserIds = new Set(rows.flatMap(raw => {
       const speaker = objectValue(raw)
@@ -335,23 +322,43 @@ export class RecordingService {
       return userId === undefined ? [] : [userId]
     }))
     const userOptions = candidateUsers.filter(candidate => !representedUserIds.has(candidate.userId)).map(
-      (candidate): ArkmeRecordingSpeakerOption => ({
-        optionKey: createHmac('sha256', speakerRefKey)
-          .update(JSON.stringify([this.runtime.config.environment, session.userId, 'arkme-user', candidate.userId])).digest('base64url'),
+      (candidate): ArkmeRecordingSpeakerCandidate => ({
+        optionKey: this.recordingSpeakerOptionKey(speakerRefKey, session.userId, 'arkme-user', candidate.userId),
         speakerRef: this.sealRecordingRefWithKey('arkme-recording-speaker-v1', {
           version: 1,
-          viewerUserId: payload.viewerUserId,
+          viewerUserId: session.userId,
           target: { kind: 'arkme-user', userId: candidate.userId },
         }, speakerRefKey),
         label: candidate.label,
         ...(candidate.avatarRef === undefined ? {} : { avatarRef: candidate.avatarRef }),
         kind: 'arkme-user',
-        currentAssignment: false,
         isCurrentUser: candidate.userId === session.userId,
-        recommended: false,
       }),
     )
-    return [...speakerOptions, ...userOptions].sort((left, right) => Number(right.recommended) - Number(left.recommended))
+    return [...speakerOptions, ...userOptions]
+  }
+
+  async recordingSpeakerRecommendation(itemRef: string, signal?: AbortSignal): Promise<ArkmeRecordingSpeakerRecommendation> {
+    this.assertWorkbenchEnabled()
+    const item = await this.openRecordingItemRef(itemRef)
+    const session = await this.runtime.requireSession()
+    if (session.userId !== item.viewerUserId) {
+      throw new ArkmePluginError('recording-ref-account-mismatch', '录音引用与当前账号不匹配', false, 403)
+    }
+    const similar = await this.runtime.authenticatedAudioPost<Record<string, unknown>>(
+      '/api/v1/audio/similar-session-speaker',
+      { session_id: item.sessionId, num: item.assignmentSpeakerNumber }, session, signal,
+    )
+    const speakerId = stringValue(similar.speaker_id).trim()
+    if (speakerId === '') return {}
+    return { optionKey: this.recordingSpeakerOptionKey(
+      await this.recordingRefKey('arkme-recording-speaker-v1'), session.userId, 'speaker', speakerId,
+    ) }
+  }
+
+  private recordingSpeakerOptionKey(key: Buffer, viewerUserId: number, kind: 'speaker' | 'arkme-user', id: string | number): string {
+    return createHmac('sha256', key)
+      .update(JSON.stringify([this.runtime.config.environment, viewerUserId, kind, id])).digest('base64url')
   }
 
   async assignRecordingSpeaker(input: {
@@ -1183,6 +1190,7 @@ export class RecordingService {
     const date = this.recordingDayStart(dateStamp).getTime()
     const data = await this.readRecordingTranscripts(date, session, signal)
     const key = await this.recordingRefKey('arkme-recording-item-v1')
+    const speakerRefKey = await this.recordingRefKey('arkme-recording-speaker-v1')
     const project = (source: ArkmeRecordingTranscriptSource) => {
       const section = data.section(source)
       const counts = new Map<string, number>()
@@ -1190,7 +1198,7 @@ export class RecordingService {
         const speakerKey = this.recordingSpeakerMutationKey(item)
         counts.set(speakerKey, (counts.get(speakerKey) ?? 0) + 1)
       }
-      return { ...section, items: section.items.map(item => this.workbenchItem(date, item, counts.get(this.recordingSpeakerMutationKey(item))!, session.userId, key)) }
+      return { ...section, items: section.items.map(item => this.workbenchItem(date, item, counts.get(this.recordingSpeakerMutationKey(item))!, session.userId, key, speakerRefKey)) }
     }
     return { dateStamp: date, system: project('system'), doubao: project('doubao'), candidateCount: data.candidateCount, failedCount: data.failedCount, silentCount: data.silentCount }
   }
@@ -1350,6 +1358,7 @@ export class RecordingService {
         counts.set(key, (counts.get(key) ?? 0) + 1)
       }
       const recordingItemRefKey = await this.recordingRefKey('arkme-recording-item-v1')
+      const speakerRefKey = await this.recordingRefKey('arkme-recording-speaker-v1')
       transcript = {
         ...transcriptResult.value,
         items: items.map(item => this.workbenchItem(
@@ -1358,6 +1367,7 @@ export class RecordingService {
           counts.get(this.recordingSpeakerMutationKey(item)) ?? 1,
           session.userId,
           recordingItemRefKey,
+          speakerRefKey,
         )),
       }
     } else {
@@ -1387,6 +1397,7 @@ export class RecordingService {
     sameSpeakerItemCount: number,
     viewerUserId: number,
     refKey: Buffer,
+    speakerRefKey: Buffer,
   ): ArkmeRecordingWorkbenchItem {
     const payload: RecordingItemRefPayload = {
       version: 1,
@@ -1414,6 +1425,7 @@ export class RecordingService {
       endAtMillis: item.endAtMillis,
       speakerNumber: item.speakerNumber,
       speakerKey: createHmac('sha256', refKey).update(`speaker:${item.speakerIdentity}`).digest('base64url'),
+      ...(item.formalSpeakerId === '' ? {} : { assignedSpeakerOptionKey: this.recordingSpeakerOptionKey(speakerRefKey, viewerUserId, 'speaker', item.formalSpeakerId) }),
       speakerColorIndex: item.speakerColorIndex,
       speakerLabel: item.speakerLabel,
       ...(item.speakerAvatarRef === undefined ? {} : { speakerAvatarRef: item.speakerAvatarRef }),

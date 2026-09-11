@@ -1,8 +1,8 @@
 import { act, create, type ReactTestRenderer } from 'react-test-renderer'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-const mocks = vi.hoisted(() => ({ callArkme: vi.fn() }))
-vi.mock('../src/client/api.js', () => ({ callArkme: mocks.callArkme }))
+const mocks = vi.hoisted(() => ({ callArkme: vi.fn(), recommendation: vi.fn() }))
+vi.mock('../src/client/api.js', () => ({ callArkme: (operation: string, ...args: unknown[]) => operation === 'recordings.speaker.recommendation' ? mocks.recommendation(...args) : mocks.callArkme(operation, ...args) }))
 
 import { arkmeAuthStore } from '../src/client/auth-store.js'
 
@@ -14,6 +14,7 @@ describe('recording speaker editor failure recovery', () => {
   let renderer: ReactTestRenderer
 
   beforeEach(() => {
+    mocks.recommendation.mockReset().mockResolvedValue({})
     mocks.callArkme.mockReset()
     arkmeAuthStore.setAuth({ status: 'logged-out', environment: 'test' })
     arkmeAuthStore.setAuth({ status: 'authenticated', environment: 'test', userId: 42 })
@@ -29,18 +30,18 @@ describe('recording speaker editor failure recovery', () => {
   })
 
 
-  it('keeps cached candidates visible when reopening while a refresh is pending', async () => {
+  it('shares cached candidates with another item while refresh is pending', async () => {
     const option = { optionKey: 'key-speaker-1', speakerRef: 'speaker-1', kind: 'speaker', label: '缓存说话人', recommended: false, currentAssignment: true, isCurrentUser: false }
     mocks.callArkme.mockResolvedValueOnce([option])
     const editor = <ArkmeRecordingSpeakerEditor item={{
-      itemId: 'item-1', itemRef: 'sealed-item', speakerLabel: '说话人 1', speakerColorIndex: 1,
+      itemId: 'item-1', itemRef: 'sealed-item', assignedSpeakerOptionKey: 'key-speaker-1', speakerLabel: '说话人 1', speakerColorIndex: 1,
       speakerNumber: 1, speakerKey: 'speaker-opaque', sameSpeakerItemCount: 3,
       text: '内容', startAtMillis: 1_000, endAtMillis: 2_000, isBackground: false, isSelf: false,
     }} onUpdated={() => {}} onClose={() => {}} />
     await act(async () => { renderer = create(editor); await tick() })
     await act(async () => { renderer.unmount(); await tick() })
     mocks.callArkme.mockImplementationOnce(() => new Promise(() => {}))
-    await act(async () => { renderer = create(editor); await tick() })
+    await act(async () => { renderer = create(<ArkmeRecordingSpeakerEditor {...editor.props} item={{ ...editor.props.item, itemRef: 'another-item' }} />); await tick() })
     expect(JSON.stringify(renderer.toJSON())).toContain('缓存说话人')
     expect(JSON.stringify(renderer.toJSON())).not.toContain('正在读取候选')
   })
@@ -54,7 +55,7 @@ describe('recording speaker editor failure recovery', () => {
     const onUpdated = vi.fn()
     const onClose = vi.fn()
     const editor = <ArkmeRecordingSpeakerEditor item={{
-      itemId: 'item-1', itemRef: 'sealed-item', speakerLabel: '说话人 1', speakerColorIndex: 1,
+      itemId: 'item-1', itemRef: 'sealed-item', assignedSpeakerOptionKey: 'key-speaker-1', speakerLabel: '说话人 1', speakerColorIndex: 1,
       speakerNumber: 1, speakerKey: 'speaker-opaque', sameSpeakerItemCount: 3,
       text: '内容', startAtMillis: 1_000, endAtMillis: 2_000, isBackground: false, isSelf: false,
     }} onUpdated={onUpdated} onClose={onClose} />
@@ -86,7 +87,7 @@ describe('recording speaker editor failure recovery', () => {
     const options = [{ optionKey: 'key-speaker-1', speakerRef: 'speaker-1', kind: 'speaker', label: '已缓存候选', recommended: false, currentAssignment: false, isCurrentUser: false }]
     mocks.callArkme.mockResolvedValueOnce(options)
     const editor = <ArkmeRecordingSpeakerEditor item={{
-      itemId: 'item-1', itemRef: 'sealed-item', speakerLabel: '说话人 1', speakerColorIndex: 1,
+      itemId: 'item-1', itemRef: 'sealed-item', assignedSpeakerOptionKey: 'key-speaker-1', speakerLabel: '说话人 1', speakerColorIndex: 1,
       speakerNumber: 1, speakerKey: 'speaker-opaque', sameSpeakerItemCount: 3,
       text: '内容', startAtMillis: 1_000, endAtMillis: 2_000, isBackground: false, isSelf: false,
     }} onUpdated={() => {}} onClose={() => {}} />
@@ -104,7 +105,7 @@ describe('recording speaker editor failure recovery', () => {
     mocks.callArkme.mockRejectedValueOnce(new Error('候选不可用')).mockResolvedValueOnce([])
     await act(async () => {
       renderer = create(<ArkmeRecordingSpeakerEditor item={{
-        itemId: 'item-1', itemRef: 'sealed-item', speakerLabel: '说话人 1', speakerColorIndex: 1,
+        itemId: 'item-1', itemRef: 'sealed-item', assignedSpeakerOptionKey: 'key-speaker-1', speakerLabel: '说话人 1', speakerColorIndex: 1,
         speakerNumber: 1, speakerKey: 'speaker-opaque', sameSpeakerItemCount: 3,
         text: '内容', startAtMillis: 1_000, endAtMillis: 2_000, isBackground: false, isSelf: false,
       }} onUpdated={() => {}} onClose={() => {}} />)
@@ -144,7 +145,7 @@ describe('recording speaker editor failure recovery', () => {
     })
     await act(async () => {
       renderer = create(<ArkmeRecordingSpeakerEditor item={{
-        itemId: 'item-1', itemRef: 'sealed-item', speakerLabel: '说话人 1', speakerColorIndex: 1,
+        itemId: 'item-1', itemRef: 'sealed-item', assignedSpeakerOptionKey: 'key-speaker-1', speakerLabel: '说话人 1', speakerColorIndex: 1,
         speakerNumber: 1, speakerKey: 'speaker-opaque', sameSpeakerItemCount: 3,
         text: '内容', startAtMillis: 1_000, endAtMillis: 2_000, isBackground: false, isSelf: false,
       }} onUpdated={() => {}} onClose={() => {}} />)
@@ -172,7 +173,7 @@ describe('recording speaker editor failure recovery', () => {
     }])
     await act(async () => {
       renderer = create(<ArkmeRecordingSpeakerEditor item={{
-        itemId: 'item-1', itemRef: 'sealed-item', speakerLabel: '说话人 1', speakerColorIndex: 1,
+        itemId: 'item-1', itemRef: 'sealed-item', assignedSpeakerOptionKey: 'key-speaker-1', speakerLabel: '说话人 1', speakerColorIndex: 1,
         speakerNumber: 1, speakerKey: 'speaker-opaque', sameSpeakerItemCount: 1,
         text: '内容', startAtMillis: 1_000, endAtMillis: 2_000, isBackground: false, isSelf: false,
       }} onUpdated={() => {}} onClose={() => {}} />)

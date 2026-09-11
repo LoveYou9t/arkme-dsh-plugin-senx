@@ -1,4 +1,4 @@
-import type { ArkmeAuthSnapshot, ArkmeRecordingSpeakerMutationResult, ArkmeRecordingSpeakerOption } from '../../types.js'
+import type { ArkmeAuthSnapshot, ArkmeRecordingSpeakerMutationResult, ArkmeRecordingSpeakerCandidate, ArkmeRecordingSpeakerRecommendation } from '../../types.js'
 import { callArkme } from '../api.js'
 import { arkmeAuthStore } from '../auth-store.js'
 import { ResourceStore, resourceCancelled } from '../resource-store.js'
@@ -8,39 +8,56 @@ export function recordingSpeakerAccount(auth: ArkmeAuthSnapshot | undefined): st
     ? `${auth.environment}:${auth.userId}` : undefined
 }
 
-export interface RecordingSpeakerOptionsBinding { account: string | undefined; itemRef: string }
+export interface RecordingSpeakerItemBinding { account: string | undefined; itemRef: string }
 
-// Recommendation and assignment belong to the exact signed item context, not to a display name.
-export const recordingSpeakerOptions = new ResourceStore<ArkmeRecordingSpeakerOption[], RecordingSpeakerOptionsBinding>({
-  load: async (binding, signal) => {
-    const current = () => binding.account !== undefined
-      && binding.account === recordingSpeakerAccount(arkmeAuthStore.getSnapshot().auth) && !signal.aborted
-    if (!current()) throw resourceCancelled()
-    const options = await callArkme<ArkmeRecordingSpeakerOption[]>(
-      'recordings.speaker.options', { itemRef: binding.itemRef }, signal,
-    )
-    if (!current()) throw resourceCancelled()
+function currentAccount(account: string | undefined, signal?: AbortSignal): boolean {
+  return account !== undefined && account === recordingSpeakerAccount(arkmeAuthStore.getSnapshot().auth) && !signal?.aborted
+}
+
+export const recordingSpeakerOptions = new ResourceStore<ArkmeRecordingSpeakerCandidate[], string | undefined>({
+  load: async (account, signal) => {
+    if (!currentAccount(account, signal)) throw resourceCancelled()
+    const options = await callArkme<ArkmeRecordingSpeakerCandidate[]>('recordings.speaker.options', {}, signal)
+    if (!currentAccount(account, signal)) throw resourceCancelled()
     return options
   },
+})
+
+// Each editable item owns its optional recommendation and assignment concurrency.
+export const recordingSpeakerItemContexts = new ResourceStore<ArkmeRecordingSpeakerRecommendation, RecordingSpeakerItemBinding>({
+  load: async (binding, signal) => {
+    if (!currentAccount(binding.account, signal)) throw resourceCancelled()
+    const recommendation = await callArkme<ArkmeRecordingSpeakerRecommendation>(
+      'recordings.speaker.recommendation', { itemRef: binding.itemRef }, signal,
+    )
+    if (!currentAccount(binding.account, signal)) throw resourceCancelled()
+    return recommendation
+  },
 }, Date.now, 50)
+
+export function resetRecordingSpeakerCaches(): void {
+  recordingSpeakerOptions.reset()
+  recordingSpeakerItemContexts.reset()
+  recordingSpeakerOptions.invalidate()
+  recordingSpeakerItemContexts.invalidate()
+}
 
 let account = recordingSpeakerAccount(arkmeAuthStore.getSnapshot().auth)
 arkmeAuthStore.subscribe(() => {
   const next = recordingSpeakerAccount(arkmeAuthStore.getSnapshot().auth)
   if (account === next) return
   account = next
-  recordingSpeakerOptions.reset()
-  recordingSpeakerOptions.invalidate()
+  resetRecordingSpeakerCaches()
 })
 
 export async function assignRecordingSpeaker(
   key: string,
-  binding: RecordingSpeakerOptionsBinding,
+  binding: RecordingSpeakerItemBinding,
   input: { scope: 'item' | 'speaker'; speakerRef?: string; newSpeakerName?: string },
 ): Promise<ArkmeRecordingSpeakerMutationResult | undefined> {
-  return await recordingSpeakerOptions.mutate(key, binding, async context => {
+  return await recordingSpeakerItemContexts.mutate(key, binding, async context => {
     try {
-      if (binding.account === undefined || binding.account !== recordingSpeakerAccount(arkmeAuthStore.getSnapshot().auth)) throw resourceCancelled()
+      if (!currentAccount(binding.account)) throw resourceCancelled()
       const value = await callArkme<ArkmeRecordingSpeakerMutationResult>(
         'recordings.speaker.assign-item', { itemRef: binding.itemRef, ...input }, context.signal,
       )
@@ -52,8 +69,10 @@ export async function assignRecordingSpeaker(
     } finally {
       if (context.current()) {
         // A failed command may already have created a speaker. Reconcile reads; never retry the write.
-        recordingSpeakerOptions.reset(candidateKey => candidateKey === key || !recordingSpeakerOptions.get(candidateKey).mutating)
+        recordingSpeakerOptions.reset()
         recordingSpeakerOptions.invalidate()
+        recordingSpeakerItemContexts.reset(candidateKey => candidateKey === key || !recordingSpeakerItemContexts.get(candidateKey).mutating)
+        recordingSpeakerItemContexts.invalidate()
       }
     }
   })

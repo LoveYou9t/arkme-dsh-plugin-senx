@@ -1,11 +1,11 @@
 import { act, create, type ReactTestRenderer } from 'react-test-renderer'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ArkmeRecordingSpeakerOption, ArkmeRecordingWorkbenchItem } from '../src/types.js'
-const mocks = vi.hoisted(() => ({ callArkme: vi.fn() }))
-vi.mock('../src/client/api.js', () => ({ callArkme: mocks.callArkme, ArkmeClientError: class extends Error {} }))
+const mocks = vi.hoisted(() => ({ callArkme: vi.fn(), recommendation: vi.fn() }))
+vi.mock('../src/client/api.js', () => ({ callArkme: (operation: string, ...args: unknown[]) => operation === 'recordings.speaker.recommendation' ? mocks.recommendation(...args) : mocks.callArkme(operation, ...args), ArkmeClientError: class extends Error {} }))
 import { arkmeAuthStore } from '../src/client/auth-store.js'
 import { ArkmeRecordingSpeakerEditor } from '../src/client/recordings/ArkmeRecordingSpeakerEditor.js'
-import { recordingSpeakerOptions } from '../src/client/recordings/recording-speaker-options-store.js'
+import { recordingSpeakerOptions, recordingSpeakerItemContexts } from '../src/client/recordings/recording-speaker-options-store.js'
 
 const tick = async () => { for (let i = 0; i < 12; i++) await Promise.resolve() }
 function deferred<T>() {
@@ -40,7 +40,9 @@ describe('speaker cache interaction and lifecycle', () => {
   }
   const confirm = () => renderer.root.findAll(node => node.type === 'button' && node.children.join('') === '确认')[0]!
   beforeEach(() => {
+    mocks.recommendation.mockReset().mockResolvedValue({})
     recordingSpeakerOptions.reset()
+    recordingSpeakerItemContexts.reset()
     arkmeAuthStore.setAuth({ status: 'authenticated', environment: 'test', userId: 42 })
     mocks.callArkme.mockReset().mockImplementation(async operation => {
       if (operation === 'recordings.speaker.options') return options
@@ -52,6 +54,7 @@ describe('speaker cache interaction and lifecycle', () => {
   afterEach(async () => {
     await act(async () => { renderer?.unmount(); await tick() })
     recordingSpeakerOptions.reset()
+    recordingSpeakerItemContexts.reset()
     vi.unstubAllGlobals()
   })
 
@@ -66,13 +69,47 @@ describe('speaker cache interaction and lifecycle', () => {
       return write.promise
     })
     await open(); await chooseUser()
+    const originalReadSignal = readSignal
     expect(confirm().props.disabled).toBe(false)
     await act(async () => { confirm().props.onClick(); await tick() })
     expect(mocks.callArkme).toHaveBeenCalledWith('recordings.speaker.assign-item', {
       itemRef: item.itemRef, scope: 'item', speakerRef: 'user-ref',
     }, expect.any(AbortSignal))
-    expect(readSignal?.aborted).toBe(true)
+    expect(readSignal?.aborted).toBe(false)
     await act(async () => { write.resolve({ day: { dateStamp: 1 } }); refresh.resolve(options); await tick() })
+    expect(onUpdated).toHaveBeenCalledOnce()
+    expect(originalReadSignal?.aborted).toBe(true)
+  })
+
+  it('shows the shared directory and the new item assignment while recommendation is pending', async () => {
+    await open({ ...item, assignedSpeakerOptionKey: 'voiceprint' })
+    await act(async () => { renderer.unmount(); await tick() })
+    const recommendation = deferred<{ optionKey?: string }>()
+    mocks.recommendation.mockReturnValue(recommendation.promise)
+    const refresh = deferred<ArkmeRecordingSpeakerOption[]>()
+    mocks.callArkme.mockImplementation(operation => operation === 'recordings.speaker.options' ? refresh.promise : Promise.resolve({ day: { dateStamp: 1 } }))
+    await open({ ...item, itemRef: 'another-item', assignedSpeakerOptionKey: 'user' })
+    expect(JSON.stringify(renderer.toJSON())).not.toContain('正在读取候选')
+    expect(confirm().props.disabled).toBe(true)
+    const voiceprint = renderer.root.findAll(node => node.type === 'button' && node.findAll(child => child.type === 'span' && child.children.includes('同名')).length > 0)[0]!
+    await act(async () => { voiceprint.props.onClick(); await tick() })
+    expect(confirm().props.disabled).toBe(false)
+    await act(async () => { recommendation.resolve({ optionKey: 'user' }); await tick() })
+    expect(confirm().props.disabled).toBe(false)
+    await act(async () => { confirm().props.onClick(); await tick() })
+    expect(mocks.callArkme).toHaveBeenCalledWith('recordings.speaker.assign-item', {
+      itemRef: 'another-item', scope: 'item', speakerRef: 'voiceprint-ref',
+    }, expect.any(AbortSignal))
+    await act(async () => { refresh.resolve(options); await tick() })
+  })
+
+  it('does not let a failed recommendation hide candidates or block saving', async () => {
+    mocks.recommendation.mockRejectedValue(new Error('推荐服务超时'))
+    await open(); await chooseUser()
+    expect(confirm().props.disabled).toBe(false)
+    expect(JSON.stringify(renderer.toJSON())).not.toContain('推荐服务超时')
+    mocks.callArkme.mockImplementation(async operation => operation === 'recordings.speaker.options' ? options : { day: { dateStamp: 1 } })
+    await act(async () => { confirm().props.onClick(); await tick() })
     expect(onUpdated).toHaveBeenCalledOnce()
   })
 

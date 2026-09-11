@@ -1,12 +1,10 @@
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties } from 'react'
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { createPortal } from 'react-dom'
 import { Check } from '@phosphor-icons/react/dist/icons/Check'
 import { Plus } from '@phosphor-icons/react/dist/icons/Plus'
 import type { ArkmeRecordingDay, ArkmeRecordingSpeakerOption, ArkmeRecordingWorkbenchItem } from '../../types.js'
 import { ArkmeUserAvatar } from '../ArkmeAvatar.js'
-import { arkmeAuthStore } from '../auth-store.js'
-import { useResource } from '../use-resource.js'
-import { assignRecordingSpeaker, recordingSpeakerAccount, recordingSpeakerOptions } from './recording-speaker-options-store.js'
+import { useRecordingSpeakerOptions } from './use-recording-speaker-options.js'
 import { arkmeTheme } from '../arkme-theme.js'
 
 const desktop = {
@@ -103,21 +101,12 @@ export function ArkmeRecordingSpeakerEditor({ item, anchor, forceBatchUpdate = f
   onUpdated(day: ArkmeRecordingDay): void
   onClose(): void
 }) {
-  const auth = useSyncExternalStore(arkmeAuthStore.subscribe, arkmeAuthStore.getSnapshot, arkmeAuthStore.getSnapshot)
-  const account = recordingSpeakerAccount(auth.auth)
-  const binding = useMemo(() => ({ account, itemRef: item.itemRef }), [account, item.itemRef])
-  const key = account === undefined ? undefined : JSON.stringify([account, item.itemRef])
-  const { snapshot, refresh } = useResource(recordingSpeakerOptions, key, binding)
-  const options = snapshot.value ?? []
-  const loading = snapshot.value === undefined && snapshot.error === undefined
-  const optionsError = snapshot.error === undefined ? ''
-    : snapshot.error instanceof Error ? snapshot.error.message : '说话人候选读取失败'
+  const { contextKey: key, options, loading, error: optionsError, ready: optionsReady, pending, refresh, save } = useRecordingSpeakerOptions(item)
   const selectionTouched = useRef(false)
   const viewGeneration = useRef(0)
   const [selected, setSelected] = useState('')
   const [query, setQuery] = useState('')
   const [batch, setBatch] = useState(forceBatchUpdate)
-  const pending = snapshot.mutating
   const [mutationError, setMutationError] = useState('')
   const categories = useMemo(() => categorizeRecordingSpeakerOptions(options, query), [options, query])
   const newSpeakerName = query.trim()
@@ -133,8 +122,8 @@ export function ArkmeRecordingSpeakerEditor({ item, anchor, forceBatchUpdate = f
   }, [forceBatchUpdate, key])
 
   useEffect(() => {
-    if (!selectionTouched.current) setSelected(snapshot.value?.find(option => option.currentAssignment)?.optionKey ?? '')
-  }, [snapshot.value, key, forceBatchUpdate])
+    if (!selectionTouched.current) setSelected(options.find(option => option.currentAssignment)?.optionKey ?? '')
+  }, [options, key, forceBatchUpdate])
 
   useEffect(() => {
     const closeOnEscape = (event: KeyboardEvent) => { if (event.key === 'Escape' && !pending) onClose() }
@@ -148,10 +137,9 @@ export function ArkmeRecordingSpeakerEditor({ item, anchor, forceBatchUpdate = f
     const target = options.find(option => option.optionKey === selected)
     setMutationError('')
     try {
-      const result = await assignRecordingSpeaker(key, binding, {
-        scope: forceBatchUpdate || batch ? 'speaker' : 'item',
-        ...(target === undefined ? { newSpeakerName } : { speakerRef: target.speakerRef }),
-      })
+      const result = await save(forceBatchUpdate || batch ? 'speaker' : 'item',
+        target === undefined ? { newSpeakerName } : { optionKey: target.optionKey },
+      )
       if (result === undefined) return
       if (viewGeneration.current !== generation) return
       onUpdated(result.day); onClose()
@@ -168,7 +156,6 @@ export function ArkmeRecordingSpeakerEditor({ item, anchor, forceBatchUpdate = f
   }
   const canBatch = forceBatchUpdate || item.sameSpeakerItemCount > 1
   const selectedCurrent = options.some(option => option.currentAssignment && option.optionKey === selected)
-  const optionsReady = account !== undefined && snapshot.value !== undefined && !snapshot.stale && optionsError === ''
   const canSubmit = optionsReady && !pending && !selectedCurrent
     && (options.some(option => option.optionKey === selected) || (newSpeakerName !== '' && !exactMatch))
   const position = recordingSpeakerPopoverPosition(
