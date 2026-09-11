@@ -16,6 +16,7 @@ let store: ArkmeConversationMemoryCache
 let scrollTop: number
 let viewportHeight: number
 let pageHeight: number
+let restoreIntent: { current: boolean | undefined }
 let pending: { current: ArkmeConversationViewportRestore | undefined }
 const rowCount: Record<string, number> = { A: 30, B: 12 }
 function Harness({ selected = 'A', active = true, hold = false }: { selected?: string; active?: boolean; hold?: boolean }) {
@@ -28,7 +29,7 @@ function Harness({ selected = 'A', active = true, hold = false }: { selected?: s
     }
   }, [selected, hold])
   const remember = useConversationViewport({ active, sourceKey: selected, renderedSourceKey: rendered,
-    bodyRef, store, pendingRestore: pending })
+    bodyRef, store, pendingRestore: pending, restoreIntent })
   return <div ref={bodyRef} data-viewport={rendered} onScroll={remember}>
     {Array.from({ length: rowCount[rendered]! }, (_, index) => <div key={`${rendered}-${index}`}
       data-arkme-conversation-row={`message:${rendered}-${index}`} data-row-index={index}>{rendered}:{index}</div>)}
@@ -48,6 +49,7 @@ function rect(top: number, height: number): DOMRect {
 beforeEach(() => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
   host = document.createElement('div'); document.body.append(host); root = createRoot(host)
+  restoreIntent = { current: undefined }
   store = new ArkmeConversationMemoryCache(); pending = { current: undefined }
   scrollTop = 0; viewportHeight = 500; pageHeight = 100; rowCount.B = 12
   vi.spyOn(HTMLElement.prototype, 'scrollTop', 'get').mockImplementation(function () {
@@ -132,6 +134,21 @@ describe('conversation viewport ownership', () => {
     render(); scroll(730)
     pending.current = { sourceKey: 'A', viewport: store.getViewport('A'), newerPageStartAnchorId: 'message:A-15' }
     render(); expect(scrollTop).toBe(1500)
+  })
+
+  it('passes explicit follow intent to deferred layout without treating clamped history as latest', () => {
+    render()
+    expect(restoreIntent.current).toBe(true)
+    pending.current = { sourceKey: 'A', viewport: { scrollTop: 9000, stickToBottom: false } }
+    render()
+    expect(scrollTop).toBe(maximum())
+    expect(restoreIntent.current).toBe(false)
+    pending.current = { sourceKey: 'A', viewport: undefined, newerPageStartAnchorId: 'message:A-29' }
+    render()
+    expect(restoreIntent.current).toBe(false)
+    restoreIntent.current = undefined
+    render()
+    expect(restoreIntent.current).toBeUndefined()
   })
 
   it('clamps the pixel fallback when the saved message was removed', () => {

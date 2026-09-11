@@ -48,13 +48,14 @@ export function arkmeConversationAnchorOffset(root: HTMLDivElement, anchorId: st
 }
 
 /** Bind the shared scrollport to its committed conversation, never to an outgoing cleanup. */
-export function useConversationViewport({ active, sourceKey, renderedSourceKey, bodyRef, store, pendingRestore }: {
+export function useConversationViewport({ active, sourceKey, renderedSourceKey, bodyRef, store, pendingRestore, restoreIntent }: {
   active: boolean
   sourceKey: string
   renderedSourceKey: string
   bodyRef: RefObject<HTMLDivElement>
   store: ArkmeConversationViewportStore
   pendingRestore: MutableRefObject<ArkmeConversationViewportRestore | undefined>
+  restoreIntent?: MutableRefObject<boolean | undefined>
 }) {
   const ready = active && sourceKey !== '' && sourceKey === renderedSourceKey
   useLayoutEffect(() => {
@@ -85,6 +86,11 @@ export function useConversationViewport({ active, sourceKey, renderedSourceKey, 
         ? pending.viewport?.scrollTop ?? body.scrollTop
         : body.scrollTop + newerPageStartOffset))
     store.storeViewport(sourceKey, arkmeConversationViewport(body))
+    if (restoreIntent !== undefined) {
+      // Deferred layout follows the requested position, not temporary geometry.
+      restoreIntent.current = pending.newerPageStartAnchorId === undefined
+        && (pending.viewport === undefined || pending.viewport.stickToBottom)
+    }
     pendingRestore.current = undefined
   })
 

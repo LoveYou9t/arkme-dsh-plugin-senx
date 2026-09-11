@@ -1,3 +1,5 @@
+import { arkmeDetailExtensionComposerStyles } from './detail-extension-composer-style.js'
+import { FileTextIcon } from '@phosphor-icons/react/dist/csr/FileText'
 import { ArkmeRecordTopicAssignmentDialog } from './ArkmeRecordTopicAssignmentDialog.js'
 import { retainNewerArkmeChatPolicy } from '../chat-policy-projection.js'
 import { arkmeMarkdownPlainText } from '../markdown.js'
@@ -96,6 +98,7 @@ import { ArkmeConfirmDialog } from './ArkmeConfirmDialog.js'
 import { ArkmeRichComposerInput, type ArkmeRichComposerHandle } from './ArkmeRichComposerInput.js'
 import { useResizableComposer } from './use-resizable-composer.js'
 import { useConversationResizeAnchor } from './conversation-resize-anchor.js'
+import { useResizableNoteDetail } from './use-resizable-note-detail.js'
 import { ArkmeEmojiPicker } from './ArkmeEmojiPicker.js'
 import type { ArkmeEmoji } from './arkme-emoji.js'
 import { ArkmeSearchSurface } from './ArkmeSearchSurface.js'
@@ -728,7 +731,7 @@ const styles: Record<string, CSSProperties> = {
   forwardTargetSendError: { margin: '8px 2px 0', color: colors.danger, fontSize: 12, lineHeight: '16px' },
   copyLinkDetailPanel: {
     position: 'absolute', top: ARKME_CONVERSATION_HEADER_HEIGHT, right: 0, bottom: 0, zIndex: 10,
-    width: 'min(440px, 100%)', minWidth: 0, boxSizing: 'border-box', display: 'flex', flexDirection: 'column',
+    minWidth: 0, boxSizing: 'border-box', display: 'flex', flexDirection: 'column',
     background: arkmeTheme.base, color: arkmeTheme.text, borderLeft: `1px solid ${arkmeTheme.borderSoft}`,
     boxShadow: '-12px 0 28px rgba(29,32,40,.055)',
   },
@@ -799,26 +802,13 @@ const styles: Record<string, CSSProperties> = {
     minHeight: 32, display: 'flex', alignItems: 'center', justifyContent: 'center',
     padding: '2px 16px', boxSizing: 'border-box', color: arkmeTheme.tertiary, textAlign: 'center', fontSize: 11, lineHeight: '16px',
   },
-  copyLinkDetailFooterDivider: { height: 1, background: arkmeTheme.borderSoft },
-  copyLinkDetailInputArea: { padding: '12px 16px 12px', boxSizing: 'border-box' },
-  copyLinkDetailInputBar: { position: 'relative', minHeight: 54, borderRadius: 12, background: arkmeTheme.subtle, boxSizing: 'border-box' },
+  copyLinkDetailInputArea: arkmeDetailExtensionComposerStyles.bar,
+  copyLinkDetailInputBar: arkmeDetailExtensionComposerStyles.shell,
   copyLinkDetailInputIcon: {
-    position: 'absolute', left: 16, top: '50%', transform: 'translateY(-50%)',
-    width: 18, height: 18, display: 'grid', placeItems: 'center', color: arkmeTheme.tertiary,
+    width: 18, height: 28, flex: 'none', alignSelf: 'flex-start',
+    display: 'grid', placeItems: 'center', color: arkmeTheme.tertiary,
   },
-  copyLinkDetailInput: {
-    width: '100%', minHeight: 54, maxHeight: 112, minWidth: 0, border: 0, outline: 'none', resize: 'none',
-    padding: '17px 66px 17px 46px', boxSizing: 'border-box', background: 'transparent', color: arkmeTheme.text,
-    fontSize: 14, lineHeight: '20px', fontFamily: 'inherit',
-  },
-  copyLinkDetailInputSend: {
-    position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)',
-    width: 40, height: 40, border: 0, borderRadius: 999, display: 'grid', placeItems: 'center',
-    background: arkmeTheme.text, color: arkmeTheme.base, cursor: 'pointer', padding: 0,
-  },
-  copyLinkDetailInputSendDisabled: {
-    background: arkmeTheme.layer2, color: arkmeTheme.caption, opacity: .72, cursor: 'default',
-  },
+  copyLinkDetailInput: arkmeDetailExtensionComposerStyles.input,
   copyLinkDetailSendError: {
     margin: '8px 2px 0', color: colors.danger, fontSize: 12, lineHeight: '16px',
   },
@@ -1929,15 +1919,6 @@ function ArkmeForwardSubmitIcon() {
   return <ArkmeSelectActionIcon kind="forward" size={22} />
 }
 
-function ArkmeCopyLinkDetailInputIcon() {
-  return <svg width="16" height="16" viewBox="0 0 20 20" fill="none" aria-hidden>
-    <path d="M5.25 2.25H11.2L15.75 6.8V17.75H5.25V2.25Z" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" />
-    <path d="M11.25 2.5V6.75H15.5" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" />
-    <path d="M7.75 11H13.25" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
-    <path d="M7.75 14H11.25" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
-  </svg>
-}
-
 function ArkmeSearchIcon() {
   return <svg width="17" height="17" viewBox="0 0 20 20" fill="none" aria-hidden>
     <path d="M8.75 15.5C12.4779 15.5 15.5 12.4779 15.5 8.75C15.5 5.02208 12.4779 2 8.75 2C5.02208 2 2 5.02208 2 8.75C2 12.4779 5.02208 15.5 8.75 15.5Z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
@@ -2011,6 +1992,8 @@ function CopyLinkDetailDrawer({
   sendError: string
   shareWebsite: string
 }) {
+  const panelRef = useRef<HTMLElement>(null)
+  const resize = useResizableNoteDetail(panelRef)
   const detail = state.status === 'ready' ? state.detail : undefined
   const title = detail?.displayTitle.trim() || '快记详情'
   const subtitle = detail === undefined ? '' : copyLinkDetailDateRange(detail.items)
@@ -2073,7 +2056,8 @@ function CopyLinkDetailDrawer({
   const extensionItems = detail?.recordContext?.extensions ?? []
   const extensionCount = Math.max(detail?.recordContext?.extensionCount ?? 0, extensionItems.length)
   const showExtensions = extensionCount > 0 || extensionItems.length > 0
-  return <aside style={styles.copyLinkDetailPanel} aria-label="快记分享链接详情" data-arkme-copy-link-detail="true">
+  return <aside ref={panelRef} style={{ ...styles.copyLinkDetailPanel, ...resize.style }} aria-label="快记分享链接详情" data-arkme-copy-link-detail="true">
+    {resize.handle}
     <header style={styles.copyLinkDetailHeader}>
       <div style={{ minWidth: 0 }}>
         <h3 style={styles.copyLinkDetailTitle}>{title}</h3>
@@ -2114,10 +2098,9 @@ function CopyLinkDetailDrawer({
     </div>}
     {detail !== undefined && <footer style={styles.copyLinkDetailFooter}>
       {generatedAt !== '' && <div style={styles.copyLinkDetailGeneratedAt}>此链接生成时间：{generatedAt}</div>}
-      <div style={styles.copyLinkDetailFooterDivider} aria-hidden />
-      <div style={styles.copyLinkDetailInputArea}>
-        <div style={styles.copyLinkDetailInputBar}>
-          <span style={styles.copyLinkDetailInputIcon}><ArkmeCopyLinkDetailInputIcon /></span>
+      <div className="arkme-detail-extension-input-bar" style={styles.copyLinkDetailInputArea}>
+        <div className="arkme-detail-extension-input-shell" style={styles.copyLinkDetailInputBar}>
+          <span aria-hidden style={styles.copyLinkDetailInputIcon}><FileTextIcon size={18} /></span>
           <textarea
             style={styles.copyLinkDetailInput}
             value={draft}
@@ -2134,13 +2117,11 @@ function CopyLinkDetailDrawer({
               }
             }}
           />
-          <button
-            type="button"
-            style={{ ...styles.copyLinkDetailInputSend, ...(sendDisabled ? styles.copyLinkDetailInputSendDisabled : {}) }}
+          <ArkmeComposerSendButton
+            ariaLabel={sendBusy ? '发送中' : '发送延展'}
             disabled={sendDisabled}
-            aria-label={sendBusy ? '发送中' : '发送延展'}
             onClick={onSendDraft}
-          ><ArkmeForwardSubmitIcon /></button>
+          />
         </div>
         {sendError !== '' && <div role="alert" style={styles.copyLinkDetailSendError}>{sendError}</div>}
       </div>
@@ -2624,6 +2605,7 @@ export function ArkmeSurface({
   const surfaceRef = useRef<HTMLDivElement>(null)
   const panelRef = useRef<HTMLElement>(null)
   const bodyRef = useRef<HTMLDivElement>(null)
+  const recordsRef = useRef<HTMLUListElement>(null)
   const endAccessoryRef = useRef<HTMLDivElement>(null)
   const sentinelRef = useRef<HTMLDivElement>(null)
   const newerSentinelRef = useRef<HTMLDivElement>(null)
@@ -3115,6 +3097,7 @@ export function ArkmeSurface({
     requestKey: string
   }>())
   const pendingViewportRestoreRef = useRef<ArkmeConversationViewportRestore>()
+  const viewportRestoreIntentRef = useRef<boolean>()
   const pendingConversationTargetLocateRef = useRef<{
     sourceKey: string
     itemUid: string
@@ -3129,6 +3112,7 @@ export function ArkmeSurface({
   const momentRelatedGenerationRef = useRef(0)
   const snapshotRequestRef = useRef<AbortController>()
   const copyLinkDetailRequestRef = useRef<AbortController>()
+  const copyLinkDetailScopeRef = useRef({ sending: false })
   const forwardTargetRequestRef = useRef<AbortController>()
   const copyLinkRefreshTimerRef = useRef<number>()
   const lastReadAckRef = useRef('')
@@ -3164,6 +3148,7 @@ export function ArkmeSurface({
     snapshotRequestRef.current = undefined
     copyLinkDetailRequestRef.current?.abort()
     copyLinkDetailRequestRef.current = undefined
+    copyLinkDetailScopeRef.current = { sending: false }
     forwardTargetRequestRef.current?.abort()
     forwardTargetRequestRef.current = undefined
     if (copyLinkRefreshTimerRef.current !== undefined) {
@@ -4008,6 +3993,7 @@ export function ArkmeSurface({
     snapshotRequestRef.current = undefined
     copyLinkDetailRequestRef.current?.abort()
     copyLinkDetailRequestRef.current = undefined
+    copyLinkDetailScopeRef.current = { sending: false }
     forwardTargetRequestRef.current?.abort()
     forwardTargetRequestRef.current = undefined
     if (copyLinkRefreshTimerRef.current !== undefined) {
@@ -5699,6 +5685,7 @@ export function ArkmeSurface({
     const maximumTop = Math.max(0, body.scrollHeight - body.clientHeight)
     pendingConversationTargetLocateRef.current = undefined
     pendingViewportRestoreRef.current = undefined
+    viewportRestoreIntentRef.current = false
     body.scrollTo({ top: Math.max(0, Math.min(maximumTop, centeredTop)), behavior: 'auto' })
     setHighlightedTargetUid(pending.itemUid)
     conversationTargetLocatedRevisionRef.current = pending.revision
@@ -6168,6 +6155,12 @@ export function ArkmeSurface({
     const controller = new AbortController()
     copyLinkDetailRequestRef.current = controller
     const timeout = window.setTimeout(() => {
+      if (copyLinkDetailRequestRef.current !== controller || !activeConversationRef.current) return
+      setCopyLinkDetail(current => current?.sid === normalizedSid
+        ? options.preserveReady === true && current.status === 'ready'
+          ? current
+          : { sid: normalizedSid, status: 'error', message: '链接暂不可用' }
+        : current)
       controller.abort()
     }, MESSAGE_ACTION_REQUEST_TIMEOUT_MS)
     if (options.preserveReady !== true) {
@@ -6189,7 +6182,7 @@ export function ArkmeSurface({
         setCopyLinkDetail(current => current?.sid === normalizedSid
           ? options.preserveReady === true && current.status === 'ready'
             ? current
-            : { sid: normalizedSid, status: 'error', message: controller.signal.aborted ? '链接暂不可用' : errorMessage(caught) || '链接暂不可用' }
+            : { sid: normalizedSid, status: 'error', message: errorMessage(caught) || '链接暂不可用' }
           : current)
       })
       .finally(() => {
@@ -6200,6 +6193,8 @@ export function ArkmeSurface({
   const closeMessageCopyLinkDetail = useCallback(() => {
     copyLinkDetailRequestRef.current?.abort()
     copyLinkDetailRequestRef.current = undefined
+    copyLinkDetailScopeRef.current = { sending: false }
+    setCopyLinkDetailSending(false)
     if (copyLinkRefreshTimerRef.current !== undefined) {
       window.clearTimeout(copyLinkRefreshTimerRef.current)
       copyLinkRefreshTimerRef.current = undefined
@@ -6211,6 +6206,12 @@ export function ArkmeSurface({
   }, [])
   const openMessageCopyLinkDetail = useCallback((sid: string) => {
     if (!activeConversationRef.current) return
+    copyLinkDetailScopeRef.current = { sending: false }
+    setCopyLinkDetailSending(false)
+    if (copyLinkRefreshTimerRef.current !== undefined) {
+      window.clearTimeout(copyLinkRefreshTimerRef.current)
+      copyLinkRefreshTimerRef.current = undefined
+    }
     closeMessageMenu()
     setMemberMenu(undefined)
     setCopyLinkDetailDraft('')
@@ -6228,8 +6229,12 @@ export function ArkmeSurface({
     }
   }, [copyLinkDetail, shareWebsite, showMessageActionStatus])
   const sendCopyLinkDetailThought = useCallback(async () => {
-    if (!activeConversationRef.current || copyLinkDetail?.status !== 'ready' || copyLinkDetailSending) return
+    const scope = copyLinkDetailScopeRef.current
+    if (!activeConversationRef.current || copyLinkDetail?.status !== 'ready' || scope.sending) return
     const overlayGeneration = conversationOverlayScopeRef.current.generation
+    const isCurrent = () => activeConversationRef.current
+      && conversationOverlayScopeRef.current.generation === overlayGeneration
+      && copyLinkDetailScopeRef.current === scope
     const target = copyLinkDetailExtensionTarget(copyLinkDetail.detail)
     if (target === undefined) {
       setCopyLinkDetailSendError('链接暂不可延展')
@@ -6238,6 +6243,7 @@ export function ArkmeSurface({
     const textContent = copyLinkDetailDraft.trim()
     if (textContent === '') return
     const recordUid = crypto.randomUUID()
+    scope.sending = true
     setCopyLinkDetailSending(true)
     setCopyLinkDetailSendError('')
     try {
@@ -6247,26 +6253,27 @@ export function ArkmeSurface({
         textContent,
         recordUid,
       })
-      if (!activeConversationRef.current || conversationOverlayScopeRef.current.generation !== overlayGeneration) return
+      if (!isCurrent()) return
       setCopyLinkDetailDraft('')
       arkmeUi.chatChanged()
       copyLinkRefreshTimerRef.current = window.setTimeout(() => {
         copyLinkRefreshTimerRef.current = undefined
+        if (!isCurrent()) return
         loadMessageCopyLinkDetail(copyLinkDetail.sid, { preserveReady: true })
       }, 550)
     } catch (caught) {
-      if (activeConversationRef.current && conversationOverlayScopeRef.current.generation === overlayGeneration) {
+      if (isCurrent()) {
         setCopyLinkDetailSendError(errorMessage(caught) || '发送失败，请重试')
       }
     } finally {
-      if (activeConversationRef.current && conversationOverlayScopeRef.current.generation === overlayGeneration) {
+      scope.sending = false
+      if (isCurrent()) {
         setCopyLinkDetailSending(false)
       }
     }
   }, [
     copyLinkDetail,
     copyLinkDetailDraft,
-    copyLinkDetailSending,
     loadMessageCopyLinkDetail,
   ])
   const enterMessageSelectMode = useCallback((item: ArkmeTimelineItem) => {
@@ -6498,8 +6505,9 @@ export function ArkmeSurface({
     bodyRef,
     store: conversationCacheRef.current,
     pendingRestore: pendingViewportRestoreRef,
+    restoreIntent: viewportRestoreIntentRef,
   })
-  useConversationResizeAnchor(bodyRef, active && activeConversation ? conversationKey : undefined, endAccessoryRef, activeSelectMode !== undefined)
+  useConversationResizeAnchor(bodyRef, active && activeConversation ? conversationKey : undefined, endAccessoryRef, activeSelectMode !== undefined, recordsRef, viewportRestoreIntentRef)
   const handleConversationScroll = useCallback(() => {
     if (rememberConversationViewport()?.stickToBottom) setNewMessageCount(0)
   }, [rememberConversationViewport])
@@ -6954,7 +6962,7 @@ export function ArkmeSurface({
               <span style={styles.timelineSkeletonAvatar} />
               <span style={{ ...styles.timelineSkeletonBubble, width: `${width}%` }} />
             </div>)}</div>}
-            {displayRows.length > 0 && <ul className={`arkme-conversation-records${timelineRevealKey === conversationKey
+            {displayRows.length > 0 && <ul ref={recordsRef} className={`arkme-conversation-records${timelineRevealKey === conversationKey
               ? ' arkme-conversation-records-reveal'
               : ''}`} style={styles.records}>
               {displayRows.map((row, index) => {
@@ -7053,6 +7061,8 @@ export function ArkmeSurface({
                       ...(isForwardMessageCard ? styles.forwardMessageLine : {}),
                       ...(isSharedRecordingCard ? styles.sharedRecordingMessageLine : {}),
                       ...(activeSelectMode !== undefined && selectionAnchor === 'card-center' ? styles.messageLineSelectCardCenterMode : {}),
+                      // The viewport already supplies the gap above the composer.
+                      ...(index === displayRows.length - 1 ? { marginBottom: 0 } : {}),
                     }}>
                       {!isExtensionMessage && messageAvatar}
                       <div style={{
@@ -7520,7 +7530,8 @@ export function ArkmeSurface({
               }} />
             </div>
             <div data-arkme-composer-footer="tools" style={styles.tools}><div style={styles.toolGroup}><button ref={addMenuTriggerRef} type="button" style={styles.plus} aria-label="添加内容" aria-haspopup="menu" aria-expanded={addMenuOpen} disabled={composerFileAddingDisabled} onClick={() => { setAddMenuOpen(value => !value) }}>{(activeRecordReeditComposer === undefined ? preparingFiles : preparingReeditFiles) ? <ArkmeFilePreparingIndicator /> : '+'}</button><ArkmeEmojiPicker
-              key={`emoji-picker:${conversationOverlayKey}`}
+              key={`emoji-picker:${authenticatedAccountKey}:${conversationOverlayKey}`}
+              accountKey={authenticatedAccountKey}
               disabled={activeSelectMode !== undefined || preparingFiles || directAdmission.blocked || activeRecordReeditComposer !== undefined}
               scopeKey={composerDraftKey}
               {...(source?.kind === 'private_chat' || source?.kind === 'group_chat' ? { sourceRef: source.sourceRef } : {})}
