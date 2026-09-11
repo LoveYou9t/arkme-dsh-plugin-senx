@@ -829,6 +829,7 @@ const styles: Record<string, CSSProperties> = {
   copyLinkDetailContentLabel: { margin: '6px 0 0', color: arkmeTheme.tertiary, fontSize: 12, lineHeight: '18px' },
   composerInner: {
     ...arkmeConversationComposerLayout.composerInner,
+    cursor: 'text',
     background: 'var(--arkme-primary-composer-idle, #f6f6f6)', boxShadow: 'none',
     transition: 'background-color 140ms ease',
   },
