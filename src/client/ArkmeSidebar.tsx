@@ -96,6 +96,7 @@ import { ArkmeConfirmDialog } from './ArkmeConfirmDialog.js'
 import { ArkmeRichComposerInput, type ArkmeRichComposerHandle } from './ArkmeRichComposerInput.js'
 import { useResizableComposer } from './use-resizable-composer.js'
 import { useConversationResizeAnchor } from './conversation-resize-anchor.js'
+import { useResizableNoteDetail } from './use-resizable-note-detail.js'
 import { ArkmeEmojiPicker } from './ArkmeEmojiPicker.js'
 import type { ArkmeEmoji } from './arkme-emoji.js'
 import { ArkmeSearchSurface } from './ArkmeSearchSurface.js'
@@ -726,7 +727,7 @@ const styles: Record<string, CSSProperties> = {
   forwardTargetSendError: { margin: '8px 2px 0', color: colors.danger, fontSize: 12, lineHeight: '16px' },
   copyLinkDetailPanel: {
     position: 'absolute', top: ARKME_CONVERSATION_HEADER_HEIGHT, right: 0, bottom: 0, zIndex: 10,
-    width: 'min(440px, 100%)', minWidth: 0, boxSizing: 'border-box', display: 'flex', flexDirection: 'column',
+    minWidth: 0, boxSizing: 'border-box', display: 'flex', flexDirection: 'column',
     background: arkmeTheme.base, color: arkmeTheme.text, borderLeft: `1px solid ${arkmeTheme.borderSoft}`,
     boxShadow: '-12px 0 28px rgba(29,32,40,.055)',
   },
@@ -2039,6 +2040,8 @@ function CopyLinkDetailDrawer({
   sendError: string
   shareWebsite: string
 }) {
+  const panelRef = useRef<HTMLElement>(null)
+  const resize = useResizableNoteDetail(panelRef)
   const detail = state.status === 'ready' ? state.detail : undefined
   const title = detail?.displayTitle.trim() || '快记详情'
   const subtitle = detail === undefined ? '' : copyLinkDetailDateRange(detail.items)
@@ -2101,7 +2104,8 @@ function CopyLinkDetailDrawer({
   const extensionItems = detail?.recordContext?.extensions ?? []
   const extensionCount = Math.max(detail?.recordContext?.extensionCount ?? 0, extensionItems.length)
   const showExtensions = extensionCount > 0 || extensionItems.length > 0
-  return <aside style={styles.copyLinkDetailPanel} aria-label="快记分享链接详情" data-arkme-copy-link-detail="true">
+  return <aside ref={panelRef} style={{ ...styles.copyLinkDetailPanel, ...resize.style }} aria-label="快记分享链接详情" data-arkme-copy-link-detail="true">
+    {resize.handle}
     <header style={styles.copyLinkDetailHeader}>
       <div style={{ minWidth: 0 }}>
         <h3 style={styles.copyLinkDetailTitle}>{title}</h3>
@@ -6203,6 +6207,12 @@ export function ArkmeSurface({
     const controller = new AbortController()
     copyLinkDetailRequestRef.current = controller
     const timeout = window.setTimeout(() => {
+      if (copyLinkDetailRequestRef.current !== controller || !activeConversationRef.current) return
+      setCopyLinkDetail(current => current?.sid === normalizedSid
+        ? options.preserveReady === true && current.status === 'ready'
+          ? current
+          : { sid: normalizedSid, status: 'error', message: '链接暂不可用' }
+        : current)
       controller.abort()
     }, MESSAGE_ACTION_REQUEST_TIMEOUT_MS)
     if (options.preserveReady !== true) {
@@ -6224,7 +6234,7 @@ export function ArkmeSurface({
         setCopyLinkDetail(current => current?.sid === normalizedSid
           ? options.preserveReady === true && current.status === 'ready'
             ? current
-            : { sid: normalizedSid, status: 'error', message: controller.signal.aborted ? '链接暂不可用' : errorMessage(caught) || '链接暂不可用' }
+            : { sid: normalizedSid, status: 'error', message: errorMessage(caught) || '链接暂不可用' }
           : current)
       })
       .finally(() => {
