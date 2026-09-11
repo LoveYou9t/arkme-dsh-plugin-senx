@@ -153,14 +153,16 @@ describe('recording UI-only host operations', () => {
 
   it('dispatches opaque playback and owner-supported speaker assignment commands', async () => {
     const recordingPlayback = vi.fn(async () => ({ playbackRef: 'media-opaque' }))
+    const cachedRecordingSpeakerOptions = vi.fn(async () => null)
     const recordingSpeakerOptions = vi.fn(async () => [{ speakerRef: 'speaker-opaque', label: '小林' }])
     const recordingSpeakerRecommendation = vi.fn(async () => ({ optionKey: 'candidate-key' }))
     const assignRecordingSpeaker = vi.fn(async () => ({ dateStamp: 10 }))
     const service = {
-      recordingPlayback, recordingSpeakerOptions, recordingSpeakerRecommendation, assignRecordingSpeaker,
+      recordingPlayback, cachedRecordingSpeakerOptions, recordingSpeakerOptions, recordingSpeakerRecommendation, assignRecordingSpeaker,
     } as unknown as ArkmeService
 
     await dispatchArkmeHostOperation(service, 'recordings.playback.open', { itemRef: 'item-opaque' })
+    expect(await dispatchArkmeHostOperation(service, 'recordings.speaker.cached-options', {})).toBeNull()
     await dispatchArkmeHostOperation(service, 'recordings.speaker.options', {})
     await dispatchArkmeHostOperation(service, 'recordings.speaker.recommendation', { itemRef: 'item-opaque' })
     await dispatchArkmeHostOperation(service, 'recordings.speaker.assign-item', {
@@ -168,6 +170,7 @@ describe('recording UI-only host operations', () => {
     })
 
     expect(recordingPlayback).toHaveBeenCalledWith('item-opaque', undefined)
+    expect(cachedRecordingSpeakerOptions).toHaveBeenCalledWith(undefined)
     expect(recordingSpeakerOptions).toHaveBeenCalledWith(undefined)
     expect(recordingSpeakerRecommendation).toHaveBeenCalledWith('item-opaque', undefined)
     expect(assignRecordingSpeaker).toHaveBeenCalledWith({

@@ -1311,6 +1311,7 @@ export async function dispatchArkmeHostOperation(
     case 'recordings.playback.open': return await service.recordingPlayback(
       stringParam(params, 'itemRef').trim(), requestSignal,
     )
+    case 'recordings.speaker.cached-options': return await service.cachedRecordingSpeakerOptions(requestSignal)
     case 'recordings.speaker.options': return await service.recordingSpeakerOptions(requestSignal)
     case 'recordings.speaker.recommendation': return await service.recordingSpeakerRecommendation(
       stringParam(params, 'itemRef').trim(), requestSignal,

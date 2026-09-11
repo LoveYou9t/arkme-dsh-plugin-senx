@@ -15,6 +15,12 @@ function currentAccount(account: string | undefined, signal?: AbortSignal): bool
 }
 
 export const recordingSpeakerOptions = new ResourceStore<ArkmeRecordingSpeakerCandidate[], string | undefined>({
+  loadCached: async (account, signal) => {
+    if (!currentAccount(account, signal)) throw resourceCancelled()
+    const options = await callArkme<ArkmeRecordingSpeakerCandidate[] | null>('recordings.speaker.cached-options', {}, signal)
+    if (!currentAccount(account, signal)) throw resourceCancelled()
+    return options ?? undefined
+  },
   load: async (account, signal) => {
     if (!currentAccount(account, signal)) throw resourceCancelled()
     const options = await callArkme<ArkmeRecordingSpeakerCandidate[]>('recordings.speaker.options', {}, signal)

@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 const mocks = vi.hoisted(() => ({ callArkme: vi.fn() }))
-vi.mock('../src/client/api.js', () => ({ callArkme: mocks.callArkme }))
+vi.mock('../src/client/api.js', () => ({ callArkme: (operation: string, ...args: unknown[]) => operation === 'recordings.speaker.cached-options' ? Promise.resolve(null) : mocks.callArkme(operation, ...args) }))
 import { arkmeAuthStore } from '../src/client/auth-store.js'
 import { assignRecordingSpeaker, recordingSpeakerOptions as store, recordingSpeakerItemContexts } from '../src/client/recordings/recording-speaker-options-store.js'
 
@@ -27,7 +27,7 @@ describe('recording speaker options cache', () => {
     const second = store.refresh('a', binding.account)
     expect(first).toBe(second)
     await Promise.resolve()
-    expect(mocks.callArkme).toHaveBeenCalledTimes(1)
+    await vi.waitFor(() => expect(mocks.callArkme).toHaveBeenCalledTimes(1))
     response.resolve([option])
     await first
     await store.refresh('b', binding.account)
