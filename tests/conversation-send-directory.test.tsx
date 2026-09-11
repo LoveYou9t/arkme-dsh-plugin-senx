@@ -6162,6 +6162,128 @@ describe('conversation send directory projection', () => {
     }
   })
 
+  async function openCopiedLinkFooter() {
+    timeline = [{
+      itemUid: 'copy-link-message', senderName: '1D3E', isMe: false, sendAtMillis: 1, status: 1,
+      title: '', textContent: 'https://jiwo.cc/s/U2HQgn1RhPJZaFmx', templateKind: 1, displayKind: 0,
+    }]
+    await act(async () => {
+      renderer = create(<ArkmeSurface productChrome={false} productNavigation={false} />)
+    })
+    await act(async () => {
+      renderer!.root.findByProps({ 'data-arkme-inline-link': 'message-copy-link' }).props.onClick({ stopPropagation: vi.fn() })
+    })
+    return renderer!.root.findByProps({ 'data-arkme-copy-link-detail': 'true' })
+  }
+
+  it.each(['resolve', 'reject'])('does not clear or block a reopened copied-link draft when an older send completes: %s', async outcome => {
+    const pending = deferred<unknown>()
+    const original = mocks.callArkme.getMockImplementation()!
+    mocks.callArkme.mockImplementation((op, params) => op === 'source.message-copy-link.extend' ? pending.promise : original(op, params))
+    const first = await openCopiedLinkFooter()
+    await act(async () => { first.findByProps({ 'aria-label': '记录此刻想法' }).props.onChange({ target: { value: '旧草稿' } }) })
+    await act(async () => { first.findByProps({ 'aria-label': '发送延展' }).props.onClick() })
+    await act(async () => { first.findByProps({ 'aria-label': '关闭详情' }).props.onClick() })
+    await act(async () => { renderer!.root.findByProps({ 'data-arkme-inline-link': 'message-copy-link' }).props.onClick({ stopPropagation: vi.fn() }) })
+    const current = () => renderer!.root.findByProps({ 'data-arkme-copy-link-detail': 'true' })
+    const input = () => current().findByProps({ 'aria-label': '记录此刻想法' })
+    expect(input().props.disabled).toBe(false)
+    await act(async () => { input().props.onChange({ target: { value: '新草稿' } }) })
+    await act(async () => { outcome === 'resolve' ? pending.resolve({}) : pending.reject(new Error('旧请求失败')) })
+    expect(input().props.value).toBe('新草稿')
+    expect(renderedText(renderer!.toJSON())).not.toContain('旧请求失败')
+  })
+
+  it('shows a retry after copied-link loading times out instead of leaving the drawer loading forever', async () => {
+    let expire: (() => void) | undefined
+    const schedule = window.setTimeout.bind(window)
+    vi.spyOn(window, 'setTimeout').mockImplementation(((handler: () => void, delay?: number) => {
+      if (delay === 12_000) expire = handler
+      return schedule(handler, delay)
+    }) as typeof window.setTimeout)
+    const pending = deferred<unknown>()
+    const original = mocks.callArkme.getMockImplementation()!
+    let stall = true
+    mocks.callArkme.mockImplementation((op, params) => op === 'source.message-copy-link.resolve' && stall ? pending.promise : original(op, params))
+    const detail = await openCopiedLinkFooter()
+    expect(renderedText(renderer!.toJSON())).toContain('正在加载链接内容')
+    expect(expire).toBeTypeOf('function')
+    await act(async () => { expire!() })
+    expect(renderedText(renderer!.toJSON())).not.toContain('正在加载链接内容')
+    const retry = detail.find(node => node.type === 'button' && node.children.includes('重试'))
+    stall = false
+    await act(async () => { retry.props.onClick() })
+    expect(detail.findByProps({ 'aria-label': '记录此刻想法' }).props.disabled).toBe(false)
+    await act(async () => { pending.resolve({}) })
+    expect(detail.findByProps({ 'aria-label': '记录此刻想法' }).props.disabled).toBe(false)
+  })
+
+  it.each(['source', 'account'])('ignores a copied-link send failure after switching %s', async change => {
+    const pending = deferred<unknown>()
+    const original = mocks.callArkme.getMockImplementation()!
+    mocks.callArkme.mockImplementation((op, params) => op === 'source.message-copy-link.extend' ? pending.promise : original(op, params))
+    const detail = await openCopiedLinkFooter()
+    await act(async () => { detail.findByProps({ 'aria-label': '记录此刻想法' }).props.onChange({ target: { value: '旧上下文草稿' } }) })
+    await act(async () => { detail.findByProps({ 'aria-label': '发送延展' }).props.onClick() })
+    await act(async () => {
+      if (change === 'account') arkmeAuthStore.setAuth({ status: 'authenticated', environment: 'test', userId: 99 })
+      else { activeSource = other; arkmeUi.selectSource(other) }
+    })
+    await act(async () => { pending.reject(new Error('旧上下文失败')) })
+    expect(renderer!.root.findAllByProps({ 'data-arkme-copy-link-detail': 'true' })).toHaveLength(0)
+    expect(renderedText(renderer!.toJSON())).not.toContain('旧上下文失败')
+  })
+
+  it('keeps copied-link IME confirmation and Shift+Enter from sending', async () => {
+    const detail = await openCopiedLinkFooter()
+    const input = () => detail.findByProps({ 'aria-label': '记录此刻想法' })
+    await act(async () => { input().props.onChange({ target: { value: '中文输入' } }) })
+    for (const [shiftKey, isComposing] of [[false, true], [true, false]]) {
+      const preventDefault = vi.fn()
+      await act(async () => { input().props.onKeyDown({ key: 'Enter', shiftKey, nativeEvent: { isComposing }, preventDefault }) })
+      expect(preventDefault).not.toHaveBeenCalled()
+    }
+    expect(mocks.callArkme.mock.calls.filter(([op]) => op === 'source.message-copy-link.extend')).toHaveLength(0)
+    expect(input().props.value).toBe('中文输入')
+  })
+
+  it('disables copied-link submission while pending and preserves the draft after rejection', async () => {
+    const pending = deferred<never>()
+    const original = mocks.callArkme.getMockImplementation()!
+    mocks.callArkme.mockImplementation((op, params) => op === 'source.message-copy-link.extend' ? pending.promise : original(op, params))
+    const detail = await openCopiedLinkFooter()
+    const input = () => detail.findByProps({ 'aria-label': '记录此刻想法' })
+    const send = () => detail.find(node => node.type === 'button' && ['发送延展', '发送中'].includes(node.props['aria-label']))
+    expect(send().props.disabled).toBe(true)
+    await act(async () => { input().props.onChange({ target: { value: '保留我的草稿' } }) })
+    expect(send().props.disabled).toBe(false)
+    await act(async () => { const submit = send().props.onClick; submit(); submit() })
+    expect(input().props.disabled).toBe(true)
+    expect(send().props.disabled).toBe(true)
+    await act(async () => { input().props.onKeyDown({ key: 'Enter', shiftKey: false, nativeEvent: { isComposing: false }, preventDefault: vi.fn() }) })
+    expect(mocks.callArkme.mock.calls.filter(([op]) => op === 'source.message-copy-link.extend')).toHaveLength(1)
+    await act(async () => { pending.reject(new Error('服务拒绝本次提交')) })
+    expect(input().props.value).toBe('保留我的草稿')
+    expect(input().props.disabled).toBe(false)
+    expect(send().props.disabled).toBe(false)
+    expect(renderedText(renderer!.toJSON())).toContain('服务拒绝本次提交')
+  })
+
+  it.each(['readonly', 'missing-anchor'])('never sends a copied link without an extendable source: %s', async mode => {
+    const original = mocks.callArkme.getMockImplementation()!
+    mocks.callArkme.mockImplementation(async (op, params) => {
+      const result = await original(op, params)
+      if (op !== 'source.message-copy-link.resolve') return result
+      return mode === 'readonly' ? { ...result, accessMode: 'link_read_only' } : { ...result, sourceAnchors: [] }
+    })
+    const detail = await openCopiedLinkFooter()
+    const input = () => detail.findByProps({ 'aria-label': '记录此刻想法' })
+    await act(async () => { input().props.onChange({ target: { value: '无法延展的快照' } }) })
+    expect(detail.find(node => node.type === 'button' && node.props['aria-label'] === '发送延展').props.disabled).toBe(true)
+    await act(async () => { input().props.onKeyDown({ key: 'Enter', shiftKey: false, nativeEvent: { isComposing: false }, preventDefault: vi.fn() }) })
+    expect(mocks.callArkme.mock.calls.filter(([op]) => op === 'source.message-copy-link.extend')).toHaveLength(0)
+  })
+
   it('extends the copied quick-link detail record from the footer input', async () => {
     timeline = [{
       itemUid: 'copy-link-message', senderName: '1D3E', isMe: false, sendAtMillis: 1, status: 1,
@@ -6180,6 +6302,8 @@ describe('conversation send directory projection', () => {
     })
     const detail = renderer!.root.findByProps({ 'data-arkme-copy-link-detail': 'true' })
     const input = detail.findByProps({ 'aria-label': '记录此刻想法' })
+    expect(input.parent?.props.className).toBe('arkme-detail-extension-input-shell')
+    expect(input.parent?.parent?.props.className).toBe('arkme-detail-extension-input-bar')
     await act(async () => {
       input.props.onChange({ target: { value: '补充想法' } })
       await Promise.resolve()
