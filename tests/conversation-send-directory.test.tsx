@@ -52,6 +52,7 @@ import { arkmeComposerDraftStore, arkmeSourceComposerDraftKey } from '../src/cli
 import { arkmeMessageReadReceipts } from '../src/client/message-read-receipt-store.js'
 import { arkmeTheme } from '../src/client/arkme-theme.js'
 import { arkmeUi } from '../src/client/ui-controller.js'
+import { ArkmeConversationMemoryCache } from '../src/client/conversation-memory-cache.js'
 
 const target: ArkmeSourceItem = {
   sourceRef: 'source-harness', sourceKey: 'chat:harness', kind: 'private_chat', displayName: 'Harness4',
@@ -924,6 +925,111 @@ describe('conversation send directory projection', () => {
       ] }
       throw new Error(`unexpected operation ${operation}`)
     })
+  })
+
+  it('never saves another conversation anchor during repeated timeline switches', async () => {
+    const stored = vi.spyOn(ArkmeConversationMemoryCache.prototype, 'storeViewport')
+    const baseCall = mocks.callArkme.getMockImplementation()!
+    mocks.callArkme.mockImplementation(async (operation: string, params?: Record<string, unknown>, signal?: AbortSignal) => {
+      if (operation === 'source.timeline') {
+        const selected = params?.sourceRef === other.sourceRef ? other : target
+        return { source: selected, hasMore: false, items: [{
+          itemUid: selected.sourceKey!, senderName: '同事', isMe: false,
+          sendAtMillis: 1, textContent: '阅读位置', status: 1,
+        }] }
+      }
+      return baseCall(operation, params, signal)
+    })
+    const body = {
+      scrollTop: 200, scrollHeight: 2000, clientHeight: 600,
+      getBoundingClientRect: () => ({ top: 0, bottom: 600 }),
+      querySelectorAll: () => {
+        // toJSON reads committed host instances, including during layout cleanup.
+        // TestInstance.root traverses React fibers, which are mid-commit here.
+        const rows: Array<{ dataset: { arkmeConversationRow: string }; getBoundingClientRect(): { top: number; bottom: number } }> = []
+        const visit = (node: ReturnType<ReactTestRenderer['toJSON']>) => {
+          if (node === null) return
+          if (Array.isArray(node)) { node.forEach(visit); return }
+          if (node.props['data-arkme-conversation-row'] !== undefined) rows.push({
+            dataset: { arkmeConversationRow: node.props['data-arkme-conversation-row'] },
+            getBoundingClientRect: () => ({ top: 30, bottom: 90 }),
+          })
+          node.children?.forEach(child => { if (typeof child !== 'string') visit(child) })
+        }
+        visit(renderer?.toJSON() ?? null)
+        return rows
+      },
+      scrollTo: vi.fn(),
+    }
+    await act(async () => {
+      renderer = create(<ArkmeSurface productChrome={false} productNavigation={false} />, {
+        createNodeMock: element => element.props.className === 'arkme-conversation-body' ? body : null,
+      })
+    })
+    for (const selected of [other, target, other, target]) {
+      body.scrollTop = 200
+      act(() => { renderer!.root.findByProps({ className: 'arkme-conversation-body' }).props.onScroll() })
+      await act(async () => { arkmeUi.selectSource(selected) })
+    }
+    const anchoredWrites = stored.mock.calls.filter(([, viewport]) => viewport.anchorId !== undefined)
+    expect(anchoredWrites.length).toBeGreaterThan(0)
+    for (const [key, viewport] of anchoredWrites) expect(viewport.anchorId).toBe(`message:${key}`)
+  })
+
+  it('clears the previous account viewport even when the next account selects the same source key', async () => {
+    const body = {
+      scrollTop: 0, scrollHeight: 2000, clientHeight: 600,
+      getBoundingClientRect: () => ({ top: 0, bottom: 600 }),
+      querySelectorAll: () => [], scrollTo: vi.fn(),
+    }
+    await act(async () => {
+      renderer = create(<ArkmeSurface productChrome={false} productNavigation={false} />, {
+        createNodeMock: element => element.props.className === 'arkme-conversation-body' ? body : null,
+      })
+    })
+    body.scrollTop = 300
+    act(() => { renderer!.root.findByProps({ className: 'arkme-conversation-body' }).props.onScroll() })
+    await act(async () => {
+      arkmeAuthStore.setAuth({ status: 'authenticated', environment: 'test', userId: 43 })
+      arkmeUi.selectSource(target)
+    })
+    expect(body.scrollTop).toBe(2000)
+  })
+
+  it('preserves history when an in-flight background timeline finishes while hidden', async () => {
+    timeline = [{ itemUid: 'history', sequence: 8, senderName: '同事', isMe: false,
+      sendAtMillis: 8, textContent: '历史消息', status: 1 }]
+    const refreshed = deferred<unknown>()
+    const baseCall = mocks.callArkme.getMockImplementation()!
+    let timelineReads = 0
+    let backgroundSignal: AbortSignal | undefined
+    mocks.callArkme.mockImplementation(async (operation: string, params?: Record<string, unknown>, signal?: AbortSignal) => {
+      if (operation === 'source.timeline' && ++timelineReads > 1) {
+        backgroundSignal = signal
+        return refreshed.promise
+      }
+      return baseCall(operation, params, signal)
+    })
+    const body = { scrollTop: 0, scrollHeight: 2000, clientHeight: 600,
+      getBoundingClientRect: () => ({ top: 0, bottom: body.clientHeight }),
+      querySelectorAll: () => [], scrollTo: vi.fn() }
+    await act(async () => {
+      renderer = create(<ArkmeSurface productChrome={false} productNavigation={false} />, {
+        createNodeMock: element => element.props.className === 'arkme-conversation-body' ? body : null,
+      })
+    })
+    body.scrollTop = 300
+    act(() => { renderer!.root.findByProps({ className: 'arkme-conversation-body' }).props.onScroll() })
+    await act(async () => { arkmeUi.selectSource({ ...target, latestSequence: 9 }) })
+    expect(timelineReads).toBeGreaterThan(1)
+    body.clientHeight = 0; body.scrollHeight = 0; body.scrollTop = 0
+    await act(async () => { renderer!.update(<ArkmeSurface productChrome={false} productNavigation={false} active={false} />) })
+    expect(backgroundSignal?.aborted).toBe(true)
+    await act(async () => { refreshed.resolve({ source: target, items: [...timeline,
+      { ...timeline[0]!, itemUid: 'new', sequence: 9, sendAtMillis: 9 }], hasMore: false }) })
+    body.clientHeight = 600; body.scrollHeight = 2100
+    await act(async () => { renderer!.update(<ArkmeSurface productChrome={false} productNavigation={false} />) })
+    expect(body.scrollTop).toBe(300)
   })
 
   it('suppresses an owner read only when retained delta items continuously cover a cached timeline gap', () => {
@@ -5501,6 +5607,37 @@ describe('conversation send directory projection', () => {
 
     expect(renderer!.root.findByProps({ 'data-arkme-message-item-uid': firstNewerItem.itemUid })).toBeDefined()
     expect(firstNewerRow.getBoundingClientRect().top).toBe(conversationBody.getBoundingClientRect().top)
+  })
+
+  it.each(['current', 'cached', 'hidden'] as const)('keeps explicit message navigation authoritative from a %s conversation', async mode => {
+    timeline = [{ itemUid: 'navigation-target', sequence: 8, senderName: '同事', isMe: false,
+      sendAtMillis: 8, textContent: '定位目标', status: 1 }]
+    const body = {
+      scrollTop: 0, scrollHeight: 2000, clientHeight: 600,
+      scrollTo: vi.fn((options: ScrollToOptions) => { body.scrollTop = options.top ?? body.scrollTop }),
+      getBoundingClientRect: () => ({ top: 0, bottom: 600 }),
+      querySelectorAll: () => [{
+        dataset: { arkmeConversationRow: 'message:navigation-target', arkmeMessageItemUid: 'navigation-target' },
+        getBoundingClientRect: () => ({ top: 900 - body.scrollTop, bottom: 980 - body.scrollTop, height: 80 }),
+      }],
+    }
+    await act(async () => {
+      renderer = create(<ArkmeSurface productChrome={false} productNavigation={false} />, {
+        createNodeMock: element => element.props.className === 'arkme-conversation-body' ? body : null,
+      })
+    })
+    body.scrollTop = 300
+    act(() => { renderer!.root.findByProps({ className: 'arkme-conversation-body' }).props.onScroll() })
+    if (mode === 'cached') await act(async () => { arkmeUi.selectSource(other) })
+    if (mode === 'hidden') await act(async () => {
+      renderer!.update(<ArkmeSurface productChrome={false} productNavigation={false} active={false} />)
+    })
+    await act(async () => {
+      arkmeUi.showConversationTarget(target, 'navigation-target', 8)
+      if (mode === 'hidden') renderer!.update(<ArkmeSurface productChrome={false} productNavigation={false} />)
+    })
+    expect(body.scrollTo).toHaveBeenCalled()
+    expect(body.scrollTop).toBe(640)
   })
 
   it('uses a layout-neutral desktop-style backdrop for a located quick note', async () => {
