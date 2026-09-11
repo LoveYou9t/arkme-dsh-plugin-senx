@@ -42,7 +42,7 @@ export function ArkmeConversationBottomControl({ showBackToBottom, newMessageCou
     }
   }
   if (!showBackToBottom && newMessageCount === 0 && !pending && !failed) return null
-  return <div data-arkme-bottom-controls style={{ position: 'absolute', inset: 'auto 15px 10px', zIndex: 4, pointerEvents: 'none' }}>
+  return <div data-arkme-bottom-controls style={{ position: 'absolute', inset: 'auto 24px 10px', zIndex: 4, pointerEvents: 'none' }}>
     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', minHeight: 30 }}>
       {newMessageCount > 0 && <button type="button" disabled={pending} onClick={() => { void activate() }}
         style={{ ...button, position: 'absolute', left: '50%', transform: 'translateX(-50%)', padding: '7px 13px', fontSize: 12 }}>
