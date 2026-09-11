@@ -4,6 +4,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 const mocks = vi.hoisted(() => ({ callArkme: vi.fn() }))
 vi.mock('../src/client/api.js', () => ({ callArkme: mocks.callArkme }))
 
+import { arkmeAuthStore } from '../src/client/auth-store.js'
+
 import { ArkmeRecordingSpeakerEditor } from '../src/client/recordings/ArkmeRecordingSpeakerEditor.js'
 
 const tick = async () => { await Promise.resolve(); await Promise.resolve() }
@@ -13,6 +15,8 @@ describe('recording speaker editor failure recovery', () => {
 
   beforeEach(() => {
     mocks.callArkme.mockReset()
+    arkmeAuthStore.setAuth({ status: 'logged-out', environment: 'test' })
+    arkmeAuthStore.setAuth({ status: 'authenticated', environment: 'test', userId: 42 })
     vi.stubGlobal('document', {
       addEventListener: vi.fn(),
       removeEventListener: vi.fn(),
@@ -22,6 +26,78 @@ describe('recording speaker editor failure recovery', () => {
     await act(async () => { renderer?.unmount(); await tick() })
     vi.unstubAllGlobals()
     vi.restoreAllMocks()
+  })
+
+
+  it('keeps cached candidates visible when reopening while a refresh is pending', async () => {
+    const option = { optionKey: 'key-speaker-1', speakerRef: 'speaker-1', kind: 'speaker', label: '缓存说话人', recommended: false, currentAssignment: true, isCurrentUser: false }
+    mocks.callArkme.mockResolvedValueOnce([option])
+    const editor = <ArkmeRecordingSpeakerEditor item={{
+      itemId: 'item-1', itemRef: 'sealed-item', speakerLabel: '说话人 1', speakerColorIndex: 1,
+      speakerNumber: 1, speakerKey: 'speaker-opaque', sameSpeakerItemCount: 3,
+      text: '内容', startAtMillis: 1_000, endAtMillis: 2_000, isBackground: false, isSelf: false,
+    }} onUpdated={() => {}} onClose={() => {}} />
+    await act(async () => { renderer = create(editor); await tick() })
+    await act(async () => { renderer.unmount(); await tick() })
+    mocks.callArkme.mockImplementationOnce(() => new Promise(() => {}))
+    await act(async () => { renderer = create(editor); await tick() })
+    expect(JSON.stringify(renderer.toJSON())).toContain('缓存说话人')
+    expect(JSON.stringify(renderer.toJSON())).not.toContain('正在读取候选')
+  })
+
+  it('keeps the user selection during background refresh and clears the cache after saving', async () => {
+    const options = [
+      { optionKey: 'key-speaker-1', speakerRef: 'speaker-1', kind: 'speaker', label: '甲', recommended: false, currentAssignment: true, isCurrentUser: false },
+      { optionKey: 'key-speaker-2', speakerRef: 'speaker-2', kind: 'speaker', label: '乙', recommended: false, currentAssignment: false, isCurrentUser: false },
+    ]
+    mocks.callArkme.mockResolvedValueOnce(options)
+    const onUpdated = vi.fn()
+    const onClose = vi.fn()
+    const editor = <ArkmeRecordingSpeakerEditor item={{
+      itemId: 'item-1', itemRef: 'sealed-item', speakerLabel: '说话人 1', speakerColorIndex: 1,
+      speakerNumber: 1, speakerKey: 'speaker-opaque', sameSpeakerItemCount: 3,
+      text: '内容', startAtMillis: 1_000, endAtMillis: 2_000, isBackground: false, isSelf: false,
+    }} onUpdated={onUpdated} onClose={onClose} />
+    await act(async () => { renderer = create(editor); await tick() })
+    await act(async () => { renderer.unmount(); await tick() })
+    let finish!: (value: typeof options) => void
+    mocks.callArkme.mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
+    await act(async () => { renderer = create(editor); await tick() })
+    const second = renderer.root.findAll(node => node.type === 'button' && node.findAll(child => child.type === 'span' && child.children.includes('乙')).length > 0)[0]!
+    await act(async () => { second.props.onClick(); await tick() })
+    expect(renderer.root.findAll(node => node.type === 'button' && node.children.join('') === '确认')[0]!.props.disabled).toBe(false)
+    await act(async () => { finish(options.map(option => ({ ...option, speakerRef: `${option.speakerRef}-renewed` }))); await tick() })
+    mocks.callArkme.mockResolvedValueOnce({ day: { dateStamp: 1 } })
+    const confirm = renderer.root.findAll(node => node.type === 'button' && node.children.join('') === '确认')[0]!
+    expect(confirm.props.disabled).toBe(false)
+    await act(async () => { confirm.props.onClick(); confirm.props.onClick(); await tick() })
+    const writes = mocks.callArkme.mock.calls.filter(([operation]) => operation === 'recordings.speaker.assign-item')
+    expect(writes).toHaveLength(1)
+    expect(writes[0]![1]).toMatchObject({ speakerRef: 'speaker-2-renewed' })
+    expect(onUpdated).toHaveBeenCalledOnce()
+    expect(onClose).toHaveBeenCalledOnce()
+    await act(async () => { renderer.unmount(); await tick() })
+    mocks.callArkme.mockImplementationOnce(() => new Promise(() => {}))
+    await act(async () => { renderer = create(editor); await tick() })
+    expect(JSON.stringify(renderer.toJSON())).toContain('正在读取候选')
+  })
+
+  it('retains cached rows but blocks saving after a failed background refresh', async () => {
+    const options = [{ optionKey: 'key-speaker-1', speakerRef: 'speaker-1', kind: 'speaker', label: '已缓存候选', recommended: false, currentAssignment: false, isCurrentUser: false }]
+    mocks.callArkme.mockResolvedValueOnce(options)
+    const editor = <ArkmeRecordingSpeakerEditor item={{
+      itemId: 'item-1', itemRef: 'sealed-item', speakerLabel: '说话人 1', speakerColorIndex: 1,
+      speakerNumber: 1, speakerKey: 'speaker-opaque', sameSpeakerItemCount: 3,
+      text: '内容', startAtMillis: 1_000, endAtMillis: 2_000, isBackground: false, isSelf: false,
+    }} onUpdated={() => {}} onClose={() => {}} />
+    await act(async () => { renderer = create(editor); await tick() })
+    await act(async () => { renderer.unmount(); await tick() })
+    mocks.callArkme.mockRejectedValueOnce(new Error('刷新失败'))
+    await act(async () => { renderer = create(editor); await tick() })
+    expect(JSON.stringify(renderer.toJSON())).toContain('已缓存候选')
+    expect(renderer.root.findByProps({ 'aria-label': '重试读取说话人候选' })).toBeDefined()
+    const confirm = renderer.root.findAll(node => node.type === 'button' && node.children.join('') === '确认')[0]!
+    expect(confirm.props.disabled).toBe(true)
   })
 
   it('fails closed when candidate loading fails and allows an explicit retry', async () => {
@@ -56,7 +132,7 @@ describe('recording speaker editor failure recovery', () => {
   it('does not create a duplicate speaker when the typed name exactly matches an existing option', async () => {
     mocks.callArkme.mockImplementation(async operation => {
       if (operation === 'recordings.speaker.options') return [{
-        speakerRef: 'sealed-speaker',
+        optionKey: 'key-sealed-speaker', speakerRef: 'sealed-speaker',
         kind: 'speaker',
         label: '林老师',
         recommended: false,
@@ -87,7 +163,7 @@ describe('recording speaker editor failure recovery', () => {
 
   it('uses the desktop identity category name for candidate users', async () => {
     mocks.callArkme.mockResolvedValueOnce([{
-      speakerRef: 'candidate-user',
+      optionKey: 'key-candidate-user', speakerRef: 'candidate-user',
       kind: 'arkme-user',
       label: '小王',
       recommended: false,

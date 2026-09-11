@@ -316,6 +316,8 @@ export class RecordingService {
         || profile?.displayName || '未命名说话人'
       return [{ speakerId, label, avatarRef: profile?.avatarRef, userId }]
     }).map((item): ArkmeRecordingSpeakerOption => ({
+      optionKey: createHmac('sha256', speakerRefKey)
+        .update(JSON.stringify([this.runtime.config.environment, session.userId, 'speaker', item.speakerId])).digest('base64url'),
       speakerRef: this.sealRecordingRefWithKey('arkme-recording-speaker-v1', {
         version: 1, viewerUserId: payload.viewerUserId,
         target: { kind: 'speaker', speakerId: item.speakerId },
@@ -334,6 +336,8 @@ export class RecordingService {
     }))
     const userOptions = candidateUsers.filter(candidate => !representedUserIds.has(candidate.userId)).map(
       (candidate): ArkmeRecordingSpeakerOption => ({
+        optionKey: createHmac('sha256', speakerRefKey)
+          .update(JSON.stringify([this.runtime.config.environment, session.userId, 'arkme-user', candidate.userId])).digest('base64url'),
         speakerRef: this.sealRecordingRefWithKey('arkme-recording-speaker-v1', {
           version: 1,
           viewerUserId: payload.viewerUserId,

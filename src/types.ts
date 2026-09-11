@@ -2718,6 +2718,8 @@ export interface ArkmeRecordingPlayback {
 }
 
 export interface ArkmeRecordingSpeakerOption {
+  /** Stable candidate identity; never an authorization or mutation reference. */
+  optionKey: string
   speakerRef: string
   label: string
   avatarRef?: string

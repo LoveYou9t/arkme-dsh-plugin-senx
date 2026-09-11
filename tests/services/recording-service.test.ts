@@ -1344,16 +1344,26 @@ describe('RecordingService', () => {
       speakerNumber: 1,
     }, undefined)
     const options = await service.recordingSpeakerOptions(item!.itemRef)
+    candidateLabel = '小林'
+    const renewedOptions = await service.recordingSpeakerOptions(item!.itemRef)
+    expect(renewedOptions.map(option => option.label)).toEqual(['小林', '小林'])
+    candidateLabel = '小王'
+    expect(options[0]!.optionKey).toMatch(/^[A-Za-z0-9_-]{43}$/)
+    expect(renewedOptions.map(option => option.optionKey)).toEqual(options.map(option => option.optionKey))
+    expect(renewedOptions[0]!.speakerRef).not.toBe(options[0]!.speakerRef)
+    expect(options[0]!.optionKey).not.toBe(options[1]!.optionKey)
     expect(calls).toContainEqual({
       path: '/api/v1/audio/similar-session-speaker',
       body: { session_id: 'session-secret', num: 1 },
     })
     expect(options).toEqual([
       {
+        optionKey: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/),
         speakerRef: expect.stringMatching(/^arkme-recording-speaker-v1\./), label: '小林', kind: 'speaker',
         currentAssignment: true, isCurrentUser: false, recommended: true,
       },
       {
+        optionKey: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/),
         speakerRef: expect.stringMatching(/^arkme-recording-speaker-v1\./), label: '小王', kind: 'arkme-user',
         currentAssignment: false, isCurrentUser: false, recommended: false,
       },
@@ -1554,14 +1564,14 @@ describe('RecordingService', () => {
       calls.push(path)
       let data: Record<string, unknown> = {}
       if (path.endsWith('/one-day-trans')) data = {
-        session_ls: [{ id: `session-${String(userId)}`, belong_usr: userId, start_at: Number(body.start_at) + 3_600_000, spk_ls: [{ num: 1, spk_id: `speaker-${String(userId)}` }] }],
+        session_ls: [{ id: `session-${String(userId)}`, belong_usr: userId, start_at: Number(body.start_at) + 3_600_000, spk_ls: [{ num: 1, spk_id: 'shared-speaker-id' }] }],
         child_ls: [{
           id: `child-${String(userId)}`, session_id: `session-${String(userId)}`, start_at: 0,
           file_name: 'device_0.m4a', mime_type: 'audio/mp4',
           asr: [{ s: 1_000, e: 2_000, n: 1, t: '项目复盘' }],
         }],
       }
-      if (path.endsWith('/get-speaker-ls')) data = { spk_ls: [{ speaker_id: `speaker-${String(userId)}`, nick_name: `用户${String(userId)}` }] }
+      if (path.endsWith('/get-speaker-ls')) data = { spk_ls: [{ speaker_id: 'shared-speaker-id', nick_name: `用户${String(userId)}` }] }
       if (path.endsWith('/similar-session-speaker')) data = {}
       if (path.endsWith('/list-timeline-by-range')) data = { audio_summary_ls: [] }
       return new Response(JSON.stringify({ code: 200, data }), {
@@ -1576,6 +1586,16 @@ describe('RecordingService', () => {
     const account42Option = (await service.recordingSpeakerOptions(account42Day.transcript.items[0]!.itemRef))[0]!
     userId = 43
     const account43Day = await service.recordingDay(new Date(2024, 7, 30).setHours(0, 0, 0, 0))
+    const account43Option = (await service.recordingSpeakerOptions(account43Day.transcript.items[0]!.itemRef))[0]!
+    expect(account43Option.optionKey).not.toBe(account42Option.optionKey)
+    const productionService = new RecordingService(
+      new ServiceRuntime({ ...config, environment: 'prod' }, sessions, new ArkmeStateStore(root), fetchImpl),
+      dependencies(),
+    )
+    const productionDay = await productionService.recordingDay(new Date(2024, 7, 30).setHours(0, 0, 0, 0))
+    const productionOption = (await productionService.recordingSpeakerOptions(productionDay.transcript.items[0]!.itemRef))[0]!
+    expect(productionOption.optionKey).not.toBe(account43Option.optionKey)
+
 
     await expect(service.assignRecordingSpeaker({
       itemRef: account43Day.transcript.items[0]!.itemRef,

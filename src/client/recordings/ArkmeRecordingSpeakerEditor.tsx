@@ -1,10 +1,12 @@
-import { useEffect, useMemo, useState, type CSSProperties } from 'react'
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties } from 'react'
 import { createPortal } from 'react-dom'
 import { Check } from '@phosphor-icons/react/dist/icons/Check'
 import { Plus } from '@phosphor-icons/react/dist/icons/Plus'
-import type { ArkmeRecordingDay, ArkmeRecordingSpeakerMutationResult, ArkmeRecordingSpeakerOption, ArkmeRecordingWorkbenchItem } from '../../types.js'
+import type { ArkmeRecordingDay, ArkmeRecordingSpeakerOption, ArkmeRecordingWorkbenchItem } from '../../types.js'
 import { ArkmeUserAvatar } from '../ArkmeAvatar.js'
-import { callArkme } from '../api.js'
+import { arkmeAuthStore } from '../auth-store.js'
+import { useResource } from '../use-resource.js'
+import { assignRecordingSpeaker, recordingSpeakerAccount, recordingSpeakerOptions } from './recording-speaker-options-store.js'
 import { arkmeTheme } from '../arkme-theme.js'
 
 const desktop = {
@@ -62,11 +64,11 @@ export function categorizeRecordingSpeakerOptions(options: readonly ArkmeRecordi
   const normalized = query.trim().toLocaleLowerCase('zh-CN')
   const visible = normalized === '' ? options : options.filter(option => option.label.toLocaleLowerCase('zh-CN').includes(normalized))
   const recommended = visible.filter(option => option.recommended)
-  const recommendedRefs = new Set(recommended.map(option => option.speakerRef))
+  const recommendedRefs = new Set(recommended.map(option => option.optionKey))
   return {
     recommended,
-    speakers: visible.filter(option => !recommendedRefs.has(option.speakerRef) && option.kind === 'speaker'),
-    users: visible.filter(option => !recommendedRefs.has(option.speakerRef) && option.kind === 'arkme-user'),
+    speakers: visible.filter(option => !recommendedRefs.has(option.optionKey) && option.kind === 'speaker'),
+    users: visible.filter(option => !recommendedRefs.has(option.optionKey) && option.kind === 'arkme-user'),
   }
 }
 
@@ -91,7 +93,7 @@ function SpeakerSection({ title, options, selected, onSelect }: {
   onSelect(option: ArkmeRecordingSpeakerOption): void
 }) {
   if (options.length === 0) return null
-  return <section><div style={styles.title}><span>{title}</span><span>{options.length}</span></div>{options.map(option => <SpeakerOptionRow key={option.speakerRef} option={option} selected={selected === option.speakerRef} onClick={() => { onSelect(option) }} />)}</section>
+  return <section><div style={styles.title}><span>{title}</span><span>{options.length}</span></div>{options.map(option => <SpeakerOptionRow key={option.optionKey} option={option} selected={selected === option.optionKey} onClick={() => { onSelect(option) }} />)}</section>
 }
 
 export function ArkmeRecordingSpeakerEditor({ item, anchor, forceBatchUpdate = false, onUpdated, onClose }: {
@@ -101,15 +103,22 @@ export function ArkmeRecordingSpeakerEditor({ item, anchor, forceBatchUpdate = f
   onUpdated(day: ArkmeRecordingDay): void
   onClose(): void
 }) {
-  const [options, setOptions] = useState<ArkmeRecordingSpeakerOption[]>([])
+  const auth = useSyncExternalStore(arkmeAuthStore.subscribe, arkmeAuthStore.getSnapshot, arkmeAuthStore.getSnapshot)
+  const account = recordingSpeakerAccount(auth.auth)
+  const binding = useMemo(() => ({ account, itemRef: item.itemRef }), [account, item.itemRef])
+  const key = account === undefined ? undefined : JSON.stringify([account, item.itemRef])
+  const { snapshot, refresh } = useResource(recordingSpeakerOptions, key, binding)
+  const options = snapshot.value ?? []
+  const loading = snapshot.value === undefined && snapshot.error === undefined
+  const optionsError = snapshot.error === undefined ? ''
+    : snapshot.error instanceof Error ? snapshot.error.message : '说话人候选读取失败'
+  const selectionTouched = useRef(false)
+  const viewGeneration = useRef(0)
   const [selected, setSelected] = useState('')
   const [query, setQuery] = useState('')
   const [batch, setBatch] = useState(forceBatchUpdate)
-  const [loading, setLoading] = useState(true)
-  const [pending, setPending] = useState(false)
-  const [optionsError, setOptionsError] = useState('')
+  const pending = snapshot.mutating
   const [mutationError, setMutationError] = useState('')
-  const [optionsEpoch, setOptionsEpoch] = useState(0)
   const categories = useMemo(() => categorizeRecordingSpeakerOptions(options, query), [options, query])
   const newSpeakerName = query.trim()
   const normalizedNewSpeakerName = newSpeakerName.toLocaleLowerCase('zh-CN')
@@ -118,22 +127,14 @@ export function ArkmeRecordingSpeakerEditor({ item, anchor, forceBatchUpdate = f
   )
 
   useEffect(() => {
-    const controller = new AbortController()
-    setOptions([]); setSelected(''); setQuery(''); setBatch(forceBatchUpdate); setOptionsError(''); setMutationError(''); setLoading(true)
-    void callArkme<ArkmeRecordingSpeakerOption[]>(
-      'recordings.speaker.options',
-      { itemRef: item.itemRef },
-      controller.signal,
-    )
-      .then(value => {
-        if (controller.signal.aborted) return
-        setOptions(value)
-        setSelected(value.find(option => option.currentAssignment)?.speakerRef ?? '')
-      })
-      .catch(reason => { if (!controller.signal.aborted) setOptionsError(reason instanceof Error ? reason.message : '说话人候选读取失败') })
-      .finally(() => { if (!controller.signal.aborted) setLoading(false) })
-    return () => { controller.abort() }
-  }, [forceBatchUpdate, item.itemRef, optionsEpoch])
+    selectionTouched.current = false
+    setSelected(''); setQuery(''); setBatch(forceBatchUpdate); setMutationError('')
+    return () => { viewGeneration.current += 1 }
+  }, [forceBatchUpdate, key])
+
+  useEffect(() => {
+    if (!selectionTouched.current) setSelected(snapshot.value?.find(option => option.currentAssignment)?.optionKey ?? '')
+  }, [snapshot.value, key, forceBatchUpdate])
 
   useEffect(() => {
     const closeOnEscape = (event: KeyboardEvent) => { if (event.key === 'Escape' && !pending) onClose() }
@@ -142,32 +143,34 @@ export function ArkmeRecordingSpeakerEditor({ item, anchor, forceBatchUpdate = f
   }, [onClose, pending])
 
   const mutate = async () => {
-    if (pending || loading || optionsError !== '') return
-    if (selected === '' && (newSpeakerName === '' || exactMatch)) return
-    setPending(true); setMutationError('')
+    if (key === undefined || !canSubmit) return
+    const generation = viewGeneration.current
+    const target = options.find(option => option.optionKey === selected)
+    setMutationError('')
     try {
-      const result = await callArkme<ArkmeRecordingSpeakerMutationResult>(
-        'recordings.speaker.assign-item',
-        {
-          itemRef: item.itemRef,
-          scope: forceBatchUpdate || batch ? 'speaker' : 'item',
-          ...(selected === '' ? { newSpeakerName } : { speakerRef: selected }),
-        },
-      )
+      const result = await assignRecordingSpeaker(key, binding, {
+        scope: forceBatchUpdate || batch ? 'speaker' : 'item',
+        ...(target === undefined ? { newSpeakerName } : { speakerRef: target.speakerRef }),
+      })
+      if (result === undefined) return
+      if (viewGeneration.current !== generation) return
       onUpdated(result.day); onClose()
-    } catch (reason) { setMutationError(reason instanceof Error ? reason.message : '说话人修改失败') }
-    finally { setPending(false) }
+    } catch (reason) {
+      if (viewGeneration.current !== generation) return
+      setMutationError(reason instanceof Error ? reason.message : '说话人修改失败')
+    }
   }
 
   const choose = (option: ArkmeRecordingSpeakerOption) => {
-    setSelected(current => current === option.speakerRef ? '' : option.speakerRef)
+    selectionTouched.current = true
+    setSelected(current => current === option.optionKey ? '' : option.optionKey)
     setQuery('')
   }
   const canBatch = forceBatchUpdate || item.sameSpeakerItemCount > 1
-  const selectedCurrent = options.some(option => option.currentAssignment && option.speakerRef === selected)
-  const optionsReady = !loading && optionsError === ''
+  const selectedCurrent = options.some(option => option.currentAssignment && option.optionKey === selected)
+  const optionsReady = account !== undefined && snapshot.value !== undefined && !snapshot.stale && optionsError === ''
   const canSubmit = optionsReady && !pending && !selectedCurrent
-    && (selected !== '' || (newSpeakerName !== '' && !exactMatch))
+    && (options.some(option => option.optionKey === selected) || (newSpeakerName !== '' && !exactMatch))
   const position = recordingSpeakerPopoverPosition(
     anchor ?? { left: 8, right: 40, top: 8, bottom: 40 },
     typeof window === 'undefined' ? { width: 1_024, height: 768 } : { width: window.innerWidth, height: window.innerHeight },
@@ -175,14 +178,14 @@ export function ArkmeRecordingSpeakerEditor({ item, anchor, forceBatchUpdate = f
 
   const layer = <><button type="button" tabIndex={-1} aria-label="关闭说话人编辑" style={styles.backdrop} onClick={() => { if (!pending) onClose() }} />
   <div style={{ ...styles.popover, left: position.left, top: position.top }} role="dialog" aria-label="编辑说话人">
-    <input autoFocus style={styles.field} aria-label="说话人名称" value={query} maxLength={50} onChange={event => { setQuery(event.target.value); setSelected('') }} placeholder="输入名称" />
+    <input autoFocus style={styles.field} aria-label="说话人名称" value={query} maxLength={50} onChange={event => { selectionTouched.current = true; setQuery(event.target.value); setSelected('') }} placeholder="输入名称" />
     {loading ? <div role="status" style={{ padding: 12, color: desktop.secondary, fontSize: 12 }}>正在读取候选…</div> : <div style={styles.list}>
       <SpeakerSection title="推荐说话人" options={categories.recommended} selected={selected} onSelect={choose} />
       <SpeakerSection title="已添加说话人" options={categories.speakers} selected={selected} onSelect={choose} />
       <SpeakerSection title="Arkme 用户" options={categories.users} selected={selected} onSelect={choose} />
     </div>}
     {newSpeakerName !== '' && !exactMatch && <button type="button" aria-label="添加新说话人" style={styles.add} disabled={!optionsReady || pending} onClick={() => { void mutate() }}><Plus size={15} />添加“{newSpeakerName}”为说话人</button>}
-    {optionsError !== '' && <div role="alert" style={styles.error}>{optionsError} <button type="button" aria-label="重试读取说话人候选" style={styles.unassign} onClick={() => { setOptionsEpoch(value => value + 1) }}>重试</button></div>}
+    {optionsError !== '' && <div role="alert" style={styles.error}>{optionsError} <button type="button" aria-label="重试读取说话人候选" style={styles.unassign} onClick={refresh}>重试</button></div>}
     {mutationError !== '' && <div role="alert" style={styles.error}>{mutationError}</div>}
     <div style={styles.bottom}>
       {canBatch ? <><input aria-label="批量修改" type="checkbox" checked={forceBatchUpdate || batch} disabled={pending || forceBatchUpdate} onChange={event => { if (!forceBatchUpdate) setBatch(event.target.checked) }} /><span style={styles.batchText}>批量修改 {item.sameSpeakerItemCount} 处“{item.speakerLabel}”</span></> : <span style={styles.batchText}>仅修改当前片段</span>}
