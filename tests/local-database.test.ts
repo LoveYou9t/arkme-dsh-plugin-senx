@@ -47,16 +47,19 @@ describe('ArkmeLocalDatabase', () => {
     let database = new ArkmeLocalDatabase(directory, new ArkmeStateStore(directory))
     const rows = [{ optionKey: 'key', speakerRef: 'ref', label: '甲', kind: 'speaker' as const, isCurrentUser: false }]
     await database.writeRecordingSpeakerCache('test:key-v1', 42, rows)
+    await database.recordRecentEmoji('test:42', 'joy_face')
     database.close()
     database = new ArkmeLocalDatabase(directory, new ArkmeStateStore(directory))
     try {
       expect(await database.readRecordingSpeakerCache('test:key-v1', 42)).toEqual(rows)
+      expect(await database.recentEmojiIds('test:42')).toEqual(['joy_face'])
       expect(await database.readRecordingSpeakerCache('production:key-v1', 42)).toBeUndefined()
       expect(await database.readRecordingSpeakerCache('test:key-v2', 42)).toBeUndefined()
       expect(await database.readRecordingSpeakerCache('test:key-v1', 43)).toBeUndefined()
       await database.writeRecordingSpeakerCache('test:key-v1', 42, [])
       expect(await database.readRecordingSpeakerCache('test:key-v1', 42)).toEqual([])
       await database.clearRecordingSpeakerCache('test:key-v1', 42)
+      expect(await database.recentEmojiIds('test:42')).toEqual(['joy_face'])
       expect(await database.readRecordingSpeakerCache('test:key-v1', 42)).toBeUndefined()
     } finally { database.close() }
   })

@@ -31,6 +31,64 @@ describe('recording speaker editor failure recovery', () => {
   })
 
 
+  it('opens without programmatic focus and preserves manual input through candidate refresh', async () => {
+    const focus = vi.fn()
+    let resolveOptions!: (value: unknown[]) => void
+    mocks.callArkme.mockImplementation(() => new Promise(resolve => { resolveOptions = resolve }))
+    await act(async () => {
+      renderer = create(<ArkmeRecordingSpeakerEditor item={{
+        itemId: 'focus-item', itemRef: 'focus-ref', speakerLabel: '说话人', speakerColorIndex: 1,
+        speakerNumber: 1, speakerKey: 'focus-key', sameSpeakerItemCount: 1,
+        text: '内容', startAtMillis: 1_000, endAtMillis: 2_000, isBackground: false, isSelf: false,
+      }} onUpdated={() => {}} onClose={() => {}} />, {
+        createNodeMock: element => element.type === 'input' && element.props['aria-label'] === '说话人名称' ? { focus } : null,
+      })
+      await tick()
+    })
+    const input = renderer.root.findByProps({ 'aria-label': '说话人名称' })
+    expect(input.props.autoFocus).toBeUndefined()
+    expect(focus).not.toHaveBeenCalled()
+    await act(async () => { input.props.onChange({ target: { value: '新名称' } }); await tick() })
+    await act(async () => { resolveOptions([]); await tick() })
+    expect(focus).not.toHaveBeenCalled()
+    expect(renderer.root.findByProps({ 'aria-label': '说话人名称' }).props.value).toBe('新名称')
+    await act(async () => { renderer.unmount(); await tick() })
+    expect(focus).not.toHaveBeenCalled()
+  })
+
+  it('lets Tab enter the popover from its trigger without intercepting other keyboard navigation', async () => {
+    const trigger = {}
+    const focus = vi.fn()
+    const addEventListener = vi.fn()
+    const removeEventListener = vi.fn()
+    vi.stubGlobal('document', { activeElement: trigger, addEventListener, removeEventListener })
+    mocks.callArkme.mockResolvedValue([])
+    const onClose = vi.fn()
+    await act(async () => {
+      renderer = create(<ArkmeRecordingSpeakerEditor item={{
+        itemId: 'keyboard-item', itemRef: 'keyboard-ref', speakerLabel: '说话人', speakerColorIndex: 1,
+        speakerNumber: 1, speakerKey: 'keyboard-key', sameSpeakerItemCount: 1,
+        text: '内容', startAtMillis: 1_000, endAtMillis: 2_000, isBackground: false, isSelf: false,
+      }} onUpdated={() => {}} onClose={onClose} />, {
+        createNodeMock: element => element.type === 'input' && element.props['aria-label'] === '说话人名称' ? { focus } : null,
+      })
+      await tick()
+    })
+    const keydown = addEventListener.mock.calls.filter(([type]) => type === 'keydown').at(-1)![1]
+    const preventDefault = vi.fn()
+    expect(focus).not.toHaveBeenCalled()
+    keydown({ key: 'Tab', target: {}, preventDefault })
+    keydown({ key: 'Tab', target: trigger, shiftKey: true, preventDefault })
+    expect(preventDefault).not.toHaveBeenCalled()
+    keydown({ key: 'Tab', target: trigger, preventDefault })
+    expect(preventDefault).toHaveBeenCalledOnce()
+    expect(focus).toHaveBeenCalledExactlyOnceWith({ preventScroll: true })
+    keydown({ key: 'Escape' })
+    expect(onClose).toHaveBeenCalledOnce()
+    await act(async () => { renderer.unmount(); await tick() })
+    expect(removeEventListener).toHaveBeenCalledWith('keydown', keydown)
+  })
+
   it('shows persisted candidates on the first opening before remote loading completes', async () => {
     mocks.cached.mockResolvedValue([{ optionKey: 'saved', speakerRef: 'ref', label: '本地说话人', kind: 'speaker', isCurrentUser: false }])
     mocks.callArkme.mockImplementation(() => new Promise(() => {}))

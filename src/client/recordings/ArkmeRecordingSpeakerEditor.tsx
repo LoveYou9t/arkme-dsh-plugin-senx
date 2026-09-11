@@ -102,6 +102,8 @@ export function ArkmeRecordingSpeakerEditor({ item, anchor, forceBatchUpdate = f
   onClose(): void
 }) {
   const { contextKey: key, options, loading, error: optionsError, ready: optionsReady, pending, refresh, save } = useRecordingSpeakerOptions(item)
+  const inputRef = useRef<HTMLInputElement>(null)
+  const triggerRef = useRef(typeof document === 'undefined' ? null : document.activeElement)
   const selectionTouched = useRef(false)
   const viewGeneration = useRef(0)
   const [selected, setSelected] = useState('')
@@ -126,9 +128,16 @@ export function ArkmeRecordingSpeakerEditor({ item, anchor, forceBatchUpdate = f
   }, [options, key, forceBatchUpdate])
 
   useEffect(() => {
-    const closeOnEscape = (event: KeyboardEvent) => { if (event.key === 'Escape' && !pending) onClose() }
-    document.addEventListener('keydown', closeOnEscape)
-    return () => { document.removeEventListener('keydown', closeOnEscape) }
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && !pending) onClose()
+      if (event.key === 'Tab' && !event.shiftKey && !event.defaultPrevented
+        && event.target === triggerRef.current && inputRef.current !== null) {
+        event.preventDefault()
+        inputRef.current.focus({ preventScroll: true })
+      }
+    }
+    document.addEventListener('keydown', handleKeyDown)
+    return () => { document.removeEventListener('keydown', handleKeyDown) }
   }, [onClose, pending])
 
   const mutate = async () => {
@@ -165,7 +174,7 @@ export function ArkmeRecordingSpeakerEditor({ item, anchor, forceBatchUpdate = f
 
   const layer = <><button type="button" tabIndex={-1} aria-label="关闭说话人编辑" style={styles.backdrop} onClick={() => { if (!pending) onClose() }} />
   <div style={{ ...styles.popover, left: position.left, top: position.top }} role="dialog" aria-label="编辑说话人">
-    <input autoFocus style={styles.field} aria-label="说话人名称" value={query} maxLength={50} onChange={event => { selectionTouched.current = true; setQuery(event.target.value); setSelected('') }} placeholder="输入名称" />
+    <input ref={inputRef} style={styles.field} aria-label="说话人名称" value={query} maxLength={50} onChange={event => { selectionTouched.current = true; setQuery(event.target.value); setSelected('') }} placeholder="输入名称" />
     {loading ? <div role="status" style={{ padding: 12, color: desktop.secondary, fontSize: 12 }}>正在读取候选…</div> : <div style={styles.list}>
       <SpeakerSection title="推荐说话人" options={categories.recommended} selected={selected} onSelect={choose} />
       <SpeakerSection title="已添加说话人" options={categories.speakers} selected={selected} onSelect={choose} />
