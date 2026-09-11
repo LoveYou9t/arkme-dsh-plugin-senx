@@ -637,6 +637,92 @@ describe('SourceService', () => {
     expect(reads).toBe(2)
   })
 
+  describe('directory request cache boundaries', () => {
+    function setup() {
+      const runtime = { requireSession: async () => ({ userId: 42 }), invalidateKey() {}, requestScope: () => 'test:42' } as unknown as ServiceRuntime
+      const service = new SourceService(runtime, {} as ProfileService, {} as never)
+      const loader = service as unknown as { listSourcesUncached(): Promise<ArkmeSourceList> }
+      const spy = vi.spyOn(loader, 'listSourcesUncached')
+      const result: ArkmeSourceList = { directory: 'send_to_self', items: [], total: 1, hasMore: false }
+      return { service, spy, result }
+    }
+
+    it('does not serve cached results to an already cancelled caller', async () => {
+      const { service, spy, result } = setup()
+      spy.mockResolvedValue(result)
+      await service.listSources('send_to_self')
+      const controller = new AbortController()
+      controller.abort()
+      await expect(service.listSources('send_to_self', { signal: controller.signal })).rejects.toMatchObject({ name: 'AbortError' })
+      expect(spy).toHaveBeenCalledTimes(1)
+    })
+
+    it('keeps the newer cache when an older independent request finishes last', async () => {
+      const { service, spy, result } = setup()
+      let release!: (value: ArkmeSourceList) => void
+      spy.mockImplementationOnce(() => new Promise(resolve => { release = resolve })).mockResolvedValue({ ...result, total: 2 })
+      const oldRead = service.listSources('send_to_self', { signal: new AbortController().signal })
+      await vi.waitFor(() => expect(spy).toHaveBeenCalledTimes(1))
+      await service.listSources('send_to_self', { signal: new AbortController().signal })
+      release(result)
+      await oldRead
+      expect((await service.listSources('send_to_self')).total).toBe(2)
+      expect(spy).toHaveBeenCalledTimes(2)
+    })
+
+    it('still shares signal-free reads and returns independent snapshots', async () => {
+      const { service, spy, result } = setup()
+      let release!: (value: ArkmeSourceList) => void
+      spy.mockImplementation(() => new Promise(resolve => { release = resolve }))
+      const a = service.listSources('send_to_self')
+      const b = service.listSources('send_to_self')
+      await vi.waitFor(() => expect(spy).toHaveBeenCalledTimes(1))
+      release(result)
+      const [first, second] = await Promise.all([a, b])
+      first.total = 99
+      expect(second.total).toBe(1)
+      expect((await service.listSources('send_to_self')).total).toBe(1)
+    })
+  })
+
+  it.each(['send_to_self', 'root'] as const)('isolates cancellation scopes for overlapping %s reads', async directory => {
+    const sessions: ArkmeSessionStore = {
+      async read() { return { userId: 42, accessToken: 'access', refreshToken: 'refresh' } },
+      async write() {}, async delete() {},
+    }
+    const runtime = new ServiceRuntime(config, sessions, { async uniqueCode() { return 'device-secret' } } as StateStore, vi.fn() as typeof fetch)
+    const service = new SourceService(runtime, new ProfileService(runtime), {
+      async summary() { return { recordCount: 0, wordsCount: 0, totalSec: 0 } }, recordItem() { return undefined },
+    })
+    const first = new AbortController()
+    const second = new AbortController()
+    const result: ArkmeSourceList = { directory, items: [], total: 2, hasMore: false }
+    let release!: () => void
+    const loader = service as unknown as { listSourcesUncached(session: unknown, directory: string, options: { signal?: AbortSignal }): Promise<ArkmeSourceList> }
+    const spy = vi.spyOn(loader, 'listSourcesUncached').mockImplementation(async (_session, _directory, options) => {
+      if (options.signal === first.signal) return await new Promise((_resolve, reject) => {
+        options.signal!.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')), { once: true })
+      })
+      await new Promise<void>(resolve => { release = resolve })
+      return result
+    })
+    const oldRead = service.listSources(directory, { signal: first.signal })
+    const rejected = expect(oldRead).rejects.toMatchObject({ name: 'AbortError' })
+    await vi.waitFor(() => expect(spy).toHaveBeenCalledTimes(1))
+    const newRead = service.listSources(directory, { signal: second.signal })
+    // Observe rejection too, so the regression cannot cause an unhandled rejection.
+    void newRead.catch(() => {})
+    await vi.waitFor(() => expect(spy).toHaveBeenCalledTimes(2))
+    const joined = service.listSources(directory, { signal: second.signal })
+    first.abort()
+    await rejected
+    release()
+    await expect(newRead).resolves.toEqual(result)
+    await expect(joined).resolves.toEqual(result)
+    await expect(service.listSources(directory)).resolves.toEqual(result)
+    expect(spy).toHaveBeenCalledTimes(2)
+  })
+
   it('cancels a send-to-self owner read when its caller is superseded', async () => {
     const sessions: ArkmeSessionStore = {
       async read() { return { userId: 42, accessToken: 'access', refreshToken: 'refresh' } },
@@ -705,6 +791,57 @@ describe('SourceService', () => {
       expect(fetchImpl).not.toHaveBeenCalled()
     },
   )
+
+  it('keeps the second send-to-self request alive through the real runtime when the first is cancelled', async () => {
+    const sessions: ArkmeSessionStore = {
+      async read() { return { userId: 42, accessToken: 'access', refreshToken: 'refresh' } },
+      async write() {}, async delete() {},
+    }
+    const recordSignals: AbortSignal[] = []
+    let finishSecond!: () => void
+    const fetchImpl = vi.fn(async (input, init) => {
+      const path = new URL(String(input)).pathname
+      if (path === '/api/v1/records/privacy/visibility-snapshot') {
+        return new Response(JSON.stringify({ code: 0, data: { items: [], has_more: false } }), { status: 200 })
+      }
+      if (path === '/api/v1/records/uncategorized/query') {
+        recordSignals.push(init!.signal!)
+        return await new Promise<Response>((resolve, reject) => {
+          if (recordSignals.length === 2) finishSecond = () => resolve(new Response(JSON.stringify({ code: 0, data: { items: [], has_more: false } }), { status: 200 }))
+          const rejectAbort = (): void => reject(new DOMException('aborted', 'AbortError'))
+          if (init?.signal?.aborted === true) rejectAbort()
+          else init?.signal?.addEventListener('abort', rejectAbort, { once: true })
+        })
+      }
+      if (path === '/api/v1/topics/display/list') {
+        return new Response(JSON.stringify({ code: 0, data: { items: [] } }), { status: 200 })
+      }
+      if (path === '/api/v1/topics/hierarchy/relations/list') {
+        return new Response(JSON.stringify({ code: 0, data: { relations: [] } }), { status: 200 })
+      }
+      throw new Error(`unexpected path: ${path}`)
+    }) as typeof fetch
+    const runtime = new ServiceRuntime(config, sessions, {
+      async uniqueCode() { return 'device-secret' },
+    } as StateStore, fetchImpl)
+    const service = new SourceService(runtime, new ProfileService(runtime), {
+      async summary() { return { recordCount: 0, wordsCount: 0, totalSec: 0 } },
+      recordItem() { return undefined },
+    })
+    const controller = new AbortController()
+
+    const read = service.listSources('send_to_self', { refresh: true, signal: controller.signal })
+    const rejection = expect(read).rejects.toMatchObject({ name: 'AbortError' })
+    await vi.waitFor(() => expect(recordSignals).toHaveLength(1))
+    const next = service.listSources('send_to_self', { refresh: true, signal: new AbortController().signal })
+    await vi.waitFor(() => expect(recordSignals).toHaveLength(2))
+    controller.abort()
+    await rejection
+    expect(recordSignals[0]!.aborted).toBe(true)
+    expect(recordSignals[1]!.aborted).toBe(false)
+    finishSecond()
+    await expect(next).resolves.toMatchObject({ directory: 'send_to_self', hasMore: false })
+  })
 
   it('creates a topic with an account-bound source reference', async () => {
     const sessions: ArkmeSessionStore = {

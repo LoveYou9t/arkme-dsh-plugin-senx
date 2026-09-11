@@ -369,7 +369,7 @@ function cloneSourceList(value: ArkmeSourceList): ArkmeSourceList {
 export class SourceService {
   private readonly chatSourceCache = new Map<string, ArkmeSourceItem>()
   private readonly sourceListCache = new Map<string, CacheEntry<ArkmeSourceList>>()
-  private readonly sourceListInFlight = new Map<string, Promise<ArkmeSourceList>>()
+  private readonly sourceListInFlight = new Map<string, { promise: Promise<ArkmeSourceList>; signal: AbortSignal | undefined }>()
   private readonly groupAvatarSnapshotCache = new Map<string, CacheEntry<ArkmeGroupAvatarSnapshotProjection | null>>()
   private readonly topicDissolveProgress = new Map<string, {
     userId: number
@@ -1203,6 +1203,7 @@ export class SourceService {
     options: { limit?: number; cursor?: string; signal?: AbortSignal; refresh?: boolean; firstPaint?: boolean } = {},
   ): Promise<ArkmeSourceList> {
     const session = await this.runtime.requireSession()
+    options.signal?.throwIfAborted()
     // Topic hierarchies require their parent and child to arrive in the same response.
     // The topics endpoint supports up to 100 items, while chat directories stay capped at 50.
     const maxLimit = directory === 'send_to_self' ? 100 : 50
@@ -1213,23 +1214,23 @@ export class SourceService {
     const cached = this.sourceListCache.get(cacheKey)
     if (options.refresh !== true && cached !== undefined && cached.expiresAtMillis > Date.now()) return cloneSourceList(cached.value)
     const existing = this.sourceListInFlight.get(cacheKey)
-    if (existing !== undefined) return cloneSourceList(await existing)
+    if (existing !== undefined && existing.signal === options.signal) return cloneSourceList(await existing.promise)
     const pending = this.listSourcesUncached(session, directory, {
       ...options,
       ...(cursor === '' ? {} : { cursor }),
-      isCurrent: () => this.sourceListInFlight.get(cacheKey) === pending,
+      isCurrent: () => this.sourceListInFlight.get(cacheKey)?.promise === pending,
     }, limit)
-    this.sourceListInFlight.set(cacheKey, pending)
+    this.sourceListInFlight.set(cacheKey, { promise: pending, signal: options.signal })
     try {
       const result = await pending
-      if (this.sourceListInFlight.get(cacheKey) === pending) {
+      if (this.sourceListInFlight.get(cacheKey)?.promise === pending) {
         this.sourceListCache.delete(cacheKey)
         this.sourceListCache.set(cacheKey, { value: cloneSourceList(result), expiresAtMillis: Date.now() + SOURCE_LIST_CACHE_TTL_MS })
         this.pruneSourceListCache()
       }
       return cloneSourceList(result)
     } finally {
-      if (this.sourceListInFlight.get(cacheKey) === pending) this.sourceListInFlight.delete(cacheKey)
+      if (this.sourceListInFlight.get(cacheKey)?.promise === pending) this.sourceListInFlight.delete(cacheKey)
     }
   }
 
