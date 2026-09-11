@@ -6934,6 +6934,7 @@ export function ArkmeSurface({
           onCancelBinding={() => { void cancelBinding() }}
         /></div> : ui.mode === 'calls' ? <ArkmeCallSurface />
           : ui.mode === 'recordings' ? <ArkmeRecordingSurface
+            active={active}
             key={`recordings:${auth?.status ?? 'unknown'}:${auth?.environment ?? 'unknown'}:${String(auth?.userId ?? 0)}`}
             onOpenRecordingImport={openRecordingImport}
             recordingRefreshRevision={recordingRefreshRevision}
