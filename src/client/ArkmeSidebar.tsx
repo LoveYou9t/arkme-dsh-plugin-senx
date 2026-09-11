@@ -132,15 +132,17 @@ import {
   ArkmeConversationMemoryCache,
   arkmeConversationTimelineDeltaItems,
   ARKME_CONVERSATION_TIMELINE_FRESH_MILLIS,
-  arkmeConversationRestoredScrollTop,
   arkmeConversationTimelineSequenceRange,
   arkmeConversationTimelineContentEqual,
   arkmeShouldRefreshChatTimeline,
   arkmeShouldRefreshRecordTimeline,
   type ArkmeConversationTimelineSnapshot,
   type ArkmeConversationTimelineSequenceRange,
-  type ArkmeConversationViewportSnapshot,
 } from './conversation-memory-cache.js'
+import {
+  arkmeConversationViewport, arkmeConversationAnchorOffset, useConversationViewport,
+  type ArkmeConversationViewportRestore,
+} from './conversation-viewport.js'
 import {
   arkmeComposerCanSend,
   arkmeComposerDraftStore,
@@ -1530,36 +1532,6 @@ export function arkmeRealtimeDeltaCoversTimelineGap(
     if (!sequences.has(sequence)) return false
   }
   return true
-}
-
-function arkmeConversationViewport(root: HTMLDivElement, messagesOnly = false): ArkmeConversationViewportSnapshot {
-  const stickToBottom = !messagesOnly && root.scrollHeight - root.scrollTop - root.clientHeight <= 80
-  if (stickToBottom) return { scrollTop: root.scrollTop, stickToBottom: true }
-  const rootRect = root.getBoundingClientRect()
-  for (const row of root.querySelectorAll<HTMLElement>('[data-arkme-conversation-row]')) {
-    if (messagesOnly && !row.dataset.arkmeConversationRow?.startsWith('message:')) continue
-    const rowRect = row.getBoundingClientRect()
-    if (rowRect.bottom <= rootRect.top || rowRect.top >= rootRect.bottom) continue
-    const anchorId = row.dataset.arkmeConversationRow
-    if (anchorId !== undefined) {
-      return {
-        scrollTop: root.scrollTop,
-        stickToBottom: false,
-        anchorId,
-        anchorOffset: rowRect.top - rootRect.top,
-      }
-    }
-  }
-  return { scrollTop: root.scrollTop, stickToBottom: false }
-}
-
-function arkmeConversationAnchorOffset(root: HTMLDivElement, anchorId: string | undefined): number | undefined {
-  if (anchorId === undefined) return undefined
-  const rootTop = root.getBoundingClientRect().top
-  for (const row of root.querySelectorAll<HTMLElement>('[data-arkme-conversation-row]')) {
-    if (row.dataset.arkmeConversationRow === anchorId) return row.getBoundingClientRect().top - rootTop
-  }
-  return undefined
 }
 
 export function aiPolishStatus(item: ArkmeTimelineItem): string {
@@ -3122,11 +3094,7 @@ export function ArkmeSurface({
     requestKey: string
     returnToLatest: boolean
   }>())
-  const pendingViewportRestoreRef = useRef<{
-    sourceKey: string
-    viewport: ArkmeConversationViewportSnapshot | undefined
-    newerPageStartAnchorId?: string
-  }>()
+  const pendingViewportRestoreRef = useRef<ArkmeConversationViewportRestore>()
   const viewportRestoreIntentRef = useRef<boolean>()
   const pendingConversationTargetLocateRef = useRef<{
     sourceKey: string
@@ -3990,9 +3958,6 @@ export function ArkmeSurface({
     pendingConversationTargetLocateRef.current = undefined
     setHighlightedTargetUid('')
     const accountChanged = cacheAccountKeyRef.current !== authenticatedAccountKey
-    if (!accountChanged && timelineStateKey !== '' && bodyRef.current !== null) {
-      conversationCacheRef.current.storeViewport(timelineStateKey, arkmeConversationViewport(bodyRef.current))
-    }
     if (accountChanged) {
       conversationCacheRef.current.clear()
       appliedTimelineInvalidationsRef.current.clear()
@@ -6555,48 +6520,21 @@ export function ArkmeSurface({
     }
     await forwardMessageItems(forwardPickerMessageItems, targets, forwardTargetPicker.commentText)
   }, [forwardMessageItems, forwardPickerMessageItems, forwardTargetPicker, showMessageActionStatus])
-  useLayoutEffect(() => {
-    if (!active || timelineStateKey === '') return
-    const cachedViewport = conversationCacheRef.current.getViewport(timelineStateKey)
-    if (cachedViewport !== undefined) {
-      pendingViewportRestoreRef.current = { sourceKey: timelineStateKey, viewport: cachedViewport }
-    }
-    return () => {
-      const body = bodyRef.current
-      if (body !== null) conversationCacheRef.current.storeViewport(timelineStateKey, arkmeConversationViewport(body))
-    }
-  }, [active, timelineStateKey])
-  useLayoutEffect(() => {
-    const pending = pendingViewportRestoreRef.current
-    const body = bodyRef.current
-    if (pending === undefined || body === null || pending.sourceKey !== timelineStateKey) return
-    const anchorOffset = arkmeConversationAnchorOffset(body, pending.viewport?.anchorId)
-    const newerPageStartOffset = arkmeConversationAnchorOffset(body, pending.newerPageStartAnchorId)
-    const maximumScrollTop = Math.max(0, body.scrollHeight - body.clientHeight)
-    body.scrollTop = pending.newerPageStartAnchorId === undefined
-      ? arkmeConversationRestoredScrollTop(pending.viewport, {
-        currentScrollTop: body.scrollTop,
-        scrollHeight: body.scrollHeight,
-        ...(anchorOffset === undefined ? {} : { anchorOffset }),
-      })
-      : Math.max(0, Math.min(maximumScrollTop, newerPageStartOffset === undefined
-        ? pending.viewport?.scrollTop ?? body.scrollTop
-        : body.scrollTop + newerPageStartOffset))
-    conversationCacheRef.current.storeViewport(pending.sourceKey, arkmeConversationViewport(body))
-    viewportRestoreIntentRef.current = pending.newerPageStartAnchorId === undefined
-      && (pending.viewport === undefined || pending.viewport.stickToBottom)
-    pendingViewportRestoreRef.current = undefined
-  }, [active, activeSelectMode, displayRows, timelineStateKey])
+  const rememberConversationViewport = useConversationViewport({
+    active: activeConversation,
+    sourceKey: conversationKey,
+    renderedSourceKey: timelineStateKey,
+    bodyRef,
+    store: conversationCacheRef.current,
+    pendingRestore: pendingViewportRestoreRef,
+    restoreIntent: viewportRestoreIntentRef,
+  })
   useConversationResizeAnchor(bodyRef, active && activeConversation ? conversationKey : undefined, endAccessoryRef, activeSelectMode !== undefined, recordsRef, viewportRestoreIntentRef)
   const bottomVisibility = useScrollBottomVisibility(bodyRef, recordsRef, active && activeConversation, displayRows)
   const handleConversationScroll = useCallback(() => {
-    const body = bodyRef.current
-    if (body === null || timelineStateKey === '') return
-    const viewport = arkmeConversationViewport(body)
-    conversationCacheRef.current.storeViewport(timelineStateKey, viewport)
-    if (viewport.stickToBottom) setNewMessageCount(0)
+    if (rememberConversationViewport()?.stickToBottom) setNewMessageCount(0)
     bottomVisibility.measure()
-  }, [bottomVisibility.measure, timelineStateKey])
+  }, [bottomVisibility.measure, rememberConversationViewport])
   const returnToLatest = useCallback(async () => {
     const body = bodyRef.current
     if (body === null || !activeConversation || timelineStateKey !== conversationKey) return
