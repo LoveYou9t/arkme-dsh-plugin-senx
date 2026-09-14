@@ -644,7 +644,8 @@ const styles: Record<string, CSSProperties> = {
     padding: '0 12px 0 40px', boxSizing: 'border-box', background: arkmeTheme.layer2, color: colors.text, outline: 'none',
     fontSize: 13,
   },
-  forwardTargetList: { flex: 1, minHeight: 0, overflowY: 'auto', margin: 0, padding: '4px 18px 18px', listStyle: 'none' },
+  forwardTargetBody: { flex: 1, minHeight: 0, overflowY: 'auto' },
+  forwardTargetList: { margin: 0, padding: '4px 18px 18px', listStyle: 'none' },
   forwardTargetRow: {
     width: '100%', minHeight: 56, display: 'grid', gridTemplateColumns: '20px 36px minmax(0, 1fr) auto', alignItems: 'center', gap: 10, padding: '9px 8px',
     boxSizing: 'border-box', border: 0, borderRadius: 8, background: 'transparent', color: colors.text,
@@ -7787,36 +7788,38 @@ export function ArkmeSurface({
                 }}
               />
             </div>
-            {forwardTargetPicker.loading && forwardTargetPicker.targets.length === 0
-              ? <div role="status" style={styles.forwardTargetStatus}>正在加载转发对象...</div>
-              : forwardTargetPicker.error !== ''
-                ? <div role="alert" style={styles.forwardTargetStatus}>{forwardTargetPicker.error}</div>
-                : forwardVisibleTargets.length === 0
-                  ? <div role="status" style={styles.forwardTargetStatus}>暂无可转发对象</div>
-                  : <ul style={styles.forwardTargetList} aria-label="转发对象列表">
-                    {forwardVisibleTargets.map(target => {
-                      const selected = forwardTargetPicker.selectedSourceRefs.includes(target.sourceRef)
-                      return <li key={target.sourceRef}>
-                        <button
-                          type="button"
-                          style={{ ...styles.forwardTargetRow, ...(selected ? styles.forwardTargetRowSelected : {}) }}
-                          aria-pressed={selected}
-                          onClick={() => { toggleForwardTarget(target) }}
-                        >
-                          <span
-                            style={{ ...styles.forwardTargetCheck, ...(selected ? styles.forwardTargetCheckSelected : {}) }}
-                            aria-hidden
-                          >✓</span>
-                          <ArkmeDirectorySourceAvatar source={target} size={38} />
-                          <span style={styles.forwardTargetText}>
-                            <span style={styles.forwardTargetName}><ArkmeRichText text={target.displayName} presentation="preview" /></span>
-                            <span style={styles.forwardTargetMeta}><ArkmeRichText text={target.latestPreview?.trim() || arkmeForwardTargetMeta(target)} presentation="preview" /></span>
-                          </span>
-                          <span style={styles.forwardTargetTime}>{arkmeForwardTargetTimeLabel(target.activeAtMillis)}</span>
-                        </button>
-                      </li>
-                    })}
-                  </ul>}
+            <div style={styles.forwardTargetBody}>
+              {forwardTargetPicker.loading && forwardTargetPicker.targets.length === 0
+                ? <div role="status" style={styles.forwardTargetStatus}>正在加载转发对象...</div>
+                : forwardTargetPicker.error !== ''
+                  ? <div role="alert" style={styles.forwardTargetStatus}>{forwardTargetPicker.error}</div>
+                  : forwardVisibleTargets.length === 0
+                    ? <div role="status" style={styles.forwardTargetStatus}>暂无可转发对象</div>
+                    : <ul style={styles.forwardTargetList} aria-label="转发对象列表">
+                      {forwardVisibleTargets.map(target => {
+                        const selected = forwardTargetPicker.selectedSourceRefs.includes(target.sourceRef)
+                        return <li key={target.sourceRef}>
+                          <button
+                            type="button"
+                            style={{ ...styles.forwardTargetRow, ...(selected ? styles.forwardTargetRowSelected : {}) }}
+                            aria-pressed={selected}
+                            onClick={() => { toggleForwardTarget(target) }}
+                          >
+                            <span
+                              style={{ ...styles.forwardTargetCheck, ...(selected ? styles.forwardTargetCheckSelected : {}) }}
+                              aria-hidden
+                            >✓</span>
+                            <ArkmeDirectorySourceAvatar source={target} size={38} />
+                            <span style={styles.forwardTargetText}>
+                              <span style={styles.forwardTargetName}><ArkmeRichText text={target.displayName} presentation="preview" /></span>
+                              <span style={styles.forwardTargetMeta}><ArkmeRichText text={target.latestPreview?.trim() || arkmeForwardTargetMeta(target)} presentation="preview" /></span>
+                            </span>
+                            <span style={styles.forwardTargetTime}>{arkmeForwardTargetTimeLabel(target.activeAtMillis)}</span>
+                          </button>
+                        </li>
+                      })}
+                    </ul>}
+            </div>
             {forwardSelectedTargets.length > 0 && <footer style={styles.forwardTargetFooter}>
               <div style={styles.forwardTargetRecipients}>
                 <span>发送给：</span>
