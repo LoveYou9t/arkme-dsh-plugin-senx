@@ -218,7 +218,7 @@ const styles: Record<string, CSSProperties> = {
     background: 'transparent', color: colors.text, boxShadow: 'none', appearance: 'none', WebkitAppearance: 'none',
   },
   tools: { ...arkmeConversationComposerLayout.tools },
-  hint: { color: colors.secondary, fontSize: 12, lineHeight: '18px' },
+  hint: { color: colors.secondary, fontSize: 12, lineHeight: '18px', marginRight: 'auto' },
   send: {
     width: 34, height: 34, flex: 'none', display: 'grid', placeItems: 'center',
     border: 0, borderRadius: 999, background: colors.accent, color: arkmeTheme.foreground, cursor: 'pointer',
