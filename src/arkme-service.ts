@@ -1148,6 +1148,10 @@ export class ArkmeService {
     return await this.source.listTopicCandidates(keyword, cursor, signal)
   }
 
+  async selfTarget(signal?: AbortSignal): Promise<ArkmeSourceItem> {
+    return await this.source.selfTarget(signal)
+  }
+
   async listSources(
     directory: ArkmeSourceDirectory,
     options: { limit?: number; cursor?: string; signal?: AbortSignal; refresh?: boolean; localFirst?: boolean } = {},

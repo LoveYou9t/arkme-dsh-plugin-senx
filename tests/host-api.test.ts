@@ -1657,3 +1657,10 @@ describe('plugin update Host API dispatch', () => {
       .rejects.toMatchObject({ code: 'plugin-update-unavailable' })
   })
 })
+
+it('resolves the self target from the session without accepting a caller account', async () => {
+  const service = { selfTarget: vi.fn() }
+  const signal = new AbortController().signal
+  await dispatchArkmeHostOperation(service as never, 'sources.self-target', { userId: 999 }, undefined, undefined, undefined, undefined, signal)
+  expect(service.selfTarget).toHaveBeenCalledWith(signal)
+})
