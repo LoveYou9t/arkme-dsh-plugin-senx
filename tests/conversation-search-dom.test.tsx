@@ -32,6 +32,11 @@ it('keeps preview navigation clicks inside the modal and Escape restores the sea
   results.scrollTop = 120
   await click('查看图片 a')
   expect(find('a')?.getAttribute('role')).toBe('dialog')
+  expect(results.hidden).toBe(false)
+  expect(results.style.display).not.toBe('none')
+  expect(host.textContent).not.toContain('原消息')
+  expect(host.textContent).not.toContain('返回结果')
+  expect(host.textContent).not.toContain('定位到消息')
   await click('下一个媒体')
   expect(find('b')?.getAttribute('role')).toBe('dialog')
   expect(close).not.toHaveBeenCalled()

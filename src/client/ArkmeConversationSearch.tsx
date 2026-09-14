@@ -62,6 +62,7 @@ export function ArkmeConversationSearchPanel({ source, scene, global, onScene, o
   const search = useConversationSearch(source.sourceRef, global, scene, query, composing)
   useEffect(() => { setSelected(undefined) }, [source.sourceRef, global, scene, query])
   useEffect(() => { if (selected === undefined) queryInput.current?.focus() }, [selected])
+  const showingMessage = selected !== undefined && selectedAssetUid === undefined
   const keyword = query.trim() !== ''
   const selectHit = (item: ArkmeSearchRecordItem, assetUid?: string) => {
     setSelectedAssetUid(assetUid)
@@ -107,7 +108,7 @@ export function ArkmeConversationSearchPanel({ source, scene, global, onScene, o
     {selected !== undefined && <SearchDetail key={`${selected.sourceKind}:${selected.sourceUid ?? ''}:${selected.recordOwnerUserId}:${selected.recordUid}`} item={selected} assetUid={selectedAssetUid} onSelectAsset={setSelectedAssetUid} navigation={navigation} onBack={() => setSelected(undefined)} onLocate={() => {
       if (selected.targetSource !== undefined) { arkmeUi.showConversationTarget(selected.targetSource, selected.recordUid, selected.sendAtMillis, selected.recordOwnerUserId); onClose() }
     }} />}
-    <div aria-label="聊天搜索结果" hidden={selected !== undefined} style={{ display: selected === undefined ? undefined : 'none', flex: 1, minHeight: 0, overflowY: 'auto', padding: '4px 12px 16px' }}
+    <div aria-label="聊天搜索结果" hidden={showingMessage} style={{ display: showingMessage ? 'none' : undefined, flex: 1, minHeight: 0, overflowY: 'auto', padding: '4px 12px 16px' }}
       onScroll={event => { const node = event.currentTarget; if (node.scrollHeight - node.scrollTop - node.clientHeight < 160) search.loadMore() }}>
       {search.page?.queryGuard.state && !['complete', 'ok'].includes(search.page.queryGuard.state) && <p role="status" style={status}>搜索结果暂不完整，请缩小范围或调整关键词</p>}
       {search.page?.itemCount !== undefined && <p style={{ color: arkmeTheme.tertiary, fontSize: 12 }}>{search.page.itemCount} {keyword ? '条结果' : scene === 'image_video' ? '个媒体' : scene === 'file' ? '个文件' : '条结果'}</p>}
@@ -159,9 +160,16 @@ function ChatSearchMedia({ item, active, onSelect }: { item: ArkmeSearchRecordIt
 function SearchDetail({ item, assetUid, onSelectAsset, onBack, onLocate, navigation }: { navigation?: import('./ArkmeFileViewer.js').ArkmePreviewNavigation | undefined; item: ArkmeSearchRecordItem; assetUid: string | undefined; onSelectAsset(uid: string): void; onBack(): void; onLocate(): void }) {
   const { detail, error, retry } = useConversationSearchDetail(item)
   const preview = assetUid === undefined ? undefined : detail?.contentBlocks?.find(block => block.fileAssetUid === assetUid && (block.kind === 'image' || block.kind === 'video' || block.kind === 'file'))
+  if (assetUid !== undefined) {
+    if (preview !== undefined) return <ArkmeMediaPreview blocks={(detail?.contentBlocks ?? []).filter(block => preview.kind === 'file' ? block.kind === 'file' : block.kind === 'image' || block.kind === 'video')} selected={preview} navigation={navigation} onSelect={block => { if (block.fileAssetUid !== undefined) onSelectAsset(block.fileAssetUid) }} onClose={onBack} />
+    return <div style={status}>
+      {error !== '' ? <div role="alert">{error}<button type="button" style={button} onClick={retry}>重试</button></div>
+        : detail === undefined ? <div role="status">加载详情…</div>
+          : <p role="alert">该附件已不存在或暂不可访问，请返回结果重新选择</p>}
+      <button autoFocus type="button" style={button} onClick={onBack}>返回结果</button>
+    </div>
+  }
   return <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '4px 16px 20px' }}>
-    {preview !== undefined && <ArkmeMediaPreview blocks={(detail?.contentBlocks ?? []).filter(block => preview.kind === 'file' ? block.kind === 'file' : block.kind === 'image' || block.kind === 'video')} selected={preview} navigation={navigation} onSelect={block => { if (block.fileAssetUid !== undefined) onSelectAsset(block.fileAssetUid) }} onClose={onBack} />}
-    {detail !== undefined && assetUid !== undefined && preview === undefined && <p role="alert" style={status}>该附件已不存在或暂不可访问，请返回结果重新选择</p>}
     <div style={{ ...row, justifyContent: 'space-between' }}><button autoFocus type="button" style={button} onClick={onBack}>返回结果</button>
       <button type="button" style={button} disabled={item.targetSource === undefined || item.recordOwnerUserId === undefined || detail === undefined} onClick={onLocate}>定位到消息</button></div>
     {error !== '' ? <div role="alert" style={status}>{error}<button type="button" style={button} onClick={retry}>重试</button></div>
