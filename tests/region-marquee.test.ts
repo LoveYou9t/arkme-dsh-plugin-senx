@@ -184,12 +184,16 @@ it('does not consume Escape before the drag threshold is reached', () => {
   expect(commit).not.toHaveBeenCalled()
 })
 
-it('prevents native selection from starting before the marquee threshold and releases it on completion', () => {
+it('preserves ordinary selection before the threshold and blocks it only during an active marquee', () => {
   pointer('pointerdown', 25, 25)
   const selectionStart = new Event('selectstart', { bubbles: true, cancelable: true })
   viewport.dispatchEvent(selectionStart)
-  expect(selectionStart.defaultPrevented).toBe(true)
-  pointer('pointermove', 180, 180); pointer('pointerup', 180, 180)
+  expect(selectionStart.defaultPrevented).toBe(false)
+  pointer('pointermove', 180, 180)
+  const activeSelectionStart = new Event('selectstart', { bubbles: true, cancelable: true })
+  viewport.dispatchEvent(activeSelectionStart)
+  expect(activeSelectionStart.defaultPrevented).toBe(true)
+  pointer('pointerup', 180, 180)
   const afterRelease = new Event('selectstart', { bubbles: true, cancelable: true })
   viewport.dispatchEvent(afterRelease)
   expect(afterRelease.defaultPrevented).toBe(false)
@@ -208,4 +212,16 @@ it('does not intercept native selection starting over message text', () => {
   const selectionStart = new Event('selectstart', { bubbles: true, cancelable: true })
   element.dispatchEvent(selectionStart)
   expect(selectionStart.defaultPrevented).toBe(false)
+})
+
+it.each([false, true])('clears an existing native range only when it belongs to the viewport: outside=%s', outside => {
+  const element = document.createElement('p'); element.textContent = 'previously selected text'
+  ;(outside ? document.body : viewport).append(element)
+  const range = document.createRange(); range.selectNodeContents(element)
+  const selection = window.getSelection()!; selection.removeAllRanges(); selection.addRange(range)
+  pointer('pointerdown', 25, 25)
+  expect(selection.toString()).toBe('previously selected text')
+  pointer('pointermove', 180, 180); pointer('pointerup', 180, 180)
+  expect(selection.toString()).toBe(outside ? 'previously selected text' : '')
+  selection.removeAllRanges(); element.remove()
 })

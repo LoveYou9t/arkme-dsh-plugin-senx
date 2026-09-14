@@ -57,7 +57,7 @@ export function attachRegionMarquee(viewport: HTMLElement, port: RegionMarqueePo
     viewport.removeEventListener('scroll', update)
     port.onRect(undefined)
   }
-  function preventNativeSelection(event: Event) { event.preventDefault() }
+  function preventNativeSelection(event: Event) { if (drag?.active) event.preventDefault() }
   function suppressReleaseClick() { suppressedClickPointerId = drag?.pointerId }
   function cancel() { if (drag?.active) suppressReleaseClick(); stop() }
   function pointerCancelled(event: PointerEvent) { if (event.pointerId === drag?.pointerId) cancel() }
@@ -80,6 +80,8 @@ export function attachRegionMarquee(viewport: HTMLElement, port: RegionMarqueePo
     if (!drag.active) {
       if (rect.width * rect.height <= 600) return
       drag.active = true
+      const selection = win.getSelection()
+      if (selection && (viewport.contains(selection.anchorNode) || viewport.contains(selection.focusNode))) selection.removeAllRanges()
       previousUserSelect = viewport.style.getPropertyValue('user-select')
       previousUserSelectPriority = viewport.style.getPropertyPriority('user-select')
       viewport.style.setProperty('user-select', 'none')
@@ -136,8 +138,8 @@ export function attachRegionMarquee(viewport: HTMLElement, port: RegionMarqueePo
     drag = { pointerId: event.pointerId, x: event.clientX, y: event.clientY,
       anchorX: event.clientX - box.left + viewport.scrollLeft, anchorY: event.clientY - box.top + viewport.scrollTop,
       active: false, keys: new Set() }
-    // Claim native selection before the threshold; CSS alone can hide a range
-    // that reappears when the gesture restores user-select on release.
+    // Only an active marquee owns native selection; preserve ordinary clicks
+    // and below-threshold drags before taking over the gesture.
     doc.addEventListener('selectstart', preventNativeSelection, true)
     doc.addEventListener('pointermove', move, { capture: true, passive: false })
     doc.addEventListener('pointerup', up, true)
