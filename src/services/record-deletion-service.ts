@@ -11,22 +11,38 @@ export interface RecordDeletionPort {
 export class RecordDeletionHttpPort implements RecordDeletionPort {
   constructor(private readonly runtime: ServiceRuntime) {}
   async deleteBatch(items: readonly ArkmeRecordDeletionItem[], session: ArkmeSessionCredentials, signal?: AbortSignal): Promise<ArkmeRecordDeletionResult> {
-    const raw = objectValue(await this.runtime.authenticatedPost<unknown>('/api/v1/records/delete-batch', {
-      items: items.map(item => ({ record_uid: item.recordUid, expected_version: item.version })),
-    }, session, signal, { trackWriteOutcome: true }))
-    const results = Array.isArray(raw.items) ? raw.items.map(objectValue) : []
-    const byUid = new Map(results.map(item => [item.record_uid, item]))
-    if (typeof raw.projection_refresh_pending !== 'boolean' || results.length !== items.length || byUid.size !== items.length
-      || items.some(item => {
-        const result = byUid.get(item.recordUid)
-        return !result || !['deleted', 'already_deleted', 'conflict', 'unknown'].includes(String(result.result))
-          || !Number.isSafeInteger(result.version) || Number(result.version) <= 0
-          || (result.result === 'deleted' && Number(result.version) <= item.version)
-      })) throw new ArkmePluginError('record-delete-result-unknown', '删除结果暂时无法确认，请刷新核对后再操作', false, 502, { writeOutcomeUnknown: true })
-    return { items: items.map(item => {
-      const result = byUid.get(item.recordUid)!
-      return { recordUid: item.recordUid, version: Number(result.version), result: result.result as ArkmeRecordDeletionResult['items'][number]['result'] }
-    }), projectionRefreshPending: raw.projection_refresh_pending }
+    const results: ArkmeRecordDeletionResult['items'] = []
+    let stopped = false
+    for (const item of items) {
+      if (stopped || signal?.aborted) {
+        results.push({ ...item, result: 'not_attempted' })
+        continue
+      }
+      // Keep the captured account and observed version for every write in this selection.
+      let sameAccount = false
+      try { sameAccount = (await this.runtime.requireSession()).userId === session.userId } catch { /* Session ended before this write. */ }
+      if (!sameAccount || signal?.aborted) {
+        stopped = true
+        results.push({ ...item, result: 'not_attempted' })
+        continue
+      }
+      try {
+        const raw = objectValue(await this.runtime.authenticatedPost<unknown>('/api/v1/records/delete', {
+          record_uid: item.recordUid, version: item.version,
+        }, session, signal, { trackWriteOutcome: true }))
+        const record = objectValue(raw.record_core)
+        if (record.record_uid !== item.recordUid || record.owner_user_id !== session.userId
+          || record.status !== 2 || !Number.isSafeInteger(record.version) || Number(record.version) <= item.version) {
+          throw new Error('删除结果无法确认')
+        }
+        results.push({ recordUid: item.recordUid, version: Number(record.version), result: 'deleted' })
+      } catch {
+        // A failed response does not prove rollback. Preserve earlier successes and never replay.
+        results.push({ ...item, result: 'unknown' })
+        stopped = true
+      }
+    }
+    return { items: results }
   }
 }
 export class RecordDeletionService {

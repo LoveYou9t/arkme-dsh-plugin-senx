@@ -4,7 +4,7 @@ import {ArkmeRecordDeletionDialog} from '../src/client/ArkmeRecordDeletionDialog
 import {ArkmeConfirmDialog} from '../src/client/ArkmeConfirmDialog.js'
 let view:ReactTestRenderer|undefined
 afterEach(async()=>{await act(async()=>view?.unmount());view=undefined})
-const result={items:[{recordUid:'a',version:2,result:'deleted' as const}],projectionRefreshPending:true}
+const result={items:[{recordUid:'a',version:2,result:'deleted' as const}]}
 const props=()=>({sourceRef:'source',deletionRefs:['ref'],port:{delete:vi.fn(async()=>result)},onCancel:vi.fn(),onResult:vi.fn(),onRefresh:vi.fn()})
 describe('record deletion confirmation',()=>{
  it('does not write until confirmed and leaves cancel harmless',async()=>{const p=props();await act(async()=>{view=create(<ArkmeRecordDeletionDialog {...p}/>)});expect(p.port.delete).not.toHaveBeenCalled();act(()=>view!.root.findByType(ArkmeConfirmDialog).props.onClose());expect(p.onCancel).toHaveBeenCalledOnce();expect(p.port.delete).not.toHaveBeenCalled()})

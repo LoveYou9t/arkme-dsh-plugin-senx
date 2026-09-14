@@ -3,7 +3,7 @@ import { sealRecordDeletionRef, openRecordDeletionRef } from '../src/record-dele
 import { RecordDeletionService, RecordDeletionHttpPort } from '../src/services/record-deletion-service.js'
 const ref = { userId: 7, sourceKind: 'private_chat' as const, sourceOwnerRef: 'chat', recordUid: 'record', recordVersion: 3 }
 function setup(){
- const port={deleteBatch:vi.fn().mockResolvedValue({items:[{recordUid:'record',version:4,result:'deleted'}],projectionRefreshPending:true})}
+ const port={deleteBatch:vi.fn().mockResolvedValue({items:[{recordUid:'record',version:4,result:'deleted'}]})}
  const runtime={invalidateKey:vi.fn(),requestScope:(id:number)=>String(id),requireSession:vi.fn().mockResolvedValue({userId:7}),stateStore:{uniqueCode:async()=> 'key'}}
  const sources={openSourceRef:vi.fn().mockResolvedValue({kind:'private_chat',ownerRef:'chat'}),invalidateSourceListCache:vi.fn()}
  const service=new RecordDeletionService(runtime as never,sources as never,port)
@@ -31,9 +31,36 @@ describe('record deletion boundary',()=>{
   const {service,port,runtime}=setup();runtime.requireSession.mockResolvedValueOnce({userId:7}).mockResolvedValue({userId:8})
   await expect(service.delete('source',[sealRecordDeletionRef(ref,'key')])).rejects.toThrow();expect(port.deleteBatch).not.toHaveBeenCalled()
  })
- it('validates every owner result and never retries malformed successes',async()=>{
-  const post=vi.fn().mockResolvedValue({items:[],projection_refresh_pending:false});const port=new RecordDeletionHttpPort({authenticatedPost:post} as never)
-  await expect(port.deleteBatch([{recordUid:'record',version:3}],{userId:7} as never)).rejects.toThrow();expect(post).toHaveBeenCalledTimes(1)
+ it('stops after malformed success without replaying',async()=>{
+  const post=vi.fn().mockResolvedValue({record_core:{}})
+  const port=new RecordDeletionHttpPort({authenticatedPost:post,requireSession:async()=>({userId:7})} as never)
+  const result=await port.deleteBatch([{recordUid:'a',version:3},{recordUid:'b',version:3}],{userId:7} as never)
+  expect(result.items.map(x=>x.result)).toEqual(['unknown','not_attempted']);expect(post).toHaveBeenCalledTimes(1)
+ })
+ it('uses the existing endpoint sequentially with observed versions',async()=>{
+  const post=vi.fn().mockImplementation(async(_path,body)=>({record_core:{record_uid:body.record_uid,owner_user_id:7,status:2,version:body.version+1}}))
+  const port=new RecordDeletionHttpPort({authenticatedPost:post,requireSession:async()=>({userId:7})} as never)
+  const result=await port.deleteBatch([{recordUid:'a',version:3},{recordUid:'b',version:5}],{userId:7} as never)
+  expect(result.items).toEqual([{recordUid:'a',version:4,result:'deleted'},{recordUid:'b',version:6,result:'deleted'}])
+  expect(post.mock.calls.map(x=>x.slice(0,2))).toEqual([['/api/v1/records/delete',{record_uid:'a',version:3}],['/api/v1/records/delete',{record_uid:'b',version:5}]])
+ })
+ it('preserves confirmed successes and stops on a lost response',async()=>{
+  const post=vi.fn().mockResolvedValueOnce({record_core:{record_uid:'a',owner_user_id:7,status:2,version:4}}).mockRejectedValue(new Error('timeout'))
+  const port=new RecordDeletionHttpPort({authenticatedPost:post,requireSession:async()=>({userId:7})} as never)
+  const result=await port.deleteBatch(['a','b','c'].map(recordUid=>({recordUid,version:3})),{userId:7} as never)
+  expect(result.items.map(x=>x.result)).toEqual(['deleted','unknown','not_attempted']);expect(post).toHaveBeenCalledTimes(2)
+ })
+ it.each(['logout','switch','abort'])('stops remaining writes after %s',async mode=>{
+  const controller=new AbortController();let sessionReads=0
+  const post=vi.fn().mockImplementation(async()=>{if(mode==='abort')controller.abort();return {record_core:{record_uid:'a',owner_user_id:7,status:2,version:4}}})
+  const port=new RecordDeletionHttpPort({authenticatedPost:post,requireSession:async()=>{if(++sessionReads>1){if(mode==='logout')throw new Error('logged out');return {userId:8}}return {userId:7}}} as never)
+  const result=await port.deleteBatch(['a','b'].map(recordUid=>({recordUid,version:3})),{userId:7} as never,controller.signal)
+  expect(result.items.map(x=>x.result)).toEqual(['deleted','not_attempted']);expect(post).toHaveBeenCalledTimes(1)
+ })
+ it.each([{record_uid:'other'},{owner_user_id:8},{status:1},{version:3}])('rejects inconsistent owner result %s',async override=>{
+  const post=vi.fn().mockResolvedValue({record_core:{record_uid:'a',owner_user_id:7,status:2,version:4,...override}})
+  const port=new RecordDeletionHttpPort({authenticatedPost:post,requireSession:async()=>({userId:7})} as never)
+  expect((await port.deleteBatch([{recordUid:'a',version:3}],{userId:7} as never)).items[0]?.result).toBe('unknown')
  })
 })
 

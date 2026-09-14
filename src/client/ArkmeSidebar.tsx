@@ -6746,7 +6746,7 @@ export function ArkmeSurface({
         for (const request of timelineRequestsRef.current.values()) request.controller.abort()
         timelineRequestsRef.current.clear()
         setLoadingOlder(false)
-        const deleted = new Set(result.items.filter(item => item.result === 'deleted' || item.result === 'already_deleted').map(item => item.recordUid))
+        const deleted = new Set(result.items.filter(item => item.result === 'deleted').map(item => item.recordUid))
         confirmedSendRetention.forget(conversationKey, [...deleted])
         const confirmedVersions = new Map(result.items.filter(item => deleted.has(item.recordUid)).map(item => [item.recordUid, item.version]))
         const keep = (item: ArkmeTimelineItem) => !deleted.has(item.itemUid) || (item.recordVersion ?? 0) > (confirmedVersions.get(item.itemUid) ?? 0)
@@ -6759,7 +6759,7 @@ export function ArkmeSurface({
         else setSelectMode(current => current?.sourceKey !== conversationKey ? current : { ...current,
           selectedIds: new Set(recordDeletion.items.filter(keep).map(arkmeTimelineOccurrenceKey)) })
         showMessageActionStatus(deleted.size === result.items.length
-          ? `成功删除 ${String(deleted.size)} 条内容${result.projectionRefreshPending ? '，列表正在同步' : ''}`
+          ? `成功删除 ${String(deleted.size)} 条内容`
           : `已确认删除 ${String(deleted.size)} 条，其余内容请刷新核对后再操作`)
       }}
     />}

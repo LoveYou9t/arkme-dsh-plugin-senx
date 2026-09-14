@@ -1919,7 +1919,7 @@ describe('conversation send directory projection', () => {
     mocks.callArkme.mockImplementation(async (operation, ...args) => {
       if (operation === 'source.record-delete') {
         timeline = []
-        return { items: [{ recordUid: 'delete-success', version: 4, result: 'deleted' }], projectionRefreshPending: true }
+        return { items: [{ recordUid: 'delete-success', version: 4, result: 'deleted' }] }
       }
       return baseCall(operation, ...args)
     })
@@ -1949,7 +1949,7 @@ describe('conversation send directory projection', () => {
         return { ...page, hasMore: true, nextCursor: { beforeSequence: 10 } }
       }
       if (operation === 'source.record-delete') return {
-        items: [{ recordUid: item.itemUid, version: 4, result: 'deleted' }], projectionRefreshPending: true }
+        items: [{ recordUid: item.itemUid, version: 4, result: 'deleted' }] }
       return baseCall(operation, input, ...args)
     })
     await enterMessageSelectMode(item)
@@ -1991,7 +1991,7 @@ describe('conversation send directory projection', () => {
     const baseCall = mocks.callArkme.getMockImplementation()!
     mocks.callArkme.mockImplementation(async (operation, ...args) => operation === 'source.record-delete'
       ? { items: [{ recordUid: first.itemUid, version: 4, result: 'deleted' },
-          { recordUid: second.itemUid, version: 4, result: 'conflict' }], projectionRefreshPending: true }
+          { recordUid: second.itemUid, version: 4, result: 'unknown' }] }
       : baseCall(operation, ...args))
     await enterMessageSelectMode(first, [second])
     act(() => renderer!.root.findByProps({ 'data-arkme-message-item-uid': second.itemUid }).findByProps({ role: 'checkbox' }).props.onClick({ stopPropagation: vi.fn() }))
@@ -2013,7 +2013,7 @@ describe('conversation send directory projection', () => {
     act(() => renderer!.root.findByProps({ 'aria-label': '删除' }).props.onClick())
     await act(async () => renderer!.root.findAllByType('button').find(node => node.children.includes('确认删除'))!.props.onClick())
     await act(async () => { arkmeUi.selectSource(other); await Promise.resolve() })
-    await act(async () => finish({ items: [{ recordUid: 'delete-switch', version: 4, result: 'deleted' }], projectionRefreshPending: true }))
+    await act(async () => finish({ items: [{ recordUid: 'delete-switch', version: 4, result: 'deleted' }] }))
     expect(arkmeUi.getSnapshot().selectedSource?.sourceRef).toBe(other.sourceRef)
     expect(renderedText(renderer!.toJSON())).not.toContain('成功删除')
     expect(renderer!.root.findAllByProps({ id: 'arkme-record-delete-title' })).toHaveLength(0)

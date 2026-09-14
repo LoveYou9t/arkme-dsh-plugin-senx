@@ -5,7 +5,7 @@ import {createArkmeHostApi,dispatchArkmeHostOperation} from '../src/host-api.js'
 import type {ArkmeService} from '../src/arkme-service.js'
 describe('record deletion host boundary',()=>{
  it('forwards opaque references only, propagates abort, and rejects invalid batches',async()=>{
-  const remove=vi.fn().mockResolvedValue({items:[],projectionRefreshPending:false});const service={deleteSourceRecords:remove} as unknown as ArkmeService;const signal=new AbortController().signal
+  const remove=vi.fn().mockResolvedValue({items:[]});const service={deleteSourceRecords:remove} as unknown as ArkmeService;const signal=new AbortController().signal
   await dispatchArkmeHostOperation(service,'source.record-delete',{sourceRef:'source',deletionRefs:['signed'],ownerUserId:999},undefined,undefined,undefined,undefined,signal)
   expect(remove).toHaveBeenCalledWith('source',['signed'],signal)
   for(const deletionRefs of [[],['a',1],Array(101).fill('a'),['a'.repeat(2049)]])await expect(dispatchArkmeHostOperation(service,'source.record-delete',{sourceRef:'source',deletionRefs})).rejects.toThrow()
