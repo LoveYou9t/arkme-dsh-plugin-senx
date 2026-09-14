@@ -2531,6 +2531,7 @@ export function ArkmeSurface({
   const panelRef = useRef<HTMLElement>(null)
   const bodyRef = useRef<HTMLDivElement>(null)
   const recordsRef = useRef<HTMLUListElement>(null)
+  const selectionStartAreaRef = useRef<HTMLDivElement>(null)
   const endAccessoryRef = useRef<HTMLDivElement>(null)
   const sentinelRef = useRef<HTMLDivElement>(null)
   const newerSentinelRef = useRef<HTMLDivElement>(null)
@@ -7262,7 +7263,8 @@ export function ArkmeSurface({
                 && <ArkmeMessagePreparingIndicator sourceKey={source.sourceKey} accountScope={authenticatedAccountKey} />}
             </div>
           </div>
-          <RegionMarquee viewportRef={bodyRef} scopeKey={`${authenticatedAccountKey}:${conversationKey}`}
+          <RegionMarquee getStartArea={() => selectionStartAreaRef.current && composerRef.current
+            ? { element: selectionStartAreaRef.current, boundary: composerRef.current } : undefined} viewportRef={bodyRef} scopeKey={`${authenticatedAccountKey}:${conversationKey}`}
             enabled={active && activeConversation && timelineStateKey === conversationKey && messageActionBusy === undefined
               && forwardTargetPicker === undefined && topicAssignment === undefined && drawer === undefined}
             getItems={() => [...(bodyRef.current?.querySelectorAll<HTMLElement>('[data-arkme-selection-key]') ?? [])]
@@ -7317,7 +7319,7 @@ export function ArkmeSurface({
           </div>}
           {messageActionStatus !== '' && <div role="status" aria-live="polite" style={styles.messageActionToast}>{messageActionStatus}</div>}
           {/* Match the desktop input Stack: the editor stays mounted beneath the selection overlay. */}
-          <div className="arkme-conversation-input-slot" style={{ position: 'relative', flex: 'none' }}>
+          <div ref={selectionStartAreaRef} className="arkme-conversation-input-slot" style={{ position: 'relative', flex: 'none' }}>
           {archiveReadOnly && source !== undefined && <div
             aria-hidden={activeSelectMode !== undefined || undefined}
             {...(activeSelectMode === undefined ? {} : { inert: '' })}

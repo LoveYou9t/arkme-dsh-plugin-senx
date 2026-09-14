@@ -225,3 +225,40 @@ it.each([false, true])('clears an existing native range only when it belongs to 
   expect(selection.toString()).toBe(outside ? 'previously selected text' : '')
   selection.removeAllRanges(); element.remove()
 })
+
+it('starts in registered blank space while clipping the anchor and rectangle to the viewport', () => {
+  cleanup()
+  const area = document.createElement('footer'); const boundary = document.createElement('div')
+  area.append(boundary); document.body.append(area)
+  area.getBoundingClientRect = () => rect(20, 220, 200, 100)
+  boundary.getBoundingClientRect = () => rect(30, 250, 180, 70)
+  cleanup = attachRegionMarquee(viewport, { canStart: () => true, getStartArea: () => ({ element: area, boundary }),
+    getItems: () => [...viewport.children].map(element => ({ key: (element as HTMLElement).dataset.key!, element: element as HTMLElement })),
+    onCommit: commit, onRect: paint }).dispose
+  boundary.textContent = 'native selection in the start surface'
+  const range = document.createRange(); range.selectNodeContents(boundary)
+  window.getSelection()!.removeAllRanges(); window.getSelection()!.addRange(range)
+  pointer('pointerdown', 25, 225, area); pointer('pointermove', 180, 100, document)
+  expect(window.getSelection()!.toString()).toBe('')
+  expect(paint.mock.calls.at(-1)![0].bottom).toBe(220)
+  pointer('pointerup', 180, 100, document)
+  expect(commit).toHaveBeenCalledOnce()
+  area.remove()
+})
+it.each(['button', 'input', 'separator', 'below-boundary', 'outside'])('does not claim %s in or beside a registered start area', kind => {
+  cleanup()
+  const area = document.createElement('footer'); const boundary = document.createElement('div')
+  const target = document.createElement(kind === 'button' || kind === 'input' ? kind : 'div')
+  if (kind === 'separator') target.setAttribute('role', 'separator')
+  area.append(boundary, target); document.body.append(area)
+  area.getBoundingClientRect = () => rect(20, 220, 200, 100)
+  boundary.getBoundingClientRect = () => rect(30, 250, 180, 70)
+  cleanup = attachRegionMarquee(viewport, { canStart: () => true, getStartArea: () => ({ element: area, boundary }),
+    getItems: () => [], onCommit: commit, onRect: paint }).dispose
+  paint.mockClear()
+  pointer('pointerdown', 25, kind === 'below-boundary' ? 260 : 225, kind === 'outside' ? document.body : target)
+  pointer('pointermove', 180, 100, document); pointer('pointerup', 180, 100, document)
+  expect(commit).not.toHaveBeenCalled()
+  expect(paint).not.toHaveBeenCalled()
+  area.remove()
+})

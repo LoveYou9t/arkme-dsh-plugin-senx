@@ -405,6 +405,7 @@ export function ArkmeArkoSurface() {
   const bodyRef = useRef<HTMLDivElement>(null)
   const historySentinelRef = useRef<HTMLDivElement>(null)
   const historyLoadInFlightRef = useRef(false)
+  const composerInputBoundaryRef = useRef<HTMLDivElement>(null)
   const composerRef = useRef<HTMLElement>(null)
   const textareaRef = useRef<ArkmeDocumentComposerHandle>(null)
   const pendingComposerFocusRef = useRef(false)
@@ -1095,7 +1096,8 @@ export function ArkmeArkoSurface() {
       </ul>}
     </div>
 
-    <RegionMarquee viewportRef={bodyRef} scopeKey={messageSelectionScope}
+    <RegionMarquee getStartArea={() => composerRef.current && composerInputBoundaryRef.current
+      ? { element: composerRef.current, boundary: composerInputBoundaryRef.current } : undefined} viewportRef={bodyRef} scopeKey={messageSelectionScope}
       enabled={detailMessage === undefined && !loading && !clearing && !modelDialogOpen && !clearConfirmOpen && messageActions.canSelectMany}
       getItems={() => [...(bodyRef.current?.querySelectorAll<HTMLElement>('[data-arko-selection-key]') ?? [])].map(element => ({ key: element.dataset.arkoSelectionKey!, element }))}
       onCommit={messageActions.selectMany}
@@ -1183,7 +1185,7 @@ export function ArkmeArkoSurface() {
         disabled={sendDisabled}
         onClick={() => { void send('你能帮我干什么') }}
       ><RobotIcon size={17} aria-hidden /><span>{`${displayName} 能干什么`}</span></button>
-      <div style={styles.composerInner}>
+      <div ref={composerInputBoundaryRef} style={styles.composerInner}>
       <ArkmeDocumentComposerInput
         format="text"
         key={accountKey}

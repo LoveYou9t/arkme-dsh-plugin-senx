@@ -1,13 +1,15 @@
 /** Geometry and gesture ownership only: keys have no message or permission semantics. */
 export interface RegionMarqueeItem { key: string; element: HTMLElement }
 export interface RegionMarqueePort {
+  /** Blank space before a control may start a drag; it never expands the viewport. */
+  getStartArea?(): { element: HTMLElement; boundary: HTMLElement } | undefined
   canStart(): boolean
   getItems(): readonly RegionMarqueeItem[]
   onCommit(keys: ReadonlySet<string>): void
   onRect(rect: DOMRect | undefined): void
 }
 
-const interactive = 'button,a,input,textarea,select,video,audio,img,[contenteditable]:not([contenteditable="false"]),[draggable="true"],[role="button"],[role="checkbox"],[role="slider"],[data-marquee-ignore]'
+const interactive = 'button,a,input,textarea,select,video,audio,img,[contenteditable]:not([contenteditable="false"]),[draggable="true"],[role="button"],[role="checkbox"],[role="slider"],[role="separator"],[data-marquee-ignore]'
 
 function overText(target: Element, viewport: HTMLElement, x: number, y: number): boolean {
   for (let element: Element | null = target; element && element !== viewport; element = element.parentElement) {
@@ -28,7 +30,7 @@ export interface RegionMarqueeHandle { cancel(): void; dispose(): void }
 export function attachRegionMarquee(viewport: HTMLElement, port: RegionMarqueePort): RegionMarqueeHandle {
   const doc = viewport.ownerDocument
   const win = doc.defaultView!
-  let drag: { pointerId: number; x: number; y: number; anchorX: number; anchorY: number; active: boolean; keys: Set<string> } | undefined
+  let drag: { startSurface: HTMLElement; pointerId: number; x: number; y: number; anchorX: number; anchorY: number; active: boolean; keys: Set<string> } | undefined
   let frame: number | undefined
   let suppressedClickPointerId: number | undefined
   let previousUserSelect = ''
@@ -81,7 +83,8 @@ export function attachRegionMarquee(viewport: HTMLElement, port: RegionMarqueePo
       if (rect.width * rect.height <= 600) return
       drag.active = true
       const selection = win.getSelection()
-      if (selection && (viewport.contains(selection.anchorNode) || viewport.contains(selection.focusNode))) selection.removeAllRanges()
+      if (selection && (viewport.contains(selection.anchorNode) || viewport.contains(selection.focusNode)
+        || drag.startSurface.contains(selection.anchorNode) || drag.startSurface.contains(selection.focusNode))) selection.removeAllRanges()
       previousUserSelect = viewport.style.getPropertyValue('user-select')
       previousUserSelectPriority = viewport.style.getPropertyPriority('user-select')
       viewport.style.setProperty('user-select', 'none')
@@ -133,10 +136,20 @@ export function attachRegionMarquee(viewport: HTMLElement, port: RegionMarqueePo
     const target = event.target
     if (!(target instanceof win.Element) || target.closest(interactive)) return
     const box = bounds()
-    if (event.clientX < box.left || event.clientX >= box.right || event.clientY < box.top || event.clientY >= box.bottom) return
-    if (overText(target, viewport, event.clientX, event.clientY)) return
-    drag = { pointerId: event.pointerId, x: event.clientX, y: event.clientY,
-      anchorX: event.clientX - box.left + viewport.scrollLeft, anchorY: event.clientY - box.top + viewport.scrollTop,
+    if (event.clientX < box.left || event.clientX >= box.right) return
+    let startSurface = viewport
+    if (!viewport.contains(target) || event.clientY < box.top || event.clientY >= box.bottom) {
+      const area = port.getStartArea?.()
+      if (!area || !area.element.contains(target)) return
+      const areaBox = area.element.getBoundingClientRect()
+      const boundary = area.boundary.getBoundingClientRect()
+      if (event.clientY < Math.max(box.bottom, areaBox.top) || event.clientY >= Math.min(areaBox.bottom, boundary.top)
+        || event.clientX < areaBox.left || event.clientX >= areaBox.right) return
+      startSurface = area.element
+    }
+    if (overText(target, startSurface, event.clientX, event.clientY)) return
+    drag = { startSurface, pointerId: event.pointerId, x: event.clientX, y: event.clientY,
+      anchorX: event.clientX - box.left + viewport.scrollLeft, anchorY: Math.min(event.clientY, box.bottom) - box.top + viewport.scrollTop,
       active: false, keys: new Set() }
     // Only an active marquee owns native selection; preserve ordinary clicks
     // and below-threshold drags before taking over the gesture.
@@ -158,14 +171,14 @@ export function attachRegionMarquee(viewport: HTMLElement, port: RegionMarqueePo
       event.stopImmediatePropagation()
     }
   }
-  viewport.addEventListener('pointerdown', down)
+  doc.addEventListener('pointerdown', down)
   doc.addEventListener('pointerdown', nextGesture, true)
   doc.addEventListener('click', click, true)
   return {
     cancel,
     dispose() {
       stop()
-      viewport.removeEventListener('pointerdown', down)
+      doc.removeEventListener('pointerdown', down)
       doc.removeEventListener('pointerdown', nextGesture, true)
       doc.removeEventListener('click', click, true)
     },
