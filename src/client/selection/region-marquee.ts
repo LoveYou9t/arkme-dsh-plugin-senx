@@ -46,6 +46,7 @@ export function attachRegionMarquee(viewport: HTMLElement, port: RegionMarqueePo
       else viewport.style.removeProperty('user-select')
     }
     drag = undefined
+    doc.removeEventListener('selectstart', preventNativeSelection, true)
     doc.removeEventListener('pointermove', move, true)
     doc.removeEventListener('pointerup', up, true)
     doc.removeEventListener('pointercancel', pointerCancelled, true)
@@ -56,6 +57,7 @@ export function attachRegionMarquee(viewport: HTMLElement, port: RegionMarqueePo
     viewport.removeEventListener('scroll', update)
     port.onRect(undefined)
   }
+  function preventNativeSelection(event: Event) { event.preventDefault() }
   function suppressReleaseClick() { suppressedClickPointerId = drag?.pointerId }
   function cancel() { if (drag?.active) suppressReleaseClick(); stop() }
   function pointerCancelled(event: PointerEvent) { if (event.pointerId === drag?.pointerId) cancel() }
@@ -134,6 +136,9 @@ export function attachRegionMarquee(viewport: HTMLElement, port: RegionMarqueePo
     drag = { pointerId: event.pointerId, x: event.clientX, y: event.clientY,
       anchorX: event.clientX - box.left + viewport.scrollLeft, anchorY: event.clientY - box.top + viewport.scrollTop,
       active: false, keys: new Set() }
+    // Claim native selection before the threshold; CSS alone can hide a range
+    // that reappears when the gesture restores user-select on release.
+    doc.addEventListener('selectstart', preventNativeSelection, true)
     doc.addEventListener('pointermove', move, { capture: true, passive: false })
     doc.addEventListener('pointerup', up, true)
     doc.addEventListener('pointercancel', pointerCancelled, true)

@@ -183,3 +183,29 @@ it('does not consume Escape before the drag threshold is reached', () => {
   pointer('pointermove', 180, 180); pointer('pointerup', 180, 180)
   expect(commit).not.toHaveBeenCalled()
 })
+
+it('prevents native selection from starting before the marquee threshold and releases it on completion', () => {
+  pointer('pointerdown', 25, 25)
+  const selectionStart = new Event('selectstart', { bubbles: true, cancelable: true })
+  viewport.dispatchEvent(selectionStart)
+  expect(selectionStart.defaultPrevented).toBe(true)
+  pointer('pointermove', 180, 180); pointer('pointerup', 180, 180)
+  const afterRelease = new Event('selectstart', { bubbles: true, cancelable: true })
+  viewport.dispatchEvent(afterRelease)
+  expect(afterRelease.defaultPrevented).toBe(false)
+})
+it.each(['Escape', 'dispose'])('releases native selection interception after %s', reason => {
+  pointer('pointerdown', 25, 25)
+  if (reason === 'dispose') cleanup()
+  else document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+  const selectionStart = new Event('selectstart', { bubbles: true, cancelable: true })
+  viewport.dispatchEvent(selectionStart)
+  expect(selectionStart.defaultPrevented).toBe(false)
+})
+it('does not intercept native selection starting over message text', () => {
+  const element = add('native-text', 40); element.textContent = 'selectable text'
+  pointer('pointerdown', 35, 45, element)
+  const selectionStart = new Event('selectstart', { bubbles: true, cancelable: true })
+  element.dispatchEvent(selectionStart)
+  expect(selectionStart.defaultPrevented).toBe(false)
+})
