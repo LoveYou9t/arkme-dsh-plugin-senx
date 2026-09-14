@@ -528,6 +528,8 @@ export function ArkmeMediaPreview({ blocks, selected, onSelect, onClose, preview
   forceDownload?: boolean
 }) {
   const index = Math.max(0, blocks.findIndex(block => block.mediaRef === selected.mediaRef))
+  const dialogRef = useRef<HTMLDivElement>(null)
+  const filePreview = selected.kind === 'file' || forceDownload
   const viewportRef = useRef<HTMLDivElement>(null)
   const previewImageRef = useRef<HTMLImageElement>(null)
   const zoomAnimationRef = useRef<Animation>()
@@ -602,6 +604,16 @@ export function ArkmeMediaPreview({ blocks, selected, onSelect, onClose, preview
       document.body.style.overflow = previousOverflow
     }
   }, [onClose])
+
+  useEffect(() => {
+    if (filePreview) return
+    const dialog = dialogRef.current
+    const previous = document.activeElement as HTMLElement | null
+    dialog?.focus()
+    return () => {
+      if (document.activeElement === document.body || dialog?.contains(document.activeElement)) previous?.focus()
+    }
+  }, [filePreview])
 
   const toggleImageScale = () => {
     cancelBlankClick()
@@ -690,9 +702,19 @@ export function ArkmeMediaPreview({ blocks, selected, onSelect, onClose, preview
     }, 500)
   }
 
-  if (selected.kind === 'file' || forceDownload) return <ArkmeFileViewer block={selected} blocks={blocks} onSelect={onSelect} onClose={onClose} openLocalFile={openLocalFile} forceDownload={forceDownload} navigation={navigation} />
+  if (filePreview) return <ArkmeFileViewer block={selected} blocks={blocks} onSelect={onSelect} onClose={onClose} openLocalFile={openLocalFile} forceDownload={forceDownload} navigation={navigation} />
 
-  return <div style={styles.previewOverlay} role="dialog" aria-modal="true" aria-label={selected.fileName} onClick={onClose}>
+  return <div ref={dialogRef} tabIndex={-1} style={styles.previewOverlay} role="dialog" aria-modal="true" aria-label={selected.fileName} onClick={onClose}
+    onKeyDown={event => {
+      event.stopPropagation()
+      if (event.key === 'Escape' && !event.nativeEvent.isComposing) { event.preventDefault(); onClose() }
+      if (event.key === 'Tab') {
+        const controls = dialogRef.current?.querySelectorAll<HTMLElement>('button:not(:disabled),a[href],video[controls],audio[controls]')
+        const first = controls?.[0], last = controls?.[controls.length - 1]
+        if (event.shiftKey && (document.activeElement === first || document.activeElement === dialogRef.current)) { event.preventDefault(); last?.focus() }
+        else if (!event.shiftKey && (document.activeElement === last || document.activeElement === dialogRef.current)) { event.preventDefault(); first?.focus() }
+      }
+    }}>
     <div style={styles.previewBody} onClick={closeOnBlankClick}>
       <style>{`
         [data-arkme-preview-close]:hover { background: rgba(20,22,24,.4) !important; }
