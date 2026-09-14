@@ -213,6 +213,18 @@ describe('conversation send directory projection', () => {
     await act(async () => { pendingRead.resolve({ effectiveReadSequence: 50, unreadCount: 0 }) })
   })
 
+  it('does not disable normal drafting or sending while automatic read intent is suspended', async () => {
+    await mountBottomControl()
+    const { suspendArkmeVisibleReadIntent } = await import('../src/client/read-intent-visibility.js')
+    const release = suspendArkmeVisibleReadIntent()
+    try {
+      await act(async () => { renderer!.root.findByType(ArkmeRichComposerInput).props.onTextChange('正常发送') })
+      expect(renderer!.root.findByProps({ 'aria-label': '发送消息' }).props.disabled).toBe(false)
+      await act(async () => { renderer!.root.findByProps({ 'aria-label': '发送消息' }).props.onClick() })
+      expect(mocks.callArkme.mock.calls.filter(([operation]) => operation === 'source.send-text')).toHaveLength(1)
+    } finally { await act(async () => release()) }
+  })
+
   it('keeps drafting and sending available while return-to-latest is pending', async () => {
     await mountBottomControl(true)
     const pending = deferred<unknown>()

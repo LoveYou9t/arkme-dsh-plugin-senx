@@ -18,6 +18,7 @@ import { arkmeBadgeUnreadCount, projectArkmeChatAttentionFromMuted } from '../ch
 import type { ArkmeDirectoryEntryOwnerProps, ArkmeDirectoryRowProps } from './slots-contract.js'
 import { callArkme } from './api.js'
 import { ArkmeDirectorySourceAvatar, ArkmeUserAvatar } from './ArkmeAvatar.js'
+import { ArkmeChatPreviewDialog, arkmeCanPreviewChat } from './ArkmeChatPreviewDialog.js'
 import { ArkmeArkoAvatar } from './ArkmeArkoAvatar.js'
 import { ArkmeMark } from './ArkmeFooterAction.js'
 import { ArkmeMuteIcon } from './ArkmeMuteIcon.js'
@@ -960,6 +961,7 @@ export function ArkmeNavigation({
   const [directoryContextTarget, setDirectoryContextMenu] = useState<
     { kind: 'source' | 'bot', key: string, x: number, y: number }
   >()
+  const [chatPreview, setChatPreview] = useState<{ accountKey: string; sourceKey: string }>()
   const directoryMutationAbortRef = useRef<AbortController>()
   const [directoryMutation, setDirectoryMutation] = useState<{
     kind: 'source' | 'bot'
@@ -996,6 +998,7 @@ export function ArkmeNavigation({
   const currentAccountKey = authenticated && auth.userId !== undefined
     ? `${auth.environment}:${String(auth.userId)}`
     : undefined
+  useEffect(() => { setChatPreview(undefined) }, [currentAccountKey, active])
   const [traceNavigation] = useState(createHomeTourTrace)
   useEffect(() => {
     traceNavigation('navigation-mounted')
@@ -1110,6 +1113,13 @@ export function ArkmeNavigation({
       && (row.kind === 'source' ? arkmeSourceIdentityKey(row.source) : conversationBotVisibilityKey(row.bot)) === directoryContextTarget.key)
     return row === undefined ? undefined : { ...row, x: directoryContextTarget.x, y: directoryContextTarget.y }
   }, [directoryContextTarget, rootConversationRows])
+  const previewRow = chatPreview?.accountKey === currentAccountKey
+    ? rootConversationRows.find(row => row.kind === 'source' && arkmeSourceIdentityKey(row.source) === chatPreview?.sourceKey)
+    : undefined
+  const previewSource = previewRow?.kind === 'source' && arkmeCanPreviewChat(previewRow.source) ? previewRow.source : undefined
+  useEffect(() => {
+    if (chatPreview !== undefined && previewSource === undefined) setChatPreview(undefined)
+  }, [chatPreview, previewSource])
   useEffect(() => {
     if (directoryContextTarget !== undefined && directoryContextMenu === undefined) setDirectoryContextMenu(undefined)
   }, [directoryContextMenu, directoryContextTarget])
@@ -2256,6 +2266,14 @@ export function ArkmeNavigation({
       }}
       onClose={closeGlobalSearch}
     />, document.body)}
+    {active && chatPreview !== undefined && previewSource !== undefined && <ArkmeChatPreviewDialog
+      key={`${chatPreview.accountKey}:${chatPreview.sourceKey}`}
+      source={previewSource}
+      onClose={() => {
+        rootRowElementsRef.current.get(previewSource.sourceRef)?.focus({ preventScroll: true })
+        setChatPreview(undefined)
+      }}
+    />}
     {active && directoryContextMenu !== undefined && typeof document !== 'undefined' && createPortal(<div
       ref={directoryContextMenuRef}
       role="menu"
@@ -2263,10 +2281,22 @@ export function ArkmeNavigation({
       style={{
         ...styles.directoryContextMenu,
         left: Math.max(8, Math.min(directoryContextMenu.x, window.innerWidth - 154)),
-        top: Math.max(8, Math.min(directoryContextMenu.y, window.innerHeight - 84)),
+        top: Math.max(8, Math.min(directoryContextMenu.y, window.innerHeight - (directoryContextMenu.kind === 'source' && arkmeCanPreviewChat(directoryContextMenu.source) ? 120 : 84))),
       }}
       onContextMenu={event => { event.preventDefault() }}
     >
+      {directoryContextMenu.kind === 'source' && arkmeCanPreviewChat(directoryContextMenu.source) && <>
+        <button type="button" role="menuitem" style={styles.directoryContextMenuItem} disabled={directoryMutation !== undefined}
+          onClick={() => {
+            if (currentAccountKey === undefined || !arkmeCanPreviewChat(directoryContextMenu.source)) return
+            setChatPreview({ accountKey: currentAccountKey, sourceKey: arkmeSourceIdentityKey(directoryContextMenu.source) })
+            setDirectoryContextMenu(undefined)
+          }}
+          onMouseEnter={event => { event.currentTarget.style.background = arkmeTheme.subtle }}
+          onMouseLeave={event => { event.currentTarget.style.background = 'transparent' }}
+        >预览</button>
+        <div aria-hidden style={styles.directoryContextMenuDivider} />
+      </>}
       <button
         type="button"
         role="menuitem"
