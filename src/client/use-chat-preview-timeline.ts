@@ -72,6 +72,10 @@ export function useChatPreviewTimeline(sourceRef: string, changeRevision: number
     return () => { request.current?.abort(); request.current = undefined }
   }, [load])
 
-  return { page, loading, error, hasChanges: changeRevision !== loadedRevision,
-    loadMore: () => load('older'), refresh: () => load('refresh'), retry: () => load(failedLoadKind.current) }
+  useEffect(() => {
+    if (!loading && error === '' && changeRevision !== loadedRevision) void load('refresh')
+  }, [changeRevision, loadedRevision, loading, error, load])
+
+  return { page, loading, error,
+    loadMore: () => load('older'), retry: () => load(failedLoadKind.current) }
 }

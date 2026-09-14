@@ -102,18 +102,27 @@ it('opens media above the chat preview and Escape only closes media', async () =
   expect(vi.mocked(callArkme).mock.calls.map(args => args[0])).toEqual(['source.timeline'])
 })
 
-it('only announces changes in this conversation and refreshes without acknowledging them', async () => {
+it('updates this conversation automatically without refresh controls or read acknowledgement', async () => {
   await render()
   await act(async () => arkmeChatTimelineDelta.publish([{ source: { ...source, sourceKey: 'another' }, items: [message] }]))
-  expect(document.body.textContent).not.toContain('消息已更新')
-  await act(async () => arkmeChatTimelineDelta.publish([{ source, items: [message] }]))
-  expect(document.body.textContent).toContain('消息已更新')
   expect(callArkme).toHaveBeenCalledTimes(1)
-  const refresh = [...document.querySelectorAll('button')].find(button => button.textContent === '刷新消息')!
-  await act(async () => refresh.click())
+  messages = [{ ...message, textContent: '自动更新正文' }]
+  await act(async () => arkmeChatTimelineDelta.publish([{ source, items: messages }]))
+  expect(document.body.textContent).toContain('自动更新正文')
   expect(document.body.textContent).not.toContain('消息已更新')
+  expect(document.body.textContent).not.toContain('刷新消息')
   expect(vi.mocked(callArkme).mock.calls.map(args => args[0])).toEqual(['source.timeline', 'source.timeline'])
   expect(arkmeChatDirectory.getSnapshot().sources[0]?.unreadCount).toBe(8)
+})
+
+it('groups timestamps using the Flutter first-message and greater-than-30-minute gap rule', async () => {
+  const start = Date.UTC(2026, 8, 14, 10)
+  messages = [0, 60_000, 31 * 60_000, 62 * 60_000].map((offset, index) => ({
+    ...message, itemUid: String(index), sequence: index + 1, sendAtMillis: start + offset,
+  }))
+  await render()
+  expect(document.querySelectorAll('[data-arkme-preview-time-marker]')).toHaveLength(2)
+  expect([...document.querySelectorAll('article')].every(row => !row.textContent?.includes('2026/'))).toBe(true)
 })
 
 it('queries other members receipts without submitting the viewer read cursor', async () => {

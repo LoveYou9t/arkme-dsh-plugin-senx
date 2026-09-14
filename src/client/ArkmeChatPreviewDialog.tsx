@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useSyncExternalStore, type CSSProperties } from 'react'
+import { Fragment, useEffect, useLayoutEffect, useRef, useSyncExternalStore, type CSSProperties } from 'react'
 import { createPortal } from 'react-dom'
 import { X } from '@phosphor-icons/react/dist/icons/X'
 import type { ArkmeSourceItem } from '../types.js'
@@ -71,28 +71,28 @@ export function ArkmeChatPreviewDialog({ source, onClose }: { source: ArkmeChatP
         <span style={{ flex: 'none', padding: '3px 8px', borderRadius: 99, background: arkmeTheme.subtle, color: arkmeTheme.secondary, fontSize: 11 }}>预览中</span>
         <button type="button" style={{ ...button, marginLeft: 'auto' }} aria-label="关闭聊天预览" onClick={onClose}><X size={20} /></button>
       </header>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', minHeight: 32, padding: '0 12px' }}>
-        {timeline.hasChanges && <span role="status" style={{ marginRight: 'auto', fontSize: 12, color: arkmeTheme.secondary }}>消息已更新</span>}
-        <button type="button" style={button} disabled={timeline.loading} onClick={() => { void timeline.refresh() }}>刷新消息</button>
-      </div>
       {timeline.error !== '' && <div role="alert" style={status}>{timeline.error}<button type="button" style={button} disabled={timeline.loading} onClick={() => { void timeline.retry() }}>重试</button></div>}
       <div ref={body} aria-label="预览消息列表" style={{ flex: 1, minHeight: 0, overflowY: 'auto', overscrollBehavior: 'contain', padding: '0 16px 16px' }}
         onScroll={() => { if (body.current !== null) viewport.current = arkmeConversationViewport(body.current) }}>
         {timeline.page?.hasMore && <div style={status}><button type="button" style={button} disabled={timeline.loading} onClick={() => { void timeline.loadMore() }}>加载更早消息</button></div>}
-        {timeline.loading && <div role="status" style={status}>正在加载消息…</div>}
+        {timeline.loading && timeline.page === undefined && <div role="status" style={status}>正在加载消息…</div>}
         {!timeline.loading && timeline.error === '' && timeline.page?.items.length === 0 && <div style={status}>暂无消息</div>}
-        {timeline.page?.items.map(item => <article key={item.itemUid} data-arkme-conversation-row={`message:${item.itemUid}`}
+        {timeline.page?.items.map((item, index, items) => <Fragment key={item.itemUid}>
+          {(index === 0 || Math.abs(item.sendAtMillis - items[index - 1]!.sendAtMillis) > 30 * 60 * 1000) && <div data-arkme-preview-time-marker style={status}>
+            {new Date(item.sendAtMillis).toLocaleString('zh-CN', { year: 'numeric', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false })}
+          </div>}
+          <article data-arkme-conversation-row={`message:${item.itemUid}`}
           style={{ display: 'flex', flexDirection: item.isMe ? 'row-reverse' : 'row', alignItems: 'flex-start', gap: 8, marginTop: 14 }}>
           <ArkmeUserAvatar {...(item.avatarRef === undefined ? {} : { avatarRef: item.avatarRef })} size={30} label={item.senderName} />
           <div style={{ minWidth: 0, maxWidth: 'calc(100% - 38px)' }}>
-            <div style={{ marginBottom: 4, color: arkmeTheme.secondary, fontSize: 11, textAlign: item.isMe ? 'right' : 'left' }}>{item.senderName} · {new Date(item.sendAtMillis).toLocaleString('zh-CN')}</div>
+            <div style={{ marginBottom: 4, color: arkmeTheme.secondary, fontSize: 11, textAlign: item.isMe ? 'right' : 'left' }}>{item.senderName}</div>
             <ArkmeMessageReadReceiptLine source={source} item={item}>
               <div style={{ minWidth: 0, padding: '8px 10px', borderRadius: 10, background: item.isMe ? arkmeTheme.messageOwn : arkmeTheme.messageOther }}>
                 <ArkmeMessageContent item={item} presentation="detail" />
               </div>
             </ArkmeMessageReadReceiptLine>
           </div>
-        </article>)}
+        </article></Fragment>)}
       </div>
     </div>
   </div>, document.body)

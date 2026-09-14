@@ -8,6 +8,7 @@ import type { ArkmeTimelineItem, ArkmeTimelinePage } from '../src/types.js'
 
 const message = (sequence: number): ArkmeTimelineItem => ({ itemUid: String(sequence), sequence, status: 1, senderName: '作者', isMe: false, sendAtMillis: sequence, textContent: `消息${sequence}`, title: '' })
 const page = (sequences: number[], before?: number): ArkmeTimelinePage => ({ source: { sourceRef: 'signed', kind: 'group_chat', displayName: '群聊', unreadCount: 10, activeAtMillis: 1 }, items: sequences.map(message), hasMore: before !== undefined, ...(before === undefined ? {} : { nextCursor: { beforeSequence: before } }) })
+let nextRevision = 0
 let root: Root, host: HTMLDivElement
 let timeline: ReturnType<typeof useChatPreviewTimeline>
 let readPage: ReturnType<typeof vi.fn<ConversationTimelineReadPort['readPage']>>
@@ -17,12 +18,15 @@ function Harness({ sourceRef = 'signed', revision = 0 }: { sourceRef?: string; r
   return <div>{timeline.page?.items.map(item => item.textContent).join(',')}{timeline.error}</div>
 }
 beforeEach(() => {
+  nextRevision = 0
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
   host = document.createElement('div'); document.body.append(host); root = createRoot(host)
   readPage = vi.fn(); port = { readPage }
 })
 afterEach(async () => { await act(async () => root.unmount()); host.remove(); vi.useRealTimers(); vi.unstubAllGlobals() })
 const render = async (sourceRef = 'signed', revision = 0) => { await act(async () => root.render(<Harness key={sourceRef} sourceRef={sourceRef} revision={revision} />)) }
+
+const refresh = async () => render('signed', ++nextRevision)
 
 it('exposes loading, empty and success without any write capability', async () => {
   const pending = Promise.withResolvers<ArkmeTimelinePage>()
@@ -33,7 +37,7 @@ it('exposes loading, empty and success without any write capability', async () =
   expect(timeline.loading).toBe(false)
   expect(timeline.page?.items).toEqual([])
   readPage.mockResolvedValueOnce(page([3, 2]))
-  await act(async () => timeline.refresh())
+  await act(async () => refresh())
   expect(timeline.page?.items.map(item => item.sequence)).toEqual([2, 3])
 })
 
@@ -74,16 +78,14 @@ it('aborts old scope work and ignores late results even if the transport ignores
   expect(host.textContent).not.toContain('消息1')
 })
 
-it('marks changes for explicit refresh, preserves the loaded window and does not fetch for unrelated renders', async () => {
+it('automatically refreshes the loaded window without fetching on unrelated renders', async () => {
   readPage.mockResolvedValueOnce(page([5, 4], 4)).mockResolvedValueOnce(page([3, 2], 2))
   await render()
   await act(async () => timeline.loadMore())
-  await render('signed', 1)
-  expect(timeline.hasChanges).toBe(true)
+  await render()
   expect(readPage).toHaveBeenCalledTimes(2)
   readPage.mockResolvedValueOnce(page([6, 5], 5)).mockResolvedValueOnce(page([4, 2], 2))
-  await act(async () => timeline.refresh())
-  expect(timeline.hasChanges).toBe(false)
+  await refresh()
   expect(timeline.page?.items.map(item => item.sequence)).toEqual([2, 4, 5, 6])
   expect(timeline.page?.nextCursor).toEqual({ beforeSequence: 2 })
 })
@@ -116,7 +118,7 @@ it('retains pagination when refreshing a previously empty conversation', async (
   readPage.mockResolvedValueOnce(page([]))
   await render()
   readPage.mockResolvedValueOnce(page([5, 4], 4))
-  await act(async () => timeline.refresh())
+  await act(async () => refresh())
   expect(timeline.page?.hasMore).toBe(true)
   expect(timeline.page?.nextCursor).toEqual({ beforeSequence: 4 })
   readPage.mockResolvedValueOnce(page([3, 2]))
@@ -124,19 +126,18 @@ it('retains pagination when refreshing a previously empty conversation', async (
   expect(timeline.page?.items.map(item => item.sequence)).toEqual([2, 3, 4, 5])
 })
 
-it('retains the change notification when another update arrives during refresh', async () => {
+it('coalesces changes arriving during refresh and catches up after the pending request', async () => {
   readPage.mockResolvedValueOnce(page([1]))
   await render()
-  await render('signed', 1)
   const pending = Promise.withResolvers<ArkmeTimelinePage>()
-  readPage.mockReturnValueOnce(pending.promise)
-  await act(async () => { void timeline.refresh() })
-  await render('signed', 2)
+  readPage.mockReturnValueOnce(pending.promise).mockResolvedValueOnce(page([3, 2, 1]))
+  await refresh()
+  await refresh()
+  await refresh()
+  expect(readPage).toHaveBeenCalledTimes(2)
   await act(async () => pending.resolve(page([2, 1])))
-  expect(timeline.hasChanges).toBe(true)
-  readPage.mockResolvedValueOnce(page([3, 2, 1]))
-  await act(async () => timeline.refresh())
-  expect(timeline.hasChanges).toBe(false)
+  expect(readPage).toHaveBeenCalledTimes(3)
+  expect(timeline.page?.items.map(item => item.sequence)).toEqual([1, 2, 3])
 })
 
 it('keeps the entire loaded window after a partial refresh fails and retries from the latest page', async () => {
@@ -144,11 +145,40 @@ it('keeps the entire loaded window after a partial refresh fails and retries fro
   await render()
   await act(async () => timeline.loadMore())
   readPage.mockResolvedValueOnce(page([6, 5], 5)).mockRejectedValueOnce(new Error('第二页失败'))
-  await act(async () => timeline.refresh())
+  await act(async () => refresh())
   expect(timeline.page?.items.map(item => item.sequence)).toEqual([2, 3, 4, 5])
   expect(timeline.error).toBe('第二页失败')
   readPage.mockResolvedValueOnce(page([6, 5], 5)).mockResolvedValueOnce(page([4, 2], 2))
   await act(async () => timeline.retry())
   expect(readPage.mock.calls.at(-2)?.[1]).toBeUndefined()
   expect(timeline.page?.items.map(item => item.sequence)).toEqual([2, 4, 5, 6])
+})
+
+it('waits for pagination before refreshing an update and preserves both history and arrivals', async () => {
+  readPage.mockResolvedValueOnce(page([5, 4], 4))
+  await render()
+  const older = Promise.withResolvers<ArkmeTimelinePage>()
+  readPage.mockReturnValueOnce(older.promise)
+    .mockResolvedValueOnce(page([6, 5], 5)).mockResolvedValueOnce(page([4, 3], 3))
+  await act(async () => { void timeline.loadMore() })
+  await refresh()
+  expect(readPage).toHaveBeenCalledTimes(2)
+  await act(async () => older.resolve(page([3], 3)))
+  expect(timeline.page?.items.map(item => item.sequence)).toEqual([3, 4, 5, 6])
+  expect(timeline.page?.nextCursor).toEqual({ beforeSequence: 3 })
+})
+
+it('does not loop on automatic refresh failure and keeps retry available', async () => {
+  vi.useFakeTimers()
+  readPage.mockResolvedValueOnce(page([1])).mockRejectedValueOnce(new Error('网络中断'))
+  await render()
+  await refresh()
+  await act(async () => vi.advanceTimersByTimeAsync(60_000))
+  expect(readPage).toHaveBeenCalledTimes(2)
+  expect(timeline.page?.items.map(item => item.sequence)).toEqual([1])
+  expect(timeline.error).toBe('网络中断')
+  readPage.mockResolvedValueOnce(page([2, 1]))
+  await act(async () => timeline.retry())
+  expect(timeline.error).toBe('')
+  expect(timeline.page?.items.map(item => item.sequence)).toEqual([1, 2])
 })
