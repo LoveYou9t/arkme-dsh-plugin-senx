@@ -904,7 +904,7 @@ export function createArkmeHostApi(service: ArkmeService, options: ArkmeHostApiO
       if (['remote.reportCurrentSession', 'source.message-preparing.report', 'source.message-preparing.cancel'].includes(request.operation) && origin === undefined) {
         throw new ArkmePluginError('origin-required', '正在输入状态必须从当前 DSH 页面发起', false, 403)
       }
-      if (['user.arkme-id.set', 'extensions.delete', 'extensions.reviews.create', 'extensions.audit.check', 'extensions.install.start', 'extensions.install.pause', 'extensions.install.resume', 'extensions.enabled.set', 'extensions.metadata.update', 'extensions.share.rotate', 'extensions.preview.delete', 'extensions.preview.reorder', 'extensions.uninstall', 'extensions.restart', 'extensions.client.failure', 'extensions.persistent.invoke', 'extensions.bundle.invoke', 'extensions.mine.publish', 'extensions.quarantine.dismiss', 'extensions.quarantine.reenable', 'remote.renameDesktop', 'message-actions.copy-link', 'message-actions.forward', 'recordings.summary-model-config.set', 'recordings.generate', 'recordings.compare.start', 'recordings.forward', 'recordings.import.retry', 'recordings.import.cancel', 'recordings.import.session.update-start', 'recordings.import.session.update-ownership', 'recordings.import.session.delete', 'recordings.speaker.assign-item', 'openapi.mcp.retry', 'team.create', 'team.join-by-jotmo-id']
+      if (['source.record-delete', 'user.arkme-id.set', 'extensions.delete', 'extensions.reviews.create', 'extensions.audit.check', 'extensions.install.start', 'extensions.install.pause', 'extensions.install.resume', 'extensions.enabled.set', 'extensions.metadata.update', 'extensions.share.rotate', 'extensions.preview.delete', 'extensions.preview.reorder', 'extensions.uninstall', 'extensions.restart', 'extensions.client.failure', 'extensions.persistent.invoke', 'extensions.bundle.invoke', 'extensions.mine.publish', 'extensions.quarantine.dismiss', 'extensions.quarantine.reenable', 'remote.renameDesktop', 'message-actions.copy-link', 'message-actions.forward', 'recordings.summary-model-config.set', 'recordings.generate', 'recordings.compare.start', 'recordings.forward', 'recordings.import.retry', 'recordings.import.cancel', 'recordings.import.session.update-start', 'recordings.import.session.update-ownership', 'recordings.import.session.delete', 'recordings.speaker.assign-item', 'openapi.mcp.retry', 'team.create', 'team.join-by-jotmo-id']
         .includes(request.operation) && origin === undefined) {
         throw new ArkmePluginError('origin-required', '该敏感变更必须从当前 DSH 页面发起', false, 403)
       }
@@ -1802,6 +1802,13 @@ export async function dispatchArkmeHostOperation(
         requestSignal === undefined ? {} : { signal: requestSignal },
       )
       return { ok: true }
+    }
+    case 'source.record-delete': {
+      const refs = params.deletionRefs
+      if (!Array.isArray(refs) || refs.length < 1 || refs.length > 100 || refs.some(ref => typeof ref !== 'string' || ref.length > 2048)) {
+        throw new ArkmePluginError('record-delete-selection-invalid', '删除选择无效', false, 400)
+      }
+      return await service.deleteSourceRecords(stringParam(params, 'sourceRef'), refs as string[], requestSignal)
     }
     case 'source.record-topic.assign': {
       if (!Array.isArray(params.assignmentRefs) || params.assignmentRefs.some(ref => typeof ref !== 'string')) {

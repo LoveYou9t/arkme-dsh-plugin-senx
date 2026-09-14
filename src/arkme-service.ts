@@ -1,3 +1,4 @@
+import { RecordDeletionService } from './services/record-deletion-service.js'
 import { RecordTopicAssignmentService } from './services/record-topic-assignment-service.js'
 import { isRecentEmojiId } from './emoji-recent.js'
 import type { ArkmeRecordTopicAssignmentInput, ArkmeRecordTopicAssignmentResult } from './record-topic-assignment-contract.js'
@@ -307,6 +308,7 @@ export class ArkmeService {
   private readonly directory: ConversationDirectoryService
   private readonly source: SourceService
   private readonly conversationDirectoryVisibility: ConversationDirectoryVisibilityService
+  private readonly recordDeletion: RecordDeletionService
   private readonly recordTopicAssignment: RecordTopicAssignmentService
   private readonly record: RecordService
   private readonly search: SearchService
@@ -374,6 +376,7 @@ export class ArkmeService {
       isDSHAgentInput: raw => this.record.isDSHAgentInput(raw),
       isPrivacyLocked: raw => this.record.isPrivacyLocked(raw),
     }, this.privacy)
+    this.recordDeletion = new RecordDeletionService(this.runtime, this.source)
     this.recordTopicAssignment = new RecordTopicAssignmentService(this.runtime, this.source)
     this.record = new RecordService(this.runtime, this.media, this.source, this.privacy, {
       files: async () => await this.filesOwner().files(),
@@ -1438,6 +1441,10 @@ export class ArkmeService {
   async readSourceAround(sourceRef: string, itemUid: string, recordOwnerUserId: number, options: { beforeLimit?: number; afterLimit?: number; signal?: AbortSignal } = {}): Promise<ArkmeTimelineAroundPage> { return await this.chat.readSourceAround(sourceRef, itemUid, recordOwnerUserId, options) }
   async sharedRecordingDetail(detailRef: string, options: { signal?: AbortSignal } = {}): Promise<ArkmeSharedRecordingPreview> {
     return await this.chat.sharedRecordingDetail(detailRef, options)
+  }
+
+  async deleteSourceRecords(sourceRef: string, deletionRefs: readonly string[], signal?: AbortSignal) {
+    return await this.recordDeletion.delete(sourceRef, deletionRefs, signal)
   }
 
   async assignRecordTopic(input: ArkmeRecordTopicAssignmentInput, signal?: AbortSignal): Promise<ArkmeRecordTopicAssignmentResult> {

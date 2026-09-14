@@ -1618,6 +1618,8 @@ export interface ArkmeTimelineItem {
     summaryText?: string
     summaryStatus?: ArkmeCallSummaryStatus
   }
+  /** Signed Record owner and observed content version for user soft deletion. */
+  recordDeletionRef?: string
   /** Signed observed personal-topic membership; distinct from forwarding snapshots. */
   recordTopicAssignmentRef?: string
   /** Stable topic identity from assignment membership evidence, not the display card. */
@@ -3571,6 +3573,7 @@ export type ArkmeHostOperation = ArkmePluginOperation
   | 'emoji.recent.list'
   | 'emoji.recent.record'
   | 'topic.candidates'
+  | 'source.record-delete'
   | 'source.record-topic.assign'
   | 'provider.instance'
   | 'link.metadata'

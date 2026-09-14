@@ -1,3 +1,4 @@
+import { openRecordDeletionRef } from '../src/record-deletion-ref.js'
 import { openRecordTopicAssignmentRef } from '../src/record-topic-assignment-ref.js'
 import { createHmac } from 'node:crypto'
 import { readFileSync } from 'node:fs'
@@ -2094,12 +2095,13 @@ describe('ArkmeService', () => {
       if (url.endsWith('/api/v1/records/uncategorized/summary')) return json({ code: 0, data: { record_count: 1 } })
       if (url.endsWith('/api/v1/records/uncategorized/query')) return json({ code: 0, data: { items: [], has_more: false } })
       if (url.endsWith('/api/v1/home/feed/query')) return json({ code: 0, data: { items: [
-        { record_uid: 'unclassified', source_kind: 1, record_core: { record_uid: 'unclassified', text_content: '正文', owner_user_id: 10001, status: 1 } },
+        { record_uid: 'unclassified', source_kind: 1, record_core: { record_uid: 'unclassified', text_content: '正文', owner_user_id: 10001, status: 1, version: 3 } },
         { record_uid: 'in-topic', source_kind: 2, source_uid: 'old-topic', topic_core: { topic_uid: 'work-topic', title: '展示主题' },
           record_core: { record_uid: 'in-topic', text_content: '正文2', owner_user_id: 10001, status: 1 } },
         { record_uid: 'foreign', source_kind: 1, record_core: { record_uid: 'foreign', text_content: '他人记录', owner_user_id: 999, status: 1 } },
         { record_uid: 'unknown', source_kind: 99, topic_core: { topic_uid: 'unrelated-topic' }, record_core: { record_uid: 'unknown', text_content: '未知来源', owner_user_id: 10001, status: 1 } },
       ], has_more: false } })
+      if (url.endsWith('/api/v1/records/delete-batch')) return json({ code: 0, data: { items: [{ record_uid: 'unclassified', version: 4, result: 'deleted' }], projection_refresh_pending: true } })
       if (url.endsWith('/api/v1/topics/records/move-batch')) return json({ code: 0, data: {
         moved_count: body.items.length, projection_refresh_pending: true,
         items: body.items.map((item: { record_uid: string; source_topic_uid?: string }) => ({
@@ -2149,6 +2151,13 @@ describe('ArkmeService', () => {
     expect(topicPage.items.find(item => item.itemUid === 'owned-other-creator')?.recordTopicAssignmentRef).toEqual(expect.any(String))
     expect(topicPage.items.find(item => item.itemUid === 'foreign-self-creator')?.recordTopicAssignmentRef).toBeUndefined()
     expect(topicPage.items.find(item => item.itemUid === 'pending-record')?.recordTopicAssignmentRef).toBeUndefined()
+    const deletable = page.items.find(item => item.itemUid === 'unclassified')!
+    expect(openRecordDeletionRef(deletable.recordDeletionRef!, 'dsh-device-1')).toMatchObject({ recordUid: 'unclassified', recordVersion: 3, userId: 10001 })
+    expect(page.items.find(item => item.itemUid === 'foreign')?.recordDeletionRef).toBeUndefined()
+    expect(page.items.find(item => item.itemUid === 'in-topic')?.recordDeletionRef).toBeUndefined() // missing Record version
+    expect(topicPage.items.find(item => item.itemUid === 'foreign-self-creator')?.recordDeletionRef).toBeUndefined()
+    await expect(service.deleteSourceRecords(self.sourceRef, [deletable.recordDeletionRef!])).resolves.toMatchObject({ items: [{recordUid: 'unclassified', version: 4, result: 'deleted'}] })
+    expect(calls.filter(call => call.url.endsWith('/api/v1/records/delete-batch')).map(call => call.body)).toEqual([{ items: [{ record_uid: 'unclassified', expected_version: 3 }] }])
     const abort = new AbortController()
     abort.abort()
     await expect(service.createTopic('已取消', undefined, { contextSourceRef: self.sourceRef, signal: abort.signal })).rejects.toThrow()
