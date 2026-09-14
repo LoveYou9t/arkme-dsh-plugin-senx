@@ -2700,6 +2700,8 @@ describe('conversation send directory projection', () => {
       expect.stringContaining('发给自己'), expect.stringContaining('Harness4'), expect.stringContaining('其他会话'),
     ])
     expect(rows[1]!.findAllByProps({ 'aria-label': '已置顶' })).toHaveLength(1)
+    expect(renderedText(rows[1]!)).not.toContain('置顶')
+    expect(rows[1]!.findByProps({ 'aria-label': '已置顶' }).props.role).toBe('img')
   })
 
   it('keeps self visible while reopening a forward picker with a pending directory read', async () => {

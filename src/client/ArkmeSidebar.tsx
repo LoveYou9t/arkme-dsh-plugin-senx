@@ -1,3 +1,4 @@
+import { ArkmePinnedCorner } from './ArkmePinnedCorner.js'
 import { useForwardTargetDirectory } from './forward-target-directory.js'
 import { ArkmeRecordDeletionDialog } from './ArkmeRecordDeletionDialog.js'
 import { Trash } from '@phosphor-icons/react/dist/icons/Trash'
@@ -647,6 +648,7 @@ const styles: Record<string, CSSProperties> = {
   },
   forwardTargetList: { flex: 1, minHeight: 0, overflowY: 'auto', margin: 0, padding: '4px 18px 18px', listStyle: 'none' },
   forwardTargetRow: {
+    position: 'relative',
     width: '100%', minHeight: 56, display: 'grid', gridTemplateColumns: '20px 36px minmax(0, 1fr) auto', alignItems: 'center', gap: 10, padding: '9px 8px',
     boxSizing: 'border-box', border: 0, borderRadius: 8, background: 'transparent', color: colors.text,
     cursor: 'pointer', textAlign: 'left', font: 'inherit',
@@ -5724,6 +5726,7 @@ export function ArkmeSurface({
         aria-pressed={selected}
         onClick={() => { toggleForwardTarget(target) }}
       >
+        {target.isPinned === true && <ArkmePinnedCorner />}
         <span
           style={{ ...styles.forwardTargetCheck, ...(selected ? styles.forwardTargetCheckSelected : {}) }}
           aria-hidden
@@ -5734,7 +5737,6 @@ export function ArkmeSurface({
           <span style={styles.forwardTargetMeta}><ArkmeRichText text={target.latestPreview?.trim() || arkmeForwardTargetMeta(target)} presentation="preview" /></span>
         </span>
         <span style={styles.forwardTargetTime}>
-          {target.isPinned === true && <span aria-label="已置顶" style={{ marginRight: 6 }}>置顶</span>}
           {arkmeForwardTargetTimeLabel(target.activeAtMillis)}
         </span>
       </button>

@@ -1,3 +1,4 @@
+import { ArkmePinnedCorner } from './ArkmePinnedCorner.js'
 import { nextArkmeUnreadConversation } from '../conversation-attention.js'
 import { ArkmeDirectoryWindow } from './ArkmeDirectoryWindow.js'
 import { arkmeSourceAllowsUserWrite } from '../topic-policy.js'
@@ -218,13 +219,6 @@ const styles: Record<string, CSSProperties> = {
     background: 'transparent', color: 'inherit', textAlign: 'left', cursor: 'pointer', font: 'inherit', outline: 0,
   },
   chatRowActive: { background: colors.active },
-  pinnedCornerClip: {
-    position: 'absolute', inset: 0, borderRadius: 'inherit', overflow: 'hidden', pointerEvents: 'none',
-  },
-  pinnedCorner: {
-    position: 'absolute', top: 0, right: 0, width: 16, height: 16,
-    background: '#65ce8b', clipPath: 'polygon(0 0, 100% 0, 100% 100%)',
-  },
   chatRowRemoving: { background: arkmeTheme.hover, cursor: 'default' },
   chatContent: { flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 4 },
   chatTop: { minWidth: 0, display: 'flex', alignItems: 'center', gap: 7 },
@@ -2127,9 +2121,7 @@ export function ArkmeNavigation({
                 setDirectoryContextMenu({ kind: 'bot', key: conversationBotVisibilityKey(bot), x: event.clientX, y: event.clientY })
               }}
             >
-              {row.pinned && <span role="img" aria-label="已置顶" style={styles.pinnedCornerClip}>
-                <span aria-hidden style={styles.pinnedCorner} />
-              </span>}
+              {row.pinned && <ArkmePinnedCorner />}
               <span style={styles.sourceAvatarWrap} aria-hidden>
                 <span style={styles.avatar}><RobotIcon size={22} weight="fill" /></span>
                 {unreadPlacement === 'avatar' && <span style={styles.mentionUnread}>{unreadText}</span>}
@@ -2175,9 +2167,7 @@ export function ArkmeNavigation({
               setDirectoryContextMenu({ kind: 'source', key: arkmeSourceIdentityKey(source), x: event.clientX, y: event.clientY })
             }}
           >
-            {row.pinned && <span role="img" aria-label="已置顶" style={styles.pinnedCornerClip}>
-              <span aria-hidden style={styles.pinnedCorner} />
-            </span>}
+            {row.pinned && <ArkmePinnedCorner />}
             <span style={styles.sourceAvatarWrap}>
               <ArkmeDirectorySourceAvatar source={source} size={38} />
               {unreadPlacement === 'avatar' && <span style={styles.mentionUnread}>{unreadText}</span>}
