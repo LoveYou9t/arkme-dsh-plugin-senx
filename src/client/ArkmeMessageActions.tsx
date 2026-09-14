@@ -1,4 +1,3 @@
-import { Trash } from '@phosphor-icons/react/dist/icons/Trash'
 import { arkmeSourceAllowsUserWrite } from '../topic-policy.js'
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent } from 'react'
 import type {
@@ -492,7 +491,6 @@ export function useArkmeMessageActions(input: {
     <button type="button" aria-label="复制文本" style={{ ...styles.selectButton, opacity: selected.length === 1 && busy === undefined ? 1 : .38 }} disabled={selected.length !== 1 || busy !== undefined} onClick={() => { const first = selected[0]; if (first !== undefined) void copyOne(first) }}><span style={styles.icon}><MessageActionIcon kind="copy" size={22} /></span><span>复制文本</span></button>
     <button type="button" aria-label="复制链接" style={{ ...styles.selectButton, opacity: selected.length > 0 && selected.every(item => item.copyLinkAvailable) && busy === undefined ? 1 : .38 }} disabled={selected.length === 0 || selected.some(item => !item.copyLinkAvailable) || busy !== undefined} onClick={() => { void copyLink(selected) }}><span style={styles.icon}><MessageActionIcon kind="link" size={22} /></span><span>复制链接</span></button>
     <button type="button" aria-label="转发" style={{ ...styles.selectButton, opacity: selected.length > 0 && selected.every(item => item.forwardAvailable) && busy === undefined ? 1 : .38 }} disabled={selected.length === 0 || selected.some(item => !item.forwardAvailable) || busy !== undefined} onClick={() => { void openForward(selected) }}><span style={styles.icon}><MessageActionIcon kind="forward" size={22} /></span><span>{busy === 'forward' ? '转发中' : '转发'}</span></button>
-    <button type="button" aria-label="删除" title="当前消息未提供可删除的本人快记及版本" disabled style={{ ...styles.selectButton, opacity: .38 }}><span style={styles.icon}><Trash size={22} /></span><span>删除</span></button>
     <button type="button" style={{ ...styles.closeButton, opacity: busy === undefined ? 1 : .38 }} disabled={busy !== undefined} onClick={() => { setSelectedIds(undefined); requestIdsRef.current = undefined }} aria-label="退出多选"><MessageActionIcon kind="close" size={20} /></button>
   </div>
 
