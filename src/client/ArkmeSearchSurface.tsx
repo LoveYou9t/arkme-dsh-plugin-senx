@@ -9,6 +9,7 @@ import type {
   ArkmeTimelineCursor, ArkmeTimelinePage,
 } from '../types.js'
 import { ArkmeClientError, callArkme } from './api.js'
+import { conversationSearchReadPort } from './conversation-search-port.js'
 import { arkmeTheme } from './arkme-theme.js'
 import { ArkmeDshAgentInputMarker, isDshAgentInputRecord } from './ArkmeDshAgentInputMarker.js'
 import { arkmeUi } from './ui-controller.js'
@@ -191,6 +192,13 @@ function AudioQuickRow({ item, asset, onOpen, onTagClick }: {
   const sender = item.nickname || recordTitle(item)
   const resolveFromConversation = useCallback(async (signal: AbortSignal): Promise<string> => {
     if (item.targetSource === undefined) return ''
+    if (item.sourceKind === 3) {
+      const message = await conversationSearchReadPort.readChatMessage(item, signal)
+      if (signal.aborted) return ''
+      const audio = message.contentBlocks?.find(block => block.kind === 'audio'
+        && (item.voice?.fileAssetUid === undefined || block.fileAssetUid === item.voice.fileAssetUid))
+      return audio === undefined ? '' : mediaUrl(audio.mediaRef)
+    }
     let cursor: ArkmeTimelineCursor | undefined
     for (let pageIndex = 0; pageIndex < 80; pageIndex += 1) {
       if (signal.aborted) return ''
@@ -455,7 +463,7 @@ export function ArkmeSearchSurface({
 
   const openRecord = useCallback((item: ArkmeSearchRecordItem) => {
     if (onOpenRecord !== undefined) { onOpenRecord(item); return }
-    if (item.targetSource !== undefined) arkmeUi.showConversationTarget(item.targetSource, item.recordUid, item.sendAtMillis)
+    if (item.targetSource !== undefined) arkmeUi.showConversationTarget(item.targetSource, item.recordUid, item.sendAtMillis, item.recordOwnerUserId)
   }, [onOpenRecord])
 
   const selectTag = useCallback((tagText: string) => {

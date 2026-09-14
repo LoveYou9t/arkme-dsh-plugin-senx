@@ -104,6 +104,7 @@ import { useResizableNoteDetail } from './use-resizable-note-detail.js'
 import { ArkmeEmojiPicker } from './ArkmeEmojiPicker.js'
 import type { ArkmeEmoji } from './arkme-emoji.js'
 import { ArkmeSearchSurface } from './ArkmeSearchSurface.js'
+import { ArkmeConversationSearch } from './ArkmeConversationSearch.js'
 import { ArkmeContactAddSurface } from './ArkmeContactAddSurface.js'
 import { ArkmeBotConversationSurface } from './ArkmeBotConversationSurface.js'
 import { ARKME_DEFAULT_SHARE_WEBSITE } from '../types.js'
@@ -6892,6 +6893,8 @@ export function ArkmeSurface({
             {authenticated && conversationBackdropVisible && isArkmeSelfWorkspaceSource(selectedSource)
               && source?.isMuted === true && <span style={styles.titleMuteIcon}><ArkmeMuteIcon size={16} /></span>}
           </div>
+          {authenticated && activeConversation && sourceIsChat && source !== undefined && <ArkmeConversationSearch
+            key={`chat-search:${authenticatedAccountKey}:${conversationOverlayKey}`} source={source} host={panelRef} accountKey={authenticatedAccountKey ?? ''} />}
           {authenticated && conversationBackdropVisible && source?.kind === 'private_chat' && <ArkmePrivateCallMenu
             key={`private-call:${conversationOverlayKey}`}
             sourceRef={source.sourceRef}

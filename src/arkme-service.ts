@@ -1730,6 +1730,7 @@ export class ArkmeService {
     cursor?: string
     searchScope?: 'global' | 'topic' | 'chat_session'
     sourceUid?: string
+    sourceRef?: string
     signal?: AbortSignal
   }): Promise<ArkmeRecordSearchResult> {
     return await this.search.searchRemote(options)
@@ -1749,6 +1750,9 @@ export class ArkmeService {
     scene: ArkmeSearchSceneKind
     limit: number
     cursor?: string
+    searchScope?: 'global' | 'topic' | 'chat_session'
+    sourceUid?: string
+    sourceRef?: string
     signal?: AbortSignal
   }): Promise<ArkmeRecordSearchResult> {
     return await this.search.searchScene(options)

@@ -986,6 +986,8 @@ export interface ArkmeImageSearchResult {
 
 export interface ArkmeSearchRecordItem {
   recordUid: string
+  /** Record owner required by Chat's exact timeline locator; never the current viewer. */
+  recordOwnerUserId?: number
   sourceKind: number
   sourceUid?: string
   routeTargetKind: string
