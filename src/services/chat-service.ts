@@ -4788,9 +4788,9 @@ export class ChatService {
         const mentionsViewer = senderUserId !== session.userId
           && arkmeMentionMetadataMentionsViewer(record, payload, session.userId)
         items.push({
-          ...recordDeletionCapability({ userId: session.userId, sourceKind: sourceKind ?? '', sourceOwnerRef: chatSessionUid,
-            recordUid: uid, recordVersion: numberValue(record.version), recordOwnerUserId: numberValue(relation.record_owner_user_id ?? record.owner_user_id),
-            isMe: senderUserId === session.userId, status: numberValue(record.status) }, signingKey),
+          ...(numberValue(record.status) === 1 ? recordDeletionCapability({ userId: session.userId, sourceKind: sourceKind ?? '', sourceOwnerRef: chatSessionUid,
+            recordUid: uid, recordVersion: numberValue(payload.version), recordOwnerUserId: numberValue(payload.owner_user_id),
+            isMe: senderUserId === session.userId, status: numberValue(payload.status) }, signingKey) : {}),
           itemUid: uid,
           ...(relationUid === '' ? {} : {
             timelineItemKey: await this.source.chatTimelineItemKey(session.userId, chatSessionUid, relationUid),
@@ -5665,8 +5665,8 @@ export class ChatService {
       const callRecord = await this.callHistory.timelineCallRecord(item, session.userId)
       const itemIndex = items.push({
         ...recordDeletionCapability({ userId: session.userId, sourceKind: source.kind, sourceOwnerRef: source.ownerRef,
-          recordUid: uid, recordVersion: numberValue(record.version), recordOwnerUserId: numberValue(relation.record_owner_user_id ?? record.owner_user_id),
-          isMe: senderUserId === session.userId, status: recordStatus }, signingKey),
+          recordUid: uid, recordVersion: numberValue(payload.version), recordOwnerUserId: numberValue(payload.owner_user_id),
+          isMe: senderUserId === session.userId, status: numberValue(payload.status) }, signingKey),
         itemUid: uid,
         ...(relationUid === '' ? {} : {
           timelineItemKey: await this.source.chatTimelineItemKey(session.userId, source.ownerRef, relationUid),

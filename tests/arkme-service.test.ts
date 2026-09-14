@@ -6247,3 +6247,60 @@ describe('ArkmeService', () => {
     }
   })
 })
+
+
+describe('chat deletion capabilities from hydrated Record payloads', () => {
+  it.each(['private_chat', 'group_chat'] as const)('preserves authoritative deletion facts across %s projections', async kind => {
+    const sessions = new MemorySessionStore()
+    sessions.session = { userId: 10001, accessToken: 'access', refreshToken: 'refresh' }
+    const variants = [
+      { uid: 'own', allowed: true },
+      { uid: 'other-sender', sender: 20002 },
+      { uid: 'other-owner', owner: 20002 },
+      { uid: 'deleted', status: 2 },
+      { uid: 'missing-status', status: undefined },
+      { uid: 'missing-version', version: undefined },
+      { uid: 'invalid-version', version: 1.5 },
+      { uid: 'missing', hydration: 2 },
+      { uid: 'unavailable', hydration: 3 },
+      { uid: 'protected', hydration: 4 },
+    ]
+    const items = variants.map(v => ({
+      relation: { rel_uid: v.uid, record_uid: v.uid, record_owner_user_id: v.owner ?? 10001,
+        sender_user_id: v.sender ?? 10001, seq: 10, attach_at: 100 },
+      record: { status: v.hydration ?? 1, payload: { record_uid: v.uid, owner_user_id: v.owner ?? 10001,
+        status: 'status' in v ? v.status : 1, version: 'version' in v ? v.version : 7, text_content: v.uid } },
+    }))
+    const deleteBodies: unknown[] = []
+    const service = new ArkmeService(config, sessions, new MemoryStateStore(), async (input, init) => {
+      const url = String(input)
+      if (['/timeline/page', '/timeline/tail', '/timeline/around'].some(path => url.endsWith(path))) {
+        return json({ code: 200, data: { items, has_more: false } })
+      }
+      if (url.endsWith('/api/v1/records/delete')) {
+        deleteBodies.push(JSON.parse(String(init?.body)))
+        return json({ code: 0, data: {
+          record_core: { record_uid: 'own', owner_user_id: 10001, status: 2, version: 8 },
+        } })
+      }
+      return json({ code: 200, data: { items: [] } })
+    })
+    const sourceRef = sourceRefFor(kind, 'chat-delete', 'Delete test')
+    const page = await service.readSource(sourceRef, { limit: 30 })
+    const tail = await service.readSource(sourceRef, { limit: 30, cursor: { afterSequence: 1 } })
+    const around = await service.readSourceAround(sourceRef, 'own', 10001, { beforeLimit: 15, afterLimit: 15 })
+    const realtime = await (service as unknown as { chat: import('../src/services/chat-service.js').ChatService })
+      .chat.chatTimelineItems({ items }, sessions.session, 'chat-delete', kind)
+    for (const projected of [page.items, tail.items, around.items, realtime]) {
+      const own = projected.find(item => item.itemUid === 'own')!
+      expect(own?.recordDeletionRef).toBeDefined()
+      expect(openRecordDeletionRef(own.recordDeletionRef!, 'dsh-device-1')).toMatchObject({
+        recordUid: 'own', recordVersion: 7, userId: 10001, sourceKind: kind, sourceOwnerRef: 'chat-delete',
+      })
+      expect(projected.filter(item => item.recordDeletionRef).map(item => item.itemUid)).toEqual(['own'])
+    }
+    await expect(service.deleteSourceRecords(sourceRef, [page.items.find(item => item.itemUid === 'own')!.recordDeletionRef!]))
+      .resolves.toMatchObject({ items: [{ recordUid: 'own', result: 'deleted', version: 8 }] })
+    expect(deleteBodies).toEqual([{ record_uid: 'own', version: 7 }])
+  })
+})
