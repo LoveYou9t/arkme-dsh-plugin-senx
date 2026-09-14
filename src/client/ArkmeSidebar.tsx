@@ -1,3 +1,5 @@
+import { ArkmeRecordDeletionDialog } from './ArkmeRecordDeletionDialog.js'
+import { Trash } from '@phosphor-icons/react/dist/icons/Trash'
 import { arkmeDetailExtensionComposerStyles } from './detail-extension-composer-style.js'
 import { FileTextIcon } from '@phosphor-icons/react/dist/csr/FileText'
 import { ArkmeRecordTopicAssignmentDialog } from './ArkmeRecordTopicAssignmentDialog.js'
@@ -2865,11 +2867,13 @@ export function ArkmeSurface({
   const messageActionStatusTimerRef = useRef<number>()
   const forwardSuccessTimerRef = useRef<number>()
   const [messageActionBusy, setMessageActionBusy] = useState<'copy-link' | 'forward'>()
+  const [recordDeletion, setRecordDeletion] = useState<{ scopeKey: string; sourceRef: string; items: ArkmeTimelineItem[] }>()
   const [selectMode, setSelectMode] = useState<{ sourceKey: string; selectedIds: Set<string> }>()
   const [topicAssignment, setTopicAssignment] = useState<{
     scopeKey: string; source: ArkmeSourceItem; assignmentRefs: string[]; firstRecordText: string; currentTopicKey?: string
   }>()
   const topicAssignmentScopeKey = `${authenticatedAccountKey ?? ''}:${conversationOverlayKey}`
+  useEffect(() => { setRecordDeletion(undefined) }, [topicAssignmentScopeKey, activeConversation, active])
   useEffect(() => { setTopicAssignment(undefined) }, [topicAssignmentScopeKey])
 
   const [forwardTargetPicker, setForwardTargetPicker] = useState<{
@@ -5757,6 +5761,8 @@ export function ArkmeSurface({
     [activeSelectMode, displayItems],
   )
   const selectedMessageCount = activeSelectMode?.selectedIds.size ?? 0
+  const selectedMessagesCanDelete = selectedMessageCount > 0 && selectedMessageItems.length === selectedMessageCount
+    && selectedMessageItems.every(item => Boolean(item.recordDeletionRef))
   const selectedMessagesHaveSnapshots = selectedMessageCount > 0 && selectedMessageItems.length === selectedMessageCount
     && selectedMessageItems.every(item => arkmeTimelineMessageActionRef(item) !== '')
   const forwardVisibleTargets = useMemo(
@@ -6746,6 +6752,45 @@ export function ArkmeSurface({
   return (
     <>
     {selfTour.panel}
+    {activeConversation && recordDeletion?.scopeKey === topicAssignmentScopeKey && <ArkmeRecordDeletionDialog
+      key={recordDeletion.scopeKey} sourceRef={recordDeletion.sourceRef}
+      deletionRefs={recordDeletion.items.map(item => item.recordDeletionRef!)}
+      onCancel={() => { setRecordDeletion(undefined) }}
+      onRefresh={() => {
+        confirmedSendRetention.forget(conversationKey, recordDeletion.items.map(item => item.itemUid))
+        conversationCacheRef.current.invalidateTimelines()
+        setRecordDeletion(undefined)
+        exitMessageSelectMode()
+        void loadTimeline(undefined, true, 40, 'refresh').catch(caught => {
+          if (activeSourceKeyRef.current === conversationKey) showMessageActionStatus(errorMessage(caught))
+        })
+      }}
+      onResult={result => {
+        // 已完成的 owner 写入使旧窗口读取失效，避免迟到分页重新插入删除前的快照。
+        timelineWindowRevisionRef.current += 1
+        for (const request of timelineRequestsRef.current.values()) request.controller.abort()
+        timelineRequestsRef.current.clear()
+        setLoadingOlder(false)
+        const deleted = new Set(result.items.filter(item => item.result === 'deleted').map(item => item.recordUid))
+        confirmedSendRetention.forget(conversationKey, [...deleted])
+        const confirmedVersions = new Map(result.items.filter(item => deleted.has(item.recordUid)).map(item => [item.recordUid, item.version]))
+        const keep = (item: ArkmeTimelineItem) => !deleted.has(item.itemUid) || (item.recordVersion ?? 0) > (confirmedVersions.get(item.itemUid) ?? 0)
+        setItems(current => current.filter(keep))
+        conversationCacheRef.current.invalidateTimelines()
+        const cached = conversationCacheRef.current.getTimeline(conversationKey)
+        if (cached) conversationCacheRef.current.storeTimeline(conversationKey, { ...cached, items: cached.items.filter(keep), fetchedAtMillis: 0 })
+        setRecordDeletion(undefined)
+        if (deleted.size === result.items.length) exitMessageSelectMode()
+        else setSelectMode(current => current?.sourceKey !== conversationKey ? current : { ...current,
+          selectedIds: new Set(recordDeletion.items.filter(keep).map(arkmeTimelineOccurrenceKey)) })
+        const rejection = result.items.find(item => item.result === 'rejected')
+        showMessageActionStatus(deleted.size === result.items.length
+          ? `成功删除 ${String(deleted.size)} 条内容`
+          : rejection?.result === 'rejected'
+            ? `已确认删除 ${String(deleted.size)} 条；${rejection.message}；其余内容未继续删除`
+            : `已确认删除 ${String(deleted.size)} 条，其余内容请刷新核对后再操作`)
+      }}
+    />}
     {activeConversation && topicAssignment?.scopeKey === topicAssignmentScopeKey && <ArkmeRecordTopicAssignmentDialog
       key={topicAssignmentScopeKey}
       source={topicAssignment.source} assignmentRefs={topicAssignment.assignmentRefs} firstRecordText={topicAssignment.firstRecordText}
@@ -7738,6 +7783,13 @@ export function ArkmeSurface({
               disabled={!selectedMessagesHaveSnapshots || messageActionBusy !== undefined}
               onClick={() => { openForwardTargetPicker() }}
             ><span style={styles.selectBarIconTile}><ArkmeSelectActionIcon kind="forward" /></span><span style={styles.selectBarLabel}>{messageActionBusy === 'forward' ? '转发中' : ARKME_MESSAGE_SELECT_ACTION_LABELS[2]}</span></button>
+            <button type="button" aria-label="删除" title={selectedMessagesCanDelete ? '删除' : '包含他人或暂不可删除的快记'}
+              style={{ ...styles.selectBarButton, ...(!selectedMessagesCanDelete || messageActionBusy !== undefined ? styles.selectBarButtonDisabled : {}) }}
+              disabled={!selectedMessagesCanDelete || messageActionBusy !== undefined}
+              onClick={() => { if (source && selectedMessagesCanDelete && messageActionBusy === undefined) setRecordDeletion({
+                scopeKey: topicAssignmentScopeKey, sourceRef: source.sourceRef, items: [...selectedMessageItems],
+              }) }}
+            ><span style={styles.selectBarIconTile}><Trash size={22} /></span><span style={styles.selectBarLabel}>删除</span></button>
             <button
               type="button"
               style={{
