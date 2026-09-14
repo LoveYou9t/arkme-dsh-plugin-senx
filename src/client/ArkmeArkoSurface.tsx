@@ -132,7 +132,11 @@ const styles: Record<string, CSSProperties> = {
   bubbleMe: { background: 'var(--dsw-specific-bubble, #eef1f8)', borderColor: 'rgba(83,97,145,.045)', borderRadius: '16px 5px 16px 16px' },
   bubbleArko: { background: arkmeTheme.subtle },
   bubbleError: { background: arkmeTheme.dangerSoft, color: colors.danger },
-  detailMeta: { color: arkmeTheme.tertiary, fontSize: 11 },
+  detailAuthor: { display: 'flex', alignItems: 'center', gap: 9, marginBottom: 20 },
+  detailAuthorContent: { flex: 1, minWidth: 0 },
+  detailName: { overflowWrap: 'anywhere', color: arkmeTheme.secondary, fontSize: 12, fontWeight: 600 },
+  detailMeta: { color: arkmeTheme.tertiary, fontSize: 11, lineHeight: '18px' },
+  detailText: { margin: 0, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', wordBreak: 'break-word', fontSize: 14, lineHeight: 1.62 },
   text: { margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontSize: 14, lineHeight: '22px' },
   reasoning: {
     margin: '8px 0 0', paddingTop: 8, borderTop: `1px solid ${colors.border}`,
@@ -1081,12 +1085,19 @@ export function ArkmeArkoSurface() {
       resizeLabel="调整消息详情宽度"
       onClose={() => { setDetailSelection(undefined) }}
     >
-      <div style={styles.detailMeta}>{detailMessage.role === 'user' ? '我' : displayName}</div>
-      {detailMessage.createdAtMillis !== undefined && detailMessage.createdAtMillis > 0
-        && Number.isFinite(detailMessage.createdAtMillis) && detailMessage.createdAtMillis < 8.64e15 && <div style={styles.detailMeta}>
-          {new Date(detailMessage.createdAtMillis).toLocaleString('zh-CN')}
-        </div>}
-      <p style={styles.text}>{detailMessage.text || (detailMessage.status === 'sending' ? '等待回复' : '暂无消息内容')}</p>
+      <div style={styles.detailAuthor} data-arkme-detail-author>
+        {detailMessage.role === 'user'
+          ? <ArkmeUserAvatar {...(userProfile?.avatarRef === undefined ? {} : { avatarRef: userProfile.avatarRef })} size={40} label="作者头像" />
+          : <ArkmeArkoAvatar size={40} />}
+        <div style={styles.detailAuthorContent}>
+          <div style={styles.detailName}>{detailMessage.role === 'user' ? '我' : displayName}</div>
+          {detailMessage.createdAtMillis !== undefined && detailMessage.createdAtMillis > 0
+            && Number.isFinite(detailMessage.createdAtMillis) && detailMessage.createdAtMillis < 8.64e15 && <div style={{ ...styles.detailMeta, marginTop: 4 }}>
+              {new Date(detailMessage.createdAtMillis).toLocaleString('zh-CN')}
+            </div>}
+        </div>
+      </div>
+      <p style={styles.detailText}>{detailMessage.text || (detailMessage.status === 'sending' ? '等待回复' : '暂无消息内容')}</p>
       {detailMessage.role === 'assistant' && detailMessage.reasoning?.trim() && <section aria-label="思考内容">
         <h4 style={styles.sender}>思考内容</h4>
         <p style={styles.text}>{detailMessage.reasoning}</p>
