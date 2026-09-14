@@ -1842,7 +1842,7 @@ describe('conversation send directory projection', () => {
     }
   })
 
-  async function openForwardPicker(textContent = '待转发快记') {
+  async function openForwardPicker(textContent = '待转发快记', body?: unknown, draft?: string) {
     timeline = [{
       itemUid: 'forward-source', messageActionRef: 'opaque-forward-action',
       senderName: '狗才', isMe: true, sendAtMillis: 1, title: '', textContent, status: 1,
@@ -1851,10 +1851,11 @@ describe('conversation send directory projection', () => {
       renderer = create(<ArkmeSurface productChrome={false} productNavigation={false} />, {
         createNodeMock: element => element.props.className === 'arkme-conversation-panel'
           ? { getBoundingClientRect: () => ({ left: 0, top: 0, width: 960, height: 720 }) }
-          : null,
+          : element.props.className === 'arkme-conversation-body' ? body ?? null : null,
       })
       await Promise.resolve()
     })
+    if (draft !== undefined) act(() => { renderer!.root.findByType(ArkmeRichComposerInput).props.onTextChange(draft) })
     const bubble = renderer!.root.findByProps({ 'aria-label': '打开快记详情' })
     act(() => {
       bubble.props.onContextMenu({
@@ -2425,6 +2426,46 @@ describe('conversation send directory projection', () => {
 
     const row = renderer!.root.findByProps({ 'data-arkme-message-item-uid': 'own-message-without-metadata' })
     expect(row.findAllByType(ArkmeTimelineMessageHeader)).toHaveLength(0)
+  })
+
+  it.each([0, 500])('preserves long drafts while forwarding with distance %s from bottom', async distance => {
+    const original = mocks.callArkme.getMockImplementation()!
+    mocks.callArkme.mockImplementation(async (operation, params, signal) => {
+      if (operation === 'files.send.tasks') return []
+      return original(operation, params, signal)
+    })
+    const body = {
+      scrollTop: 1400 - distance, scrollHeight: 2000, clientHeight: 600,
+      getBoundingClientRect: () => ({ top: 0, bottom: 600 }),
+      querySelectorAll: () => [], scrollTo: vi.fn(),
+      addEventListener: vi.fn(), removeEventListener: vi.fn(),
+    }
+    const draft = '未发送的长草稿\n'.repeat(500)
+    const dialog = await openForwardPicker('原始消息', body, draft)
+    body.scrollTop = 1400 - distance
+    act(() => { renderer!.root.findByProps({ className: 'arkme-conversation-body' }).props.onScroll() })
+    const search = renderer!.root.findByProps({ 'aria-label': '搜索转发对象' })
+    for (let length = 1; length <= 150; length++) {
+      act(() => { search.props.onChange({ currentTarget: { value: '1'.repeat(length) } }) })
+    }
+    act(() => { search.props.onChange({ currentTarget: { value: '' } }) })
+    act(() => { dialog.findAll(node => node.type === 'button' && typeof node.props['aria-pressed'] === 'boolean')[0]!.props.onClick() })
+    const comment = renderer!.root.findByProps({ 'aria-label': '转发附言' })
+    for (let length = 1; length <= 150; length++) {
+      act(() => { comment.props.onChange({ currentTarget: { value: '1'.repeat(length) } }) })
+    }
+    const note = '1'.repeat(150) + '\n第二行附言'
+    act(() => { comment.props.onChange({ currentTarget: { value: note } }) })
+    expect(renderer!.root.findByType(ArkmeRichComposerInput).props.value).toBe(draft)
+    expect(renderer!.root.findByProps({ 'aria-label': '发送转发' }).props.disabled).toBe(false)
+    expect(mocks.callArkme.mock.calls.filter(([op]) => op === 'source.forward-messages')).toHaveLength(0)
+    await act(async () => { renderer!.root.findByProps({ 'aria-label': '发送转发' }).props.onClick() })
+    const sends = mocks.callArkme.mock.calls.filter(([op]) => op === 'source.forward-messages')
+    expect(sends).toHaveLength(1)
+    expect(sends[0]![1]).toMatchObject({ actionRefs: ['opaque-forward-action'], commentText: note })
+    expect(renderer!.root.findByType(ArkmeRichComposerInput).props.value).toBe(draft)
+    expect(renderer!.root.findAllByProps({ 'aria-labelledby': 'arkme-forward-target-title' })).toHaveLength(0)
+    expect(timeline[0]!.textContent).toBe('原始消息')
   })
 
   it('keeps the forward picker mounted while rapid comment changes are deferred', async () => {
