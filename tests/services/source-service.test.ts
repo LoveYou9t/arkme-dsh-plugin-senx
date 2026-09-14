@@ -819,10 +819,11 @@ describe('SourceService', () => {
     expect(groupResult).toMatchObject({
       status: 'fulfilled', value: { items: [{ kind: 'group_chat', displayName: '项目群' }] },
     })
-    expect(listBodies).toEqual([
+    expect(listBodies).toHaveLength(2)
+    expect(listBodies).toEqual(expect.arrayContaining([
       { limit: 30 },
       { limit: 30, session_kind: 2 },
-    ])
+    ]))
   })
 
   it('skips DSH Agent input records when decorating the default category preview', async () => {
@@ -1253,4 +1254,72 @@ describe('Chat directory pin owner boundary', () => {
     await expect(service.setChatDirectoryPin(source.sourceRef, true, controller.signal)).rejects.toMatchObject({ name: 'AbortError' })
     expect(requests).toEqual([])
   })
+})
+
+  it('keeps a second directory caller alive when the first caller cancels', async () => {
+    const sessions: ArkmeSessionStore = {
+      async read() { return { userId: 42, accessToken: 'access', refreshToken: 'refresh' } },
+      async write() {}, async delete() {},
+    }
+    let completeRead = () => {}
+    let latestRecordSignal: AbortSignal | undefined
+    const fetchImpl = vi.fn(async (input, init) => {
+      const path = new URL(String(input)).pathname
+      if (path === '/api/v1/records/privacy/visibility-snapshot') {
+        return new Response(JSON.stringify({ code: 0, data: { items: [], has_more: false } }), { status: 200 })
+      }
+      if (path === '/api/v1/records/uncategorized/query') {
+        latestRecordSignal = init?.signal ?? undefined
+        return await new Promise<Response>((resolve, reject) => {
+          completeRead = () => resolve(new Response(JSON.stringify({ code: 0, data: { items: [] } }), { status: 200 }))
+          const rejectAbort = (): void => reject(new DOMException('aborted', 'AbortError'))
+          if (init?.signal?.aborted === true) rejectAbort()
+          else init?.signal?.addEventListener('abort', rejectAbort, { once: true })
+        })
+      }
+      if (path === '/api/v1/topics/display/list') {
+        return new Response(JSON.stringify({ code: 0, data: { items: [] } }), { status: 200 })
+      }
+      if (path === '/api/v1/topics/hierarchy/relations/list') {
+        return new Response(JSON.stringify({ code: 0, data: { relations: [] } }), { status: 200 })
+      }
+      throw new Error(`unexpected path: ${path}`)
+    }) as typeof fetch
+    const runtime = new ServiceRuntime(config, sessions, {
+      async uniqueCode() { return 'device-secret' },
+    } as StateStore, fetchImpl)
+    const service = new SourceService(runtime, new ProfileService(runtime), {
+      async summary() { return { recordCount: 0, wordsCount: 0, totalSec: 0 } },
+      recordItem() { return undefined },
+    })
+    const controller = new AbortController()
+
+    const read = service.listSources('send_to_self', { refresh: true, signal: controller.signal })
+    await vi.waitFor(() => { expect(latestRecordSignal).toBeDefined() })
+    const secondController = new AbortController()
+    const secondRead = service.listSources('send_to_self', { refresh: true, signal: secondController.signal })
+    const outcomes = Promise.allSettled([read, secondRead])
+    await new Promise(resolve => setTimeout(resolve, 0))
+    controller.abort()
+    completeRead()
+
+    const result = await outcomes
+    expect(secondController.signal.aborted).toBe(false)
+    expect(result[1]?.status).toBe('fulfilled')
+  })
+
+
+it('resolves a current-account self target without reading personal content', async () => {
+  const fetchImpl = vi.fn(() => { throw new Error('must not read topics or records') })
+  const sessions: ArkmeSessionStore = {
+    async read() { return { userId: 42, accessToken: 'access', refreshToken: 'refresh' } },
+    async write() {}, async delete() {},
+  }
+  const runtime = new ServiceRuntime(config, sessions, { async uniqueCode() { return 'secret' } } as StateStore, fetchImpl as typeof fetch)
+  const service = new SourceService(runtime, new ProfileService(runtime), {} as never)
+  const target = await service.selfTarget()
+  expect(target).toMatchObject({ kind: 'send_to_self', displayName: '发给自己' })
+  await expect(service.openSourceRef(target.sourceRef, 42)).resolves.toMatchObject({ userId: 42, kind: 'send_to_self', ownerRef: 'all' })
+  await expect(service.openSourceRef(target.sourceRef, 43)).rejects.toBeDefined()
+  expect(fetchImpl).not.toHaveBeenCalled()
 })

@@ -1,3 +1,4 @@
+import { SharedReadGroup } from '../shared-read-group.js'
 import { patchChatPolicy, type ChatPolicySnapshot } from './chat-policy.js'
 import { readTopicRecordPage } from './topic-record-page.js'
 import { readTopicMetadata } from './topic-metadata.js'
@@ -369,7 +370,7 @@ function cloneSourceList(value: ArkmeSourceList): ArkmeSourceList {
 export class SourceService {
   private readonly chatSourceCache = new Map<string, ArkmeSourceItem>()
   private readonly sourceListCache = new Map<string, CacheEntry<ArkmeSourceList>>()
-  private readonly sourceListInFlight = new Map<string, Promise<ArkmeSourceList>>()
+  private readonly sourceListInFlight = new SharedReadGroup<ArkmeSourceList>()
   private readonly groupAvatarSnapshotCache = new Map<string, CacheEntry<ArkmeGroupAvatarSnapshotProjection | null>>()
   private readonly topicDissolveProgress = new Map<string, {
     userId: number
@@ -1202,7 +1203,9 @@ export class SourceService {
     directory: ArkmeSourceDirectory,
     options: { limit?: number; cursor?: string; signal?: AbortSignal; refresh?: boolean; firstPaint?: boolean } = {},
   ): Promise<ArkmeSourceList> {
+    options.signal?.throwIfAborted()
     const session = await this.runtime.requireSession()
+    options.signal?.throwIfAborted()
     // Topic hierarchies require their parent and child to arrive in the same response.
     // The topics endpoint supports up to 100 items, while chat directories stay capped at 50.
     const maxLimit = directory === 'send_to_self' ? 100 : 50
@@ -1212,25 +1215,31 @@ export class SourceService {
     this.pruneSourceListCache()
     const cached = this.sourceListCache.get(cacheKey)
     if (options.refresh !== true && cached !== undefined && cached.expiresAtMillis > Date.now()) return cloneSourceList(cached.value)
-    const existing = this.sourceListInFlight.get(cacheKey)
-    if (existing !== undefined) return cloneSourceList(await existing)
-    const pending = this.listSourcesUncached(session, directory, {
-      ...options,
-      ...(cursor === '' ? {} : { cursor }),
-      isCurrent: () => this.sourceListInFlight.get(cacheKey) === pending,
-    }, limit)
-    this.sourceListInFlight.set(cacheKey, pending)
-    try {
-      const result = await pending
-      if (this.sourceListInFlight.get(cacheKey) === pending) {
+    return cloneSourceList(await this.sourceListInFlight.run(cacheKey, async (signal, isCurrent) => {
+      const result = await this.listSourcesUncached(session, directory, {
+        ...options, signal, ...(cursor === '' ? {} : { cursor }), isCurrent,
+      }, limit)
+      signal.throwIfAborted()
+      if (isCurrent()) {
         this.sourceListCache.delete(cacheKey)
         this.sourceListCache.set(cacheKey, { value: cloneSourceList(result), expiresAtMillis: Date.now() + SOURCE_LIST_CACHE_TTL_MS })
         this.pruneSourceListCache()
       }
-      return cloneSourceList(result)
-    } finally {
-      if (this.sourceListInFlight.get(cacheKey) === pending) this.sourceListInFlight.delete(cacheKey)
-    }
+      return result
+    }, options.signal))
+  }
+
+  async selfTarget(signal?: AbortSignal): Promise<ArkmeSourceItem> {
+    signal?.throwIfAborted()
+    const { userId } = await this.runtime.requireSession()
+    const target = await this.selfTargetForAccount(userId)
+    signal?.throwIfAborted()
+    return target
+  }
+
+  private async selfTargetForAccount(userId: number): Promise<ArkmeSourceItem> {
+    const sourceRef = await this.sealSourceRef(userId, 'send_to_self', 'all', '发给自己')
+    return { sourceRef, kind: 'send_to_self', displayName: '发给自己', activeAtMillis: 0, unreadCount: 0 }
   }
 
   async setChatDirectoryPin(
@@ -1513,9 +1522,7 @@ export class SourceService {
         ? ''
         : latestAggregateItem.latestPreview?.trim() || '非文本内容'
       const aggregateSource: ArkmeSourceItem = {
-        sourceRef: await this.sealSourceRef(session.userId, 'send_to_self', 'all', '发给自己'),
-        kind: 'send_to_self',
-        displayName: '发给自己',
+        ...await this.selfTargetForAccount(session.userId),
         ...(aggregateLatestPreview === '' ? {} : { latestPreview: aggregateLatestPreview }),
         activeAtMillis: latestAggregateItem?.activeAtMillis ?? 0,
         unreadCount: 0,
@@ -1699,9 +1706,7 @@ export class SourceService {
     for (const key of this.sourceListCache.keys()) {
       if (matches(key)) this.sourceListCache.delete(key)
     }
-    for (const key of this.sourceListInFlight.keys()) {
-      if (matches(key)) this.sourceListInFlight.delete(key)
-    }
+    this.sourceListInFlight.invalidate(matches)
   }
 
   private pruneSourceListCache(): void {

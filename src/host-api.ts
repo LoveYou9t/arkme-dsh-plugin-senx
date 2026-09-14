@@ -1605,6 +1605,7 @@ export async function dispatchArkmeHostOperation(
     case 'topic.candidates': return await service.listTopicCandidates(
       stringParam(params, 'keyword'), stringParam(params, 'cursor') || undefined, requestSignal,
     )
+    case 'sources.self-target': return await service.selfTarget(requestSignal)
     case 'sources.list': return await service.listSources(
       stringParam(params, 'directory') as ArkmeSourceDirectory,
       {
