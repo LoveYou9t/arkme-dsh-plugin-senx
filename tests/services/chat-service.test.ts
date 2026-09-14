@@ -260,6 +260,38 @@ describe('ChatService', () => {
     })
   })
 
+  it('separates preview and location windows and cancels only the last reader without blocking writes', async () => {
+    const session = { userId: 42, accessToken: 'access', refreshToken: 'refresh' }
+    const requests: Array<{ body: Record<string, unknown>; signal: AbortSignal }> = []
+    const runtime = new ServiceRuntime(config, { async read() { return session }, async write() {}, async delete() {} }, {} as StateStore,
+      vi.fn(async (_url, init) => {
+        const body = JSON.parse(String(init?.body))
+        if (body.writeFixture) return new Response(JSON.stringify({ code: 200, data: { sent: true } }))
+        const signal = init!.signal as AbortSignal
+        requests.push({ body, signal })
+        return await new Promise<Response>((_, reject) => signal.addEventListener('abort', () => reject(signal.reason), { once: true }))
+      }) as typeof fetch)
+    const source = { openSourceRef: async () => ({ version: 1, userId: 42, kind: 'private_chat', ownerRef: 'session', displayName: '会话' }) }
+    const chat = new ChatService(runtime, source as never, {} as never, {} as never, {} as never, {} as never, {} as never, {} as never, {} as never)
+    const a = new AbortController(), b = new AbortController(), c = new AbortController()
+    const previewA = chat.readSourceAround('source', 'record', 77, { beforeLimit: 1, afterLimit: 1, signal: a.signal })
+    const previewB = chat.readSourceAround('source', 'record', 77, { beforeLimit: 1, afterLimit: 1, signal: b.signal })
+    const location = chat.readSourceAround('source', 'record', 77, { beforeLimit: 20, afterLimit: 20, signal: c.signal })
+    const checks = [previewA, previewB, location].map(promise => expect(promise).rejects.toMatchObject({ name: 'AbortError' }))
+    try {
+      await vi.waitFor(() => expect(requests).toHaveLength(2))
+      expect(requests.map(request => request.body.before_limit).sort((a, b) => Number(a) - Number(b))).toEqual([1, 20])
+      expect(requests.every(request => request.body.record_owner_user_id === 77)).toBe(true)
+      await expect(runtime.authenticatedChatPost('/write-fixture', { writeFixture: true }, session)).resolves.toEqual({ sent: true })
+      a.abort(); await checks[0]
+      expect(requests.find(request => request.body.before_limit === 1)!.signal.aborted).toBe(false)
+      b.abort(); await checks[1]
+      await vi.waitFor(() => expect(requests.find(request => request.body.before_limit === 1)!.signal.aborted).toBe(true))
+      expect(requests.find(request => request.body.before_limit === 20)!.signal.aborted).toBe(false)
+      c.abort(); await checks[2]
+    } finally { a.abort(); b.abort(); c.abort(); await Promise.all(checks); runtime.dispose() }
+  })
+
   it('loads a continuous chat window around an extension parent for exact cross-page location', async () => {
     const session = { userId: 42, accessToken: 'access', refreshToken: 'refresh' }
     const sourceItem = {

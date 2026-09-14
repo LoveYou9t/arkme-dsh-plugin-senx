@@ -153,6 +153,8 @@ export interface ArkmeRemoteRequestOptions {
   cacheMs?: number
   failureCooldownMs?: number
   bypassCache?: boolean
+  /** Cancel a shared read transport once its last subscriber leaves. */
+  cancelWhenUnobserved?: boolean
   /** Optional writes may avoid publishing service-wide cooldowns; existing admission limits still apply. */
   publishServiceCooldown?: boolean
   /** Mark only transport outcomes where a mutation may have reached its owner without a usable acknowledgement. */
@@ -516,6 +518,7 @@ export class ServiceRuntime {
       ...(options.cacheMs === undefined ? {} : { cacheMs: options.cacheMs }),
       ...(options.failureCooldownMs === undefined ? {} : { failureCooldownMs: options.failureCooldownMs }),
       ...(options.bypassCache === undefined ? {} : { bypassCache: options.bypassCache }),
+      ...(options.cancelWhenUnobserved === undefined ? {} : { cancelWhenUnobserved: options.cancelWhenUnobserved }),
       ...(signal === undefined ? {} : { signal }),
       ...(read ? {
         lane: options.lane === 'background-read' ? 'background-read' as const : 'interactive-read' as const,

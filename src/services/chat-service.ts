@@ -2299,8 +2299,8 @@ export class ChatService {
       options.signal,
       {
         lane: 'interactive-read',
-        key: `timeline-around:${source.ownerRef}:${String(normalizedOwnerUserId)}:${normalizedItemUid}`,
-        failureCooldownMs: 2_000,
+        key: `timeline-around:${source.ownerRef}:${String(normalizedOwnerUserId)}:${normalizedItemUid}:${beforeLimit}:${afterLimit}`,
+        cancelWhenUnobserved: true,
       },
     )
     const responseSessionUid = stringValue(data.chat_session_uid).trim()

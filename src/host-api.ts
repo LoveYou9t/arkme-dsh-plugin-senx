@@ -49,6 +49,15 @@ const MAX_RELATED_QUICK_NOTE_REQUEST_BYTES = MAX_MESSAGE_ACTION_REF_CHARS + (64 
 const MAX_OWNER_MESSAGE_ACTION_REQUEST_BYTES = 10 * 1024 * 1024
 const MAX_REQUEST_BYTES = MAX_OWNER_MESSAGE_ACTION_REQUEST_BYTES
 
+function searchScopeParam(params: Record<string, unknown> | undefined): { searchScope?: 'global' | 'topic' | 'chat_session' } {
+  if (params?.searchScope === undefined) return {}
+  const value = params.searchScope
+  if (value !== 'global' && value !== 'topic' && value !== 'chat_session') {
+    throw new ArkmePluginError('search-source-invalid', '搜索范围无效', false, 400)
+  }
+  return { searchScope: value }
+}
+
 function requestBytesLimit(operation: string): number {
   if (operation === 'source.related-quick-notes.from-message') return MAX_RELATED_QUICK_NOTE_REQUEST_BYTES
   if (operation === 'message-actions.copy-link' || operation === 'message-actions.forward') {
@@ -1340,10 +1349,10 @@ export async function dispatchArkmeHostOperation(
       query: stringParam(params, 'query'),
       limit: numberParam(params, 'limit', 20),
       ...(stringParam(params, 'cursor') === '' ? {} : { cursor: stringParam(params, 'cursor') }),
-      ...(['topic', 'chat_session'].includes(stringParam(params, 'searchScope'))
-        ? { searchScope: stringParam(params, 'searchScope') as 'topic' | 'chat_session' }
-        : {}),
+      ...searchScopeParam(params),
       ...(stringParam(params, 'sourceUid') === '' ? {} : { sourceUid: stringParam(params, 'sourceUid') }),
+      ...(params?.sourceRef === undefined ? {} : { sourceRef: stringParam(params, 'sourceRef') }),
+      ...(requestSignal === undefined ? {} : { signal: requestSignal }),
     })
     case 'images.list': return await service.searchImages({
       limit: numberParam(params, 'limit', 20),
@@ -1353,7 +1362,12 @@ export async function dispatchArkmeHostOperation(
       const scene = stringParam(params, 'scene') as ArkmeSearchSceneKind
       const limit = numberParam(params, 'limit', 20)
       const cursor = stringParam(params, 'cursor')
-      return await service.searchScene({ scene, limit, ...(cursor === '' ? {} : { cursor }) })
+      return await service.searchScene({ scene, limit, ...(cursor === '' ? {} : { cursor }),
+        ...searchScopeParam(params),
+        ...(stringParam(params, 'sourceUid') === '' ? {} : { sourceUid: stringParam(params, 'sourceUid') }),
+        ...(params?.sourceRef === undefined ? {} : { sourceRef: stringParam(params, 'sourceRef') }),
+        ...(requestSignal === undefined ? {} : { signal: requestSignal }),
+      })
     }
     case 'search.recordings': return await service.searchRecordings({
       query: stringParam(params, 'query'),
@@ -1369,7 +1383,7 @@ export async function dispatchArkmeHostOperation(
         ? {}
         : { statuses: stringListParam(params, 'statuses') as ArkmeAiVideoJobStatus[] }),
     })
-    case 'files.assets': return await service.queryFileAssets(stringListParam(params, 'fileAssetUids'))
+    case 'files.assets': return await service.queryFileAssets(stringListParam(params, 'fileAssetUids'), requestSignal)
     case 'arko.profile': return await service.arkoProfile()
     case 'arko.session': return await service.arkoEnsureSession()
     case 'arko.new-session': return await service.arkoCreateSession()
