@@ -51,7 +51,6 @@ interface ArkoMessage {
   text: string
   reasoning?: string
   status: ArkoMessageStatus
-  meta?: string
   createdAtMillis?: number
   assistantMsgId?: number
   runUid?: string
@@ -151,7 +150,6 @@ const styles: Record<string, CSSProperties> = {
     margin: '8px 0 0', color: colors.text, whiteSpace: 'pre-wrap', wordBreak: 'break-word',
     fontSize: 13, lineHeight: '18px',
   },
-  meta: { color: arkmeTheme.tertiary, fontSize: 11 },
   empty: { width: 'min(720px,100%)', margin: '28px auto', color: colors.secondary, textAlign: 'center', fontSize: 13 },
   historySentinel: { width: '100%', height: 1 },
   historyLoading: { width: 'min(780px,100%)', margin: '0 auto 12px', color: colors.secondary, textAlign: 'center', fontSize: 12 },
@@ -239,13 +237,6 @@ export function shouldShowArkoThinking(status: ArkoMessageStatus, reasoning?: st
   return status === 'sending' || (reasoning !== undefined && reasoning.trim() !== '')
 }
 
-export function arkoMessageActivityLabel(
-  role: ArkoMessageRole,
-  runStatus: string | undefined,
-): string | undefined {
-  return role === 'assistant' ? arkoRunActivityLabel(runStatus) : undefined
-}
-
 export function arkoPreservedScrollTop(
   previousScrollTop: number,
   previousScrollHeight: number,
@@ -323,7 +314,6 @@ function historyMessage(item: ArkmeArkoHistoryItem): ArkoMessage {
   const placeholder = isActivityPlaceholderText(item.text)
   const reasoningPlaceholder = isActivityPlaceholderText(item.reasoning)
   const active = isActiveHistoryRun(item)
-  const activity = arkoMessageActivityLabel(item.role, item.runStatus)
   return {
     id: `history:${String(item.messageId)}`,
     messageId: item.messageId,
@@ -336,7 +326,6 @@ function historyMessage(item: ArkmeArkoHistoryItem): ArkoMessage {
     ...(item.role !== 'assistant' ? {} : { assistantMsgId: item.messageId }),
     ...(item.runUid === undefined ? {} : { runUid: item.runUid }),
     ...(item.runStatus === undefined ? {} : { runStatus: item.runStatus }),
-    ...(activity === undefined ? {} : { meta: activity }),
     ...(item.messageActionRef === undefined ? {} : {
       messageActionRef: item.messageActionRef,
       ...(item.messageActionConversationRef === undefined ? {} : { messageActionConversationRef: item.messageActionConversationRef }),
@@ -378,15 +367,6 @@ function resultText(result: ArkmeArkoAskResult): string {
   if (result.errorMessage?.trim()) return result.errorMessage.trim()
   if (isActiveRunStatus(result.run?.status ?? result.status)) return ''
   return '任务已处理。'
-}
-
-function resultMeta(result: ArkmeArkoAskResult): string {
-  if (result.status === 'waiting_user') return '等待你的补充'
-  if (result.status === 'waiting_tool') return '当前 DSH 暂不支持此客户端操作，请停止任务后换一种方式'
-  if (result.timedOut) return '处理中'
-  if (result.createdRecordUids.length > 0) return `已产生 ${String(result.createdRecordUids.length)} 条记录`
-  if (result.status === 'completed') return '已完成'
-  return result.status
 }
 
 function latestContinuation(messages: ArkoMessage[], sessionId: number | undefined): ArkoContinuationTarget | undefined {
@@ -519,7 +499,6 @@ export function ArkmeArkoSurface() {
         role: 'assistant',
         text: '',
         status: 'error',
-        meta: '发送结果待确认',
         createdAtMillis: restored.createdAtMillis + 1,
       }]
     })
@@ -607,7 +586,6 @@ export function ArkmeArkoSurface() {
           }, controller.signal)
           if (controller.signal.aborted) return
           consecutiveFailures = 0
-          const activity = arkoRunActivityLabel(status.status)
           if (status.status === 'waiting_tool') {
             setNotice('当前任务需要 DSH 尚未支持的客户端操作，可以停止任务后换一种方式重试')
           }
@@ -615,7 +593,6 @@ export function ArkmeArkoSurface() {
             ...item,
             runStatus: status.status,
             status: isActiveRunStatus(status.status) ? 'sending' : status.status === 'failed' ? 'error' : 'done',
-            ...(activity === undefined ? {} : { meta: activity }),
           } : item))
           if (!isActiveRunStatus(status.status)) {
             await finishRun()
@@ -732,7 +709,7 @@ export function ArkmeArkoSurface() {
     setError('')
     setNotice('')
     setMessages(current => current.map(item => item.id === turn.localAssistantMessageId
-      ? { ...item, text: '', status: 'sending', meta: '正在确认发送状态', runStatus: 'accepted' }
+      ? { ...item, text: '', status: 'sending', runStatus: 'accepted' }
       : item))
     try {
       const result = await callArkme<ArkmeArkoAskResult>('arko.ask', {
@@ -766,7 +743,6 @@ export function ArkmeArkoSurface() {
         role: 'assistant',
         text: resultText(result),
         status: runActive ? 'sending' : result.errorMessage === undefined ? 'done' : 'error',
-        meta: resultMeta(result),
         assistantMsgId: result.assistantMsgId,
         ...(item.createdAtMillis === undefined ? {} : { createdAtMillis: item.createdAtMillis }),
         ...(hasVisibleReasoning ? { reasoning: result.reasoning } : {}),
@@ -789,14 +765,14 @@ export function ArkmeArkoSurface() {
         writeArkoPendingTurn(turn)
         setError(`Arko 发送结果暂未确认：${message}。请重试确认，系统会复用同一次请求，不会重复执行。`)
         setMessages(current => current.map(item => item.id === turn.localAssistantMessageId ? {
-          ...item, role: 'assistant', text: '', status: 'error', meta: '发送结果待确认',
+          ...item, role: 'assistant', text: '', status: 'error',
         } : item))
       } else {
         removeArkoPendingTurn(turn.userId)
         setPendingTurn(current => current?.clientTurnUid === turn.clientTurnUid ? undefined : current)
         setError(message)
         setMessages(current => current.map(item => item.id === turn.localAssistantMessageId ? {
-          ...item, role: 'assistant', text: message, status: 'error', meta: '发送失败',
+          ...item, role: 'assistant', text: message, status: 'error',
         } : item))
       }
     } finally {
@@ -848,7 +824,6 @@ export function ArkmeArkoSurface() {
         role: 'assistant',
         text: '',
         status: 'sending',
-        meta: '正在思考',
         runStatus: 'accepted',
         createdAtMillis: createdAtMillis + 1,
       }])
@@ -886,9 +861,6 @@ export function ArkmeArkoSurface() {
         runUid: activeRun.runUid,
       })
       setNotice('已请求停止当前任务，正在确认最终状态')
-      setMessages(current => current.map(item => item.assistantMsgId === activeRun.assistantMsgId
-        ? { ...item, meta: '正在停止' }
-        : item))
     } catch (caught) {
       setError(`停止 Arko 任务失败：${errorMessage(caught)}`)
     } finally {
@@ -1044,7 +1016,6 @@ export function ArkmeArkoSurface() {
                 }}>
                   <p style={styles.text}>{item.text}</p>
                 </div>}
-                {item.meta !== undefined && <span style={styles.meta}>{item.meta}</span>}
               </div>
             </div>
           </li>}
