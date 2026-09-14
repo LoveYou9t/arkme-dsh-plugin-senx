@@ -30,11 +30,15 @@ import { arkoPresentationName, arkmeArkoProfileStore } from './arko-profile-stor
 import { arkmeArkoConversationPreviewStore } from './arko-conversation-preview-store.js'
 import { arkmeAuthStore } from './auth-store.js'
 import { arkmeTheme } from './arkme-theme.js'
-import { arkmeArkoComposerDraftKey, arkmeComposerDraftStore } from './composer-draft-store.js'
+import { arkmeArkoComposerDraftKey, arkmeComposerDraftStore, serializeArkmeComposerDraft } from './composer-draft-store.js'
 import {
-  arkmeConversationComposerHeight, arkmeConversationComposerLayout,
+  arkmeConversationComposerLayout,
 } from './conversation-composer-presentation.js'
 import { restoreArkmeComposerFocus } from './composer-focus.js'
+import { ArkmeDocumentComposerInput, type ArkmeDocumentComposerHandle } from './ArkmeDocumentComposerInput.js'
+import { ArkmeEmojiPicker } from './ArkmeEmojiPicker.js'
+import { ArkmeRichText } from './ArkmeRichText.js'
+import { arkmeEmojiPlainText, type ArkmeEmoji } from './arkme-emoji.js'
 import {
   ArkmeMessageActionSelectCheck,
   useArkmeMessageActions,
@@ -43,6 +47,7 @@ import {
 
 type ArkoMessageRole = 'user' | 'assistant' | 'divider'
 type ArkoMessageStatus = 'sending' | 'done' | 'error'
+const arkoQuestionMaxLength = 60 * 1024
 
 interface ArkoMessage {
   id: string
@@ -213,7 +218,7 @@ const styles: Record<string, CSSProperties> = {
     background: 'transparent', color: colors.text, boxShadow: 'none', appearance: 'none', WebkitAppearance: 'none',
   },
   tools: { ...arkmeConversationComposerLayout.tools },
-  hint: { color: colors.secondary, fontSize: 12, lineHeight: '18px' },
+  hint: { color: colors.secondary, fontSize: 12, lineHeight: '18px', marginRight: 'auto' },
   send: {
     width: 34, height: 34, flex: 'none', display: 'grid', placeItems: 'center',
     border: 0, borderRadius: 999, background: colors.accent, color: arkmeTheme.foreground, cursor: 'pointer',
@@ -400,7 +405,7 @@ export function ArkmeArkoSurface() {
   const historySentinelRef = useRef<HTMLDivElement>(null)
   const historyLoadInFlightRef = useRef(false)
   const composerRef = useRef<HTMLElement>(null)
-  const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const textareaRef = useRef<ArkmeDocumentComposerHandle>(null)
   const pendingComposerFocusRef = useRef(false)
   const sendInFlightRef = useRef(false)
   const authSnapshot = useSyncExternalStore(
@@ -420,7 +425,10 @@ export function ArkmeArkoSurface() {
     arkmeComposerDraftStore.getRevision,
     arkmeComposerDraftStore.getRevision,
   )
-  const draft = arkmeComposerDraftStore.get(composerDraftKey).text
+  const draftSnapshot = arkmeComposerDraftStore.get(composerDraftKey)
+  const draft = draftSnapshot.text
+  const accountKey = authSnapshot.auth?.status === 'authenticated' && profileUserId !== undefined
+    ? `${authSnapshot.auth.environment}:${String(profileUserId)}` : undefined
   const profile = profileSnapshot.userId === profileUserId ? profileSnapshot.profile : undefined
   const [userProfile, setUserProfile] = useState<ArkmeUserProfile | null>(null)
   const [session, setSession] = useState<ArkmeArkoSession>()
@@ -466,7 +474,7 @@ export function ArkmeArkoSurface() {
         id: message.id,
         actionRef: message.messageActionRef,
         conversationRef: message.messageActionConversationRef,
-        copyText: message.text,
+        copyText: arkmeEmojiPlainText(message.text),
         copyLinkAvailable: message.copyLinkAvailable === true,
         forwardAvailable: message.forwardAvailable === true,
       }]
@@ -660,13 +668,6 @@ export function ArkmeArkoSurface() {
     return () => { controller.abort() }
   }, [activeRun, profileUserId, scrollToBottom])
 
-  useLayoutEffect(() => {
-    const textarea = textareaRef.current
-    if (textarea === null) return
-    textarea.style.height = 'auto'
-    textarea.style.height = `${arkmeConversationComposerHeight(textarea.scrollHeight)}px`
-  }, [draft])
-
   const loadEarlier = useCallback(async () => {
     if (historyOffset === undefined || historyLoadInFlightRef.current) return
     const body = bodyRef.current
@@ -818,11 +819,23 @@ export function ArkmeArkoSurface() {
   const interactionLocked = sending || pendingTurn !== undefined || activeRun !== undefined
   const sendDisabled = loading || interactionLocked || clearing || selectingModel
     || session === undefined || profileUserId === undefined
+  const inputDisabled = loading || interactionLocked || session === undefined || profileUserId === undefined
+
+  const insertEmoji = useCallback((emoji: ArkmeEmoji): boolean => {
+    if (inputDisabled || composerDraftKey === undefined) return false
+    const result = textareaRef.current?.insertEmoji(emoji)
+    if (result === 'length-limit') setError('内容长度已达上限，请删减后再添加表情')
+    return result === 'inserted'
+  }, [composerDraftKey, inputDisabled])
 
   const send = useCallback(async (presetText?: string) => {
-    const text = (presetText ?? draft).trim()
+    const text = (presetText ?? serializeArkmeComposerDraft(arkmeComposerDraftStore.get(composerDraftKey)).text).trim()
     if (text === '' || sendInFlightRef.current || sendDisabled
       || session === undefined || profileUserId === undefined || composerDraftKey === undefined) return
+    if (text.length > arkoQuestionMaxLength) {
+      setError('内容长度超过上限，请删减后再发送')
+      return
+    }
     sendInFlightRef.current = true
     try {
       const continuation = latestContinuation(messages, session.sessionId)
@@ -867,7 +880,7 @@ export function ArkmeArkoSurface() {
     } finally {
       sendInFlightRef.current = false
     }
-  }, [catalog, composerDraftKey, draft, messages, profileUserId, scrollToBottom, sendDisabled, session, submitTurn])
+  }, [catalog, composerDraftKey, messages, profileUserId, scrollToBottom, sendDisabled, session, submitTurn])
 
   const selectModel = useCallback(async (routeKey: string) => {
     if (selectingModel) return
@@ -1068,7 +1081,7 @@ export function ArkmeArkoSurface() {
                   ...(item.role === 'user' ? styles.bubbleMe : styles.bubbleArko),
                   ...(item.status === 'error' ? styles.bubbleError : {}),
                 }}>
-                  <p style={styles.text}>{item.text}</p>
+                  <p style={styles.text}><ArkmeRichText text={item.text} renderLink={link => link.text} /></p>
                 </div>}
               </div>
             </div>
@@ -1157,16 +1170,18 @@ export function ArkmeArkoSurface() {
         onClick={() => { void send('你能帮我干什么') }}
       ><RobotIcon size={17} aria-hidden /><span>{`${displayName} 能干什么`}</span></button>
       <div style={styles.composerInner}>
-      <textarea
+      <ArkmeDocumentComposerInput
+        format="text"
+        key={accountKey}
         ref={textareaRef}
-        rows={1}
-        style={styles.textarea}
+        style={styles.textarea!}
         value={draft}
-        maxLength={60 * 1024}
+        emojis={draftSnapshot.emojis}
+        maxLength={arkoQuestionMaxLength}
         placeholder={`问问 ${displayName}...`}
-        aria-label={`发送给 ${displayName}`}
-        disabled={loading || interactionLocked || session === undefined || profileUserId === undefined}
-        onChange={event => { arkmeComposerDraftStore.setText(composerDraftKey, event.target.value) }}
+        ariaLabel={`发送给 ${displayName}`}
+        disabled={inputDisabled}
+        onRichTextChange={(text, emojis) => { arkmeComposerDraftStore.setRichText(composerDraftKey, text, emojis) }}
         onKeyDown={event => {
           if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
             event.preventDefault()
@@ -1176,6 +1191,16 @@ export function ArkmeArkoSurface() {
         }}
       />
       <div style={styles.tools}>
+        <ArkmeEmojiPicker
+          key={accountKey}
+          mode="text"
+          disabled={inputDisabled}
+          accountKey={accountKey}
+          scopeKey={composerDraftKey}
+          getCaretGeometry={() => textareaRef.current?.getCaretGeometry()}
+          getEditorGeometry={() => textareaRef.current?.getEditorGeometry()}
+          onSelect={insertEmoji}
+        />
         <span style={styles.hint}>{hint}</span>
         {activeRun === undefined ? <button
           type="button"
