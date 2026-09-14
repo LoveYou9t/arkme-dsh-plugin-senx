@@ -6,12 +6,7 @@ export interface RecordDeletionClientPort {
 }
 export const recordDeletionClientPort: RecordDeletionClientPort = {
   async delete(sourceRef, deletionRefs, signal) {
-    const deadline = AbortSignal.timeout(30_000)
-    try { return await callArkme<ArkmeRecordDeletionResult>('source.record-delete', { sourceRef, deletionRefs }, AbortSignal.any([signal, deadline])) }
-    catch (error) {
-      if (deadline.aborted && !signal.aborted) throw new Error('删除请求超时，请刷新核对后再操作')
-      throw error
-    } finally {
+    try { return await callArkme<ArkmeRecordDeletionResult>('source.record-delete', { sourceRef, deletionRefs }, signal) } finally {
       // A lost response may still have changed owner facts. Invalidate readers; never replay a write.
       arkmeUi.recordChanged()
       arkmeUi.chatChanged()

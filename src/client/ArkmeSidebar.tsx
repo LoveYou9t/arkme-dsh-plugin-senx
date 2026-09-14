@@ -6758,9 +6758,12 @@ export function ArkmeSurface({
         if (deleted.size === result.items.length) exitMessageSelectMode()
         else setSelectMode(current => current?.sourceKey !== conversationKey ? current : { ...current,
           selectedIds: new Set(recordDeletion.items.filter(keep).map(arkmeTimelineOccurrenceKey)) })
+        const rejection = result.items.find(item => item.result === 'rejected')
         showMessageActionStatus(deleted.size === result.items.length
           ? `成功删除 ${String(deleted.size)} 条内容`
-          : `已确认删除 ${String(deleted.size)} 条，其余内容请刷新核对后再操作`)
+          : rejection?.result === 'rejected'
+            ? `已确认删除 ${String(deleted.size)} 条；${rejection.message}；其余内容未继续删除`
+            : `已确认删除 ${String(deleted.size)} 条，其余内容请刷新核对后再操作`)
       }}
     />}
     {activeConversation && topicAssignment?.scopeKey === topicAssignmentScopeKey && <ArkmeRecordTopicAssignmentDialog

@@ -1,7 +1,7 @@
 import type { ArkmeSessionCredentials } from '../keychain-store.js'
 import type { ArkmeRecordDeletionItem, ArkmeRecordDeletionResult } from '../record-deletion-contract.js'
 import { openRecordDeletionRef } from '../record-deletion-ref.js'
-import { ArkmePluginError, ServiceRuntime, objectValue } from './service.js'
+import { ArkmePluginError, ArkmeUpstreamResponseError, ServiceRuntime, objectValue } from './service.js'
 import type { SourceService } from './source-service.js'
 
 /** User Record owner operation. No Agent authorization, Chat withdrawal or permanent-delete fallback. */
@@ -36,9 +36,15 @@ export class RecordDeletionHttpPort implements RecordDeletionPort {
           throw new Error('删除结果无法确认')
         }
         results.push({ recordUid: item.recordUid, version: Number(record.version), result: 'deleted' })
-      } catch {
-        // A failed response does not prove rollback. Preserve earlier successes and never replay.
-        results.push({ ...item, result: 'unknown' })
+      } catch (error) {
+        // The existing delete endpoint maps pre-write validation/ownership/version refusal to 40001.
+        // Internal errors and lost responses cannot establish whether the write happened.
+        const rejected = error instanceof ArkmePluginError && error.writeOutcomeUnknown !== true
+          && ((error instanceof ArkmeUpstreamResponseError && error.code === 'arkme-code-40001')
+            || ['auth-http-401', 'auth-http-403'].includes(error.code))
+        results.push(rejected
+          ? { ...item, result: 'rejected', message: error.message }
+          : { ...item, result: 'unknown' })
         stopped = true
       }
     }

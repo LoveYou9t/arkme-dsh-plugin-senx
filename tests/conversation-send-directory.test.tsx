@@ -1983,7 +1983,7 @@ describe('conversation send directory projection', () => {
     expect(renderedText(renderer!.toJSON())).toContain('核对读取失败')
   })
 
-  it('keeps only unresolved selected Records after a partial deletion', async () => {
+  it.each(['unknown', 'rejected'] as const)('keeps unresolved selections and shows the %s outcome', async outcome => {
     const first: ArkmeTimelineItem = { itemUid: 'delete-partial-a', messageActionRef: 'select-a',
       recordDeletionRef: 'delete-a', recordVersion: 3, senderName: '我', isMe: true,
       sendAtMillis: 1, textContent: 'First', status: 1 }
@@ -1991,12 +1991,13 @@ describe('conversation send directory projection', () => {
     const baseCall = mocks.callArkme.getMockImplementation()!
     mocks.callArkme.mockImplementation(async (operation, ...args) => operation === 'source.record-delete'
       ? { items: [{ recordUid: first.itemUid, version: 4, result: 'deleted' },
-          { recordUid: second.itemUid, version: 4, result: 'unknown' }] }
+          { recordUid: second.itemUid, version: 4, result: outcome, ...(outcome === 'rejected' ? { message: '内容版本已变化，请刷新后重试' } : {}) }] }
       : baseCall(operation, ...args))
     await enterMessageSelectMode(first, [second])
     act(() => renderer!.root.findByProps({ 'data-arkme-message-item-uid': second.itemUid }).findByProps({ role: 'checkbox' }).props.onClick({ stopPropagation: vi.fn() }))
     act(() => renderer!.root.findByProps({ 'aria-label': '删除' }).props.onClick())
     await act(async () => renderer!.root.findAllByType('button').find(node => node.children.includes('确认删除'))!.props.onClick())
+    if (outcome === 'rejected') expect(renderedText(renderer!.toJSON())).toContain('内容版本已变化，请刷新后重试')
     expect(renderer!.root.findAllByProps({ 'data-arkme-message-item-uid': first.itemUid })).toHaveLength(0)
     expect(renderer!.root.findByProps({ 'data-arkme-message-item-uid': second.itemUid }).findByProps({ role: 'checkbox' }).props['aria-checked']).toBe(true)
     expect(mocks.callArkme.mock.calls.filter(([op]) => op === 'source.record-delete')).toHaveLength(1)

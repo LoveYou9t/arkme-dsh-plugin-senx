@@ -1,3 +1,4 @@
+import { ArkmePluginError, ArkmeUpstreamResponseError } from '../src/services/service.js'
 import { describe,it,expect,vi } from 'vitest'
 import { sealRecordDeletionRef, openRecordDeletionRef } from '../src/record-deletion-ref.js'
 import { RecordDeletionService, RecordDeletionHttpPort } from '../src/services/record-deletion-service.js'
@@ -49,6 +50,24 @@ describe('record deletion boundary',()=>{
   const port=new RecordDeletionHttpPort({authenticatedPost:post,requireSession:async()=>({userId:7})} as never)
   const result=await port.deleteBatch(['a','b','c'].map(recordUid=>({recordUid,version:3})),{userId:7} as never)
   expect(result.items.map(x=>x.result)).toEqual(['deleted','unknown','not_attempted']);expect(post).toHaveBeenCalledTimes(2)
+ })
+ it.each([
+  new ArkmeUpstreamResponseError('arkme-code-40001','内容版本已变化，请刷新后重试',false,502,{}),
+  new ArkmePluginError('auth-http-403','没有权限删除',false,403),
+ ])('preserves explicit rejection without claiming unknown outcome',async error=>{
+  const post=vi.fn().mockResolvedValueOnce({record_core:{record_uid:'a',owner_user_id:7,status:2,version:4}}).mockRejectedValue(error)
+  const port=new RecordDeletionHttpPort({authenticatedPost:post,requireSession:async()=>({userId:7})} as never)
+  const result=await port.deleteBatch(['a','b','c'].map(recordUid=>({recordUid,version:3})),{userId:7} as never)
+  expect(result.items.map(x=>x.result)).toEqual(['deleted','rejected','not_attempted'])
+  expect(result.items[1]).toMatchObject({message:error.message});expect(post).toHaveBeenCalledTimes(2)
+ })
+ it.each([
+  new ArkmeUpstreamResponseError('arkme-code-1002','服务异常',true,502,{}),
+  new ArkmePluginError('arkme-code-40001','响应不确定',false,502,{writeOutcomeUnknown:true}),
+ ])('does not treat server failure or unknown outcome metadata as rejection',async error=>{
+  const post=vi.fn().mockRejectedValue(error)
+  const port=new RecordDeletionHttpPort({authenticatedPost:post,requireSession:async()=>({userId:7})} as never)
+  expect((await port.deleteBatch([{recordUid:'a',version:3}],{userId:7} as never)).items[0]?.result).toBe('unknown')
  })
  it.each(['logout','switch','abort'])('stops remaining writes after %s',async mode=>{
   const controller=new AbortController();let sessionReads=0
