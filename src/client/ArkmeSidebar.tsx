@@ -646,7 +646,8 @@ const styles: Record<string, CSSProperties> = {
     padding: '0 12px 0 40px', boxSizing: 'border-box', background: arkmeTheme.layer2, color: colors.text, outline: 'none',
     fontSize: 13,
   },
-  forwardTargetList: { flex: 1, minHeight: 0, overflowY: 'auto', margin: 0, padding: '4px 18px 18px', listStyle: 'none' },
+  forwardTargetBody: { flex: 1, minHeight: 0, overflowY: 'auto' },
+  forwardTargetList: { margin: 0, padding: '4px 18px 18px', listStyle: 'none' },
   forwardTargetRow: {
     position: 'relative',
     width: '100%', minHeight: 56, display: 'grid', gridTemplateColumns: '20px 36px minmax(0, 1fr) auto', alignItems: 'center', gap: 10, padding: '9px 8px',
@@ -7821,25 +7822,27 @@ export function ArkmeSurface({
                 }}
               />
             </div>
-            <ul style={styles.forwardTargetList} aria-label="转发对象列表">
-              {(forwardSelfTarget !== undefined || forwardTargetPicker.keyword.trim() === '') && <li key="send_to_self">
-                {forwardSelfTarget !== undefined ? renderForwardTargetButton(forwardSelfTarget) : <div
-                  aria-disabled="true" aria-label="发给自己暂不可用" style={{ ...styles.forwardTargetRow, cursor: 'default' }}>
-                  <span style={styles.forwardTargetCheck} aria-hidden />
-                  <ArkmeDirectorySourceAvatar source={{ kind: 'send_to_self' }} size={38} />
-                  <span style={styles.forwardTargetText}>
-                    <span style={styles.forwardTargetName}>发给自己</span>
-                    <span style={styles.forwardTargetMeta}>默认分类</span>
-                  </span>
-                </div>}
-              </li>}
-              {forwardVisibleTargets.filter(target => target.kind !== 'send_to_self').map(target =>
-                <li key={arkmeForwardTargetKey(target)}>{renderForwardTargetButton(target)}</li>)}
-              {forwardVisibleTargets.length === 0 && <li role="status" style={styles.forwardTargetStatus}>
-                {forwardDirectory.loading ? '正在加载转发对象...' : '暂无可转发对象'}
-              </li>}
-            </ul>
-            {forwardDirectory.error !== '' && <div role="alert" style={styles.forwardTargetStatus}>{forwardDirectory.error}</div>}
+            <div style={styles.forwardTargetBody}>
+              <ul style={styles.forwardTargetList} aria-label="转发对象列表">
+                {(forwardSelfTarget !== undefined || forwardTargetPicker.keyword.trim() === '') && <li key="send_to_self">
+                  {forwardSelfTarget !== undefined ? renderForwardTargetButton(forwardSelfTarget) : <div
+                    aria-disabled="true" aria-label="发给自己暂不可用" style={{ ...styles.forwardTargetRow, cursor: 'default' }}>
+                    <span style={styles.forwardTargetCheck} aria-hidden />
+                    <ArkmeDirectorySourceAvatar source={{ kind: 'send_to_self' }} size={38} />
+                    <span style={styles.forwardTargetText}>
+                      <span style={styles.forwardTargetName}>发给自己</span>
+                      <span style={styles.forwardTargetMeta}>默认分类</span>
+                    </span>
+                  </div>}
+                </li>}
+                {forwardVisibleTargets.filter(target => target.kind !== 'send_to_self').map(target =>
+                  <li key={arkmeForwardTargetKey(target)}>{renderForwardTargetButton(target)}</li>)}
+                {forwardVisibleTargets.length === 0 && <li role="status" style={styles.forwardTargetStatus}>
+                  {forwardDirectory.loading ? '正在加载转发对象...' : '暂无可转发对象'}
+                </li>}
+              </ul>
+              {forwardDirectory.error !== '' && <div role="alert" style={styles.forwardTargetStatus}>{forwardDirectory.error}</div>}
+            </div>
             {forwardSelectedTargets.length > 0 && <footer style={styles.forwardTargetFooter}>
               <div style={styles.forwardTargetRecipients}>
                 <span>发送给：</span>
