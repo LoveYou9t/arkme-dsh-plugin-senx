@@ -4,12 +4,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ArkmeConversationSearchPanel } from '../src/client/ArkmeConversationSearch.js'
 import type { ArkmeRecordSearchResult, ArkmeSearchSceneKind, ArkmeSourceItem } from '../src/types.js'
 
-const mocks = vi.hoisted(() => ({ callArkme: vi.fn(), locate: vi.fn() }))
+const mocks = vi.hoisted(() => ({ callArkme: vi.fn(), locate: vi.fn(), preview: vi.fn() }))
 vi.mock('../src/client/api.js', () => ({ callArkme: mocks.callArkme, ArkmeClientError: class extends Error {} }))
 vi.mock('../src/client/ui-controller.js', () => ({ arkmeUi: { showConversationTarget: mocks.locate } }))
-vi.mock('../src/client/ArkmeRichContent.js', () => ({
+vi.mock('../src/client/ArkmeRichContent.js', async importOriginal => ({
+  arkmeContentMediaUrl: (await importOriginal<typeof import('../src/client/ArkmeRichContent.js')>()).arkmeContentMediaUrl,
   ArkmeMessageContent: ({ item }: { item: { textContent: string } }) => <div>{item.textContent}</div>,
-  ArkmeMediaPreview: ({ selected }: { selected: { fileAssetUid: string } }) => <div aria-label="媒体预览">{selected.fileAssetUid}</div>,
+  ArkmeMediaPreview: ({ selected, navigation, onClose }: { selected: { fileAssetUid: string }; navigation?: { next?: () => void }; onClose(): void }) => { mocks.preview(selected.fileAssetUid); return <><div aria-label="媒体预览">{selected.fileAssetUid}</div><button onClick={navigation?.next}>下一附件</button><button onClick={onClose}>关闭预览</button></> },
 }))
 
 const source: ArkmeSourceItem = { sourceRef: 'signed-group', kind: 'group_chat', displayName: '项目群', activeAtMillis: 1, unreadCount: 0 }
@@ -44,6 +45,78 @@ beforeEach(() => {
 afterEach(async () => { if (root) await act(async () => root.unmount()); vi.useRealTimers() })
 
 describe('conversation search parity', () => {
+  it.each(['image', 'video', 'file'])('previews %s without rendering the original message or hiding results', async kind => {
+    mocks.callArkme.mockImplementation(async (operation: string) => {
+      if (operation === 'source.timeline-around') return { items: [{ itemUid: 'one', senderName: '小林', sendAtMillis: 1, textContent: '完整正文', contentBlocks: [{ kind, fileAssetUid: 'asset', mediaRef: 'signed', fileName: '附件' }] }] }
+      const assets = [{ fileAssetUid: 'asset', fileName: '附件', fileKind: kind === 'video' ? 3 : 1 }]
+      return { ...result(), items: [{ ...result().items[0], media: kind === 'file' ? [] : assets, files: kind === 'file' ? assets : [] }] }
+    })
+    await mount()
+    if (kind === 'file') { await click('文件'); await tick(0) }
+    const label = kind === 'file' ? '打开文件 附件' : kind === 'video' ? '查看视频 附件' : '查看图片 附件'
+    await act(async () => root.root.findByProps({ 'aria-label': label }).props.onClick())
+    expect(root.root.findByProps({ 'aria-label': '媒体预览' })).toBeDefined()
+    expect(root.root.findByProps({ 'aria-label': '聊天搜索结果' }).props.hidden).toBe(false)
+    expect(JSON.stringify(root.toJSON())).not.toContain('完整正文')
+    expect(root.root.findAllByType('button').some(node => ['返回结果', '定位到消息'].includes(node.props.children))).toBe(false)
+    await click('关闭预览')
+    expect(root.root.findAllByProps({ 'aria-label': '媒体预览' })).toHaveLength(0)
+  })
+
+  it('keeps results accessible through attachment loading, failure, retry and missing attachment', async () => {
+    mocks.callArkme.mockImplementation(async () => ({ ...result(), items: [{ ...result().items[0], files: [{ fileAssetUid: 'asset', fileName: '附件' }] }] }))
+    await mount(); await click('文件'); await tick(0)
+    mocks.callArkme.mockImplementationOnce(() => new Promise(() => {}))
+    await act(async () => root.root.findByProps({ 'aria-label': '打开文件 附件' }).props.onClick())
+    expect(JSON.stringify(root.toJSON())).toContain('加载详情')
+    expect(root.root.findByProps({ 'aria-label': '聊天搜索结果' }).props.hidden).toBe(false)
+    await tick(15_000)
+    expect(JSON.stringify(root.toJSON())).toContain('详情加载超时')
+    mocks.callArkme.mockResolvedValueOnce({ items: [{ itemUid: 'one', textContent: '完整正文', contentBlocks: [] }] })
+    await click('重试')
+    expect(JSON.stringify(root.toJSON())).toContain('该附件已不存在')
+    expect(JSON.stringify(root.toJSON())).not.toContain('完整正文')
+    await click('返回结果')
+    expect(JSON.stringify(root.toJSON())).not.toContain('该附件已不存在')
+    expect(root.root.findByProps({ 'aria-label': '聊天搜索结果' }).props.hidden).toBe(false)
+  })
+
+  it('uses the authorized media kind when search metadata is stale', async () => {
+    mocks.callArkme.mockImplementation(async (operation: string) => {
+      if (operation === 'source.timeline-around') return { items: [{ itemUid: 'one', contentBlocks: [{ kind: 'image', mediaRef: 'signed-image', fileAssetUid: 'asset', fileName: '图片' }] }] }
+      return { ...result(), items: [{ ...result().items[0], media: [{ fileAssetUid: 'asset', mimeType: 'video/mp4', fileKind: 3 }] }] }
+    })
+    await mount()
+    expect(root.root.findAllByType('video')).toHaveLength(0)
+    expect(root.root.findByProps({ 'aria-label': '查看图片 图片' })).toBeDefined()
+  })
+  it('never renders the previous asset while switching within the same message', async () => {
+    mocks.callArkme.mockImplementation(async (operation: string) => {
+      if (operation === 'source.timeline-around') return { items: [{ itemUid: 'one', contentBlocks: ['a', 'b'].map(id => ({ kind: 'image', mediaRef: id, fileAssetUid: id, fileName: id })) }] }
+      return { ...result(), items: [{ ...result().items[0], media: ['a', 'b'].map(id => ({ fileAssetUid: id, fileName: id })) }] }
+    })
+    await mount()
+    await act(async () => root.root.findByProps({ 'aria-label': '查看图片 a' }).props.onClick())
+    mocks.preview.mockClear()
+    await click('下一附件')
+    expect(mocks.preview.mock.calls.every(([uid]) => uid === 'b')).toBe(true)
+  })
+
+  it('navigates files across records by owner and returns directly to retained results', async () => {
+    mocks.callArkme.mockImplementation(async (operation: string, params: Record<string, unknown>) => {
+      if (operation === 'source.timeline-around') return { items: [{ itemUid: params.itemUid, senderName: '小林', sendAtMillis: 1, contentBlocks: [{ kind: 'file', fileAssetUid: 'shared', mediaRef: 'signed-file', fileName: '文件.pdf' }] }] }
+      return { ...result(), items: [42, 77].map(owner => ({ ...result().items[0], recordOwnerUserId: owner, files: [{ fileAssetUid: 'shared', fileName: '文件.pdf' }, { fileAssetUid: 'shared', fileName: '文件.pdf' }] })) }
+    })
+    await mount(); await click('文件'); await tick(0)
+    const rows = root.root.findAllByProps({ 'aria-label': '打开文件 文件.pdf' })
+    expect(rows).toHaveLength(2)
+    await act(async () => rows[0]!.props.onClick())
+    await click('下一附件')
+    expect(mocks.callArkme.mock.calls.filter(([op]) => op === 'source.timeline-around').map(([, params]) => params.recordOwnerUserId)).toEqual([42, 77])
+    await click('关闭预览')
+    expect(root.root.findByProps({ 'aria-label': '聊天搜索结果' }).props.hidden).toBe(false)
+  })
+
   it('opens the clicked media asset directly after resolving the exact record', async () => {
     mocks.callArkme.mockImplementation(async (operation: string) => {
       if (operation === 'files.assets') return [{ fileAssetUid: 'photo-2', previewUrl: 'https://example.com/photo.png', mimeType: 'image/png' }]
@@ -261,8 +334,9 @@ describe('conversation search parity', () => {
       return { ...result(), items: ['one', 'two'].map(id => ({ ...result(id).items[0], media: [{ fileAssetUid: id }] })) }
     })
     await mount()
-    await click('查看媒体消息')
+    await act(async () => root.root.findAllByType('button').find(node => node.props['aria-label'] === '查看图片 ')!.props.onClick())
     expect(pendingSignals[0]!.aborted).toBe(true)
+    expect(JSON.stringify(root.toJSON())).toContain('该附件已不存在或暂不可访问')
     await click('返回结果')
     expect(mocks.callArkme.mock.calls.filter(([op, params]) => op === 'source.timeline-around' && params.itemUid === 'one')).toHaveLength(2)
   })
