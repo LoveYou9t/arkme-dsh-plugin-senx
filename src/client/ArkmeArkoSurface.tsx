@@ -1,3 +1,4 @@
+import { ArkmeMessageSelectionControl, messageSelectionStyles } from './message-selection-presentation.js'
 import { RegionMarquee } from './selection/RegionMarquee.js'
 import { ArkmeDetailShell } from './ArkmeDetailShell.js'
 import {
@@ -41,7 +42,6 @@ import { ArkmeEmojiPicker } from './ArkmeEmojiPicker.js'
 import { ArkmeRichText } from './ArkmeRichText.js'
 import { arkmeEmojiPlainText, type ArkmeEmoji } from './arkme-emoji.js'
 import {
-  ArkmeMessageActionSelectCheck,
   useArkmeMessageActions,
   type ArkmeMessageActionViewItem,
 } from './ArkmeMessageActions.js'
@@ -480,7 +480,7 @@ export function ArkmeArkoSurface() {
         forwardAvailable: message.forwardAvailable === true,
       }]
   )), [messages])
-  const messageSelectionItems = useMemo(() => messages.filter(message => message.role !== 'divider').map(message => ({ id: message.id, copyText: message.text })), [messages])
+  const messageSelectionItems = useMemo(() => messages.filter(message => message.role !== 'divider').map(message => ({ id: message.id, copyText: arkmeEmojiPlainText(message.text) })), [messages])
   const messageSelectionScope = profileUserId === undefined ? 'anonymous' : `user:${String(profileUserId)}:session:${String(session?.sessionId ?? 0)}`
   const messageActions = useArkmeMessageActions({
     scopeKey: messageSelectionScope,
@@ -1035,19 +1035,19 @@ export function ArkmeArkoSurface() {
             <span style={styles.divider}>{item.text}</span>
           </li> : <li
             data-arko-selection-key={item.id}
-            style={{ ...styles.row, ...(item.role === 'user' ? styles.rowMe : styles.rowArko) }}
+            style={{ ...styles.row, ...(item.role === 'user' ? styles.rowMe : styles.rowArko), ...(messageActions.selecting ? { ...messageSelectionStyles.rowSelectAvatarMode, marginBottom: 23 } : {}), ...(selectedForAction ? messageSelectionStyles.rowSelectedForAction : {}) }}
             onClick={event => {
               if (!messageActions.selecting) return
               if (event.target instanceof Element && event.target.closest('button,a,input,textarea,[role=link]')) return
               messageActions.toggle({ id: item.id, copyText: item.text })
             }}
           >
-            <div style={{ ...styles.line, ...(item.role === 'user' ? styles.lineMe : {}) }}>
-              {messageActions.selecting && <ArkmeMessageActionSelectCheck
-                selected={selectedForAction}
+              {messageActions.selecting && <ArkmeMessageSelectionControl anchor="avatar"
+                checked={selectedForAction}
                 disabled={!messageActions.canSelectMany}
-                onClick={event => { event.stopPropagation(); messageActions.toggle({ id: item.id, copyText: item.text }) }}
+                onToggle={() => { messageActions.toggle({ id: item.id, copyText: item.text }) }}
               />}
+            <div style={{ ...styles.line, ...(item.role === 'user' ? styles.lineMe : {}), ...(messageActions.selecting ? { minWidth: 0, marginBottom: 0 } : {}) }}>
               <span style={styles.avatar} aria-hidden>{item.role === 'user'
                 ? <ArkmeUserAvatar
                   {...(userProfile?.avatarRef === undefined ? {} : { avatarRef: userProfile.avatarRef })}
@@ -1173,7 +1173,9 @@ export function ArkmeArkoSurface() {
       </section>
     </div>}
 
-    {messageActions.selecting ? messageActions.selectionBar : <footer ref={composerRef} style={styles.composer}>
+    <div style={{ position: 'relative', flex: 'none' }}>
+    {messageActions.selecting && <div style={{ position: 'absolute', inset: 0, zIndex: 35, display: 'grid', background: arkmeTheme.layer2 }}>{messageActions.selectionBar}</div>}
+    <footer ref={composerRef} aria-hidden={messageActions.selecting || undefined} {...(messageActions.selecting ? { inert: '' } : {})} style={{ ...styles.composer, ...(messageActions.selecting ? { visibility: 'hidden', pointerEvents: 'none' } : {}) }}>
       <button
         type="button"
         aria-label={`${displayName} 能干什么`}
@@ -1192,7 +1194,7 @@ export function ArkmeArkoSurface() {
         maxLength={arkoQuestionMaxLength}
         placeholder={`问问 ${displayName}...`}
         ariaLabel={`发送给 ${displayName}`}
-        disabled={inputDisabled}
+        disabled={inputDisabled || messageActions.selecting}
         onRichTextChange={(text, emojis) => { arkmeComposerDraftStore.setRichText(composerDraftKey, text, emojis) }}
         onKeyDown={event => {
           if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
@@ -1206,7 +1208,7 @@ export function ArkmeArkoSurface() {
         <ArkmeEmojiPicker
           key={accountKey}
           mode="text"
-          disabled={inputDisabled}
+          disabled={inputDisabled || messageActions.selecting}
           accountKey={accountKey}
           scopeKey={composerDraftKey}
           getCaretGeometry={() => textareaRef.current?.getCaretGeometry()}
@@ -1229,7 +1231,8 @@ export function ArkmeArkoSurface() {
           onClick={() => { void cancelActiveRun() }}
         ><span aria-hidden>■</span></button>}
       </div>
-    </div></footer>}
+    </div></footer>
+    </div>
     {messageActions.overlay}
   </div>
 }

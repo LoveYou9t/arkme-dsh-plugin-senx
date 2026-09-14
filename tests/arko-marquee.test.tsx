@@ -1,3 +1,4 @@
+import { ArkmeMessageSelectionControl, messageSelectionStyles } from '../src/client/message-selection-presentation.js'
 import { act, create, type ReactTestRenderer } from 'react-test-renderer'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { ArkmeArkoSurface } from '../src/client/ArkmeArkoSurface.js'
@@ -7,6 +8,10 @@ import { arkmeAuthStore } from '../src/client/auth-store.js'
 import { arkmeArkoProfileStore } from '../src/client/arko-profile-store.js'
 import type { ArkmeArkoHistoryItem } from '../src/types.js'
 vi.mock('../src/client/api.js', async original => ({ ...await original<typeof import('../src/client/api.js')>(), callArkme: vi.fn() }))
+vi.mock('../src/client/ArkmeDocumentComposerInput.js', async () => {
+  const { forwardRef } = await import('react')
+  return { ArkmeDocumentComposerInput: forwardRef(() => null) }
+})
 let renderer: ReactTestRenderer
 let history: ArkmeArkoHistoryItem[]
 const item = (id: number, extra: Partial<ArkmeArkoHistoryItem> = {}): ArkmeArkoHistoryItem => ({
@@ -89,4 +94,27 @@ it('requires every selected operation to carry its own conversation evidence', a
   await mount(); await select('history:1', 'history:2')
   expect(button('复制链接').props.disabled).toBe(true)
   expect(button('转发').props.disabled).toBe(true)
+})
+
+it('uses the common left selection rail for both message roles and the labeled exit action', async () => {
+  await mount(); await select('history:1', 'history:2')
+  const controls = renderer.root.findAllByType(ArkmeMessageSelectionControl)
+  expect(controls).toHaveLength(2)
+  for (const control of controls) {
+    expect(control.parent!.type).toBe('li')
+    expect(control.parent!.props.style).toMatchObject({ display: 'grid', gridTemplateColumns: messageSelectionStyles.rowSelectAvatarMode.gridTemplateColumns })
+    expect(control.parent!.props.style.background).toBe(messageSelectionStyles.rowSelectedForAction.background)
+    expect(control.findByType('button').props.role).toBe('checkbox')
+  }
+  expect(button('退出多选').findAllByType('span').some(node => node.children.includes('退出多选'))).toBe(true)
+})
+
+it('copies selected emoji messages as visible text using the same projection as menu actions', async () => {
+  const writeText = vi.fn(async () => {})
+  vi.stubGlobal('navigator', { clipboard: { writeText } })
+  vi.stubGlobal('window', Object.assign(new EventTarget(), { setTimeout: vi.fn() }))
+  history = [item(1, { text: '你好[jm_emoji:smiling_face]', messageActionRef: undefined })]
+  await mount(); await select('history:1')
+  await act(async () => button('复制文本').props.onClick())
+  expect(writeText).toHaveBeenCalledWith('你好😊')
 })
