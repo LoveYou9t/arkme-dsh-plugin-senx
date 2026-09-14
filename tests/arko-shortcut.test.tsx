@@ -1,4 +1,4 @@
-import { act, create, type ReactTestRenderer } from 'react-test-renderer'
+import { act, create, type ReactTestRenderer, type ReactTestInstance } from 'react-test-renderer'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ArkmeDocumentComposerInput } from '../src/client/ArkmeDocumentComposerInput.js'
 import { ArkmeArkoSurface } from '../src/client/ArkmeArkoSurface.js'
@@ -29,6 +29,7 @@ let history: ArkmeArkoHistoryItem[]
 async function mount() {
   await act(async () => { renderer = create(<ArkmeArkoSurface />) })
 }
+function visibleText(node: ReactTestInstance): string { return node.children.map(child => typeof child === 'string' ? child : visibleText(child)).join('') }
 function shortcut() { return renderer.root.findByProps({ 'aria-label': 'Arko 能干什么' }) }
 
 beforeEach(() => {
@@ -70,8 +71,8 @@ describe('Arko capability shortcut', () => {
       status: 1, runUid: 'existing-run', runStatus, createdRecordUids: [] }]
     await mount()
     const message = renderer.root.findAllByType('li')[0]!
-    const answer = message.findAllByType('p').find(node => node.children.includes('历史回答'))!
-    expect(answer.children).toEqual(['历史回答'])
+    const answer = message.findAllByType('p').find(node => visibleText(node) === '历史回答')!
+    expect(visibleText(answer)).toBe('历史回答')
     // The message body ends at the answer bubble, with no trailing status line.
     const bubble = answer.parent!
     expect(bubble.parent!.children.at(-1)).toBe(bubble)
@@ -82,7 +83,7 @@ describe('Arko capability shortcut', () => {
     await mount()
     await act(async () => { shortcut().props.onClick() })
     const answer = renderer.root.findAllByType('li').at(-1)!.findByType('p')
-    expect(answer.children).toEqual(['已完成'])
+    expect(visibleText(answer)).toBe('已完成')
     expect(answer.parent!.parent!.children.at(-1)).toBe(answer.parent)
     expect(shortcut().props.disabled).toBe(false)
   })
@@ -92,7 +93,7 @@ describe('Arko capability shortcut', () => {
     await mount()
     await act(async () => { shortcut().props.onClick() })
     const message = renderer.root.findAllByType('li').at(-1)!
-    expect(message.findAllByType('p').map(node => node.children.join(''))).toEqual(['已检查访问权限', '无法访问指定内容'])
+    expect(message.findAllByType('p').map(node => visibleText(node))).toEqual(['已检查访问权限', '无法访问指定内容'])
     expect(shortcut().props.disabled).toBe(false)
     expect(readArkoPendingTurn(10001)).toBeUndefined()
   })
@@ -103,7 +104,7 @@ describe('Arko capability shortcut', () => {
     await act(async () => { shortcut().props.onClick() })
     const message = renderer.root.findAllByType('li').at(-1)!
     const bubble = message.findByType('p').parent!
-    expect(bubble.findByType('p').children).toEqual(['可以帮你记录'])
+    expect(visibleText(bubble.findByType('p'))).toBe('可以帮你记录')
     expect(bubble.parent!.children.at(-1)).toBe(bubble)
     expect(shortcut().props.disabled).toBe(false)
     expect(readArkoPendingTurn(10001)).toBeUndefined()
@@ -172,7 +173,7 @@ describe('Arko capability shortcut', () => {
     const retry = renderer.root.findAllByType('button').find(button => button.children.includes('重新加载'))!
     await act(async () => { retry.props.onClick() })
     expect(JSON.stringify(renderer.toJSON())).not.toContain('history unavailable')
-    expect(renderer.root.findAllByType('li')[0]!.findByType('p').children).toEqual(['恢复的回答'])
+    expect(visibleText(renderer.root.findAllByType('li')[0]!.findByType('p'))).toBe('恢复的回答')
     expect(shortcut().props.disabled).toBe(false)
   })
 

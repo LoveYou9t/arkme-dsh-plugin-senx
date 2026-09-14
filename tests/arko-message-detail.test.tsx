@@ -224,7 +224,7 @@ it('keeps draft and ordinary sending available while inspecting history', async 
   await act(async () => { arkmeComposerDraftStore.setText(key, '继续提问') })
   await click(bubble('完整回答'))
   expect(arkmeComposerDraftStore.get(key).text).toBe('继续提问')
-  expect(host.querySelector('textarea')!.disabled).toBe(false)
+  expect(host.querySelector('[role="textbox"]')!.getAttribute('contenteditable')).toBe('true')
   const send = host.querySelector('[title="发送"]') as HTMLButtonElement
   expect(send.disabled).toBe(false)
   await click(send)
