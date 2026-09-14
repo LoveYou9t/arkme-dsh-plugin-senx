@@ -1,3 +1,4 @@
+import { recordDeletionCapability } from '../record-deletion-ref.js'
 import { sealRecordTopicAssignmentRef } from '../record-topic-assignment-ref.js'
 import { arkmeTopicDisplayName } from '../topic-policy.js'
 import { CallHistoryService } from './call-history-service.js'
@@ -2135,7 +2136,7 @@ export class ChatService {
           const core = objectValue(entry.record_core)
           const sourceTopicUid = entry.source_kind === 1 ? ''
             : entry.source_kind === 2 ? stringValue(entry.source_uid).trim() || undefined : undefined
-          const assignable = this.withRecordTopicAssignmentRef(source, item, session.userId, signingKey,
+          const assignable = this.withPersonalRecordCapabilities(source, item, session.userId, signingKey,
             numberValue(core.owner_user_id), sourceTopicUid)
           if (!assignable.recordTopicAssignmentRef || !sourceTopicUid) return assignable
           return { ...assignable, recordTopicAssignmentTopicKey: await this.source.topicHierarchyKey(session.userId, sourceTopicUid) }
@@ -2162,7 +2163,7 @@ export class ChatService {
           source: await this.source.sourceItem(source),
           items: page.items.map(item => this.withRecordMessageActionRef(
             source,
-            this.withRecordTopicAssignmentRef(source, this.record.recordTimelineItem(item), session.userId, signingKey, session.userId, ''),
+            this.withPersonalRecordCapabilities(source, this.record.recordTimelineItem(item), session.userId, signingKey, session.userId, ''),
             session.userId,
             signingKey,
           )),
@@ -2193,7 +2194,7 @@ export class ChatService {
             ...(displayItems === undefined ? {} : { displayItems }),
             mediaUnavailable: media.unavailableRecordUids.has(recordUid),
           })
-          return this.withRecordTopicAssignmentRef(source, item, session.userId, signingKey,
+          return this.withPersonalRecordCapabilities(source, item, session.userId, signingKey,
             numberValue(objectValue(raw).owner_user_id), source.ownerRef)
         })
         return {
@@ -4833,6 +4834,9 @@ export class ChatService {
         const mentionsViewer = senderUserId !== session.userId
           && arkmeMentionMetadataMentionsViewer(record, payload, session.userId)
         items.push({
+          ...(numberValue(record.status) === 1 ? recordDeletionCapability({ userId: session.userId, sourceKind: sourceKind ?? '', sourceOwnerRef: chatSessionUid,
+            recordUid: uid, recordVersion: numberValue(payload.version), recordOwnerUserId: numberValue(payload.owner_user_id),
+            isMe: senderUserId === session.userId, status: numberValue(payload.status) }, signingKey) : {}),
           itemUid: uid,
           ...(relationUid === '' ? {} : {
             timelineItemKey: await this.source.chatTimelineItemKey(session.userId, chatSessionUid, relationUid),
@@ -5706,6 +5710,9 @@ export class ChatService {
       )
       const callRecord = await this.callHistory.timelineCallRecord(item, session.userId)
       const itemIndex = items.push({
+        ...recordDeletionCapability({ userId: session.userId, sourceKind: source.kind, sourceOwnerRef: source.ownerRef,
+          recordUid: uid, recordVersion: numberValue(payload.version), recordOwnerUserId: numberValue(payload.owner_user_id),
+          isMe: senderUserId === session.userId, status: numberValue(payload.status) }, signingKey),
         itemUid: uid,
         ...(relationUid === '' ? {} : {
           timelineItemKey: await this.source.chatTimelineItemKey(session.userId, source.ownerRef, relationUid),
@@ -6056,10 +6063,13 @@ export class ChatService {
     }
   }
 
-  private withRecordTopicAssignmentRef(
+  private withPersonalRecordCapabilities(
     source: ArkmeSourceRefPayload, item: ArkmeTimelineItem, userId: number, signingKey: string,
     recordOwnerUserId: number, sourceTopicUid: string | undefined,
   ): ArkmeTimelineItem {
+    item = { ...item, ...recordDeletionCapability({ userId, sourceKind: source.kind, sourceOwnerRef: source.ownerRef,
+      recordUid: item.itemUid, recordVersion: item.recordVersion ?? 0, recordOwnerUserId,
+      isMe: item.isMe === true, status: item.status }, signingKey) }
     if ((source.kind !== 'send_to_self' && source.kind !== 'default_category' && source.kind !== 'topic')
       || recordOwnerUserId !== userId || item.status !== 1 || item.itemUid.trim() === '' || sourceTopicUid === undefined) return item
     return { ...item, recordTopicAssignmentRef: sealRecordTopicAssignmentRef({
