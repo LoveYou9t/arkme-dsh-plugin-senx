@@ -58,6 +58,52 @@ afterEach(() => {
 })
 
 describe('Arko capability shortcut', () => {
+  it.each(['accepted', 'queued', 'running', 'stream_timeout', 'waiting_tool', 'waiting_user', 'completed', 'partial', 'cancelled', 'expired', 'failed'])('omits history message footnotes for %s without hiding the answer', async runStatus => {
+    history = [{ messageId: 8, sessionId: 88, role: 'assistant', text: '历史回答', reasoning: '', createdAtMillis: 1,
+      status: 1, runUid: 'existing-run', runStatus, createdRecordUids: [] }]
+    await mount()
+    const message = renderer.root.findAllByType('li')[0]!
+    const answer = message.findAllByType('p').find(node => node.children.includes('历史回答'))!
+    expect(answer.children).toEqual(['历史回答'])
+    // The message body ends at the answer bubble, with no trailing status line.
+    const bubble = answer.parent!
+    expect(bubble.parent!.children.at(-1)).toBe(bubble)
+  })
+
+  it('preserves answer text that happens to match the removed completion label', async () => {
+    ask.mockResolvedValueOnce({ ...result, text: '已完成' })
+    await mount()
+    await act(async () => { shortcut().props.onClick() })
+    const answer = renderer.root.findAllByType('li').at(-1)!.findByType('p')
+    expect(answer.children).toEqual(['已完成'])
+    expect(answer.parent!.parent!.children.at(-1)).toBe(answer.parent)
+    expect(shortcut().props.disabled).toBe(false)
+  })
+
+  it('retains real reasoning and error content independently of removed footnotes', async () => {
+    ask.mockResolvedValueOnce({ ...result, status: 'failed', text: '', errorMessage: '无法访问指定内容', reasoning: '已检查访问权限' })
+    await mount()
+    await act(async () => { shortcut().props.onClick() })
+    const message = renderer.root.findAllByType('li').at(-1)!
+    expect(message.findAllByType('p').map(node => node.children.join(''))).toEqual(['已检查访问权限', '无法访问指定内容'])
+    expect(shortcut().props.disabled).toBe(false)
+    expect(readArkoPendingTurn(10001)).toBeUndefined()
+  })
+
+  it.each([[], ['record-1']])('omits immediate result footnotes and permits the next send: %j', async createdRecordUids => {
+    ask.mockResolvedValueOnce({ ...result, createdRecordUids })
+    await mount()
+    await act(async () => { shortcut().props.onClick() })
+    const message = renderer.root.findAllByType('li').at(-1)!
+    const bubble = message.findByType('p').parent!
+    expect(bubble.findByType('p').children).toEqual(['可以帮你记录'])
+    expect(bubble.parent!.children.at(-1)).toBe(bubble)
+    expect(shortcut().props.disabled).toBe(false)
+    expect(readArkoPendingTurn(10001)).toBeUndefined()
+    await act(async () => { shortcut().props.onClick() })
+    expect(ask).toHaveBeenCalledTimes(2)
+  })
+
   it.each([false, true])('unlocks after background completion when profile refresh fails: %s', async profileFails => {
     vi.useFakeTimers()
     let profileCalls = 0
@@ -80,6 +126,65 @@ describe('Arko capability shortcut', () => {
     expect(button.findByType('span').children.join('')).toBe(`${expectedName} 能干什么`)
     expect(button.props.disabled).toBe(false)
     expect(vi.mocked(callArkme)).toHaveBeenCalledWith('arko.run.status', { sessionId: 88, runUid: 'run-1' }, expect.any(AbortSignal))
+    expect(ask).toHaveBeenCalledTimes(1)
+    const bubble = renderer.root.findAllByType('li').at(-1)!.findByType('p').parent!
+    expect(bubble.parent!.children.at(-1)).toBe(bubble)
+  })
+
+  it.each([false, true])('retains cancellation feedback and controls without message footnotes, failure: %s', async fails => {
+    const original = vi.mocked(callArkme).getMockImplementation()!
+    vi.mocked(callArkme).mockImplementation(async (method, input) => {
+      if (method === 'arko.cancel') {
+        if (fails) throw new Error('cancel unavailable')
+        return {} as never
+      }
+      return original(method, input)
+    })
+    ask.mockResolvedValueOnce({ ...result, status: 'running', runUid: 'run-1' })
+    await mount()
+    await act(async () => { shortcut().props.onClick() })
+    await act(async () => { renderer.root.findByProps({ title: '停止当前任务' }).props.onClick() })
+    expect(callArkme).toHaveBeenCalledWith('arko.cancel', { sessionId: 88, assistantMsgId: 2, runUid: 'run-1' })
+    expect(JSON.stringify(renderer.toJSON())).toContain(fails ? '停止 Arko 任务失败：cancel unavailable' : '已请求停止当前任务，正在确认最终状态')
+    expect(renderer.root.findByProps({ title: '停止当前任务' }).props.disabled).toBe(false)
+    expect(shortcut().props.disabled).toBe(true)
+    expect(ask).toHaveBeenCalledTimes(1)
+  })
+
+  it('recovers a failed history load through the visible retry control', async () => {
+    let historyCalls = 0
+    const original = vi.mocked(callArkme).getMockImplementation()!
+    vi.mocked(callArkme).mockImplementation(async (method, input) => {
+      if (method === 'arko.history' && ++historyCalls === 1) throw new Error('history unavailable')
+      return original(method, input)
+    })
+    history = [{ messageId: 8, sessionId: 88, role: 'assistant', text: '恢复的回答', reasoning: '', createdAtMillis: 1,
+      status: 1, runStatus: 'completed', createdRecordUids: [] }]
+    await mount()
+    expect(JSON.stringify(renderer.toJSON())).toContain('history unavailable')
+    const retry = renderer.root.findAllByType('button').find(button => button.children.includes('重新加载'))!
+    await act(async () => { retry.props.onClick() })
+    expect(JSON.stringify(renderer.toJSON())).not.toContain('history unavailable')
+    expect(renderer.root.findAllByType('li')[0]!.findByType('p').children).toEqual(['恢复的回答'])
+    expect(shortcut().props.disabled).toBe(false)
+  })
+
+  it('unlocks through matching terminal history when status polling fails', async () => {
+    vi.useFakeTimers()
+    const original = vi.mocked(callArkme).getMockImplementation()!
+    vi.mocked(callArkme).mockImplementation(async (method, input) => {
+      if (method === 'arko.run.status') throw new Error('status unavailable')
+      return original(method, input)
+    })
+    ask.mockResolvedValueOnce({ ...result, status: 'running', runUid: 'run-1' })
+    await mount()
+    await act(async () => { shortcut().props.onClick() })
+    history = [{ messageId: 2, sessionId: 88, role: 'assistant', text: '最终回答', reasoning: '', createdAtMillis: 1,
+      status: 1, runUid: 'run-1', runStatus: 'completed', createdRecordUids: [] }]
+    await act(async () => { await vi.advanceTimersByTimeAsync(1200) })
+    expect(shortcut().props.disabled).toBe(false)
+    expect(renderer.root.findAllByProps({ title: '停止当前任务' })).toHaveLength(0)
+    expect(JSON.stringify(renderer.toJSON())).toContain('最终回答')
     expect(ask).toHaveBeenCalledTimes(1)
   })
 

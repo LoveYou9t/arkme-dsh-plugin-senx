@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import {
-  ArkmeArkoSurface, arkoHistoryHasTerminalRun, arkoMessageActivityLabel, arkoPreservedScrollTop,
+  ArkmeArkoSurface, arkoHistoryHasTerminalRun, arkoPreservedScrollTop,
   arkoRunActivityLabel, latestActiveRun, mergeHistory, shouldShowArkoThinking,
 } from '../src/client/ArkmeArkoSurface.js'
 import type { ArkmeArkoHistoryItem } from '../src/types.js'
@@ -55,11 +55,6 @@ describe('Arko surface', () => {
     expect(shouldShowArkoThinking('done')).toBe(false)
     expect(shouldShowArkoThinking('done', '')).toBe(false)
     expect(shouldShowArkoThinking('done', '正在读取资料')).toBe(true)
-  })
-
-  it('keeps run activity labels on assistant messages only', () => {
-    expect(arkoMessageActivityLabel('assistant', 'queued')).toBe('正在思考')
-    expect(arkoMessageActivityLabel('user', 'queued')).toBeUndefined()
   })
 
   it('uses matching terminal history as a silent fallback for status polling failures', () => {
