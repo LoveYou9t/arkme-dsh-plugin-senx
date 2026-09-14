@@ -1,3 +1,4 @@
+import { RegionMarquee } from './selection/RegionMarquee.js'
 import { ArkmeDetailShell } from './ArkmeDetailShell.js'
 import {
   Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore,
@@ -479,10 +480,11 @@ export function ArkmeArkoSurface() {
         forwardAvailable: message.forwardAvailable === true,
       }]
   )), [messages])
+  const messageSelectionItems = useMemo(() => messages.filter(message => message.role !== 'divider').map(message => ({ id: message.id, copyText: message.text })), [messages])
+  const messageSelectionScope = profileUserId === undefined ? 'anonymous' : `user:${String(profileUserId)}:session:${String(session?.sessionId ?? 0)}`
   const messageActions = useArkmeMessageActions({
-    scopeKey: profileUserId === undefined
-      ? 'anonymous'
-      : `user:${String(profileUserId)}:session:${String(session?.sessionId ?? 0)}`,
+    scopeKey: messageSelectionScope,
+    selectionItems: messageSelectionItems,
     items: messageActionItems,
   })
 
@@ -1001,7 +1003,8 @@ export function ArkmeArkoSurface() {
         </button>
       </div>
     </header>
-    <div ref={bodyRef} style={styles.body}>
+    <div style={{ position: 'relative', flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+    <div ref={bodyRef} data-arko-message-viewport style={styles.body}>
       {notice !== '' && <div style={styles.notice}>{notice}</div>}
       {error !== '' && <div style={styles.error}>{error}</div>}
       {historyError !== '' && <div style={{ ...styles.error, ...styles.feedbackRow }}>
@@ -1031,17 +1034,19 @@ export function ArkmeArkoSurface() {
           {item.role === 'divider' ? <li style={{ ...styles.row, justifyContent: 'center' }}>
             <span style={styles.divider}>{item.text}</span>
           </li> : <li
+            data-arko-selection-key={item.id}
             style={{ ...styles.row, ...(item.role === 'user' ? styles.rowMe : styles.rowArko) }}
             onClick={event => {
-              if (!messageActions.selecting || actionItem === undefined) return
+              if (!messageActions.selecting) return
               if (event.target instanceof Element && event.target.closest('button,a,input,textarea,[role=link]')) return
-              messageActions.toggle(actionItem)
+              messageActions.toggle({ id: item.id, copyText: item.text })
             }}
           >
             <div style={{ ...styles.line, ...(item.role === 'user' ? styles.lineMe : {}) }}>
-              {messageActions.selecting && actionItem !== undefined && <ArkmeMessageActionSelectCheck
+              {messageActions.selecting && <ArkmeMessageActionSelectCheck
                 selected={selectedForAction}
-                onClick={event => { event.stopPropagation(); messageActions.toggle(actionItem) }}
+                disabled={!messageActions.canSelectMany}
+                onClick={event => { event.stopPropagation(); messageActions.toggle({ id: item.id, copyText: item.text }) }}
               />}
               <span style={styles.avatar} aria-hidden>{item.role === 'user'
                 ? <ArkmeUserAvatar
@@ -1090,6 +1095,13 @@ export function ArkmeArkoSurface() {
       </ul>}
     </div>
 
+    <RegionMarquee viewportRef={bodyRef} scopeKey={messageSelectionScope}
+      enabled={detailMessage === undefined && !loading && !clearing && !modelDialogOpen && !clearConfirmOpen && messageActions.canSelectMany}
+      getItems={() => [...(bodyRef.current?.querySelectorAll<HTMLElement>('[data-arko-selection-key]') ?? [])].map(element => ({ key: element.dataset.arkoSelectionKey!, element }))}
+      onCommit={messageActions.selectMany}
+      style={{ border: `1px solid ${arkmeTheme.accent}`, background: `color-mix(in srgb, ${arkmeTheme.accent} 16%, transparent)` }}
+    />
+    </div>
     {!messageActions.selecting && detailMessage !== undefined && <ArkmeDetailShell
       returnFocusRef={detailTriggerRef}
       bodyRef={detailBodyRef}
