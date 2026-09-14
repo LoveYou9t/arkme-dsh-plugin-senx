@@ -517,7 +517,8 @@ export function arkmeContainedImageRect(viewportWidth: number, viewportHeight: n
   }
 }
 
-export function ArkmeMediaPreview({ blocks, selected, onSelect, onClose, previewUrl, openLocalFile = true, forceDownload = false }: {
+export function ArkmeMediaPreview({ blocks, selected, onSelect, onClose, previewUrl, openLocalFile = true, forceDownload = false, navigation }: {
+  navigation?: import('./ArkmeFileViewer.js').ArkmePreviewNavigation | undefined
   blocks: ArkmeContentBlock[]
   selected: ArkmeContentBlock
   onSelect: (block: ArkmeContentBlock) => void
@@ -543,8 +544,8 @@ export function ArkmeMediaPreview({ blocks, selected, onSelect, onClose, preview
   const original = useArkmeOriginal(selected, selected.kind === 'image')
   const originalUrl = previewUrl ?? (original.localRef === undefined ? arkmeContentMediaUrl(selected) : arkmeLocalFileUrl(original.localRef))
   const { notice: actionNotice, showNotice: showActionNotice, clearNotice: clearActionNotice } = useArkmeFileActionNotice()
-  const previousDisabled = index <= 0
-  const nextDisabled = index >= blocks.length - 1
+  const previousDisabled = navigation === undefined ? index <= 0 : navigation.previous === undefined
+  const nextDisabled = navigation === undefined ? index >= blocks.length - 1 : navigation.next === undefined
 
   useEffect(() => cancelBlankClick, [selected.mediaRef, onClose])
   useEffect(() => () => {
@@ -689,7 +690,7 @@ export function ArkmeMediaPreview({ blocks, selected, onSelect, onClose, preview
     }, 500)
   }
 
-  if (selected.kind === 'file' || forceDownload) return <ArkmeFileViewer block={selected} blocks={blocks} onSelect={onSelect} onClose={onClose} openLocalFile={openLocalFile} forceDownload={forceDownload} />
+  if (selected.kind === 'file' || forceDownload) return <ArkmeFileViewer block={selected} blocks={blocks} onSelect={onSelect} onClose={onClose} openLocalFile={openLocalFile} forceDownload={forceDownload} navigation={navigation} />
 
   return <div style={styles.previewOverlay} role="dialog" aria-modal="true" aria-label={selected.fileName} onClick={onClose}>
     <div style={styles.previewBody} onClick={closeOnBlankClick}>
@@ -741,9 +742,9 @@ export function ArkmeMediaPreview({ blocks, selected, onSelect, onClose, preview
           : <video src={originalUrl} controls autoPlay playsInline style={styles.previewMedia} aria-label={selected.fileName} />}
       </div>
       <div style={styles.previewActions} data-arkme-media-preview-actions="bottom">
-        <ArkmeFileActionNavButton label="上一个媒体" direction="left" disabled={previousDisabled} onClick={() => { if (!previousDisabled) selectMedia(blocks[index - 1]!) }} />
+        <ArkmeFileActionNavButton label="上一个媒体" direction="left" disabled={previousDisabled} onClick={() => { if (!previousDisabled) { if (navigation) navigation.previous?.(); else selectMedia(blocks[index - 1]!) } }} />
         <span aria-hidden style={styles.previewActionWideGap} />
-        <ArkmeFileActionNavButton label="下一个媒体" direction="right" disabled={nextDisabled} onClick={() => { if (!nextDisabled) selectMedia(blocks[index + 1]!) }} />
+        <ArkmeFileActionNavButton label="下一个媒体" direction="right" disabled={nextDisabled} onClick={() => { if (!nextDisabled) { if (navigation) navigation.next?.(); else selectMedia(blocks[index + 1]!) } }} />
         <span aria-hidden style={styles.previewActionWideGap} />
         <ArkmeFileActions block={selected} original={original} copySourceUrl={originalUrl} onImageCopyNotice={showActionNotice} showDownloadStatus={false} hideDownloadAfterSave={false} style={styles.previewActionPair} />
       </div>

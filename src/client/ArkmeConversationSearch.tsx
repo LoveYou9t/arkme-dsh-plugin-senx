@@ -2,11 +2,12 @@ import { Fragment, useEffect, useRef, useState, type CSSProperties, type RefObje
 import { createPortal } from 'react-dom'
 import { MagnifyingGlass } from '@phosphor-icons/react/dist/icons/MagnifyingGlass'
 import { X } from '@phosphor-icons/react/dist/icons/X'
-import type { ArkmeContentBlock, ArkmeSearchRecordItem, ArkmeSearchSceneKind, ArkmeSourceItem } from '../types.js'
+import type { ArkmeSearchRecordItem, ArkmeSearchSceneKind, ArkmeSourceItem } from '../types.js'
 import { arkmeTheme } from './arkme-theme.js'
 import { arkmeUi } from './ui-controller.js'
+import { SearchFileRow, SearchLinkRows, SearchMediaTile } from './ArkmeSearchCategories.js'
 import { RecordRow } from './ArkmeSearchSurface.js'
-import { ArkmeMediaPreview, ArkmeMessageContent } from './ArkmeRichContent.js'
+import { arkmeContentMediaUrl, ArkmeMediaPreview, ArkmeMessageContent } from './ArkmeRichContent.js'
 import { ARKME_CONVERSATION_HEADER_HEIGHT } from './arkme-layout.js'
 import { useConversationSearch, useConversationSearchDetail } from './use-conversation-search.js'
 import { useResizableNoteDetail } from './use-resizable-note-detail.js'
@@ -69,10 +70,19 @@ export function ArkmeConversationSearchPanel({ source, scene, global, onScene, o
       onClose()
     } else setSelected(item)
   }
+  const attachments = !keyword && (scene === 'file' || scene === 'image_video')
+    ? (search.page?.items ?? []).filter(item => item.sourceKind === 3).flatMap(item =>
+      [...new Map((scene === 'file' ? item.files : item.media).map(asset => [asset.fileAssetUid, asset])).values()].map(asset => ({ item, uid: asset.fileAssetUid }))) : []
+  const attachmentIndex = attachments.findIndex(entry => entry.item === selected && entry.uid === selectedAssetUid)
+  const navigation = attachmentIndex < 0 ? undefined : {
+    ...(attachmentIndex === 0 ? {} : { previous: () => { const entry = attachments[attachmentIndex - 1]!; selectHit(entry.item, entry.uid) } }),
+    ...(attachmentIndex === attachments.length - 1 ? {} : { next: () => { const entry = attachments[attachmentIndex + 1]!; selectHit(entry.item, entry.uid) } }),
+  }
   return <aside ref={panel} aria-label="聊天记录搜索" style={{ position: 'absolute', top: ARKME_CONVERSATION_HEADER_HEIGHT, right: 0, bottom: 0, zIndex: 30,
     ...resize.style, display: 'flex', flexDirection: 'column', boxSizing: 'border-box', background: arkmeTheme.base, color: arkmeTheme.text, borderLeft: `1px solid ${arkmeTheme.border}` }}
     onKeyDown={event => { if (event.key === 'Escape' && !event.nativeEvent.isComposing && !(typeof document !== 'undefined' && document.querySelector('[role="dialog"][aria-modal="true"]')) && !(event.target instanceof Element && event.target.closest('[role="dialog"]'))) { event.stopPropagation(); selected === undefined ? onClose() : setSelected(undefined) } }}>
     {resize.handle}
+    <style>{`.arkme-search-tab[aria-selected=true]::after { content: ''; position: absolute; bottom: 0; left: calc(50% - 5px); width: 10px; height: 2px; border-radius: 2px; background: currentColor; } .arkme-search-file-row:hover { background: ${arkmeTheme.hover} !important; }`}</style>
     <header style={{ padding: '14px 14px 8px', flex: 'none' }}>
       <div style={row}>
         <strong style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 14 }}>{global ? '全局搜索' : source.displayName}</strong>
@@ -88,36 +98,37 @@ export function ArkmeConversationSearchPanel({ source, scene, global, onScene, o
           style={{ width: '100%', minWidth: 0, height: 36, border: 0, outline: 0, background: 'transparent', color: arkmeTheme.text, font: 'inherit', fontSize: 14 }} />
         {query !== '' && <button type="button" aria-label="清空搜索" style={button} onClick={() => { setQuery(''); setComposing(false) }}><X size={16} /></button>}
       </div>
-      {!keyword && <div role="tablist" aria-label="聊天记录分类" style={{ ...row, overflowX: 'auto', marginTop: 10 }}>
-        {scenes.map(item => <button type="button" role="tab" aria-selected={scene === item.key} key={item.key}
-          onClick={() => onScene(item.key)} style={{ ...button, flex: 'none', padding: '8px 6px', color: scene === item.key ? arkmeTheme.text : arkmeTheme.secondary,
-            borderBottom: scene === item.key ? `2px solid ${arkmeTheme.text}` : '2px solid transparent', borderRadius: 0 }}>{item.label}</button>)}
+      {!keyword && <div role="tablist" aria-label="聊天记录分类" style={{ ...row, gap: 0, overflowX: 'auto', marginTop: 10 }}>
+        {scenes.map(item => <button type="button" role="tab" className="arkme-search-tab" aria-selected={scene === item.key} key={item.key}
+          onClick={() => onScene(item.key)} style={{ ...button, position: 'relative', flex: 'none', padding: '8px 0', marginRight: 30, fontSize: 14, fontWeight: scene === item.key ? 600 : 400, color: scene === item.key ? arkmeTheme.text : arkmeTheme.secondary,
+            borderRadius: 0 }}>{item.label}</button>)}
       </div>}
     </header>
-    {selected !== undefined && <SearchDetail item={selected} assetUid={selectedAssetUid} onBack={() => setSelected(undefined)} onLocate={() => {
+    {selected !== undefined && <SearchDetail key={`${selected.sourceKind}:${selected.sourceUid ?? ''}:${selected.recordOwnerUserId}:${selected.recordUid}`} item={selected} assetUid={selectedAssetUid} onSelectAsset={setSelectedAssetUid} navigation={navigation} onBack={() => setSelected(undefined)} onLocate={() => {
       if (selected.targetSource !== undefined) { arkmeUi.showConversationTarget(selected.targetSource, selected.recordUid, selected.sendAtMillis, selected.recordOwnerUserId); onClose() }
     }} />}
     <div aria-label="聊天搜索结果" hidden={selected !== undefined} style={{ display: selected === undefined ? undefined : 'none', flex: 1, minHeight: 0, overflowY: 'auto', padding: '4px 12px 16px' }}
       onScroll={event => { const node = event.currentTarget; if (node.scrollHeight - node.scrollTop - node.clientHeight < 160) search.loadMore() }}>
       {search.page?.queryGuard.state && !['complete', 'ok'].includes(search.page.queryGuard.state) && <p role="status" style={status}>搜索结果暂不完整，请缩小范围或调整关键词</p>}
       {search.page?.itemCount !== undefined && <p style={{ color: arkmeTheme.tertiary, fontSize: 12 }}>{search.page.itemCount} {keyword ? '条结果' : scene === 'image_video' ? '个媒体' : scene === 'file' ? '个文件' : '条结果'}</p>}
-      <div style={!keyword && scene === 'image_video' ? { display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 4 } : undefined}>
+      <div style={!keyword && scene === 'image_video' ? { display: 'grid', gridTemplateColumns: 'repeat(5, minmax(0, 1fr))', gap: 1 } : undefined}>
       {search.page?.items.map((item, index, items) => <Fragment key={`${item.sourceKind}:${item.sourceUid ?? ''}:${item.recordOwnerUserId ?? ''}:${item.recordUid}`}>
-        {!keyword && (index === 0 || searchMonth(item.sendAtMillis) !== searchMonth(items[index - 1]!.sendAtMillis)) && <p style={{ gridColumn: '1 / -1', margin: '12px 0 8px', fontSize: 12, color: arkmeTheme.secondary }}>{searchMonth(item.sendAtMillis)}</p>}
-        <div style={!keyword && scene === 'image_video' ? { display: 'contents' } : { marginBottom: 8 }}>
+        {!keyword && scene !== 'link' && (index === 0 || searchMonth(item.sendAtMillis) !== searchMonth(items[index - 1]!.sendAtMillis)) && <p style={{ gridColumn: '1 / -1', margin: '12px 0 8px', fontSize: 12, color: arkmeTheme.secondary }}>{searchMonth(item.sendAtMillis)}</p>}
+        <div style={!keyword && scene === 'image_video' ? { display: 'contents' } : { marginBottom: scene === 'file' || scene === 'link' ? 0 : 8 }}>
         {!keyword && scene === 'image_video' ? item.sourceKind === 3 ? item.media.length > 0 ? <ChatSearchMedia item={item} active={selected === undefined} onSelect={selectHit} /> : <button type="button" style={button} onClick={() => selectHit(item)}>查看媒体消息</button> : <div style={{ display: 'contents' }}>
           {item.media.map(asset => { const display = search.assets.get(asset.fileAssetUid); const url = display?.previewUrl ?? display?.downloadUrl
             const video = (display?.mimeType ?? asset.mimeType ?? '').startsWith('video/') || asset.fileKind === 3
-            return <button key={asset.fileAssetUid} type="button" aria-label={`查看${video ? '视频' : '图片'} ${display?.fileName ?? asset.fileName ?? ''}`} style={{ ...button, padding: 0, overflow: 'hidden', aspectRatio: '1', background: arkmeTheme.subtle }} onClick={() => selectHit(item, asset.fileAssetUid)}>
-              {url === undefined ? '媒体暂不可用' : video ? <video src={url} preload="metadata" style={{ width: '100%', height: '100%', objectFit: 'cover' }} /> : <img src={url} alt={display?.fileName ?? asset.fileName ?? '图片'} loading="lazy" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />}
-            </button>
+            return <SearchMediaTile key={asset.fileAssetUid} url={url} unavailable={url === undefined} name={display?.fileName ?? asset.fileName ?? ''} video={video} durationSec={asset.durationMillis === undefined ? undefined : asset.durationMillis / 1000} onOpen={() => selectHit(item, asset.fileAssetUid)} />
           })}
           {item.media.length === 0 && <button type="button" style={button} onClick={() => selectHit(item)}>查看媒体消息</button>}
-        </div> : <>
-          <RecordRow item={item} onClick={() => selectHit(item)} />
-          {!keyword && scene === 'file' && item.files.map(file => <button key={file.fileAssetUid} type="button" style={{ ...button, textAlign: 'left' }} onClick={() => selectHit(item)}>{file.fileName || search.assets.get(file.fileAssetUid)?.fileName || '查看文件'}</button>)}
-          {!keyword && scene === 'link' && item.linkUrl !== undefined && <a href={item.linkUrl} target="_blank" rel="noreferrer" style={{ display: 'block', overflowWrap: 'anywhere', padding: 8, color: arkmeTheme.info, fontSize: 13 }}>{item.linkUrl}</a>}
-        </>}
+        </div> : !keyword && scene === 'file' ? <>
+          {[...new Map(item.files.map(file => [file.fileAssetUid, file])).values()].map(file => <SearchFileRow key={file.fileAssetUid} file={file} item={item} onOpen={() => selectHit(item, file.fileAssetUid)} />)}
+          {item.files.length === 0 && <button type="button" style={button} onClick={() => selectHit(item)}>查看文件消息</button>}
+        </> : !keyword && scene === 'link' ? <SearchLinkRows item={item} onLocate={() => {
+          if (item.targetSource !== undefined && (item.sourceKind !== 3 || item.recordOwnerUserId !== undefined)) {
+            arkmeUi.showConversationTarget(item.targetSource, item.recordUid, item.sendAtMillis, item.recordOwnerUserId); onClose()
+          } else selectHit(item)
+        }} /> : <RecordRow item={item} onClick={() => selectHit(item)} />}
       </div></Fragment>)}
       </div>
       {search.loading && <div role="status" style={status}>加载中…</div>}
@@ -132,24 +143,25 @@ function ChatSearchMedia({ item, active, onSelect }: { item: ArkmeSearchRecordIt
   const element = useRef<HTMLDivElement>(null)
   const { detail, error } = useConversationSearchDetail(item, element, active)
   const blocks = detail?.contentBlocks?.filter(block => block.kind === 'image' || block.kind === 'video') ?? []
-  return <div ref={element} style={{ gridColumn: '1 / -1', display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 4 }}>
-    {blocks.length === 0 ? <button type="button" style={{ ...button, minHeight: 96 }} onClick={() => onSelect(item)}>{error ? '媒体加载失败，点击重试' : detail ? '查看媒体消息' : '加载媒体…'}</button>
-      : blocks.map(block => <button key={block.mediaRef} type="button" aria-label={`查看${block.kind === 'video' ? '视频' : '图片'} ${block.fileName ?? ''}`}
-        style={{ ...button, padding: 0, overflow: 'hidden', aspectRatio: '1', background: arkmeTheme.subtle }} onClick={() => onSelect(item, block.fileAssetUid)}>
-        {block.kind === 'video' ? <video src={`/arkme-self/api/media?ref=${encodeURIComponent(block.mediaRef)}`} preload="metadata" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-          : <img src={`/arkme-self/api/media?ref=${encodeURIComponent(block.mediaRef)}`} alt={block.fileName ?? '图片'} loading="lazy" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />}
-      </button>)}
+  const assets = [...new Map(item.media.map(asset => [asset.fileAssetUid, asset])).values()]
+  return <div ref={element} style={{ display: 'contents' }}>
+    {assets.map(asset => {
+      const block = blocks.find(value => value.fileAssetUid === asset.fileAssetUid)
+      return <SearchMediaTile key={asset.fileAssetUid} name={block?.fileName ?? asset.fileName ?? ''}
+        url={block === undefined ? undefined : arkmeContentMediaUrl(block)}
+        video={block !== undefined ? block.kind === 'video' : asset.fileKind === 3 || (asset.mimeType ?? '').startsWith('video/')}
+        durationSec={block?.durationSec ?? (asset.durationMillis === undefined ? undefined : asset.durationMillis / 1000)}
+        unavailable={error !== '' || detail !== undefined && block === undefined} onOpen={() => onSelect(item, asset.fileAssetUid)} />
+    })}
   </div>
 }
 
-function SearchDetail({ item, assetUid, onBack, onLocate }: { item: ArkmeSearchRecordItem; assetUid: string | undefined; onBack(): void; onLocate(): void }) {
+function SearchDetail({ item, assetUid, onSelectAsset, onBack, onLocate, navigation }: { navigation?: import('./ArkmeFileViewer.js').ArkmePreviewNavigation | undefined; item: ArkmeSearchRecordItem; assetUid: string | undefined; onSelectAsset(uid: string): void; onBack(): void; onLocate(): void }) {
   const { detail, error, retry } = useConversationSearchDetail(item)
-  const [preview, setPreview] = useState<ArkmeContentBlock>()
-  useEffect(() => {
-    setPreview(assetUid === undefined ? undefined : detail?.contentBlocks?.find(block => block.fileAssetUid === assetUid && (block.kind === 'image' || block.kind === 'video')))
-  }, [assetUid, detail])
+  const preview = assetUid === undefined ? undefined : detail?.contentBlocks?.find(block => block.fileAssetUid === assetUid && (block.kind === 'image' || block.kind === 'video' || block.kind === 'file'))
   return <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '4px 16px 20px' }}>
-    {preview !== undefined && <ArkmeMediaPreview blocks={(detail?.contentBlocks ?? []).filter(block => block.kind === 'image' || block.kind === 'video')} selected={preview} onSelect={setPreview} onClose={() => setPreview(undefined)} />}
+    {preview !== undefined && <ArkmeMediaPreview blocks={(detail?.contentBlocks ?? []).filter(block => preview.kind === 'file' ? block.kind === 'file' : block.kind === 'image' || block.kind === 'video')} selected={preview} navigation={navigation} onSelect={block => { if (block.fileAssetUid !== undefined) onSelectAsset(block.fileAssetUid) }} onClose={onBack} />}
+    {detail !== undefined && assetUid !== undefined && preview === undefined && <p role="alert" style={status}>该附件已不存在或暂不可访问，请返回结果重新选择</p>}
     <div style={{ ...row, justifyContent: 'space-between' }}><button autoFocus type="button" style={button} onClick={onBack}>返回结果</button>
       <button type="button" style={button} disabled={item.targetSource === undefined || item.recordOwnerUserId === undefined || detail === undefined} onClick={onLocate}>定位到消息</button></div>
     {error !== '' ? <div role="alert" style={status}>{error}<button type="button" style={button} onClick={retry}>重试</button></div>

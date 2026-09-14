@@ -343,6 +343,14 @@ describe('Arkme rich content presentation', () => {
     expect(html).not.toContain('data-arkme-long-article="preview"')
     expect(html).not.toContain('data-arkme-text-collapsible')
   })
+  it('uses explicit cross-record navigation independently of the current message blocks', () => {
+    const image = { kind: 'image' as const, mediaRef: 'one', fileName: 'one.png', mimeType: 'image/png', size: 1, sortOrder: 0 }
+    const html = renderToStaticMarkup(<ArkmeMediaPreview blocks={[image]} selected={image} navigation={{ next: () => {} }} onSelect={() => {}} onClose={() => {}} />)
+    expect(html).toContain('aria-label="上一个媒体" disabled=""')
+    expect(html).not.toContain('aria-label="下一个媒体" disabled=""')
+
+  })
+
   it('contains the whole image initially and exposes fixed-width zoom without horizontal overflow', () => {
     const image = { kind: 'image' as const, mediaRef: 'long-image-ref', fileName: 'long.png', mimeType: 'image/png', size: 1, sortOrder: 0 }
     const html = renderToStaticMarkup(<ArkmeMediaPreview blocks={[image]} selected={image} onSelect={() => undefined} onClose={() => undefined} />)

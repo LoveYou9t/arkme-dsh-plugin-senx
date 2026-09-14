@@ -115,7 +115,11 @@ export function useConversationSearchDetail(item: ArkmeSearchRecordItem, element
       ? new IntersectionObserver(entries => {
         if (entries.some(entry => entry.isIntersecting)) { load(); observer?.disconnect() }
       }, { rootMargin: '160px' }) : undefined
-    if (observer && element?.current) observer.observe(element.current)
+    if (observer && element?.current) {
+      const tiles = element.current.querySelectorAll?.('[data-search-media-tile]')
+      if (tiles?.length) tiles.forEach(tile => observer.observe(tile))
+      else observer.observe(element.current)
+    }
     else load()
     return () => { observer?.disconnect(); clearTimeout(timeout); controller.abort() }
   }, [item, revision, element, active, detail])
