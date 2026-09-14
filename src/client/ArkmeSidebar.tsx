@@ -1,3 +1,4 @@
+import { RegionMarquee } from './selection/RegionMarquee.js'
 import { arkmeDetailExtensionComposerStyles } from './detail-extension-composer-style.js'
 import { FileTextIcon } from '@phosphor-icons/react/dist/csr/FileText'
 import { ArkmeRecordTopicAssignmentDialog } from './ArkmeRecordTopicAssignmentDialog.js'
@@ -1029,10 +1030,6 @@ export function arkmeTimelineMessageActionRef(item: ArkmeTimelineItem): string {
   return item.messageActionRef?.trim() ?? ''
 }
 
-function canSelectTimelineItem(item: ArkmeTimelineItem): boolean {
-  return arkmeTimelineMessageActionRef(item) !== '' || Boolean(item.recordTopicAssignmentRef)
-}
-
 export function arkmeTimelineOccurrenceKey(item: ArkmeTimelineItem): string {
   const opaqueKey = item.timelineItemKey?.trim() ?? ''
   return opaqueKey === '' ? `item:${item.itemUid}` : opaqueKey
@@ -1079,7 +1076,7 @@ export function arkmeSelectedTimelineItems(
   items: readonly ArkmeTimelineItem[],
   selectedIds: ReadonlySet<string>,
 ): ArkmeTimelineItem[] {
-  return items.filter(item => selectedIds.has(arkmeTimelineOccurrenceKey(item)) && canSelectTimelineItem(item))
+  return items.filter(item => selectedIds.has(arkmeTimelineOccurrenceKey(item)))
 }
 
 export async function arkmeCopyTextToClipboard(value: string): Promise<void> {
@@ -5732,8 +5729,10 @@ export function ArkmeSurface({
     [activeSelectMode, displayItems],
   )
   const selectedMessageCount = activeSelectMode?.selectedIds.size ?? 0
+  const selectedMessagesWithinBatchLimit = selectedMessageCount > 0 && selectedMessageCount <= 100
   const selectedMessagesHaveSnapshots = selectedMessageCount > 0 && selectedMessageItems.length === selectedMessageCount
     && selectedMessageItems.every(item => arkmeTimelineMessageActionRef(item) !== '')
+  const selectedMessagesSupportSnapshotBatch = selectedMessagesWithinBatchLimit && selectedMessagesHaveSnapshots
   const forwardVisibleTargets = useMemo(
     () => forwardTargetPicker === undefined
       ? []
@@ -6142,6 +6141,10 @@ export function ArkmeSurface({
       showMessageActionStatus('当前消息暂不支持复制链接')
       return
     }
+    if (itemsToCopy.length > 100) {
+      showMessageActionStatus('最多选择 100 条消息执行此操作')
+      return
+    }
     const controller = new AbortController()
     const timeout = window.setTimeout(() => {
       controller.abort()
@@ -6301,7 +6304,7 @@ export function ArkmeSurface({
   ])
   const enterMessageSelectMode = useCallback((item: ArkmeTimelineItem) => {
     closeMessageMenu()
-    if (source === undefined || !canSelectTimelineItem(item)) {
+    if (source === undefined) {
       showMessageActionStatus('当前消息暂不支持多选')
       return
     }
@@ -6325,17 +6328,35 @@ export function ArkmeSurface({
     }
     setSelectMode({ sourceKey: conversationKey, selectedIds: new Set([arkmeTimelineOccurrenceKey(item)]) })
   }, [closeMessageMenu, conversationKey, displayRows, showMessageActionStatus, source, timelineStateKey])
+  const commitMarqueeSelection = useCallback((keys: ReadonlySet<string>) => {
+    if (source === undefined || messageActionBusy !== undefined) return
+    const availableKeys = new Set(displayItems.map(arkmeTimelineOccurrenceKey))
+    const covered = [...keys].filter(key => availableKeys.has(key))
+    if (covered.length === 0) return
+    closeMessageMenu()
+    setAddMenuOpen(false)
+    pendingComposerFocusDraftKeyRef.current = undefined
+    const focused = typeof document === 'undefined' ? null : document.activeElement
+    if (typeof HTMLElement !== 'undefined' && focused instanceof HTMLElement && composerRef.current?.contains(focused)) focused.blur()
+    const body = bodyRef.current
+    if (body !== null) pendingViewportRestoreRef.current = {
+      sourceKey: timelineStateKey, viewport: arkmeConversationViewport(body, true),
+    }
+    setSelectMode(current => ({ sourceKey: conversationKey,
+      selectedIds: new Set([...(current?.sourceKey === conversationKey ? current.selectedIds : []), ...covered]),
+    }))
+  }, [closeMessageMenu, conversationKey, displayItems, messageActionBusy, source, timelineStateKey])
   const toggleSelectedMessage = useCallback((item: ArkmeTimelineItem) => {
-    if (source === undefined || !canSelectTimelineItem(item)) return
+    if (source === undefined || messageActionBusy !== undefined) return
     setSelectMode(current => {
       const occurrenceKey = arkmeTimelineOccurrenceKey(item)
       if (current === undefined || current.sourceKey !== conversationKey) return { sourceKey: conversationKey, selectedIds: new Set([occurrenceKey]) }
       const selectedIds = new Set(current.selectedIds)
       if (selectedIds.has(occurrenceKey)) selectedIds.delete(occurrenceKey)
-      else if (selectedIds.size < 100) selectedIds.add(occurrenceKey)
+      else selectedIds.add(occurrenceKey)
       return { sourceKey: current.sourceKey, selectedIds }
     })
-  }, [conversationKey, source])
+  }, [conversationKey, messageActionBusy, source])
   const openForwardTargetPicker = useCallback((itemsToForward: readonly ArkmeTimelineItem[] = selectedMessageItems) => {
     if (!activeConversationRef.current) return
     closeMessageMenu()
@@ -7061,7 +7082,6 @@ export function ArkmeSurface({
                 />
                 const polishStatus = aiPolishStatus(item)
                 const selectedForAction = activeSelectMode?.selectedIds.has(arkmeTimelineOccurrenceKey(item)) === true
-                const canSelect = canSelectTimelineItem(item)
                 const isForwardMessageCard = item.forwardRecords !== undefined
                 const isSharedRecordingCard = item.sharedRecording !== undefined
                 const isStructuredMessageCard = isForwardMessageCard || isSharedRecordingCard
@@ -7079,7 +7099,7 @@ export function ArkmeSurface({
                 const isHighlighted = highlightedTargetUid === item.itemUid || recordReeditHighlightUid === item.itemUid
                 return <Fragment key={row.id}>
                   {startsDay && <li style={styles.date}>{dayLabel(item.sendAtMillis)}</li>}
-                  <li data-arkme-conversation-row={row.id} data-arkme-message-item-uid={item.itemUid} style={{
+                  <li data-arkme-selection-key={arkmeTimelineOccurrenceKey(item)} data-arkme-conversation-row={row.id} data-arkme-message-item-uid={item.itemUid} style={{
                     ...styles.row,
                     ...(activeSelectMode === undefined
                       ? isSharedRecordingCard
@@ -7093,7 +7113,6 @@ export function ArkmeSurface({
                   }}
                     onClickCapture={event => {
                       if (activeSelectMode === undefined) return
-                      if (!canSelect) return
                       if (!arkmeShouldToggleMessageSelectFromRowClick(event.target)) return
                       event.preventDefault()
                       event.stopPropagation()
@@ -7108,7 +7127,7 @@ export function ArkmeSurface({
                     {activeSelectMode !== undefined && <ArkmeMessageSelectionControl
                       anchor={selectionAnchor}
                       checked={selectedForAction}
-                      disabled={!canSelect}
+                      disabled={messageActionBusy !== undefined}
                       onToggle={() => { toggleSelectedMessage(item) }}
                     />}
                     <div style={{
@@ -7276,6 +7295,14 @@ export function ArkmeSurface({
                 && <ArkmeMessagePreparingIndicator sourceKey={source.sourceKey} accountScope={authenticatedAccountKey} />}
             </div>
           </div>
+          <RegionMarquee viewportRef={bodyRef} scopeKey={`${authenticatedAccountKey}:${conversationKey}`}
+            enabled={active && activeConversation && timelineStateKey === conversationKey && messageActionBusy === undefined
+              && forwardTargetPicker === undefined && topicAssignment === undefined && drawer === undefined}
+            getItems={() => [...(bodyRef.current?.querySelectorAll<HTMLElement>('[data-arkme-selection-key]') ?? [])]
+              .map(element => ({ key: element.dataset.arkmeSelectionKey!, element }))}
+            onCommit={commitMarqueeSelection}
+            style={{ border: `1px solid ${arkmeTheme.accent}`, background: `color-mix(in srgb, ${arkmeTheme.accent} 16%, transparent)` }}
+          />
           {active && activeConversation && timelineStateKey === conversationKey && <ArkmeConversationBottomControl
             key={`${authenticatedAccountKey}:${conversationKey}`}
             showBackToBottom={bottomVisibility.visible || timelineMode === 'around' || newerHasMore}
@@ -7632,14 +7659,18 @@ export function ArkmeSurface({
           </div>
             <div data-arkme-composer-footer="hint" style={styles.composerHint}>Enter发送 / Shift+Enter换行</div>
           </div></footer>}
+          {activeSelectMode !== undefined && selectedMessageCount > 0 && !selectedMessagesSupportSnapshotBatch && <div
+            role="status" style={{ padding: '6px 16px', color: arkmeTheme.secondary, fontSize: 12 }}
+          >{selectedMessageCount > 100 ? `已选择 ${selectedMessageCount} 条消息，批量操作最多支持 100 条，请减少选择后操作`
+            : '选中的消息包含暂不支持复制链接或转发的内容，可取消这些消息后操作'}</div>}
           {activeSelectMode !== undefined && <div style={styles.selectBar} role="toolbar" aria-label={`已选择 ${selectedMessageCount} 条消息`}>
             {source !== undefined && isArkmeSelfWorkspaceSource(source) && <button
               type="button" aria-label="指定主题" style={styles.selectBarButton}
-              disabled={messageActionBusy !== undefined || selectedMessageCount === 0
+              disabled={messageActionBusy !== undefined || !selectedMessagesWithinBatchLimit
                 || selectedMessageItems.length !== selectedMessageCount
                 || selectedMessageItems.some(item => !item.recordTopicAssignmentRef)}
               onClick={() => {
-                if (messageActionBusy !== undefined || selectedMessageItems.length === 0
+                if (messageActionBusy !== undefined || !selectedMessagesWithinBatchLimit || selectedMessageItems.length === 0
                   || selectedMessageItems.length !== selectedMessageCount
                   || selectedMessageItems.some(item => !item.recordTopicAssignmentRef)) return
                 const currentTopicKey = source.kind === 'topic' ? source.topicHierarchyKey
@@ -7669,18 +7700,18 @@ export function ArkmeSurface({
               type="button"
               style={{
                 ...styles.selectBarButton,
-                ...(!selectedMessagesHaveSnapshots || messageActionBusy !== undefined ? styles.selectBarButtonDisabled : {}),
+                ...(!selectedMessagesSupportSnapshotBatch || messageActionBusy !== undefined ? styles.selectBarButtonDisabled : {}),
               }}
-              disabled={!selectedMessagesHaveSnapshots || messageActionBusy !== undefined}
+              disabled={!selectedMessagesSupportSnapshotBatch || messageActionBusy !== undefined}
               onClick={() => { void copyMessageLink(selectedMessageItems) }}
             ><span style={styles.selectBarIconTile}><ArkmeSelectActionIcon kind="link" /></span><span style={styles.selectBarLabel}>{ARKME_MESSAGE_SELECT_ACTION_LABELS[1]}</span></button>
             <button
               type="button"
               style={{
                 ...styles.selectBarButton,
-                ...(!selectedMessagesHaveSnapshots || messageActionBusy !== undefined ? styles.selectBarButtonDisabled : {}),
+                ...(!selectedMessagesSupportSnapshotBatch || messageActionBusy !== undefined ? styles.selectBarButtonDisabled : {}),
               }}
-              disabled={!selectedMessagesHaveSnapshots || messageActionBusy !== undefined}
+              disabled={!selectedMessagesSupportSnapshotBatch || messageActionBusy !== undefined}
               onClick={() => { openForwardTargetPicker() }}
             ><span style={styles.selectBarIconTile}><ArkmeSelectActionIcon kind="forward" /></span><span style={styles.selectBarLabel}>{messageActionBusy === 'forward' ? '转发中' : ARKME_MESSAGE_SELECT_ACTION_LABELS[2]}</span></button>
             <button
@@ -7863,8 +7894,7 @@ export function ArkmeSurface({
           <button
             type="button"
             role="menuitem"
-            style={{ ...styles.messageActionMenuItem, opacity: !canSelectTimelineItem(messageMenuItem) ? .45 : 1 }}
-            disabled={!canSelectTimelineItem(messageMenuItem)}
+            style={styles.messageActionMenuItem}
             onClick={() => { enterMessageSelectMode(messageMenuItem) }}
           ><span style={styles.messageActionMenuIcon} aria-hidden><ArkmeMessageActionIcon kind="select" /></span><span style={styles.messageActionMenuText}>{ARKME_MESSAGE_ACTION_MENU_LABELS[3]}</span></button>
           <button
