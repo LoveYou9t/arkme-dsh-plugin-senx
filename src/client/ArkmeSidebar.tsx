@@ -1,3 +1,5 @@
+import { ArkmePinnedCorner } from './ArkmePinnedCorner.js'
+import { useForwardTargetDirectory } from './forward-target-directory.js'
 import { ArkmeRecordDeletionDialog } from './ArkmeRecordDeletionDialog.js'
 import { Trash } from '@phosphor-icons/react/dist/icons/Trash'
 import { messageSelectionStyles, ArkmeMessageSelectionControl, ArkmeSelectActionIcon } from './message-selection-presentation.js'
@@ -646,6 +648,7 @@ const styles: Record<string, CSSProperties> = {
   },
   forwardTargetList: { flex: 1, minHeight: 0, overflowY: 'auto', margin: 0, padding: '4px 18px 18px', listStyle: 'none' },
   forwardTargetRow: {
+    position: 'relative',
     width: '100%', minHeight: 56, display: 'grid', gridTemplateColumns: '20px 36px minmax(0, 1fr) auto', alignItems: 'center', gap: 10, padding: '9px 8px',
     boxSizing: 'border-box', border: 0, borderRadius: 8, background: 'transparent', color: colors.text,
     cursor: 'pointer', textAlign: 'left', font: 'inherit',
@@ -1077,25 +1080,33 @@ export async function arkmeCopyTextToClipboard(value: string): Promise<void> {
   if (!copied) throw new Error('复制失败，请稍后重试')
 }
 
+function arkmeForwardTargetKey(source: ArkmeSourceItem): string {
+  return source.kind === 'send_to_self' ? 'send_to_self' : arkmeSourceIdentityKey(source)
+}
+
 export function arkmeForwardableTargetSources(
   rootSources: readonly ArkmeSourceItem[],
-  sendToSelfSources: readonly ArkmeSourceItem[],
-  aggregateSource?: ArkmeSourceItem,
+  selfTarget?: ArkmeSourceItem,
+  selectedTargetKeys: readonly string[] = [],
 ): ArkmeSourceItem[] {
   const targets = new Map<string, ArkmeSourceItem>()
   const addChatTarget = (source: ArkmeSourceItem | undefined) => {
-    if (source === undefined || targets.has(source.sourceRef)) return
+    if (source === undefined || targets.has(arkmeForwardTargetKey(source))) return
     if (source.kind !== 'private_chat' && source.kind !== 'group_chat') return
-    targets.set(source.sourceRef, source)
+    targets.set(arkmeForwardTargetKey(source), source)
   }
   const addSendToSelfRoot = (source: ArkmeSourceItem | undefined) => {
-    if (source === undefined || source.kind !== 'send_to_self' || targets.has(source.sourceRef)) return
-    targets.set(source.sourceRef, source)
+    if (source === undefined || source.kind !== 'send_to_self' || targets.has(arkmeForwardTargetKey(source))) return
+    targets.set(arkmeForwardTargetKey(source), source)
   }
-  addSendToSelfRoot(aggregateSource)
-  for (const source of sendToSelfSources) addSendToSelfRoot(source)
+  addSendToSelfRoot(selfTarget)
   for (const source of rootSources) addChatTarget(source)
-  return [...targets.values()].slice(0, FORWARD_TARGET_LIMIT)
+  return [...targets.values()].sort((left, right) => {
+    if (left.kind === 'send_to_self') return right.kind === 'send_to_self' ? 0 : -1
+    if (right.kind === 'send_to_self') return 1
+    return Number(right.isPinned === true) - Number(left.isPinned === true)
+      || right.activeAtMillis - left.activeAtMillis
+  }).filter((target, index) => index < FORWARD_TARGET_LIMIT || selectedTargetKeys.includes(arkmeForwardTargetKey(target)))
 }
 
 export function arkmeForwardTargetVisibleSources(
@@ -2790,14 +2801,13 @@ export function ArkmeSurface({
     sourceKey: string
     itemUids: string[]
     items: ArkmeTimelineItem[]
-    loading: boolean
-    targets: ArkmeSourceItem[]
-    selectedSourceRefs: string[]
+    selectedTargetKeys: string[]
     keyword: string
     commentText: string
-    error: string
     sendError: string
   }>()
+  const forwardPickerOpen = forwardTargetPicker !== undefined
+  const forwardDirectory = useForwardTargetDirectory(authenticatedAccountKey, forwardPickerOpen)
   const needsChatDirectory = activeConversation && detailState?.kind === 'success'
   const chatDirectory = useSyncExternalStore(
     needsChatDirectory ? arkmeChatDirectory.subscribe : NOOP_SUBSCRIBE,
@@ -3044,7 +3054,8 @@ export function ArkmeSurface({
   const snapshotRequestRef = useRef<AbortController>()
   const copyLinkDetailRequestRef = useRef<AbortController>()
   const copyLinkDetailScopeRef = useRef({ sending: false })
-  const forwardTargetRequestRef = useRef<AbortController>()
+  const forwardPickerScopeRef = useRef<AbortController>()
+  const forwardSubmissionScopeRef = useRef({ sending: false })
   const copyLinkRefreshTimerRef = useRef<number>()
   const lastReadAckRef = useRef('')
   const bindingNotifiedUserIdRef = useRef<number | undefined>()
@@ -3080,8 +3091,9 @@ export function ArkmeSurface({
     copyLinkDetailRequestRef.current?.abort()
     copyLinkDetailRequestRef.current = undefined
     copyLinkDetailScopeRef.current = { sending: false }
-    forwardTargetRequestRef.current?.abort()
-    forwardTargetRequestRef.current = undefined
+    forwardSubmissionScopeRef.current = { sending: false }
+    forwardPickerScopeRef.current?.abort()
+    forwardPickerScopeRef.current = undefined
     if (copyLinkRefreshTimerRef.current !== undefined) {
       window.clearTimeout(copyLinkRefreshTimerRef.current)
       copyLinkRefreshTimerRef.current = undefined
@@ -3949,8 +3961,9 @@ export function ArkmeSurface({
     copyLinkDetailRequestRef.current?.abort()
     copyLinkDetailRequestRef.current = undefined
     copyLinkDetailScopeRef.current = { sending: false }
-    forwardTargetRequestRef.current?.abort()
-    forwardTargetRequestRef.current = undefined
+    forwardSubmissionScopeRef.current = { sending: false }
+    forwardPickerScopeRef.current?.abort()
+    forwardPickerScopeRef.current = undefined
     if (copyLinkRefreshTimerRef.current !== undefined) {
       window.clearTimeout(copyLinkRefreshTimerRef.current)
       copyLinkRefreshTimerRef.current = undefined
@@ -5677,20 +5690,58 @@ export function ArkmeSurface({
   const selectedMessagesHaveSnapshots = selectedMessageCount > 0 && selectedMessageItems.length === selectedMessageCount
     && selectedMessageItems.every(item => arkmeTimelineMessageActionRef(item) !== '')
   const selectedMessagesSupportSnapshotBatch = selectedMessagesWithinBatchLimit && selectedMessagesHaveSnapshots
+  const forwardTargets = useMemo(() => arkmeForwardableTargetSources(
+    forwardDirectory.chats, forwardDirectory.self, forwardTargetPicker?.selectedTargetKeys,
+  ), [forwardDirectory.chats, forwardDirectory.self, forwardTargetPicker?.selectedTargetKeys])
+  const forwardTargetsRef = useRef(forwardTargets)
+  forwardTargetsRef.current = forwardTargets
+  useEffect(() => {
+    setForwardTargetPicker(current => {
+      if (current === undefined) return current
+      const keys = current.selectedTargetKeys.filter(key => forwardTargets.some(target => arkmeForwardTargetKey(target) === key))
+      return keys.length === current.selectedTargetKeys.length ? current : { ...current, selectedTargetKeys: keys }
+    })
+  }, [forwardTargets])
   const forwardVisibleTargets = useMemo(
     () => forwardTargetPicker === undefined
       ? []
-      : arkmeForwardTargetVisibleSources(forwardTargetPicker.targets, forwardTargetPicker.keyword),
-    [forwardTargetPicker],
+      : arkmeForwardTargetVisibleSources(forwardTargets, forwardTargetPicker.keyword),
+    [forwardTargetPicker, forwardTargets],
   )
   const forwardSelectedTargets = useMemo(
     () => forwardTargetPicker === undefined
       ? []
-      : forwardTargetPicker.selectedSourceRefs
-        .map(sourceRef => forwardTargetPicker.targets.find(target => target.sourceRef === sourceRef))
+      : forwardTargetPicker.selectedTargetKeys
+        .map(key => forwardTargets.find(target => arkmeForwardTargetKey(target) === key))
         .filter((target): target is ArkmeSourceItem => target !== undefined),
-    [forwardTargetPicker],
+    [forwardTargetPicker, forwardTargets],
   )
+  const forwardSelfTarget = forwardVisibleTargets.find(target => target.kind === 'send_to_self')
+  const renderForwardTargetButton = (target: ArkmeSourceItem) => {
+    const selected = forwardTargetPicker?.selectedTargetKeys.includes(arkmeForwardTargetKey(target)) === true
+    return (
+      <button
+        type="button"
+        style={{ ...styles.forwardTargetRow, ...(selected ? styles.forwardTargetRowSelected : {}) }}
+        aria-pressed={selected}
+        onClick={() => { toggleForwardTarget(target) }}
+      >
+        {target.isPinned === true && <ArkmePinnedCorner />}
+        <span
+          style={{ ...styles.forwardTargetCheck, ...(selected ? styles.forwardTargetCheckSelected : {}) }}
+          aria-hidden
+        >✓</span>
+        <ArkmeDirectorySourceAvatar source={target} size={38} />
+        <span style={styles.forwardTargetText}>
+          <span style={styles.forwardTargetName}><ArkmeRichText text={target.displayName} presentation="preview" /></span>
+          <span style={styles.forwardTargetMeta}><ArkmeRichText text={target.latestPreview?.trim() || arkmeForwardTargetMeta(target)} presentation="preview" /></span>
+        </span>
+        <span style={styles.forwardTargetTime}>
+          {arkmeForwardTargetTimeLabel(target.activeAtMillis)}
+        </span>
+      </button>
+    )
+  }
   const forwardPickerMessageItems = forwardTargetPicker?.items ?? []
   const messageMenuItem = useMemo(
     () => messageMenu === undefined
@@ -6321,86 +6372,66 @@ export function ArkmeSurface({
     if (savedItems.some((saved, index) => saved !== itemsToForward[index])) {
       showMessageActionStatus('转发使用已保存内容，请核对预览；尚未同步的编辑不参与转发')
     }
-    const initialTargets = arkmeForwardableTargetSources(
-      arkmeChatDirectory.getSnapshot().sources,
-      selfSources,
-      aggregateSource,
-    )
     const sourceKey = conversationKey
     setForwardTargetPicker({
       sourceKey,
       itemUids: forwardableItems.map(item => item.itemUid),
       items: [...forwardableItems],
-      loading: true,
-      targets: initialTargets,
-      selectedSourceRefs: [],
+      selectedTargetKeys: [],
       keyword: '',
       commentText: '',
-      error: '',
       sendError: '',
     })
-    forwardTargetRequestRef.current?.abort()
+    forwardPickerScopeRef.current?.abort()
     const controller = new AbortController()
-    forwardTargetRequestRef.current = controller
-    const overlayGeneration = conversationOverlayScopeRef.current.generation
-    Promise.all([
-      callArkme<ArkmeSourceList>('sources.list', { directory: 'root', limit: FORWARD_TARGET_LIMIT }, controller.signal),
-      callArkme<ArkmeSourceList>('sources.list', { directory: 'send_to_self', limit: FORWARD_TARGET_LIMIT }, controller.signal)
-        .catch(() => ({ directory: 'send_to_self' as const, items: [], hasMore: false })),
-    ]).then(([root, sendToSelf]) => {
-      if (controller.signal.aborted || forwardTargetRequestRef.current !== controller
-        || !activeConversationRef.current || conversationOverlayScopeRef.current.generation !== overlayGeneration
-        || activeSourceKeyRef.current !== sourceKey) return
-      const targets = arkmeForwardableTargetSources(root.items, sendToSelf.items, aggregateSource)
-      setForwardTargetPicker(current => current === undefined || current.sourceKey !== sourceKey
-        ? current
-        : {
-          ...current,
-          loading: false,
-          targets,
-          selectedSourceRefs: current.selectedSourceRefs.filter(sourceRef =>
-            targets.some(target => target.sourceRef === sourceRef)),
-          error: targets.length === 0 ? '暂无可转发对象' : '',
-        })
-    }).catch(caught => {
-      if (controller.signal.aborted || forwardTargetRequestRef.current !== controller
-        || !activeConversationRef.current || conversationOverlayScopeRef.current.generation !== overlayGeneration
-        || activeSourceKeyRef.current !== sourceKey) return
-      setForwardTargetPicker(current => current === undefined || current.sourceKey !== sourceKey
-        ? current
-        : { ...current, loading: false, error: errorMessage(caught) || '转发对象加载失败，请稍后重试' })
-    }).finally(() => {
-      if (forwardTargetRequestRef.current === controller) forwardTargetRequestRef.current = undefined
-    })
-  }, [aggregateSource, closeMessageMenu, conversationKey, items, reeditSubmissions.jobs, selectedMessageItems, selfSources, showMessageActionStatus, source])
+    forwardPickerScopeRef.current = controller
+  }, [closeMessageMenu, conversationKey, items, reeditSubmissions.jobs, selectedMessageItems, showMessageActionStatus, source])
+  useEffect(() => {
+    if (forwardPickerOpen) return
+    forwardPickerScopeRef.current?.abort()
+    forwardPickerScopeRef.current = undefined
+  }, [forwardPickerOpen])
   const toggleForwardTarget = useCallback(async (target: ArkmeSourceItem) => {
     if (forwardTargetPicker === undefined || messageActionBusy === 'forward') return
-    const selected = forwardTargetPicker.selectedSourceRefs.includes(target.sourceRef)
+    const request = forwardPickerScopeRef.current
+    const isCurrent = () => request !== undefined && !request.signal.aborted
+      && forwardPickerScopeRef.current === request
+      && arkmeAuthenticatedAccountKey(arkmeAuthStore.getSnapshot().auth) === authenticatedAccountKey
+    const selected = forwardTargetPicker.selectedTargetKeys.includes(arkmeForwardTargetKey(target))
     if (!selected && target.directMessageAdmissionApplicable === true) {
-      try { await requireDirectMessageSendAllowed(target) }
-      catch (error) { showMessageActionStatus(errorMessage(error)); return }
+      try { await requireDirectMessageSendAllowed(target, request?.signal) }
+      catch (error) { if (isCurrent()) showMessageActionStatus(errorMessage(error)); return }
     }
-    if (!selected && forwardTargetPicker.selectedSourceRefs.length >= MAX_FORWARD_TARGET_SELECTION) {
+    if (!isCurrent()) return
+    if (!selected && forwardTargetPicker.selectedTargetKeys.length >= MAX_FORWARD_TARGET_SELECTION) {
       showMessageActionStatus(`最多选择 ${String(MAX_FORWARD_TARGET_SELECTION)} 个转发对象`)
       return
     }
-    setForwardTargetPicker(current => current !== forwardTargetPicker ? current : {
-      ...forwardTargetPicker,
-      selectedSourceRefs: selected
-        ? forwardTargetPicker.selectedSourceRefs.filter(sourceRef => sourceRef !== target.sourceRef)
-        : [...forwardTargetPicker.selectedSourceRefs, target.sourceRef],
+    setForwardTargetPicker(current => {
+      if (current === undefined || current.items !== forwardTargetPicker.items) return current
+      const key = arkmeForwardTargetKey(target)
+      if (!forwardTargetsRef.current.some(item => arkmeForwardTargetKey(item) === key)) return current
+      if (!selected && (current.selectedTargetKeys.includes(key) || current.selectedTargetKeys.length >= MAX_FORWARD_TARGET_SELECTION)) return current
+      return { ...current, selectedTargetKeys: selected
+        ? current.selectedTargetKeys.filter(value => value !== key)
+        : [...current.selectedTargetKeys, key] }
     })
-  }, [forwardTargetPicker, messageActionBusy, showMessageActionStatus])
+  }, [authenticatedAccountKey, forwardTargetPicker, forwardTargets, messageActionBusy, showMessageActionStatus])
   const forwardMessageItems = useCallback(async (
     itemsToForward: readonly ArkmeTimelineItem[],
     targetSources: readonly ArkmeSourceItem[],
     commentText = '',
   ) => {
-    if (source === undefined || messageActionBusy !== undefined || itemsToForward.length === 0) return
+    if (source === undefined || messageActionBusy !== undefined || forwardSubmissionScopeRef.current.sending || itemsToForward.length === 0) return
     const sourceRef = source.sourceRef
     const sourceKey = conversationKey
     const actionRefs = itemsToForward.map(arkmeTimelineMessageActionRef).filter(value => value !== '')
     if (actionRefs.length === 0 || targetSources.length === 0) return
+    const submissionScope = forwardSubmissionScopeRef.current
+    submissionScope.sending = true
+    const isCurrent = () => forwardSubmissionScopeRef.current === submissionScope
+      && arkmeAuthenticatedAccountKey(arkmeAuthStore.getSnapshot().auth) === authenticatedAccountKey
+      && activeSourceKeyRef.current === sourceKey
     const normalizedCommentText = commentText.trim()
     const controller = new AbortController()
     const timeout = window.setTimeout(() => {
@@ -6413,6 +6444,8 @@ export function ArkmeSurface({
     try {
       const results = await Promise.allSettled(targetSources.map(async targetSource => {
         await requireDirectMessageSendAllowed(targetSource, controller.signal)
+        if (!isCurrent()) controller.abort()
+        controller.signal.throwIfAborted()
         return {
           targetSource,
           result: await callArkme<ArkmeSourceSendResult>('source.forward-messages', {
@@ -6425,7 +6458,7 @@ export function ArkmeSurface({
           }, controller.signal),
         }
       }))
-      if (activeSourceKeyRef.current !== sourceKey) return
+      if (!isCurrent()) return
       let successCount = 0
       let failureCount = 0
       let warningText = ''
@@ -6459,16 +6492,17 @@ export function ArkmeSurface({
       showMessageActionStatus(warningText)
       if (needsTimelineRefresh) await loadTimeline()
     } catch (caught) {
-      if (activeSourceKeyRef.current === sourceKey) {
+      if (isCurrent()) {
         const message = controller.signal.aborted ? '转发失败，请稍后重试' : errorMessage(caught) || '转发失败，请稍后重试'
         setForwardTargetPicker(current => current === undefined ? current : { ...current, sendError: message })
         showMessageActionStatus(message)
       }
     } finally {
       window.clearTimeout(timeout)
-      setMessageActionBusy(undefined)
+      submissionScope.sending = false
+      if (isCurrent()) setMessageActionBusy(undefined)
     }
-  }, [closeMessageMenu, conversationKey, exitMessageSelectMode, loadTimeline, messageActionBusy, showForwardSuccessFeedback, showMessageActionStatus, source])
+  }, [authenticatedAccountKey, closeMessageMenu, conversationKey, exitMessageSelectMode, loadTimeline, messageActionBusy, showForwardSuccessFeedback, showMessageActionStatus, source])
   const confirmForwardTargets = useCallback(async () => {
     if (forwardTargetPicker === undefined) return
     if (forwardTargetPicker.items.length === 0) {
@@ -6476,8 +6510,8 @@ export function ArkmeSurface({
       showMessageActionStatus('请选择要转发的快记')
       return
     }
-    const targets = forwardTargetPicker.selectedSourceRefs
-      .map(sourceRef => forwardTargetPicker.targets.find(item => item.sourceRef === sourceRef))
+    const targets = forwardTargetPicker.selectedTargetKeys
+      .map(key => forwardTargets.find(item => arkmeForwardTargetKey(item) === key))
       .filter((item): item is ArkmeSourceItem => item !== undefined)
     if (targets.length === 0) {
       setForwardTargetPicker({ ...forwardTargetPicker, sendError: '请选择转发对象' })
@@ -6485,7 +6519,7 @@ export function ArkmeSurface({
       return
     }
     await forwardMessageItems(forwardPickerMessageItems, targets, forwardTargetPicker.commentText)
-  }, [forwardMessageItems, forwardPickerMessageItems, forwardTargetPicker, showMessageActionStatus])
+  }, [forwardMessageItems, forwardPickerMessageItems, forwardTargetPicker, forwardTargets, showMessageActionStatus])
   const rememberConversationViewport = useConversationViewport({
     active: activeConversation,
     sourceKey: conversationKey,
@@ -7787,36 +7821,25 @@ export function ArkmeSurface({
                 }}
               />
             </div>
-            {forwardTargetPicker.loading && forwardTargetPicker.targets.length === 0
-              ? <div role="status" style={styles.forwardTargetStatus}>正在加载转发对象...</div>
-              : forwardTargetPicker.error !== ''
-                ? <div role="alert" style={styles.forwardTargetStatus}>{forwardTargetPicker.error}</div>
-                : forwardVisibleTargets.length === 0
-                  ? <div role="status" style={styles.forwardTargetStatus}>暂无可转发对象</div>
-                  : <ul style={styles.forwardTargetList} aria-label="转发对象列表">
-                    {forwardVisibleTargets.map(target => {
-                      const selected = forwardTargetPicker.selectedSourceRefs.includes(target.sourceRef)
-                      return <li key={target.sourceRef}>
-                        <button
-                          type="button"
-                          style={{ ...styles.forwardTargetRow, ...(selected ? styles.forwardTargetRowSelected : {}) }}
-                          aria-pressed={selected}
-                          onClick={() => { toggleForwardTarget(target) }}
-                        >
-                          <span
-                            style={{ ...styles.forwardTargetCheck, ...(selected ? styles.forwardTargetCheckSelected : {}) }}
-                            aria-hidden
-                          >✓</span>
-                          <ArkmeDirectorySourceAvatar source={target} size={38} />
-                          <span style={styles.forwardTargetText}>
-                            <span style={styles.forwardTargetName}><ArkmeRichText text={target.displayName} presentation="preview" /></span>
-                            <span style={styles.forwardTargetMeta}><ArkmeRichText text={target.latestPreview?.trim() || arkmeForwardTargetMeta(target)} presentation="preview" /></span>
-                          </span>
-                          <span style={styles.forwardTargetTime}>{arkmeForwardTargetTimeLabel(target.activeAtMillis)}</span>
-                        </button>
-                      </li>
-                    })}
-                  </ul>}
+            <ul style={styles.forwardTargetList} aria-label="转发对象列表">
+              {(forwardSelfTarget !== undefined || forwardTargetPicker.keyword.trim() === '') && <li key="send_to_self">
+                {forwardSelfTarget !== undefined ? renderForwardTargetButton(forwardSelfTarget) : <div
+                  aria-disabled="true" aria-label="发给自己暂不可用" style={{ ...styles.forwardTargetRow, cursor: 'default' }}>
+                  <span style={styles.forwardTargetCheck} aria-hidden />
+                  <ArkmeDirectorySourceAvatar source={{ kind: 'send_to_self' }} size={38} />
+                  <span style={styles.forwardTargetText}>
+                    <span style={styles.forwardTargetName}>发给自己</span>
+                    <span style={styles.forwardTargetMeta}>默认分类</span>
+                  </span>
+                </div>}
+              </li>}
+              {forwardVisibleTargets.filter(target => target.kind !== 'send_to_self').map(target =>
+                <li key={arkmeForwardTargetKey(target)}>{renderForwardTargetButton(target)}</li>)}
+              {forwardVisibleTargets.length === 0 && <li role="status" style={styles.forwardTargetStatus}>
+                {forwardDirectory.loading ? '正在加载转发对象...' : '暂无可转发对象'}
+              </li>}
+            </ul>
+            {forwardDirectory.error !== '' && <div role="alert" style={styles.forwardTargetStatus}>{forwardDirectory.error}</div>}
             {forwardSelectedTargets.length > 0 && <footer style={styles.forwardTargetFooter}>
               <div style={styles.forwardTargetRecipients}>
                 <span>发送给：</span>

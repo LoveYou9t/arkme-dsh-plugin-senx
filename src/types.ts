@@ -3461,6 +3461,7 @@ export type ArkmePluginOperation =
   | 'extensions.reviews.create'
   | 'extensions.audit.check'
   | 'sources.list'
+  | 'sources.self-target'
   | 'conversation.directory.bot-pin'
   | 'conversation.directory.visibility.query'
   | 'conversation.directory.visibility.set'
