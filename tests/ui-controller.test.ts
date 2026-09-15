@@ -279,17 +279,17 @@ describe('ArkmeUiController', () => {
     })
   })
 
-  it('opens and consumes an exact conversation message target', () => {
+  it.each([undefined, 7, '6690025278483443577'])('opens and consumes an exact conversation message target for %s', (ownerId) => {
     const controller = new ArkmeUiController()
     const source = {
       sourceRef: 'source-search', kind: 'group_chat', displayName: '发布会项目群', activeAtMillis: 1, unreadCount: 0,
     } as const
 
-    controller.showConversationTarget(source, 'record-search-1', 123)
+    controller.showConversationTarget(source, 'record-search-1', 123, ownerId)
     const target = controller.getSnapshot().conversationTarget
     expect(controller.getSnapshot()).toMatchObject({
       mode: 'source', selectedSource: source,
-      conversationTarget: { itemUid: 'record-search-1', sendAtMillis: 123 },
+      conversationTarget: { itemUid: 'record-search-1', sendAtMillis: 123, ...(ownerId === undefined ? {} : { recordOwnerUserId: ownerId }) },
     })
 
     controller.consumeConversationTarget(target?.revision ?? 0)

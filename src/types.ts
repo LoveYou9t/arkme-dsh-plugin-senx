@@ -1,3 +1,4 @@
+import type { RecordOwnerId } from './record-owner-id.js'
 export type { ArkmeLinkMetadata } from './link-metadata.js'
 
 export type ArkmeEnvironment = 'test' | 'prod'
@@ -991,7 +992,7 @@ export interface ArkmeImageSearchResult {
 export interface ArkmeSearchRecordItem {
   recordUid: string
   /** Record owner required by Chat's exact timeline locator; never the current viewer. */
-  recordOwnerUserId?: number
+  recordOwnerUserId?: RecordOwnerId
   sourceKind: number
   sourceUid?: string
   routeTargetKind: string
@@ -1642,6 +1643,7 @@ export interface ArkmeTimelineItem {
   messageActionRef?: string
   /** Account- and conversation-bound opaque reference for actions on the sender. */
   memberRef?: string
+  senderKind?: 'human' | 'bot'
   senderName: string
   agentSource?: ArkmeTimelineAgentSource
   /** Opaque Provider image reference for the concrete message sender. */
@@ -1695,7 +1697,7 @@ export interface ArkmeTimelineExtensionParent {
   textContent: string
   textFormat?: 'plain' | 'markdown'
   /** Authoritative record owner required by Chat's exact around lookup. */
-  recordOwnerUserId?: number
+  recordOwnerUserId?: RecordOwnerId
   sequence?: number
   sendAtMillis?: number
   contentBlocks?: ArkmeContentBlock[]
@@ -2162,7 +2164,7 @@ export type ArkmeMessageCopyLinkPresentationNode =
 export interface ArkmeMessageCopyLinkSourceAnchor {
   relationUid: string
   recordUid: string
-  recordOwnerUserId: number
+  recordOwnerUserId: RecordOwnerId
   sequence: number
 }
 
@@ -2171,7 +2173,7 @@ export interface ArkmeMessageCopyLinkExtensionItem extends ArkmeMessageCopyLinkS
   /** Record this extension directly continues; used to render the desktop two-level tree. */
   parentRecordUid?: string
   /** Owner required by the durable chat extension endpoint when this item becomes the next target. */
-  recordOwnerUserId?: number
+  recordOwnerUserId?: RecordOwnerId
   level: number
 }
 

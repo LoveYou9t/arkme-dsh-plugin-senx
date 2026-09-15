@@ -1,3 +1,4 @@
+import { recordOwnerId } from '../record-owner-id.js'
 import { createHash, randomUUID } from 'node:crypto'
 import type {
   ArkmeCachedQueryResult,
@@ -485,10 +486,10 @@ export class SearchService {
     const linkMatch = textContent.match(/https:\/\/[^\s<>()]+/u)
     const sourceTitle = stringValue(topic.title ?? chat.title).trim()
     const creationSource = Math.trunc(numberValue(core.creation_source ?? item.creation_source))
-    const recordOwnerUserId = numberValue(core.owner_user_id)
+    const recordOwnerUserId = recordOwnerId(core.owner_user_id)
     return {
       recordUid,
-      ...(Number.isSafeInteger(recordOwnerUserId) && recordOwnerUserId > 0 ? { recordOwnerUserId } : {}),
+      ...(recordOwnerUserId !== 0 ? { recordOwnerUserId } : {}),
       sourceKind: Math.trunc(numberValue(item.source_kind)),
       ...(stringValue(item.source_uid).trim() === '' ? {} : { sourceUid: stringValue(item.source_uid).trim() }),
       routeTargetKind: stringValue(item.route_target_kind).trim(),

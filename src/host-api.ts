@@ -1,3 +1,4 @@
+import { recordOwnerId } from './record-owner-id.js'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { readDirectoryPage } from './directory-reader.js'
 import { ArkmePluginError, ArkmeService } from './arkme-service.js'
@@ -1656,7 +1657,7 @@ export async function dispatchArkmeHostOperation(
     case 'source.timeline-around': return await service.readSourceAround(
       stringParam(params, 'sourceRef'),
       stringParam(params, 'itemUid'),
-      numberParam(params, 'recordOwnerUserId', 0),
+      recordOwnerId(params.recordOwnerUserId),
       {
         beforeLimit: numberParam(params, 'beforeLimit', 20),
         afterLimit: numberParam(params, 'afterLimit', 20),

@@ -3370,7 +3370,7 @@ describe('ArkmeService', () => {
       } })
       if (url.endsWith('/api/v1/chats/display-snapshots')) return json({ code: 200, data: { items: [{
         session: { chat_session_uid: 'group-mention' },
-        bot_participants: [{ chat_session_uid: 'group-mention', bot_uid: 'mention-bot', display_name_snapshot: '群助手' }],
+        bot_participants: [{ chat_session_uid: 'group-mention', bot_uid: 'mention-bot', display_name_snapshot: '群助手', extra: { avatar_url: 'https://images.test/mention-bot.png' } }],
       }] } })
       if (url.endsWith('/api/v1/chats/records/send')) return json({ code: 200, data: {
         record_uid: body.record_uid, rel_uid: body.rel_uid, seq: 18, audit_status: 1,

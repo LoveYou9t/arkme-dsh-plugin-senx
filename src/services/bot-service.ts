@@ -1,3 +1,4 @@
+import type { BotDisplayProfiles } from '../chat-sender-display.js'
 import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto'
 import { isArkmeBotAvatarRef } from '../bot-avatar-ref.js'
 import type { ArkmeSessionCredentials } from '../keychain-store.js'
@@ -516,6 +517,21 @@ export class BotService {
       throw new ArkmePluginError('bot-group-source-invalid', 'Bot 只能安装到群聊', false)
     }
     return source
+  }
+
+  // 展示读取不构造会话能力或签名引用，也不触发登录刷新。
+  async senderDisplayProfiles(
+    session: ArkmeSessionCredentials,
+    signal?: AbortSignal,
+  ): Promise<BotDisplayProfiles> {
+    const data = await this.runtime.authenticatedBotPost<Record<string, unknown>>(
+      '/api/v1/bot/list', {}, session, signal,
+      { refreshOnUnauthorized: false, key: 'bot-sender-display-names' },
+    )
+    return new Map(listValue(data.bots).map(value => {
+      const raw = objectValue(value)
+      return [stringValue(raw.bot_id).trim(), { displayName: stringValue(raw.name).trim(), avatarUrl: stringValue(raw.avatar_url).trim() || stringValue(raw.avatar).trim() }] as const
+    }).filter(([uid]) => uid !== ''))
   }
 
   async listMentionableGroupBots(
