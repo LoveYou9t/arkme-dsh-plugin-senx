@@ -1689,8 +1689,8 @@ function ArkmeExtensionParentPreview({ parent, isMe, onSelect }: {
             draggable={false}
             style={styles.extensionParentImage}
           />
-          {block.dynamicPhoto !== undefined && <span aria-label="实况照片" style={{ position: 'absolute', display: 'flex', left: 4, bottom: 4, pointerEvents: 'none' }}>
-            <ArkmeLivePhotoBadge compact playable={block.dynamicPhoto.motion !== undefined} />
+          {block.dynamicPhoto !== undefined && <span aria-label="实况照片" style={{ position: 'absolute', display: 'flex', left: 2, bottom: 2, pointerEvents: 'none' }}>
+            <ArkmeLivePhotoBadge variant="extension" />
           </span>}
         </span>
         : <span key={block.mediaRef} style={styles.extensionParentFile}>{block.fileName || '视频'}</span>)}

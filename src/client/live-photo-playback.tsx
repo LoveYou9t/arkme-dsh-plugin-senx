@@ -3,8 +3,6 @@ import type { ArkmeContentBlock } from '../types.js'
 import { arkmeLocalFileUrl, useArkmeOriginal } from './ArkmeFileViewer.js'
 import { ArkmeLivePhotoBadge } from './ArkmeLivePhotoBadge.js'
 
-const noMotion: ArkmeContentBlock = { kind: 'video', mediaRef: '', fileName: '', mimeType: '', size: 0, sortOrder: 0 }
-
 /** Disposable preview state; reception, authentication and retries stay with the existing file owner. */
 export function useArkmeLivePhotoPlayback(cover: ArkmeContentBlock) {
   const photo = cover.kind === 'image' ? cover.dynamicPhoto : undefined
@@ -12,7 +10,7 @@ export function useArkmeLivePhotoPlayback(cover: ArkmeContentBlock) {
   const identity = `${cover.mediaRef}\0${motion?.mediaRef ?? ''}`
   const [state, setState] = useState<{ identity: string; phase: 'loading' | 'playing' | 'failed'; error?: string }>()
   const phase = state?.identity === identity ? state.phase : undefined
-  const reception = useArkmeOriginal(motion ?? noMotion)
+  const reception = useArkmeOriginal(motion)
   const videoRef = useRef<HTMLVideoElement>(null)
   const requested = useRef(false)
   const active = phase === 'loading' || phase === 'playing'
@@ -56,7 +54,7 @@ export function useArkmeLivePhotoPlayback(cover: ArkmeContentBlock) {
         title={phase === 'loading' ? '实况加载中' : motion === undefined ? '实况动态片段不可用' : '播放实况'}
         disabled={active || motion === undefined} onClick={start}
         style={{ visibility: phase === 'playing' ? 'hidden' : 'visible', display: 'inline-flex', alignItems: 'center', gap: 6, border: 0, borderRadius: 16, padding: 0, background: 'transparent', color: '#fff', fontSize: 12, cursor: active ? 'progress' : motion === undefined ? 'default' : 'pointer' }}>
-        <ArkmeLivePhotoBadge playable={motion !== undefined} />
+        <ArkmeLivePhotoBadge />
         {phase === 'loading' && <span role="status">加载中</span>}
       </button>
       {phase === 'failed' && <span role="alert" style={{ position: 'absolute', bottom: 40, left: 0, width: 'max-content', maxWidth: 'min(320px, 70vw)', textAlign: 'left', fontSize: 12 }}>{state?.error}</span>}

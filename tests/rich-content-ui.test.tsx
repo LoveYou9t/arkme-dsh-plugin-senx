@@ -15,15 +15,17 @@ import { ArkmeTimelineDetailDrawer, ForwardRecordsDetail } from '../src/client/A
 import { arkmeClipboardImageFiles, arkmeShouldDismissAnchoredMenu, arkmeShouldToggleMessageSelectFromRowClick } from '../src/client/ArkmeSidebar.js'
 
 describe('Arkme rich content presentation', () => {
-  it('uses the Flutter Live ring geometry and marks unavailable motion without a video label', () => {
-    const compact = renderToStaticMarkup(<ArkmeLivePhotoBadge compact playable />)
+  it('uses the Flutter Live ring geometry without an unavailable-state glyph', () => {
+    const compact = renderToStaticMarkup(<ArkmeLivePhotoBadge variant="thumbnail" />)
     expect(compact).toContain('width="16" height="16"')
     expect(compact.match(/<circle /g)).toHaveLength(16)
     expect(compact).not.toContain('<path')
     expect(compact).not.toContain('LIVE')
-    const unavailable = renderToStaticMarkup(<ArkmeLivePhotoBadge compact playable={false} />)
-    expect(unavailable).toContain('d="M4 4.8 16 15.2"')
-    expect(renderToStaticMarkup(<ArkmeLivePhotoBadge playable />)).toContain('width="22" height="22"')
+    expect(compact).toContain('rgba(0,0,0,.36)')
+    const extension = renderToStaticMarkup(<ArkmeLivePhotoBadge variant="extension" />)
+    expect(extension).toContain('width:14px;height:14px')
+    expect(extension).toContain('width="12" height="12"')
+    expect(renderToStaticMarkup(<ArkmeLivePhotoBadge />)).toContain('width="22" height="22"')
   })
 
   it('positions a Live marker when metadata arrives after the cover and updates it after resize', async () => {
@@ -50,10 +52,10 @@ describe('Arkme rich content presentation', () => {
     try {
       await act(async () => { view = create(render(false), { createNodeMock: node => node.type === 'img' ? imageNode : node.props['data-arkme-live-photo-overlay'] ? control : null }) })
       await act(async () => view!.update(render(true)))
-      expect(control.style).toMatchObject({ left: '8px', top: '292px', visibility: 'visible' })
+      expect(control.style).toMatchObject({ left: '14px', top: '286px', visibility: 'visible' })
       width = 200
       resize()
-      expect(control.style).toMatchObject({ left: '8px', top: '242px' })
+      expect(control.style).toMatchObject({ left: '14px', top: '236px' })
       await act(async () => view!.update(render(false)))
       expect(disconnect).toHaveBeenCalledOnce()
       expect(imageNode.removeEventListener).toHaveBeenCalledWith('load', expect.any(Function))

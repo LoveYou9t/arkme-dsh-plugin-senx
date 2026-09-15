@@ -16,19 +16,19 @@ export function arkmeFileSize(size: number): string {
   return size >= 1024 * 1024 ? `${(size / 1024 / 1024).toFixed(1)} MB` : size >= 1024 ? `${(size / 1024).toFixed(1)} KB` : `${size} B`
 }
 
-export function useArkmeOriginal(block: ArkmeContentBlock, autoReceive = false, refreshKey?: unknown) {
-  const identity = block.localFileRef ?? block.originalRef ?? block.mediaRef
+export function useArkmeOriginal(block: ArkmeContentBlock | undefined, autoReceive = false, refreshKey?: unknown) {
+  const identity = block?.localFileRef ?? block?.originalRef ?? block?.mediaRef
   const [snapshot, setSnapshot] = useState<{ identity: string; value: ArkmeFileReception }>()
-  const reception: ArkmeFileReception = snapshot?.identity === identity ? snapshot.value : { state: 'missing', receivedBytes: 0, totalBytes: block.size }
+  const reception: ArkmeFileReception = identity !== undefined && snapshot?.identity === identity ? snapshot.value : { state: 'missing', receivedBytes: 0, totalBytes: block?.size ?? 0 }
   const [revision, setRevision] = useState(0)
   const [requested, setRequested] = useState<string>()
   useEffect(() => {
-    if (block.localFileRef !== undefined) return
+    if (identity === undefined || block?.localFileRef !== undefined) return
     let active = true
     const controller = new AbortController()
     let timer: ReturnType<typeof setTimeout> | undefined
-    setSnapshot({ identity, value: { state: 'missing', receivedBytes: 0, totalBytes: block.size } })
-    if (block.originalRef === undefined) return
+    setSnapshot({ identity, value: { state: 'missing', receivedBytes: 0, totalBytes: block?.size ?? 0 } })
+    if (block?.originalRef === undefined) return
     const listeners = receptionListeners.get(identity) ?? new Set<(value: ArkmeFileReception) => void>()
     const update = (value: ArkmeFileReception) => { if (active) setSnapshot({ identity, value }) }
     listeners.add(update); receptionListeners.set(identity, listeners)
@@ -39,7 +39,7 @@ export function useArkmeOriginal(block: ArkmeContentBlock, autoReceive = false, 
         publishReception(identity, value)
         if (value.state === 'receiving') timer = setTimeout(() => { void poll(false) }, 750)
       } catch (error) {
-        if (active) setSnapshot({ identity, value: { state: 'failed', receivedBytes: 0, totalBytes: block.size, error: error instanceof Error ? error.message : '文件接收失败' } })
+        if (active) setSnapshot({ identity, value: { state: 'failed', receivedBytes: 0, totalBytes: block?.size ?? 0, error: error instanceof Error ? error.message : '文件接收失败' } })
       }
     }
     void poll(autoReceive || requested === identity)
@@ -47,10 +47,11 @@ export function useArkmeOriginal(block: ArkmeContentBlock, autoReceive = false, 
       active = false; controller.abort(); if (timer !== undefined) clearTimeout(timer)
       listeners.delete(update); if (listeners.size === 0) receptionListeners.delete(identity)
     }
-  }, [identity, block.originalRef, block.localFileRef, block.size, autoReceive, requested, revision, refreshKey])
-  const localRef = block.localFileRef ?? reception.file?.fileRef
+  }, [identity, block?.originalRef, block?.localFileRef, block?.size, autoReceive, requested, revision, refreshKey])
+  const localRef = block?.localFileRef ?? reception.file?.fileRef
   return { reception, localRef, receive: () => {
-    setSnapshot({ identity, value: { state: 'missing', receivedBytes: 0, totalBytes: block.size } })
+    if (identity === undefined) return
+    setSnapshot({ identity, value: { state: 'missing', receivedBytes: 0, totalBytes: block?.size ?? 0 } })
     setRequested(identity); setRevision(value => value + 1)
   } }
 }

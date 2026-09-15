@@ -5545,10 +5545,12 @@ describe('conversation send directory projection', () => {
     expect(childLine.findAllByType(ArkmeTimelineMessageHeader)).toHaveLength(0)
   })
 
-  it.each(['plain', 'live', 'cover-only', 'local-live'] as const)('renders %s extension attachments without changing parent navigation', async kind => {
+  it.each(([
+    'plain', 'live', 'cover-only', 'local-live',
+  ] as const).flatMap(kind => [true, false].map(isMe => ({ kind, isMe }))))('renders $kind extension attachments (isMe=$isMe) without changing parent navigation', async ({ kind, isMe }) => {
     const motion = { kind: 'video' as const, mediaRef: 'motion-ref', fileName: 'motion.mp4', sortOrder: 1 }
     timeline = [{
-      itemUid: 'extension-child', senderName: '我', isMe: true, sendAtMillis: 12,
+      itemUid: 'extension-child', senderName: isMe ? '我' : '同事', isMe, sendAtMillis: 12,
       title: '', textContent: '延展内容', status: 1,
       extensionParent: {
         itemUid: 'extension-parent', senderName: '同事', title: '', textContent: '原消息',
@@ -5579,8 +5581,10 @@ describe('conversation send directory projection', () => {
     if (kind !== 'plain') {
       expect(badges[0].parent).toBe(image.parent)
       expect(image.parent!.props.style).toMatchObject({ position: 'relative', display: 'flex', alignSelf: 'center', flex: 'none' })
-      expect(badges[0].props.style).toMatchObject({ display: 'flex', left: 4, bottom: 4, pointerEvents: 'none' })
-      expect(badges[0].findAllByType('path')).toHaveLength(kind === 'cover-only' ? 1 : 0)
+      expect(badges[0].props.style).toMatchObject({ display: 'flex', left: 2, bottom: 2, pointerEvents: 'none' })
+      expect(badges[0].findByProps({ 'data-arkme-live-photo-badge': true }).props.style).toMatchObject({ width: 14, height: 14 })
+      expect(badges[0].findByType('svg').props).toMatchObject({ width: 12, height: 12 })
+      expect(badges[0].findAllByType('path')).toHaveLength(0)
     }
     const navigate = vi.spyOn(arkmeUi, 'showConversationTarget').mockImplementation(() => {})
     preview.props.onClick()

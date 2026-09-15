@@ -395,8 +395,8 @@ function MediaGallery({ blocks, failures, retryVersions, onOpen, onFailure, onRe
             <video src={src} muted playsInline preload="metadata" style={styles.videoPreview} aria-hidden onError={event => { onFailure(block, event.currentTarget.error?.code === 4 || !arkmeCanInlineLocalFile(block.mimeType, block.fileName) ? 'unsupported' : 'retryable') }} />
             <span style={styles.videoBadge} aria-hidden>▶ {durationLabel(block.durationSec)}</span>
           </>}
-        {block.kind === 'image' && block.dynamicPhoto !== undefined && <span style={{ position: 'absolute', display: 'flex', left: 4, bottom: 4, pointerEvents: 'none' }} aria-label="实况照片">
-          <ArkmeLivePhotoBadge compact playable={block.dynamicPhoto.motion !== undefined} />
+        {block.kind === 'image' && block.dynamicPhoto !== undefined && <span style={{ position: 'absolute', display: 'flex', left: 6, bottom: 6, pointerEvents: 'none' }} aria-label="实况照片">
+          <ArkmeLivePhotoBadge variant="thumbnail" />
         </span>}
         <UploadProgress block={block} />
       </button>
@@ -568,8 +568,8 @@ export function ArkmeMediaPreview({ blocks, selected, onSelect, onClose, preview
       const canvas = image.parentElement?.getBoundingClientRect()
       if (canvas === undefined || image.naturalWidth === 0) return
       const bounds = imagePreviewContentBounds(image, imageMode)
-      control.style.left = `${bounds.left - canvas.left + 8}px`
-      control.style.top = `${bounds.top - canvas.top + bounds.height - 8}px`
+      control.style.left = `${bounds.left - canvas.left + 14}px`
+      control.style.top = `${bounds.top - canvas.top + bounds.height - 14}px`
       control.style.visibility = 'visible'
     }
     placeControl()
