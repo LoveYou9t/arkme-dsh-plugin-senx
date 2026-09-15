@@ -716,6 +716,20 @@ function chatRecordOwnerUserId(
   return 0
 }
 
+function chatTimelineItemSupportsQuickNoteDetails(
+  relation: Record<string, unknown>,
+  recordOwnerUserId: RecordOwnerId,
+): boolean {
+  const senderActorKind = integerLikeValue(relation.sender_actor_kind ?? relation.senderActorKind)
+  const senderBotUid = stringValue(relation.sender_bot_uid ?? relation.senderBotUid).trim()
+  // Legacy webhook Bots can be projected as human actors with synthetic int64
+  // owners. Match relatedQuickNoteLocator's identity requirements before the
+  // drawer requests owner-scoped related notes or extensions.
+  return senderActorKind !== 2 && senderBotUid === ''
+    && typeof recordOwnerUserId === 'number'
+    && Number.isSafeInteger(recordOwnerUserId) && recordOwnerUserId > 0
+}
+
 function epochMillisValue(value: unknown): number {
   const timestamp = integerLikeValue(value)
   return timestamp > 0 && timestamp < 100_000_000_000 ? timestamp * 1000 : timestamp
@@ -4833,7 +4847,7 @@ export class ChatService {
         const isMe = !isBot && senderUserId === session.userId
         const relationUid = stringValue(relation.rel_uid ?? relation.relUid).trim()
         const recordOwnerUserId = chatRecordOwnerUserId(relation, record, payload, senderUserId)
-        const quickNoteDetailsSupported = recordOwnerUserId !== 0
+        const quickNoteDetailsSupported = chatTimelineItemSupportsQuickNoteDetails(relation, recordOwnerUserId)
         const aiPolish = this.aiPolish.timelineAiPolish(record, payload)
         const sendAtMillis = numberValue(relation.attach_at ?? payload.send_at)
         const forwardRecords = await this.chatForwardRecordsPreview(item, session.userId, sendAtMillis)
@@ -5708,7 +5722,7 @@ export class ChatService {
       const isBot = timelineSenderIsBot(relation)
       const isMe = !isBot && senderUserId === session.userId
       const recordOwnerUserId = chatRecordOwnerUserId(relation, record, payload, senderUserId)
-      const quickNoteDetailsSupported = recordOwnerUserId !== 0
+      const quickNoteDetailsSupported = chatTimelineItemSupportsQuickNoteDetails(relation, recordOwnerUserId)
       const aiPolish = this.aiPolish.timelineAiPolish(record, payload)
       const sendAtMillis = numberValue(relation.attach_at ?? payload.send_at)
       const forwardRecords = await this.chatForwardRecordsPreview(item, session.userId, sendAtMillis)
