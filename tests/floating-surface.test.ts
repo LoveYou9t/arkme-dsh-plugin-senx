@@ -173,6 +173,13 @@ describe('Arkme persistent conversation frame', () => {
     expect(arkmeSourceShowsMessageAvatars(undefined)).toBe(false)
   })
 
+  it('labels Bot senders without treating human names as Bot identity', () => {
+    const item: ArkmeTimelineItem = { itemUid: 'bot-record', senderName: '1', senderKind: 'bot',
+      isMe: false, sendAtMillis: 1, title: '', textContent: '', status: 1 }
+    expect(renderToStaticMarkup(createElement(ArkmeTimelineMessageHeader, { item }))).toContain('BOT')
+    expect(renderToStaticMarkup(createElement(ArkmeTimelineMessageHeader, { item: { ...item, senderKind: 'human' } }))).not.toContain('BOT')
+  })
+
   it('puts time before nickname for own messages and keeps nickname before time for received messages', () => {
     const sendAtMillis = new Date(2026, 7, 21, 16, 38).getTime()
     const ownItem: ArkmeTimelineItem = {

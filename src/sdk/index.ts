@@ -1,3 +1,4 @@
+import { recordOwnerId, type RecordOwnerId } from '../record-owner-id.js'
 import { ARKME_MESSAGE_READ_RECEIPT_MAX_ITEMS, ARKME_PROVIDER_CONTRACT_VERSION } from '../types.js'
 import type { ArkmeDirectMessageAdmission } from '../direct-message-admission.js'
 export type { ArkmeDirectMessageAdmission, ArkmeDirectMessageAdmissionPort } from '../direct-message-admission.js'
@@ -1553,10 +1554,10 @@ export class ArkmeSdk {
   async readSourceAround(
     sourceRef: string,
     itemUid: string,
-    recordOwnerUserId: number,
+    recordOwnerUserId: RecordOwnerId,
     options: { beforeLimit?: number; afterLimit?: number; signal?: AbortSignal } = {},
   ): Promise<ArkmeTimelineAroundPage> {
-    if (sourceRef.trim() === '' || itemUid.trim() === '' || !Number.isSafeInteger(recordOwnerUserId) || recordOwnerUserId <= 0) {
+    if (sourceRef.trim() === '' || itemUid.trim() === '' || recordOwnerId(recordOwnerUserId) === 0) {
       throw new TypeError('Arkme timeline around requires a source, record uid, and record owner')
     }
     return await this.call<ArkmeTimelineAroundPage>('source.timeline-around', {

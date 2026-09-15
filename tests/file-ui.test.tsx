@@ -14,6 +14,39 @@ const original = { localRef: 'arkme-file-v1.00000000-0000-4000-8000-000000000001
 afterEach(() => { vi.unstubAllGlobals(); vi.useRealTimers(); vi.restoreAllMocks(); vi.clearAllMocks() })
 
 describe('file save UI', () => {
+  it('keeps absent resources idle and cancels reception when the resource disappears', async () => {
+    let signal: AbortSignal | undefined
+    const receive = vi.spyOn(ArkmeSdk.prototype, 'receiveFile').mockImplementation(async (_ref, _start, incomingSignal) => {
+      signal = incomingSignal
+      return { state: 'missing', receivedBytes: 0, totalBytes: 3 }
+    })
+    let current!: ReturnType<typeof useArkmeOriginal>
+    function Probe({ present }: { present: boolean }) {
+      current = useArkmeOriginal(present ? { ...block, originalRef: 'original' } : undefined)
+      return null
+    }
+    let view!: ReactTestRenderer
+    try {
+      await act(async () => { view = create(<Probe present={false} />) })
+      await act(async () => current.receive())
+      expect(receive).not.toHaveBeenCalled()
+      expect(current.localRef).toBeUndefined()
+      await act(async () => view.update(<Probe present />))
+      expect(receive).toHaveBeenCalledWith('original', false, expect.any(AbortSignal))
+      await act(async () => current.receive())
+      expect(receive).toHaveBeenLastCalledWith('original', true, expect.any(AbortSignal))
+      const activeSignal = signal!
+      await act(async () => view.update(<Probe present={false} />))
+      expect(activeSignal.aborted).toBe(true)
+      const count = receive.mock.calls.length
+      await act(async () => current.receive())
+      expect(receive).toHaveBeenCalledTimes(count)
+      expect(current.localRef).toBeUndefined()
+    } finally {
+      await act(async () => view.unmount())
+    }
+  })
+
   it('uses cross-record file navigation without falling back to current-record selection', async () => {
     vi.stubGlobal('document', { body: {}, activeElement: null })
     const next = vi.fn(), select = vi.fn()

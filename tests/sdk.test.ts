@@ -868,7 +868,7 @@ describe('Arkme SDK', () => {
     ])
   })
 
-  it('requests an exact chat timeline window around a record', async () => {
+  it.each([7, '6690025278483443577'])('requests an exact chat timeline window around a record for %s', async (ownerId) => {
     const calls: Array<{ operation: string; params?: Record<string, unknown> }> = []
     const sdk = createArkmeSdk({ fetchImpl: async (_input, init) => {
       calls.push(JSON.parse(String(init?.body)))
@@ -879,11 +879,11 @@ describe('Arkme SDK', () => {
       })
     } })
 
-    await expect(sdk.readSourceAround('source-1', 'record-1', 7, { beforeLimit: 20, afterLimit: 30 }))
+    await expect(sdk.readSourceAround('source-1', 'record-1', ownerId, { beforeLimit: 20, afterLimit: 30 }))
       .resolves.toMatchObject({ anchorItemUid: 'record-1' })
     expect(calls).toEqual([{
       operation: 'source.timeline-around',
-      params: { sourceRef: 'source-1', itemUid: 'record-1', recordOwnerUserId: 7, beforeLimit: 20, afterLimit: 30 },
+      params: { sourceRef: 'source-1', itemUid: 'record-1', recordOwnerUserId: ownerId, beforeLimit: 20, afterLimit: 30 },
     }])
   })
 
