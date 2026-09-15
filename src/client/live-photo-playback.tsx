@@ -49,7 +49,7 @@ export function useArkmeLivePhotoPlayback(cover: ArkmeContentBlock) {
       onPlaying={() => setState({ identity, phase: 'playing' })}
       onEnded={finish} onPause={event => { if (videoRef.current === event.currentTarget && phase === 'playing') finish() }} onError={() => fail('动态片段播放失败，请重试')}
     /> : null,
-    control: photo === undefined ? null : <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, marginRight: 12 }}>
+    control: photo === undefined ? null : <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
       <button type="button" data-arkme-live-photo-control
         aria-label={phase === 'loading' ? '实况加载中' : motion === undefined ? '实况动态片段不可用' : '播放实况'}
         aria-busy={phase === 'loading'}

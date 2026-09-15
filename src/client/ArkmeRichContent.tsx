@@ -537,6 +537,7 @@ export function ArkmeMediaPreview({ blocks, selected, onSelect, onClose, preview
   const filePreview = selected.kind === 'file' || forceDownload
   const viewportRef = useRef<HTMLDivElement>(null)
   const previewImageRef = useRef<HTMLImageElement>(null)
+  const liveControlRef = useRef<HTMLDivElement>(null)
   const zoomAnimationRef = useRef<Animation>()
   const zoomFromRef = useRef<ImagePreviewRect>()
   const draggedRef = useRef(false)
@@ -557,6 +558,25 @@ export function ArkmeMediaPreview({ blocks, selected, onSelect, onClose, preview
   const { notice: actionNotice, showNotice: showActionNotice, clearNotice: clearActionNotice } = useArkmeFileActionNotice()
   const previousDisabled = navigation === undefined ? index <= 0 : navigation.previous === undefined
   const nextDisabled = navigation === undefined ? index >= blocks.length - 1 : navigation.next === undefined
+
+  useLayoutEffect(() => {
+    const image = previewImageRef.current
+    const control = liveControlRef.current
+    if (image === null || control === null) return
+    const placeControl = () => {
+      const canvas = image.parentElement?.getBoundingClientRect()
+      if (canvas === undefined || image.naturalWidth === 0) return
+      const bounds = imagePreviewContentBounds(image, imageMode)
+      control.style.left = `${bounds.left - canvas.left + 8}px`
+      control.style.top = `${bounds.top - canvas.top + bounds.height - 8}px`
+      control.style.visibility = 'visible'
+    }
+    placeControl()
+    image.addEventListener('load', placeControl)
+    const observer = typeof ResizeObserver === 'undefined' ? undefined : new ResizeObserver(placeControl)
+    observer?.observe(image)
+    return () => { image.removeEventListener('load', placeControl); observer?.disconnect() }
+  }, [selected.mediaRef, originalUrl, imageMode])
 
   useEffect(() => cancelBlankClick, [selected.mediaRef, onClose])
   useEffect(() => () => {
@@ -761,7 +781,7 @@ export function ArkmeMediaPreview({ blocks, selected, onSelect, onClose, preview
             onPointerUp={endImageDrag}
             onPointerCancel={endImageDrag}
           >
-            <div style={imageMode === 'contained' ? styles.previewCanvasContained : { width: zoomSize?.width, height: zoomSize?.height, minWidth: '100%', minHeight: '100%', display: 'grid', placeItems: 'center' }}>
+            <div style={{ ...(imageMode === 'contained' ? styles.previewCanvasContained : { width: zoomSize?.width, height: zoomSize?.height, minWidth: '100%', minHeight: '100%', display: 'grid', placeItems: 'center' }), position: 'relative' }}>
               <img
                 ref={previewImageRef}
                 src={originalUrl}
@@ -769,13 +789,15 @@ export function ArkmeMediaPreview({ blocks, selected, onSelect, onClose, preview
                 draggable={false}
                 style={{ ...(imageMode === 'contained' ? styles.previewImageContained : { display: 'block', width: zoomSize?.width, height: zoomSize?.height, maxWidth: 'none', userSelect: 'none' as const }), cursor: 'inherit' }}
               />
+              {livePhoto.control !== null && <div ref={liveControlRef} data-arkme-live-photo-overlay style={{ position: 'absolute', visibility: 'hidden', transform: 'translateY(-100%)', zIndex: 1 }} onPointerDown={event => event.stopPropagation()} onDoubleClick={event => event.stopPropagation()}>
+                {livePhoto.control}
+              </div>}
             </div>
           </div>
           : <video src={originalUrl} controls autoPlay playsInline style={styles.previewMedia} aria-label={selected.fileName} />}
       </div>
       {livePhoto.video !== null && <div style={styles.previewStage}>{livePhoto.video}</div>}
       <div style={styles.previewActions} data-arkme-media-preview-actions="bottom">
-        {livePhoto.control}
         <ArkmeFileActionNavButton label="上一个媒体" direction="left" disabled={previousDisabled} onClick={() => { if (!previousDisabled) { if (navigation) navigation.previous?.(); else selectMedia(blocks[index - 1]!) } }} />
         <span aria-hidden style={styles.previewActionWideGap} />
         <ArkmeFileActionNavButton label="下一个媒体" direction="right" disabled={nextDisabled} onClick={() => { if (!nextDisabled) { if (navigation) navigation.next?.(); else selectMedia(blocks[index + 1]!) } }} />

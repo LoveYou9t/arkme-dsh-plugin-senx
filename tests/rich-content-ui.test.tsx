@@ -35,6 +35,8 @@ describe('Arkme rich content presentation', () => {
     try {
       await act(async () => { view = create(<ArkmeMediaPreview blocks={[image]} selected={image} onSelect={() => {}} onClose={() => {}} />) })
       const live = () => view!.root.findByProps({ 'data-arkme-live-photo-control': true })
+      expect(view!.root.findByProps({ 'data-arkme-media-preview-actions': 'bottom' }).findAllByProps({ 'data-arkme-live-photo-control': true })).toHaveLength(0)
+      expect(view!.root.findByProps({ 'data-arkme-live-photo-overlay': true }).findAllByProps({ 'data-arkme-live-photo-control': true })).toHaveLength(1)
       expect(live().props.style.visibility).not.toBe('hidden')
       await act(async () => live().props.onClick())
       expect(live().props.disabled).toBe(true)
