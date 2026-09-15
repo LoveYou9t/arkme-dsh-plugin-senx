@@ -812,9 +812,10 @@ export function ArkmeTimelineDetailDrawer({
   })
   const messageActionRef = item.messageActionRef?.trim() ?? ''
   const normalizedSourceRef = sourceRef?.trim() ?? ''
+  const quickNoteDetailsSupported = item.quickNoteDetailsSupported !== false
   const loadRelated = useCallback(() => {
     listAbortRef.current?.abort()
-    if (normalizedSourceRef === '' || messageActionRef === '') {
+    if (!quickNoteDetailsSupported || normalizedSourceRef === '' || messageActionRef === '') {
       setRelatedState({ kind: 'idle' })
       return
     }
@@ -831,10 +832,10 @@ export function ArkmeTimelineDetailDrawer({
       if (controller.signal.aborted || listAbortRef.current !== controller) return
       setRelatedState({ kind: 'error', message: relatedQuickNoteErrorMessage(error, '相关快记加载失败') })
     })
-  }, [messageActionRef, normalizedSourceRef])
+  }, [messageActionRef, normalizedSourceRef, quickNoteDetailsSupported])
   const loadExtensionContext = useCallback(() => {
     extensionAbortRef.current?.abort()
-    if (normalizedSourceRef === '' || messageActionRef === '') {
+    if (!quickNoteDetailsSupported || normalizedSourceRef === '' || messageActionRef === '') {
       setExtensionState({ kind: 'idle' })
       return
     }
@@ -851,7 +852,7 @@ export function ArkmeTimelineDetailDrawer({
       if (controller.signal.aborted || extensionAbortRef.current !== controller) return
       setExtensionState({ kind: 'error', message: relatedQuickNoteErrorMessage(error, '延展加载失败') })
     })
-  }, [messageActionRef, normalizedSourceRef])
+  }, [messageActionRef, normalizedSourceRef, quickNoteDetailsSupported])
   const loadRelatedDetail = useCallback((relatedItem: ArkmeRelatedQuickNoteItem) => {
     detailAbortRef.current?.abort()
     if (normalizedSourceRef === '') return
@@ -933,7 +934,7 @@ export function ArkmeTimelineDetailDrawer({
   const textContent = showOriginal && item.aiPolish?.originalText !== undefined ? item.aiPolish.originalText
     : item.aiPolish?.state === 'polished' && item.aiPolish.polishedText !== undefined ? item.aiPolish.polishedText : item.textContent
   const canToggle = item.aiPolish?.state === 'polished' && item.aiPolish.originalText !== undefined && item.aiPolish.polishedText !== undefined
-  const extensionFooter = !canExtend || normalizedSourceRef === '' || messageActionRef === '' ? undefined : <DetailExtensionComposer
+  const extensionFooter = !quickNoteDetailsSupported || !canExtend || normalizedSourceRef === '' || messageActionRef === '' ? undefined : <DetailExtensionComposer
     sourceRef={normalizedSourceRef}
     sourceKind={sourceKind}
     conversationMembers={conversationMembers}
@@ -996,13 +997,13 @@ export function ArkmeTimelineDetailDrawer({
       />
     </div>
     {sourceBadge}
-    {item.extensionParent !== undefined && <DetailExtensionParent parent={item.extensionParent} />}
-    <ArkmeRelatedQuickNotesCard
+    {quickNoteDetailsSupported && item.extensionParent !== undefined && <DetailExtensionParent parent={item.extensionParent} />}
+    {quickNoteDetailsSupported && <ArkmeRelatedQuickNotesCard
       state={relatedState}
       onOpen={() => { navigateRelated('related-list') }}
       onRetry={loadRelated}
-    />
-    <DetailExtensionContext
+    />}
+    {quickNoteDetailsSupported && <DetailExtensionContext
       state={extensionState}
       optimistic={optimisticExtensions}
       {...(selectedExtensionRecordUid === undefined ? {} : { selectedRecordUid: selectedExtensionRecordUid })}
@@ -1013,7 +1014,7 @@ export function ArkmeTimelineDetailDrawer({
       isMentionClickable={mentionOpensMemberProfile}
       onRetry={loadExtensionContext}
       onSelect={extension => { setSelectedExtensionRecordUid(extension.recordUid) }}
-    />
+    />}
     {memberProfile !== undefined && <ArkmeMemberProfileCard
       member={memberProfile}
       showTopicNickname={sourceKind === 'group_chat'}

@@ -4833,6 +4833,7 @@ export class ChatService {
         const isMe = !isBot && senderUserId === session.userId
         const relationUid = stringValue(relation.rel_uid ?? relation.relUid).trim()
         const recordOwnerUserId = chatRecordOwnerUserId(relation, record, payload, senderUserId)
+        const quickNoteDetailsSupported = recordOwnerUserId !== 0
         const aiPolish = this.aiPolish.timelineAiPolish(record, payload)
         const sendAtMillis = numberValue(relation.attach_at ?? payload.send_at)
         const forwardRecords = await this.chatForwardRecordsPreview(item, session.userId, sendAtMillis)
@@ -4893,6 +4894,7 @@ export class ChatService {
               contentBlocks,
             }), signingKey),
           }),
+          ...(quickNoteDetailsSupported ? {} : { quickNoteDetailsSupported: false }),
           ...(!isBot && senderUserId > 0 ? { memberRef: await this.sealChatMemberRef(session.userId, chatSessionUid, senderUserId) } : {}),
           senderName,
           ...(agentSource === undefined ? {} : { agentSource }),
@@ -5706,6 +5708,7 @@ export class ChatService {
       const isBot = timelineSenderIsBot(relation)
       const isMe = !isBot && senderUserId === session.userId
       const recordOwnerUserId = chatRecordOwnerUserId(relation, record, payload, senderUserId)
+      const quickNoteDetailsSupported = recordOwnerUserId !== 0
       const aiPolish = this.aiPolish.timelineAiPolish(record, payload)
       const sendAtMillis = numberValue(relation.attach_at ?? payload.send_at)
       const forwardRecords = await this.chatForwardRecordsPreview(item, session.userId, sendAtMillis)
@@ -5774,6 +5777,7 @@ export class ChatService {
             contentBlocks,
           }), signingKey),
         }),
+        ...(quickNoteDetailsSupported ? {} : { quickNoteDetailsSupported: false }),
         ...(!isBot && senderUserId > 0 ? { memberRef: await this.sealChatMemberRef(session.userId, source.ownerRef, senderUserId) } : {}),
         senderName,
         ...(isBot ? { senderKind: 'bot' as const } : {}),
