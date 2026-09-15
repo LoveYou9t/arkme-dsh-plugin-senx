@@ -1,3 +1,4 @@
+import { stringifyOwnerJson } from '../../src/record-owner-id.js'
 import { describe, expect, it, vi } from 'vitest'
 import type { ArkmeSessionStore } from '../../src/keychain-store.js'
 import { MediaService } from '../../src/services/media-service.js'
@@ -59,7 +60,7 @@ describe('SearchService', () => {
       runtime.dispose()
     }
   })
-  it.each(['private_chat', 'group_chat'] as const)('uses the signed %s session for keyword and all five scene queries', async kind => {
+  it.each([['private_chat', 77], ['group_chat', 77], ['group_chat', '6690025278483443577']] as const)('uses the signed %s session and owner %s for keyword and all five scene queries', async (kind, ownerId) => {
     const sessions: ArkmeSessionStore = { async read() { return { userId: 42, accessToken: 'access', refreshToken: 'refresh' } }, async write() {}, async delete() {} }
     const bodies: Record<string, unknown>[] = []
     const urls: string[] = []
@@ -67,7 +68,7 @@ describe('SearchService', () => {
       vi.fn(async (input, init) => {
         urls.push(String(input))
         if (String(input).includes('/search/records/')) bodies.push(JSON.parse(String(init?.body)))
-        return new Response(JSON.stringify({ code: 0, data: { items: [{ record_uid: 'hit', source_kind: 3, source_uid: 'real-session', record_core: { owner_user_id: 77, text_content: '内容' } }], has_more: false } }))
+        return new Response(stringifyOwnerJson({ code: 0, data: { items: [{ record_uid: 'hit', source_kind: 3, source_uid: 'real-session', record_core: { owner_user_id: ownerId, text_content: '内容' } }], has_more: false } }))
       }) as typeof fetch)
     const profile = new ProfileService(runtime)
     const source = new SourceService(runtime, profile, { async summary() { return { recordCount: 0, wordsCount: 0, totalSec: 0 } }, recordItem() { return undefined } })
@@ -76,7 +77,7 @@ describe('SearchService', () => {
     const record = new RecordService(runtime, media, source)
     const service = new SearchService(runtime, record, media, source)
     const hits = await service.searchRemote({ query: '复盘', limit: 50, sourceRef: target.sourceRef, sourceUid: 'wrong-session', searchScope: 'global' })
-    expect(hits.items[0]?.recordOwnerUserId).toBe(77)
+    expect(hits.items[0]?.recordOwnerUserId).toBe(ownerId)
     expect(hits.items[0]?.targetSource?.sourceRef).toBe(target.sourceRef)
     for (const scene of ['audio', 'link', 'image_video', 'file', 'long_article'] as const) {
       await service.searchScene({ scene, limit: 30, cursor: 'page-2', sourceRef: target.sourceRef })

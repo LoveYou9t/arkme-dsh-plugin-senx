@@ -1,3 +1,5 @@
+import { recordOwnerId } from '../record-owner-id.js'
+import { ArkmeBotIdentityStyles, ArkmeBotSenderName } from './ArkmeBotIdentity.js'
 import { ArkmePinnedCorner } from './ArkmePinnedCorner.js'
 import { ArkmeMembershipBadge } from './ArkmeMembershipBadge.js'
 import { useForwardTargetDirectory } from './forward-target-directory.js'
@@ -1553,6 +1555,7 @@ export function arkmeSourceShowsMessageAvatars(source: ArkmeSourceItem | undefin
 }
 
 function MessageAvatar(props: {
+  senderKind?: 'human' | 'bot' | undefined
   avatarRef?: string
   member?: ArkmeConversationMemberItem
   profileEnabled: boolean
@@ -1560,7 +1563,7 @@ function MessageAvatar(props: {
   onContextMenu: (member: ArkmeConversationMemberItem, anchorRect: DOMRect) => void
 }) {
   const member = props.member
-  const avatar = <ArkmeUserAvatar {...(props.avatarRef === undefined ? {} : { avatarRef: props.avatarRef })} size={ARKME_MESSAGE_AVATAR_SIZE} label="消息头像" />
+  const avatar = <ArkmeUserAvatar senderKind={props.senderKind} {...(props.avatarRef === undefined ? {} : { avatarRef: props.avatarRef })} size={ARKME_MESSAGE_AVATAR_SIZE} label="消息头像" />
   if (member === undefined) return <span data-arkme-message-avatar="true" style={styles.messageAvatar} aria-hidden>{avatar}</span>
   return <button
     type="button"
@@ -1644,7 +1647,7 @@ export function ArkmeTimelineMessageHeader({
   const senderName = memberDisplayName && memberDisplayName !== '群成员' ? memberDisplayName : arkmeTimelineSenderName(item, profile)
   return <span style={styles.messageHeader}>
     {item.isMe && <span style={styles.meta}>{timeLabel(item.sendAtMillis)}</span>}
-    <span style={styles.sender}>{senderName}</span>
+    {item.senderKind === 'bot' ? <ArkmeBotSenderName name={senderName} /> : <span style={styles.sender}>{senderName}</span>}
     {!item.isMe && <span style={styles.meta}>{timeLabel(item.sendAtMillis)}</span>}
   </span>
 }
@@ -3776,7 +3779,7 @@ export function ArkmeSurface({
       return () => { if (animationFrame !== 0) cancelAnimationFrame(animationFrame) }
     }
     if ((source.kind === 'private_chat' || source.kind === 'group_chat')
-      && (target.recordOwnerUserId ?? 0) > 0
+      && recordOwnerId(target.recordOwnerUserId) !== 0
       && !conversationTargetPagingRef.current.aroundRequested) {
       conversationTargetPagingRef.current.aroundRequested = true
       const generation = timelineGenerationRef.current
@@ -3877,7 +3880,7 @@ export function ArkmeSurface({
       })
       return
     }
-    if ((target.recordOwnerUserId ?? 0) > 0) return
+    if (recordOwnerId(target.recordOwnerUserId) !== 0) return
     if (loadingOlder) return
     if (!hasMore || nextCursor === undefined || conversationTargetPagingRef.current.pages >= 80) {
       setError('已打开对应会话，但暂未能在当前历史中定位该条消息')
@@ -6723,6 +6726,7 @@ export function ArkmeSurface({
 
   return (
     <>
+    <ArkmeBotIdentityStyles />
     {selfTour.panel}
     {activeConversation && recordDeletion?.scopeKey === topicAssignmentScopeKey && <ArkmeRecordDeletionDialog
       key={recordDeletion.scopeKey} sourceRef={recordDeletion.sourceRef}
@@ -7140,7 +7144,7 @@ export function ArkmeSurface({
                 const isStructuredMessageCard = isForwardMessageCard || isSharedRecordingCard
                 const isExtensionMessage = !isSharedRecordingCard && item.extensionParent !== undefined
                 const messageAvatar = showMessageAvatars && !isSharedRecordingCard
-                  ? <MessageAvatar
+                  ? <MessageAvatar senderKind={item.senderKind}
                     {...(avatarRef === undefined ? {} : { avatarRef })}
                     {...(messageMember === undefined ? {} : { member: messageMember })}
                     profileEnabled={source?.kind === 'group_chat'}

@@ -1,3 +1,4 @@
+import { recordOwnerId, type RecordOwnerId } from '../record-owner-id.js'
 import type { ArkmeBotSummary, ArkmeSourceItem } from '../types.js'
 import { arkmeSourceIdentityKey } from './source-identity.js'
 import { arkmeContactsTab } from './redesign/contacts/contacts-tab-store.js'
@@ -48,7 +49,7 @@ export interface ArkmeUiState {
   /** Forces a real conversation-surface commit for every native notification click, including the current source. */
   notificationActivationRevision?: number
   conversationUnreadJumpRevision?: number
-  conversationTarget?: { revision: number; itemUid: string; sendAtMillis: number; recordOwnerUserId?: number }
+  conversationTarget?: { revision: number; itemUid: string; sendAtMillis: number; recordOwnerUserId?: RecordOwnerId }
   recordingTarget?: { dateStamp: number; startAtMillis: number }
   searchTarget?: { revision: number; query: string }
   extensionShareRef?: string
@@ -405,7 +406,7 @@ export class ArkmeUiController {
     this.publish({ ...rest, mode: 'bot', selectedBot: bot })
   }
 
-  showConversationTarget(source: ArkmeSourceItem, itemUid: string, sendAtMillis: number, recordOwnerUserId?: number): void {
+  showConversationTarget(source: ArkmeSourceItem, itemUid: string, sendAtMillis: number, recordOwnerUserId?: RecordOwnerId): void {
     this.leaveContacts()
     const normalizedItemUid = itemUid.trim()
     if (normalizedItemUid === '') throw new TypeError('会话消息定位标识不能为空')
@@ -419,8 +420,8 @@ export class ArkmeUiController {
         revision: ++this.conversationTargetRevision,
         itemUid: normalizedItemUid,
         sendAtMillis: Number.isFinite(sendAtMillis) ? sendAtMillis : 0,
-        ...(recordOwnerUserId !== undefined && Number.isSafeInteger(recordOwnerUserId) && recordOwnerUserId > 0
-          ? { recordOwnerUserId }
+        ...(recordOwnerId(recordOwnerUserId) !== 0
+          ? { recordOwnerUserId: recordOwnerId(recordOwnerUserId) }
           : {}),
       },
     })

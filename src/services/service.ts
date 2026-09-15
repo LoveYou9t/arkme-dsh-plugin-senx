@@ -1,3 +1,4 @@
+import { parseOwnerJson, stringifyOwnerJson } from '../record-owner-id.js'
 import { createHash } from 'node:crypto'
 import { retryAfterMillis } from '../http-retry-after.js'
 import {
@@ -576,7 +577,7 @@ export class ServiceRuntime {
           Usersource: '3',
           ...(bearer === undefined ? {} : { Authorization: `Bearer ${bearer}` }),
         },
-        body: multipart ? body : JSON.stringify(body),
+        body: multipart ? body : stringifyOwnerJson(body),
         signal: controller.signal,
       })
       if (response.status === 401 || (response.status === 403 && !preserveForbiddenError)) {
@@ -617,7 +618,7 @@ export class ServiceRuntime {
         )
       }
       let envelope: ArkmeEnvelope<T>
-      try { envelope = await response.json() as ArkmeEnvelope<T> }
+      try { envelope = parseOwnerJson(await response.text()) as ArkmeEnvelope<T> }
       catch (error) {
         throw new ArkmePluginError('arkme-response-invalid', 'Arkme 服务返回了无效响应', true, 502, { cause: error })
       }
@@ -719,7 +720,7 @@ export class ServiceRuntime {
         )
       }
       let envelope: ArkmeEnvelope<T>
-      try { envelope = await response.json() as ArkmeEnvelope<T> }
+      try { envelope = parseOwnerJson(await response.text()) as ArkmeEnvelope<T> }
       catch (error) {
         throw new ArkmePluginError('arkme-response-invalid', 'Arkme 服务返回了无效响应', true, 502, { cause: error })
       }
@@ -984,16 +985,20 @@ export class ServiceRuntime {
     body: Record<string, unknown>,
     initialSession?: ArkmeSessionCredentials,
     signal?: AbortSignal,
+    options?: ArkmeRemoteRequestOptions & { refreshOnUnauthorized?: boolean },
   ): Promise<T> {
+    const { refreshOnUnauthorized = true, ...remoteOptions } = options ?? {}
     let session = initialSession ?? await this.requireSession()
+    const requestOptions = () => options === undefined ? undefined
+      : this.authenticatedRequestOptions(session, 'other', 'interactive-read', remoteOptions)
     try {
-      return await this.post<T>(this.config.botBaseUrl, path, body, session.accessToken, [200], signal)
+      return await this.post<T>(this.config.botBaseUrl, path, body, session.accessToken, [200], signal, false, requestOptions())
     } catch (error) {
-      if (!(error instanceof ArkmePluginError) || !['auth-http-401', 'auth-http-403'].includes(error.code)) {
+      if (!refreshOnUnauthorized || !(error instanceof ArkmePluginError) || !['auth-http-401', 'auth-http-403'].includes(error.code)) {
         throw error
       }
       session = await this.refreshAccessToken(session)
-      return await this.post<T>(this.config.botBaseUrl, path, body, session.accessToken, [200], signal)
+      return await this.post<T>(this.config.botBaseUrl, path, body, session.accessToken, [200], signal, false, requestOptions())
     }
   }
 

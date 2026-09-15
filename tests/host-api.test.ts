@@ -739,13 +739,13 @@ describe('conversation member Host API dispatch', () => {
     }, undefined, undefined, undefined, undefined, signal)
     expect(service.readSource).toHaveBeenCalledWith('source-ref', { limit: 40, signal })
   })
-  it('forwards the exact record identity and bounded around window', async () => {
+  it.each([7, '6690025278483443577'])('forwards the exact record identity and bounded around window for %s', async (ownerId) => {
     const service = fakeService()
     await dispatchArkmeHostOperation(service as never, 'source.timeline-around', {
-      sourceRef: 'source-ref', itemUid: 'record-parent', recordOwnerUserId: 7,
+      sourceRef: 'source-ref', itemUid: 'record-parent', recordOwnerUserId: ownerId,
       beforeLimit: 20, afterLimit: 21, chatSessionUid: 'must-not-forward',
     })
-    expect(service.readSourceAround).toHaveBeenCalledWith('source-ref', 'record-parent', 7, {
+    expect(service.readSourceAround).toHaveBeenCalledWith('source-ref', 'record-parent', ownerId, {
       beforeLimit: 20, afterLimit: 21,
     })
   })
