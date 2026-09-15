@@ -17,10 +17,10 @@ const config: ArkmeServiceConfig = {
 }
 
 describe('MediaService', () => {
-  it('projects an explicit Live pair as one cover with a safe motion reference', async () => {
+  it.each([1, 2])('projects an explicit Live pair for cover render role %s', async (coverRenderRole) => {
     const media = new MediaService({ config: {} } as ServiceRuntime, {} as never, {} as never, {} as never)
     const refs = [
-      { file_asset_uid: 'cover', render_role: 1, dynamic_photo: { logical_uid: 'live', role: 'cover' }, file_name: 'photo.jpg', mime_type: 'image/jpeg', file_kind: 1, preview_url: 'https://example.test/cover' },
+      { file_asset_uid: 'cover', render_role: coverRenderRole, dynamic_photo: { logical_uid: 'live', role: 'cover' }, file_name: 'photo.jpg', mime_type: 'image/jpeg', file_kind: 1, preview_url: 'https://example.test/cover' },
       { file_asset_uid: 'motion', render_role: 4, dynamic_photo: { logical_uid: 'live', role: 'motion' }, file_name: 'photo.mov', mime_type: 'video/quicktime', file_kind: 3, download_url: 'https://example.test/motion' },
     ]
     const raw = { content_payload: { media_refs: refs } }

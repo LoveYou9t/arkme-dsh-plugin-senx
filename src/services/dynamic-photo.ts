@@ -9,7 +9,7 @@ export function recordDynamicPhotoGroups(refs: readonly Record<string, unknown>[
     const metadata = objectValue(ref.dynamic_photo)
     const uid = stringValue(metadata.logical_uid).trim()
     if (uid === '') continue
-    const target = metadata.role === 'cover' && ref.render_role === 1 ? covers
+    const target = metadata.role === 'cover' && (ref.render_role === 1 || ref.render_role === 2) ? covers
       : metadata.role === 'motion' && ref.render_role === 4 ? motions : undefined
     if (target !== undefined) target.set(uid, [...(target.get(uid) ?? []), ref])
   }
