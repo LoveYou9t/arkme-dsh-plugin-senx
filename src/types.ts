@@ -1402,6 +1402,8 @@ export interface ArkmeSourceItem {
   sourceKey?: string
   /** Private-chat peer identity when this source is a one-to-one chat. */
   peerUserId?: number
+  /** Private-chat counterpart membership from Chat; never the viewer's membership. */
+  peerMemberType?: 'free' | 'vip' | 'svip' | 'unknown'
   /** Opaque reference to this topic's parent when both topic labels are available in the same response. */
   parentSourceRef?: string
   /** Opaque topic identity for reconciling hierarchy across paginated directory responses. */
@@ -1640,6 +1642,8 @@ export interface ArkmeTimelineItem {
   messageWithdrawalRef?: string
   /** Account- and conversation-bound opaque reference for copy-link and forward actions. */
   messageActionRef?: string
+  /** False when the source actor cannot own related quick notes or chat extensions. Omitted defaults to supported for legacy and user messages. */
+  quickNoteDetailsSupported?: boolean
   /** Account- and conversation-bound opaque reference for actions on the sender. */
   memberRef?: string
   senderName: string

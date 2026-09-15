@@ -9,6 +9,7 @@ import type {} from './slots-contract.js'
 import type { ArkmeAuthSnapshot, ArkmeSourceItem, ArkmeSourceList } from '../types.js'
 import { ArkmeOutgoingCallHost } from './ArkmeOutgoingCallHost.js'
 import { ArkmeHomeTour } from './ArkmeHomeTour.js'
+import { startArkmeDirectoryBadge } from './directory-badge-runtime.js'
 import { ArkmeProductNavigation } from './ArkmeProductNavigation.js'
 import { ArkmeQuickAddButton } from './ArkmeQuickAdd.js'
 import { arkmePrependSourceByIdentity } from './source-identity.js'
@@ -62,7 +63,7 @@ const styles: Record<string, CSSProperties> = {
 const ARKME_PERSISTENT_SIDEBAR_CHROME_WIDTH = 76
 const ARKME_PERSISTENT_NAVIGATION_WIDTH = 72
 const ARKME_PERSISTENT_DIVIDER_BUDGET = ARKME_PERSISTENT_SIDEBAR_CHROME_WIDTH - ARKME_PERSISTENT_NAVIGATION_WIDTH
-const ARKME_PERSISTENT_DIRECTORY_MIN_WIDTH = 64
+const ARKME_PERSISTENT_DIRECTORY_MIN_WIDTH = 72
 const ARKME_PERSISTENT_DIRECTORY_COMPACT_WIDTH = 200
 const ARKME_PERSISTENT_SIDEBAR_MIN_WIDTH = ARKME_PERSISTENT_NAVIGATION_WIDTH
   + ARKME_PERSISTENT_DIVIDER_BUDGET
@@ -130,6 +131,13 @@ export function ArkmePersistentClientRuntime() {
   }, [avatarScopeKey])
 
   useArkmeRealtimeClientEvents(auth, ui.authRevision, true, { ownsMessagePreparing: true })
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || window.top !== window) return
+    const bridge = window.arkmeDesktopNotifications
+    if (bridge?.applyDirectoryBadge === undefined) return
+    return startArkmeDirectoryBadge(count => bridge.applyDirectoryBadge!(count), avatarScopeKey)
+  }, [avatarScopeKey])
 
   useEffect(() => {
     if (!shouldRestoreWebAuthenticatedWorkspace(auth, ui.mode)) return
