@@ -1,3 +1,4 @@
+import { ArkmeLivePhotoBadge } from './ArkmeLivePhotoBadge.js'
 import { recordOwnerId } from '../record-owner-id.js'
 import { ArkmeBotIdentityStyles, ArkmeBotSenderName } from './ArkmeBotIdentity.js'
 import { ArkmePinnedCorner } from './ArkmePinnedCorner.js'
@@ -1679,15 +1680,19 @@ function ArkmeExtensionParentPreview({ parent, isMe, onSelect }: {
     {text !== '' && <span style={styles.extensionParentText}><ArkmeRichText text={text} presentation="preview" /></span>}
     {visuals.length > 0 && <span style={styles.extensionParentMedia} aria-label="原消息附件">
       {visuals.map(block => block.kind === 'image'
-        ? <img
-          key={block.mediaRef}
-          src={block.localFileRef === undefined
-            ? `/arkme-self/api/media?ref=${encodeURIComponent(block.mediaRef)}`
-            : createArkmeSdk().localFileUrl(block.localFileRef)}
-          alt={block.fileName}
-          draggable={false}
-          style={styles.extensionParentImage}
-        />
+        ? <span key={block.mediaRef} style={{ position: 'relative', display: 'flex', alignSelf: 'center', flex: 'none' }}>
+          <img
+            src={block.localFileRef === undefined
+              ? `/arkme-self/api/media?ref=${encodeURIComponent(block.mediaRef)}`
+              : createArkmeSdk().localFileUrl(block.localFileRef)}
+            alt={block.fileName}
+            draggable={false}
+            style={styles.extensionParentImage}
+          />
+          {block.dynamicPhoto !== undefined && <span aria-label="实况照片" style={{ position: 'absolute', display: 'flex', left: 2, bottom: 2, pointerEvents: 'none' }}>
+            <ArkmeLivePhotoBadge variant="extension" />
+          </span>}
+        </span>
         : <span key={block.mediaRef} style={styles.extensionParentFile}>{block.fileName || '视频'}</span>)}
     </span>}
     {text === '' && visuals.length === 0 && firstFile !== undefined
