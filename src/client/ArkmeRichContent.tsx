@@ -946,6 +946,8 @@ export function ArkmeMessageContent({ item, sourceRef, onLongArticleUpdated, hig
   const openPreview = (block: ArkmeContentBlock) => { setPreview({ block }) }
   const openAsFile = (block: ArkmeContentBlock) => { setPreview({ block, forceDownload: true }) }
   const isArticle = item.templateKind === 8 || item.displayKind === 1
+  const bodyTextFormat = item.senderKind === 'bot' && item.textContent.trim() !== ''
+    ? 'markdown' : item.textFormat ?? 'plain'
   const text = item.textContent || (!isArticle && blocks.length === 0 ? item.title : '')
   const linkLabelMode: ArkmeLinkLabelMode = presentation === 'detail' ? 'raw' : 'resolved'
   // Only a voice note's single audio owns its transcript. Generic/mixed
@@ -962,7 +964,7 @@ export function ArkmeMessageContent({ item, sourceRef, onLongArticleUpdated, hig
     collapsible={withTranscript && presentation !== 'detail' && collapseText && shouldCollapseText(text)}
   >{withTranscript && text !== '' ? <ArkmeMessageRichText
       text={text}
-      {...(item.textFormat === undefined ? {} : { textFormat: item.textFormat })}
+      textFormat={bodyTextFormat}
       highlightMentions={highlightMentions}
       linkLabelMode={linkLabelMode}
       {...(display.mentions === undefined ? {} : { mentionTargets: display.mentions })}
@@ -1000,7 +1002,7 @@ export function ArkmeMessageContent({ item, sourceRef, onLongArticleUpdated, hig
         {isArticle && presentation === 'bubble' ? <ArticleCard title={item.title} text={item.textContent} onOpen={() => { if (onArticleOpen !== undefined) onArticleOpen(); else setArticleOpen(true) }} /> : <>
           {isArticle && item.title && <h3 style={{ margin: 0, fontSize: 14, lineHeight: 1.7 }}><ArkmeRichText text={item.title} presentation="preview" /></h3>}
           {text !== '' && <LongText
-            textFormat={item.textFormat ?? 'plain'}
+            textFormat={bodyTextFormat}
             text={text}
             highlightMentions={highlightMentions}
             collapseText={collapseText}
