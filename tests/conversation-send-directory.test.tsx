@@ -5545,6 +5545,56 @@ describe('conversation send directory projection', () => {
     expect(childLine.findAllByType(ArkmeTimelineMessageHeader)).toHaveLength(0)
   })
 
+  it.each(['plain', 'live', 'cover-only', 'local-live'] as const)('renders %s extension attachments without changing parent navigation', async kind => {
+    const motion = { kind: 'video' as const, mediaRef: 'motion-ref', fileName: 'motion.mp4', sortOrder: 1 }
+    timeline = [{
+      itemUid: 'extension-child', senderName: '我', isMe: true, sendAtMillis: 12,
+      title: '', textContent: '延展内容', status: 1,
+      extensionParent: {
+        itemUid: 'extension-parent', senderName: '同事', title: '', textContent: '原消息',
+        recordOwnerUserId: 7, sendAtMillis: 11,
+        contentBlocks: [{
+          kind: 'image', mediaRef: 'cover-ref', fileName: 'cover.jpg', sortOrder: 0,
+          ...(kind === 'local-live' ? { localFileRef: 'arkme-file-v1.11111111-1111-4111-8111-111111111111' } : {}),
+          ...(kind === 'plain' ? {} : { dynamicPhoto: {
+            logicalUid: 'live-pair', ...(kind === 'live' || kind === 'local-live' ? { motion } : {}),
+          } }),
+        }],
+      },
+    }]
+    await act(async () => {
+      renderer = create(<ArkmeSurface productChrome={false} productNavigation={false} />)
+      await Promise.resolve()
+    })
+    const preview = renderer!.root.findByProps({ 'data-arkme-extension-parent-preview': 'extension-parent' })
+    expect(preview.props.role).toBe('button')
+    expect(preview.props.onClick).toBeTypeOf('function')
+    expect(preview.findAllByType('button')).toHaveLength(0)
+    expect(preview.findAllByType('video')).toHaveLength(0)
+    const image = preview.findByType('img')
+    expect(image.props.src).toBe(kind === 'local-live' ? '/arkme-self/api/files/local?ref=arkme-file-v1.11111111-1111-4111-8111-111111111111' : '/arkme-self/api/media?ref=cover-ref')
+    expect(image.props.style).toMatchObject({ width: 32, height: 32 })
+    const badges = preview.findAllByProps({ 'aria-label': '实况照片' })
+    expect(badges).toHaveLength(kind === 'plain' ? 0 : 1)
+    if (kind !== 'plain') {
+      expect(badges[0].parent).toBe(image.parent)
+      expect(image.parent!.props.style).toMatchObject({ position: 'relative', display: 'flex', alignSelf: 'center', flex: 'none' })
+      expect(badges[0].props.style).toMatchObject({ display: 'flex', left: 4, bottom: 4, pointerEvents: 'none' })
+      expect(badges[0].findAllByType('path')).toHaveLength(kind === 'cover-only' ? 1 : 0)
+    }
+    const navigate = vi.spyOn(arkmeUi, 'showConversationTarget').mockImplementation(() => {})
+    preview.props.onClick()
+    for (const key of ['Enter', ' ']) {
+      const preventDefault = vi.fn()
+      preview.props.onKeyDown({ key, preventDefault })
+      expect(preventDefault).toHaveBeenCalledOnce()
+    }
+    preview.props.onKeyDown({ key: 'Escape', preventDefault: vi.fn() })
+    expect(navigate).toHaveBeenCalledTimes(3)
+    expect(navigate).toHaveBeenCalledWith(expect.objectContaining({ sourceRef: 'source-harness' }), 'extension-parent', 11, 7)
+    navigate.mockRestore()
+  })
+
   it('uses a pointer cursor for a clickable extension parent preview', async () => {
     timeline = [{
       itemUid: 'extension-child', senderName: '我', isMe: true, sendAtMillis: 12,

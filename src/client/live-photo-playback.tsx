@@ -59,7 +59,7 @@ export function useArkmeLivePhotoPlayback(cover: ArkmeContentBlock) {
         <ArkmeLivePhotoBadge playable={motion !== undefined} />
         {phase === 'loading' && <span role="status">加载中</span>}
       </button>
-      {phase === 'failed' && <span role="alert" style={{ position: 'absolute', bottom: 40, left: 12, right: 12, textAlign: 'center', fontSize: 12 }}>{state?.error}</span>}
+      {phase === 'failed' && <span role="alert" style={{ position: 'absolute', bottom: 40, left: 0, width: 'max-content', maxWidth: 'min(320px, 70vw)', textAlign: 'left', fontSize: 12 }}>{state?.error}</span>}
     </span>,
   }
 }

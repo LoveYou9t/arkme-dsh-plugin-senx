@@ -26,6 +26,43 @@ describe('Arkme rich content presentation', () => {
     expect(renderToStaticMarkup(<ArkmeLivePhotoBadge playable />)).toContain('width="22" height="22"')
   })
 
+  it('positions a Live marker when metadata arrives after the cover and updates it after resize', async () => {
+    vi.stubGlobal('window', { addEventListener: vi.fn(), removeEventListener: vi.fn() })
+    vi.stubGlobal('document', { body: { style: { overflow: '' } } })
+    const control = { style: {} as Record<string, string> }
+    let resize = () => {}
+    const disconnect = vi.fn()
+    vi.stubGlobal('ResizeObserver', class {
+      constructor(callback: () => void) { resize = callback }
+      observe() {}
+      disconnect = disconnect
+    })
+    let width = 400
+    const imageNode = {
+      naturalWidth: 200, naturalHeight: 100,
+      parentElement: { getBoundingClientRect: () => ({ left: 10, top: 20 }) },
+      getBoundingClientRect: () => ({ left: 10, top: 20, width, height: 400 }),
+      addEventListener: vi.fn(), removeEventListener: vi.fn(),
+    }
+    const image = { kind: 'image' as const, mediaRef: 'cover', fileName: 'live.jpg', mimeType: 'image/jpeg', size: 1, sortOrder: 0 }
+    let view: ReturnType<typeof create> | undefined
+    const render = (live: boolean) => <ArkmeMediaPreview blocks={[image]} selected={{ ...image, ...(live ? { dynamicPhoto: { logicalUid: 'live' } } : {}) }} onSelect={() => {}} onClose={() => {}} />
+    try {
+      await act(async () => { view = create(render(false), { createNodeMock: node => node.type === 'img' ? imageNode : node.props['data-arkme-live-photo-overlay'] ? control : null }) })
+      await act(async () => view!.update(render(true)))
+      expect(control.style).toMatchObject({ left: '8px', top: '292px', visibility: 'visible' })
+      width = 200
+      resize()
+      expect(control.style).toMatchObject({ left: '8px', top: '242px' })
+      await act(async () => view!.update(render(false)))
+      expect(disconnect).toHaveBeenCalledOnce()
+      expect(imageNode.removeEventListener).toHaveBeenCalledWith('load', expect.any(Function))
+    } finally {
+      if (view) await act(async () => view!.unmount())
+      vi.unstubAllGlobals()
+    }
+  })
+
   it('shows LIVE on the cover, hides it only while playing and restores it after ending or error', async () => {
     vi.stubGlobal('window', { addEventListener: vi.fn(), removeEventListener: vi.fn() })
     vi.stubGlobal('document', { body: { style: { overflow: '' } } })
@@ -54,6 +91,7 @@ describe('Arkme rich content presentation', () => {
       expect(view!.root.findAllByType('video')).toHaveLength(0)
       expect(live().props.disabled).toBe(false)
       expect(JSON.stringify(view!.toJSON())).toContain('动态片段播放失败')
+      expect(view!.root.findByProps({ role: 'alert' }).props.style).toMatchObject({ width: 'max-content', maxWidth: 'min(320px, 70vw)' })
     } finally {
       if (view) await act(async () => view!.unmount())
       vi.unstubAllGlobals()
