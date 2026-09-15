@@ -3359,7 +3359,8 @@ describe('ArkmeService', () => {
       if (url.endsWith('/api/v1/chats/members/records/page')) return json({ code: 200, data: {
         items: [{
           relation: {
-            record_uid: 'member-record-1', rel_uid: 'member-relation-1', sender_user_id: 2001,
+            record_uid: 'member-record-1', rel_uid: 'member-relation-1', sender_user_id: body.mode === 'mentioned' ? 9001 : 2001,
+            ...(body.mode === 'mentioned' ? { sender_actor_kind: 2, sender_bot_uid: 'mention-bot' } : {}),
             display_name_snapshot: '小林', attach_at: 1700000000200, seq: 8,
           },
           record: { status: 1, payload: { record_uid: 'member-record-1', text_content: '成员快记' } },
@@ -3367,6 +3368,10 @@ describe('ArkmeService', () => {
         has_more: true,
         next_before_seq: 8,
       } })
+      if (url.endsWith('/api/v1/chats/display-snapshots')) return json({ code: 200, data: { items: [{
+        session: { chat_session_uid: 'group-mention' },
+        bot_participants: [{ chat_session_uid: 'group-mention', bot_uid: 'mention-bot', display_name_snapshot: '群助手' }],
+      }] } })
       if (url.endsWith('/api/v1/chats/records/send')) return json({ code: 200, data: {
         record_uid: body.record_uid, rel_uid: body.rel_uid, seq: 18, audit_status: 1,
       } })
@@ -3470,7 +3475,7 @@ describe('ArkmeService', () => {
       .resolves.toMatchObject({
         member: { memberRef, displayName: '我的私有备注' },
         mode: 'mentioned',
-        items: [{ itemUid: 'member-record-1', memberRef, textContent: '成员快记' }],
+        items: [{ itemUid: 'member-record-1', senderName: '群助手', isMe: false, textContent: '成员快记' }],
         hasMore: true,
         nextCursor: { beforeSequence: 8 },
       })

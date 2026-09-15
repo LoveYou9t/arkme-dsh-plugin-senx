@@ -654,7 +654,7 @@ export class BotService {
     }
   }
 
-  private botAvatarProjection(
+  botAvatarProjection(
     raw: Record<string, unknown>,
     userId: number,
     botId: string,
@@ -705,7 +705,7 @@ export class BotService {
     const normalized = imageRef.trim()
     const entry = BOT_IMAGE_REF_PATTERN.test(normalized) ? this.botImageRefs.get(normalized) : undefined
     if (entry === undefined || entry.viewerUserId !== expectedViewerUserId || entry.expiresAtMillis <= this.now()) {
-      if (entry !== undefined) {
+      if (entry !== undefined && entry.expiresAtMillis <= this.now()) {
         this.botImageRefs.delete(normalized)
         if (this.botImageRefByKey.get(entry.key) === normalized) this.botImageRefByKey.delete(entry.key)
       }

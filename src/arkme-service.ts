@@ -426,7 +426,7 @@ export class ArkmeService {
       sendChatSourceTextRaw: async (...args) => await this.chat.sendChatSourceTextRaw(...args),
     })
     this.realtime = new ChatRealtimeService(this.runtime, this.source, {
-      chatTimelineItems: async (data, session, chatSessionUid, sourceKind) => await this.chat.chatTimelineItems(data, session, chatSessionUid, sourceKind),
+      chatTimelineItems: async (...args) => await this.chat.chatTimelineItems(...args),
     })
     this.conversationDirectoryVisibility = new ConversationDirectoryVisibilityService(new ConversationListPreferenceService(this.runtime), this.source, this.bot, this.realtime)
     this.directory = new ConversationDirectoryService(this.runtime, this.source, this.conversationDirectoryVisibility,

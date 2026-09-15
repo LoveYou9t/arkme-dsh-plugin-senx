@@ -91,6 +91,7 @@ import { ArkmePrivacyVisibilityService, arkmePrivacyLockedRecord, arkmePrivacyLo
 import { arkmeRecordCaptureContextPayload, RecordService } from './record-service.js'
 import type { ArkmeRelatedQuickNoteSourceLocator } from './related-quick-note-service.js'
 import { ArkmePluginError, ServiceRuntime, objectValue, stringValue } from './service.js'
+import { ArkmeStaleRequestError } from '../request-coordinator.js'
 import { arkmeMentionMetadataFromRecord, arkmeMentionMetadataMentionsViewer } from '../mention-metadata.js'
 import { arkmeRichBackgroundSound } from '../record-background-sound.js'
 import { arkmeHashTagContentPayload, arkmeHashTagPayload } from '../hashtag.js'
@@ -1348,6 +1349,17 @@ function encodeOpaqueJson(value: unknown): string {
 
 function decodeOpaqueJson(value: string): unknown {
   return JSON.parse(Buffer.from(value, 'base64url').toString('utf8')) as unknown
+}
+
+const TIMELINE_BOT_IDENTITY_BUDGET_MS = 1_500
+
+function timelineSenderIsBot(relation: Record<string, unknown>): boolean {
+  return integerLikeValue(relation.sender_actor_kind) === 2
+}
+
+function timelineSenderBotUid(relation: Record<string, unknown>): string {
+  return timelineSenderIsBot(relation)
+    ? stringValue(relation.sender_bot_uid).trim() : ''
 }
 
 export class ChatService {
@@ -4794,8 +4806,10 @@ export class ChatService {
       session: ArkmeSessionCredentials,
       chatSessionUid: string,
       projectedSourceKind?: 'private_chat' | 'group_chat',
+      bundle?: Record<string, unknown>,
     ): Promise<ArkmeTimelineItem[]> {
       const items: ArkmeTimelineItem[] = []
+      const botParticipants = await this.timelineBotParticipants(listValue(data.items), session, chatSessionUid, undefined, bundle)
       const signingKey = await this.runtime.stateStore.uniqueCode()
       const sourceKind = projectedSourceKind
       for (const raw of listValue(data.items)) {
@@ -4806,6 +4820,8 @@ export class ChatService {
         const uid = stringValue(relation.record_uid ?? payload.record_uid).trim()
         if (uid === '') continue
         const senderUserId = integerLikeValue(relation.sender_user_id)
+        const isBot = timelineSenderIsBot(relation)
+        const isMe = !isBot && senderUserId === session.userId
         const relationUid = stringValue(relation.rel_uid ?? relation.relUid).trim()
         const recordOwnerUserId = chatRecordOwnerUserId(relation, record, payload, senderUserId)
         const aiPolish = this.aiPolish.timelineAiPolish(record, payload)
@@ -4822,16 +4838,16 @@ export class ChatService {
           signingKey,
         })
         const rawAgentSource = timelineAgentSource(relation, record, payload)
-        const agentSource = senderUserId === session.userId
+        const agentSource = isMe
           ? this.arko.currentUserAgentSourceFallback(session.userId, rawAgentSource)
           : rawAgentSource
         const contentBlocks = this.media.richContentBlocks(item, session.userId)
-        const extensionProjection = this.timelineExtensionProjection(item, session.userId)
+        const extensionProjection = this.timelineExtensionProjection(item, session.userId, botParticipants)
         const conversationPreview = arkmeChatConversationPreview(item)
         const callRecord = await this.callHistory.timelineCallRecord(item, session.userId)
-        const senderName = stringValue(relation.display_name_snapshot).trim() || 'Arkme用户'
+        const senderName = this.timelineSenderName(relation, botParticipants)
         const mentions = await this.timelineMentionTargets(record, payload, session.userId, chatSessionUid)
-        const mentionsViewer = senderUserId !== session.userId
+        const mentionsViewer = !isMe
           && arkmeMentionMetadataMentionsViewer(record, payload, session.userId)
         items.push({
           ...(numberValue(record.status) === 1 ? recordDeletionCapability({ userId: session.userId, sourceKind: sourceKind ?? '', sourceOwnerRef: chatSessionUid,
@@ -4841,7 +4857,7 @@ export class ChatService {
           ...(relationUid === '' ? {} : {
             timelineItemKey: await this.source.chatTimelineItemKey(session.userId, chatSessionUid, relationUid),
           }),
-          ...(sourceKind !== 'group_chat' || relationUid === '' || senderUserId === session.userId ? {} : {
+          ...(sourceKind !== 'group_chat' || relationUid === '' || isMe ? {} : {
             messageRef: this.sealMessageRef(session.userId, chatSessionUid, relationUid, signingKey),
             messageWithdrawalRef: this.sealMessageWithdrawalRef(
               session.userId, chatSessionUid, relationUid, signingKey,
@@ -4868,11 +4884,12 @@ export class ChatService {
               contentBlocks,
             }), signingKey),
           }),
-          ...(senderUserId > 0 ? { memberRef: await this.sealChatMemberRef(session.userId, chatSessionUid, senderUserId) } : {}),
+          ...(!isBot && senderUserId > 0 ? { memberRef: await this.sealChatMemberRef(session.userId, chatSessionUid, senderUserId) } : {}),
           senderName,
           ...(agentSource === undefined ? {} : { agentSource }),
-          ...(senderUserId > 0 ? { avatarRef: await this.profile.sealProfileImageRef(session.userId, senderUserId) } : {}),
-          isMe: senderUserId === session.userId,
+          ...(isBot ? this.timelineBotAvatar(relation, botParticipants, session.userId)
+            : senderUserId > 0 ? { avatarRef: await this.profile.sealProfileImageRef(session.userId, senderUserId) } : {}),
+          isMe,
           ...(callRecord === undefined ? {} : { callRecord }),
           ...(mentionsViewer ? { mentionsViewer: true } : {}),
           ...(mentions === undefined ? {} : { mentions }),
@@ -5662,19 +5679,22 @@ export class ChatService {
     signal?: AbortSignal,
   ): Promise<ArkmeTimelineItem[]> {
     const items: ArkmeTimelineItem[] = []
+    const renderableItems = rawItems.filter(raw => numberValue(objectValue(objectValue(raw).record).status) === 1)
+    const botParticipants = await this.timelineBotParticipants(renderableItems, session, source.ownerRef, signal)
     const senderUserIdByIndex = new Map<number, number>()
     const signingKey = await this.runtime.stateStore.uniqueCode()
-    for (const raw of rawItems) {
+    for (const raw of renderableItems) {
       const item = objectValue(raw)
       const relation = objectValue(item.relation)
       const record = objectValue(item.record)
       const payload = objectValue(record.payload)
       const recordStatus = numberValue(record.status)
-      if (recordStatus !== 1) continue
       const uid = stringValue(relation.record_uid ?? payload.record_uid).trim()
       if (uid === '') continue
       const relationUid = stringValue(relation.rel_uid).trim()
       const senderUserId = Math.trunc(numberValue(relation.sender_user_id))
+      const isBot = timelineSenderIsBot(relation)
+      const isMe = !isBot && senderUserId === session.userId
       const recordOwnerUserId = chatRecordOwnerUserId(relation, record, payload, senderUserId)
       const aiPolish = this.aiPolish.timelineAiPolish(record, payload)
       const sendAtMillis = numberValue(relation.attach_at ?? payload.send_at)
@@ -5690,12 +5710,12 @@ export class ChatService {
         signingKey,
       })
       const rawAgentSource = timelineAgentSource(relation, record, payload)
-      const agentSource = senderUserId === session.userId
+      const agentSource = isMe
         ? this.arko.currentUserAgentSourceFallback(session.userId, rawAgentSource)
         : rawAgentSource
       const contentBlocks = this.media.richContentBlocks(item, session.userId)
-      const extensionProjection = this.timelineExtensionProjection(item, session.userId)
-      const senderName = stringValue(relation.display_name_snapshot).trim() || 'Arkme用户'
+      const extensionProjection = this.timelineExtensionProjection(item, session.userId, botParticipants)
+      const senderName = this.timelineSenderName(relation, botParticipants)
       const mentions = await this.timelineMentionTargets(record, payload, session.userId, source.ownerRef)
       const captureContext = timelineCaptureContext({ ...record, ...payload })
       const recordDurationMillis = positiveNumberValue(
@@ -5717,7 +5737,7 @@ export class ChatService {
         ...(relationUid === '' ? {} : {
           timelineItemKey: await this.source.chatTimelineItemKey(session.userId, source.ownerRef, relationUid),
         }),
-        ...(source.kind !== 'group_chat' || relationUid === '' || senderUserId === session.userId ? {} : {
+        ...(source.kind !== 'group_chat' || relationUid === '' || isMe ? {} : {
           messageRef: this.sealMessageRef(session.userId, source.ownerRef, relationUid, signingKey),
           messageWithdrawalRef: this.sealMessageWithdrawalRef(
             session.userId, source.ownerRef, relationUid, signingKey,
@@ -5744,10 +5764,11 @@ export class ChatService {
             contentBlocks,
           }), signingKey),
         }),
-        ...(senderUserId > 0 ? { memberRef: await this.sealChatMemberRef(session.userId, source.ownerRef, senderUserId) } : {}),
+        ...(!isBot && senderUserId > 0 ? { memberRef: await this.sealChatMemberRef(session.userId, source.ownerRef, senderUserId) } : {}),
         senderName,
+        ...(isBot ? this.timelineBotAvatar(relation, botParticipants, session.userId) : {}),
         ...(agentSource === undefined ? {} : { agentSource }),
-        isMe: senderUserId === session.userId,
+        isMe,
         ...(callRecord === undefined ? {} : { callRecord }),
         ...(mentions === undefined ? {} : { mentions }),
         sendAtMillis,
@@ -5771,7 +5792,7 @@ export class ChatService {
         ...(sharedRecording === undefined ? {} : { sharedRecording }),
         ...(extensionProjection === undefined ? {} : extensionProjection),
       }) - 1
-      if (senderUserId > 0) senderUserIdByIndex.set(itemIndex, senderUserId)
+      if (!isBot && senderUserId > 0) senderUserIdByIndex.set(itemIndex, senderUserId)
     }
     try {
       const profiles = await this.profile.publicProfilesByUserIds([...new Set(senderUserIdByIndex.values())], session, signal)
@@ -5786,9 +5807,81 @@ export class ChatService {
     return items
   }
 
+  private async timelineBotParticipants(
+    rawItems: unknown[],
+    session: ArkmeSessionCredentials,
+    chatSessionUid: string,
+    signal?: AbortSignal,
+    knownBundle?: Record<string, unknown>,
+  ): Promise<Map<string, Record<string, unknown>>> {
+    const participants = new Map<string, Record<string, unknown>>()
+    const hasBot = rawItems.some(raw => {
+      const item = objectValue(raw)
+      const relation = objectValue(item.relation)
+      const payload = objectValue(objectValue(item.record).payload)
+      if (stringValue(relation.record_uid ?? payload.record_uid).trim() === '') return false
+      const preview = objectValue(item.extension_parent_preview ?? item.extensionParentPreview)
+      return timelineSenderBotUid(relation) !== ''
+        || timelineSenderBotUid(objectValue(preview.relation)) !== ''
+    })
+    if (!hasBot) return participants
+    let bundle = knownBundle
+    if (bundle === undefined) {
+      try {
+        const budget = AbortSignal.timeout(TIMELINE_BOT_IDENTITY_BUDGET_MS)
+        const identitySignal = signal === undefined ? budget : AbortSignal.any([signal, budget])
+        const data = await this.runtime.authenticatedChatPost<Record<string, unknown>>(
+          '/api/v1/chats/display-snapshots', { chat_session_uids: [chatSessionUid] }, session, identitySignal,
+          { refreshOnUnauthorized: false },
+        )
+        bundle = listValue(data.items).map(objectValue).find(item =>
+          stringValue(objectValue(item.session).chat_session_uid).trim() === chatSessionUid)
+      } catch (error) {
+        if (signal?.aborted || error instanceof ArkmeStaleRequestError) throw error
+        // Optional Bot details must not delay readable messages beyond the display budget.
+        return participants
+      }
+    }
+    if (stringValue(objectValue(bundle?.session).chat_session_uid).trim() !== chatSessionUid) return participants
+    for (const raw of listValue(bundle?.bot_participants)) {
+      const participant = objectValue(raw)
+      if (stringValue(participant.chat_session_uid).trim() !== chatSessionUid) continue
+      const botUid = stringValue(participant.bot_uid).trim()
+      if (botUid !== '') participants.set(botUid, participant)
+    }
+    return participants
+  }
+
+  private timelineSenderName(
+    relation: Record<string, unknown>,
+    participants: Map<string, Record<string, unknown>>,
+  ): string {
+    if (!timelineSenderIsBot(relation)) return stringValue(relation.display_name_snapshot ?? relation.displayNameSnapshot).trim() || 'Arkme用户'
+    const botUid = timelineSenderBotUid(relation)
+    const participant = participants.get(botUid)
+    const extra = objectValue(participant?.extra)
+    return stringValue(participant?.display_name_snapshot).trim()
+      || firstTextValue(extra, ['display_name_snapshot', 'displayNameSnapshot', 'bot_name', 'botName', 'name', 'nickname'])
+      || 'Bot'
+  }
+
+  private timelineBotAvatar(
+    relation: Record<string, unknown>,
+    participants: Map<string, Record<string, unknown>>,
+    viewerUserId: number,
+  ): { avatarRef?: string } {
+    const botUid = timelineSenderBotUid(relation)
+    if (botUid === '') return {}
+    const extra = objectValue(participants.get(botUid)?.extra)
+    const avatarUrl = stringValue(relation.sender_avatar_url).trim()
+      || firstTextValue(extra, ['avatar_url', 'avatarUrl', 'head_img', 'headImg'])
+    return avatarUrl === '' ? {} : this.bot.botAvatarProjection({ avatar_url: avatarUrl }, viewerUserId, botUid)
+  }
+
   private timelineExtensionProjection(
     item: Record<string, unknown>,
     viewerUserId: number,
+    botParticipants: Map<string, Record<string, unknown>>,
   ): Pick<ArkmeTimelineItem, 'extensionParentRecordUid' | 'extensionParent'> | undefined {
     const edge = objectValue(item.extension_edge ?? item.extensionEdge)
     const preview = objectValue(item.extension_parent_preview ?? item.extensionParentPreview)
@@ -5819,7 +5912,7 @@ export class ChatService {
       extensionParentRecordUid: parentRecordUid,
       extensionParent: {
         itemUid: parentRecordUid,
-        senderName: stringValue(previewRelation.display_name_snapshot ?? previewRelation.displayNameSnapshot).trim() || 'Arkme用户',
+        senderName: this.timelineSenderName(previewRelation, botParticipants),
         title: stringValue(previewPayload.title),
         textContent: stringValue(previewPayload.text_content ?? previewPayload.textContent),
         ...(recordOwnerUserId > 0 ? { recordOwnerUserId } : {}),
