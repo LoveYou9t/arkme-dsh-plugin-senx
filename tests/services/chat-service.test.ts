@@ -81,6 +81,26 @@ async function chatTimelineItemKeyForTest(
 }
 
 describe('ChatService', () => {
+  it.each(['private_chat', 'group_chat'] as const)('keeps %s preview reads separate from read cursor mutation', async kind => {
+    const session = { userId: 42, accessToken: 'fixture', refreshToken: 'fixture' }
+    const authenticatedChatPost = vi.fn().mockResolvedValue({ items: [], has_more: false })
+    const openSourceRef = vi.fn(async () => ({ kind, ownerRef: 'owner-session' }))
+    const runtime = { config, stateStore: { uniqueCode: async () => 'fixture-key' }, requireSession: async () => session, authenticatedChatPost }
+    const chat = new ChatService(runtime as never,
+      { openSourceRef, sourceItem: async () => ({ kind }) } as never,
+      {} as never, {} as never, {} as never, {} as never, {} as never,
+      { queryGroupAiPolishConfig: async () => { throw new Error('optional decoration unavailable') },
+        queryGroupAiPolishNotices: async () => { throw new Error('optional decoration unavailable') } } as never, {} as never)
+    const signal = new AbortController().signal
+    await chat.readSource('signed-access-reference', { limit: 40, signal })
+    await chat.readSource('signed-access-reference', { limit: 40, cursor: { beforeSequence: 12 }, signal })
+    expect(openSourceRef.mock.calls).toEqual([['signed-access-reference', 42], ['signed-access-reference', 42]])
+    expect(authenticatedChatPost.mock.calls.map(call => call.slice(0, 4))).toEqual([
+      ['/api/v1/chat/timeline/page', { chat_session_uid: 'owner-session', before_seq: 0, limit: 40 }, session, signal],
+      ['/api/v1/chat/timeline/page', { chat_session_uid: 'owner-session', before_seq: 12, limit: 40 }, session, signal],
+    ])
+  })
+
   it.each([
     ['', '', '群内昵称'],
     ['', '成员接口备注', '成员接口备注'],

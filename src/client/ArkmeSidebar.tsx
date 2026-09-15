@@ -67,7 +67,7 @@ import { ArkmeConversationBottomControl } from './ArkmeConversationBottomControl
 import { projectArkmeChatAttentionFromMuted } from '../chat-attention.js'
 import { bindSentFileTaskLocals, fileTaskShowsInlineStatus, fileTaskTimelineItem, localFileBlock, useArkmeFileSendTasks } from './file-send-tasks.js'
 import { isArkmeRequestAbort, retryArkmeRead } from './read-retry.js'
-import { arkmeAwaitVisibleReadIntent, arkmeVisibleReadIntentAllowed } from './read-intent-visibility.js'
+import { arkmeAwaitVisibleReadIntent, arkmeVisibleReadIntentAllowed, subscribeArkmeReadIntentAvailability } from './read-intent-visibility.js'
 import { verifyPhoneCaptcha } from './geetest.js'
 import { ArkmeDirectorySourceAvatar, ArkmeUserAvatar } from './ArkmeAvatar.js'
 import {
@@ -2315,9 +2315,11 @@ export function ArkmeSurface({
     const resumeRead = () => {
       if (arkmeVisibleReadIntentAllowed()) setForegroundReadRevision(value => value + 1)
     }
+    const releaseReadAvailability = subscribeArkmeReadIntentAvailability(resumeRead)
     window.addEventListener('focus', resumeRead)
     document.addEventListener('visibilitychange', resumeRead)
     return () => {
+      releaseReadAvailability()
       window.removeEventListener('focus', resumeRead)
       document.removeEventListener('visibilitychange', resumeRead)
     }
