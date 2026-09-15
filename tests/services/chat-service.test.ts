@@ -1608,7 +1608,7 @@ describe('ChatService', () => {
 
   })
 
-  it('allows Bot details with an exact owner and rejects ownerless messages', async () => {
+  it('marks Bot and ownerless generic chat messages as unsupported quick-note detail sources', async () => {
     const session = { userId: 42, accessToken: 'access', refreshToken: 'refresh' }
     const runtime = {
       config: { maxTextLength: 20_000 },
@@ -1645,15 +1645,15 @@ describe('ChatService', () => {
     }] }, session, 'chat-1', 'group_chat')
 
     expect(items).toMatchObject([
-      { itemUid: 'record-bot' },
+      { itemUid: 'record-bot', quickNoteDetailsSupported: false },
       { itemUid: 'record-ownerless', quickNoteDetailsSupported: false },
     ])
   })
 
   it.each([
-    { label: 'explicit Bot', owner: 9001, actorKind: 2, botUid: 'daily-statistics-bot', supported: true },
+    { label: 'explicit Bot', owner: 9001, actorKind: 2, botUid: 'daily-statistics-bot', supported: false },
     { label: 'legacy Bot with unsafe numeric owner', owner: 6349264209489892000, actorKind: 1, botUid: '', supported: false },
-    { label: 'legacy Bot with unsafe string owner', owner: '6349264209489892000', actorKind: 1, botUid: '', supported: true },
+    { label: 'legacy Bot with unsafe string owner', owner: '6349264209489892000', actorKind: 1, botUid: '', supported: false },
     { label: 'human', owner: 9001, actorKind: 1, botUid: '', supported: true },
   ])('preserves quick-note eligibility for $label in paged and pushed messages', async ({ owner, actorKind, botUid, supported }) => {
     const session = { userId: 42, accessToken: 'access', refreshToken: 'refresh' }
