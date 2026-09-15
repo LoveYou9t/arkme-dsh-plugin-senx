@@ -99,6 +99,7 @@ describe('official DSH client adapter', () => {
       'settings.general.item',
       'settings.section',
       'shell.overlay',
+      'shell.overlay',
     ])
     expect(registered).toEqual(expect.arrayContaining([
       expect.objectContaining({
@@ -324,7 +325,7 @@ describe('official DSH client adapter', () => {
     } as never)
 
     const labels = effect.mock.calls.map(call => call[1])
-    expect(labels).toContain('dsh-arkme: client app update status')
+    expect(labels).toContain('dsh-arkme: client app update bridge')
     expect(labels).not.toContain('dsh-arkme: client plugin update status')
   })
 })
