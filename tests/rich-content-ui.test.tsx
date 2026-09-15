@@ -10,10 +10,22 @@ import {
   arkmeRelatedRecordingItemFromSharedRecording, arkmeSharedRecordingTimeText,
 } from '../src/client/ArkmeRichContent.js'
 import { ArkmeLongArticleDialog } from '../src/client/ArkmeLongArticleDialog.js'
+import { ArkmeLivePhotoBadge } from '../src/client/ArkmeLivePhotoBadge.js'
 import { ArkmeTimelineDetailDrawer, ForwardRecordsDetail } from '../src/client/ArkmeNoteDetails.js'
 import { arkmeClipboardImageFiles, arkmeShouldDismissAnchoredMenu, arkmeShouldToggleMessageSelectFromRowClick } from '../src/client/ArkmeSidebar.js'
 
 describe('Arkme rich content presentation', () => {
+  it('uses the Flutter Live ring geometry and marks unavailable motion without a video label', () => {
+    const compact = renderToStaticMarkup(<ArkmeLivePhotoBadge compact playable />)
+    expect(compact).toContain('width="16" height="16"')
+    expect(compact.match(/<circle /g)).toHaveLength(16)
+    expect(compact).not.toContain('<path')
+    expect(compact).not.toContain('LIVE')
+    const unavailable = renderToStaticMarkup(<ArkmeLivePhotoBadge compact playable={false} />)
+    expect(unavailable).toContain('d="M4 4.8 16 15.2"')
+    expect(renderToStaticMarkup(<ArkmeLivePhotoBadge playable />)).toContain('width="22" height="22"')
+  })
+
   it('shows LIVE on the cover, hides it only while playing and restores it after ending or error', async () => {
     vi.stubGlobal('window', { addEventListener: vi.fn(), removeEventListener: vi.fn() })
     vi.stubGlobal('document', { body: { style: { overflow: '' } } })
@@ -26,6 +38,8 @@ describe('Arkme rich content presentation', () => {
       expect(live().props.style.visibility).not.toBe('hidden')
       await act(async () => live().props.onClick())
       expect(live().props.disabled).toBe(true)
+      expect(live().props['aria-busy']).toBe(true)
+      expect(view!.root.findAllByProps({ role: 'status' }).length).toBeGreaterThan(0)
       expect(live().props.style.visibility).not.toBe('hidden')
       await act(async () => view!.root.findByType('video').props.onPlaying())
       expect(live().props.style.visibility).toBe('hidden')

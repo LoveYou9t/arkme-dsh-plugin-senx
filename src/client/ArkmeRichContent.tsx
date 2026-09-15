@@ -1,4 +1,5 @@
 import { useArkmeLivePhotoPlayback } from './live-photo-playback.js'
+import { ArkmeLivePhotoBadge } from './ArkmeLivePhotoBadge.js'
 import { arkmeMarkdownPlainText } from '../markdown.js'
 import { preserveTextTogglePosition } from './preserve-text-toggle-position.js'
 import { ArkmeMarkdownBody } from './ArkmeMarkdownBody.js'
@@ -394,7 +395,9 @@ function MediaGallery({ blocks, failures, retryVersions, onOpen, onFailure, onRe
             <video src={src} muted playsInline preload="metadata" style={styles.videoPreview} aria-hidden onError={event => { onFailure(block, event.currentTarget.error?.code === 4 || !arkmeCanInlineLocalFile(block.mimeType, block.fileName) ? 'unsupported' : 'retryable') }} />
             <span style={styles.videoBadge} aria-hidden>▶ {durationLabel(block.durationSec)}</span>
           </>}
-        {block.kind === 'image' && block.dynamicPhoto !== undefined && <span style={styles.videoBadge} aria-label="实况照片">LIVE</span>}
+        {block.kind === 'image' && block.dynamicPhoto !== undefined && <span style={{ position: 'absolute', left: 4, bottom: 4, pointerEvents: 'none' }} aria-label="实况照片">
+          <ArkmeLivePhotoBadge compact playable={block.dynamicPhoto.motion !== undefined} />
+        </span>}
         <UploadProgress block={block} />
       </button>
     })}

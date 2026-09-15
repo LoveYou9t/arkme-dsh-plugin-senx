@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { ArkmeContentBlock } from '../types.js'
 import { arkmeLocalFileUrl, useArkmeOriginal } from './ArkmeFileViewer.js'
+import { ArkmeLivePhotoBadge } from './ArkmeLivePhotoBadge.js'
 
 const noMotion: ArkmeContentBlock = { kind: 'video', mediaRef: '', fileName: '', mimeType: '', size: 0, sortOrder: 0 }
 
@@ -50,10 +51,13 @@ export function useArkmeLivePhotoPlayback(cover: ArkmeContentBlock) {
     /> : null,
     control: photo === undefined ? null : <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, marginRight: 12 }}>
       <button type="button" data-arkme-live-photo-control
-        aria-label={motion === undefined ? '实况动态片段不可用' : '播放实况'}
+        aria-label={phase === 'loading' ? '实况加载中' : motion === undefined ? '实况动态片段不可用' : '播放实况'}
+        aria-busy={phase === 'loading'}
+        title={phase === 'loading' ? '实况加载中' : motion === undefined ? '实况动态片段不可用' : '播放实况'}
         disabled={active || motion === undefined} onClick={start}
-        style={{ visibility: phase === 'playing' ? 'hidden' : 'visible', border: 0, borderRadius: 15, padding: '6px 10px', background: 'rgba(20,22,24,.38)', color: 'rgba(255,255,255,.90)', fontSize: 12, cursor: active ? 'progress' : 'pointer' }}>
-        {phase === 'loading' ? 'LIVE 加载中' : motion === undefined ? 'LIVE 不可用' : 'LIVE'}
+        style={{ visibility: phase === 'playing' ? 'hidden' : 'visible', display: 'inline-flex', alignItems: 'center', gap: 6, border: 0, borderRadius: 16, padding: 0, background: 'transparent', color: '#fff', fontSize: 12, cursor: active ? 'progress' : motion === undefined ? 'default' : 'pointer' }}>
+        <ArkmeLivePhotoBadge playable={motion !== undefined} />
+        {phase === 'loading' && <span role="status">加载中</span>}
       </button>
       {phase === 'failed' && <span role="alert" style={{ position: 'absolute', bottom: 40, left: 12, right: 12, textAlign: 'center', fontSize: 12 }}>{state?.error}</span>}
     </span>,
