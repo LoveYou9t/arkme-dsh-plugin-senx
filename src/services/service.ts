@@ -28,6 +28,9 @@ import type { ArkmeExtensionReviewOperation } from '../extensions/types.js'
 import type { RecordingImportAdmission, RecordingImportJob } from '../recording-import-contract.js'
 
 export interface StateStore extends RecentEmojiStore {
+  readRecordingSpeakerCache?(scope: string, userId: number): Promise<import('../types.js').ArkmeRecordingSpeakerCandidate[] | undefined>
+  writeRecordingSpeakerCache?(scope: string, userId: number, candidates: import('../types.js').ArkmeRecordingSpeakerCandidate[]): Promise<void>
+  clearRecordingSpeakerCache?(scope: string, userId: number): Promise<void>
   readDirectoryCache?(userId: number): Promise<import('../types.js').ArkmeSourceList | undefined>
   writeDirectoryCache?(userId: number, page: import('../types.js').ArkmeSourceList): Promise<void>
   readAvatarCache?(userId: number, imageRef: string): Promise<import('../types.js').ArkmeImageBytes | undefined>
@@ -150,6 +153,8 @@ export interface ArkmeRemoteRequestOptions {
   cacheMs?: number
   failureCooldownMs?: number
   bypassCache?: boolean
+  /** Cancel a shared read transport once its last subscriber leaves. */
+  cancelWhenUnobserved?: boolean
   /** Optional writes may avoid publishing service-wide cooldowns; existing admission limits still apply. */
   publishServiceCooldown?: boolean
   /** Mark only transport outcomes where a mutation may have reached its owner without a usable acknowledgement. */
@@ -513,6 +518,7 @@ export class ServiceRuntime {
       ...(options.cacheMs === undefined ? {} : { cacheMs: options.cacheMs }),
       ...(options.failureCooldownMs === undefined ? {} : { failureCooldownMs: options.failureCooldownMs }),
       ...(options.bypassCache === undefined ? {} : { bypassCache: options.bypassCache }),
+      ...(options.cancelWhenUnobserved === undefined ? {} : { cancelWhenUnobserved: options.cancelWhenUnobserved }),
       ...(signal === undefined ? {} : { signal }),
       ...(read ? {
         lane: options.lane === 'background-read' ? 'background-read' as const : 'interactive-read' as const,
