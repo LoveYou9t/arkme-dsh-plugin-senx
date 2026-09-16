@@ -9,8 +9,10 @@
 }
 
 [data-arkme-workspace], [data-arkme-workspace] * { box-sizing: border-box; }
-[data-arkme-workspace] button, [data-arkme-workspace] input, [data-arkme-workspace] textarea { font: inherit; }
-[data-arkme-workspace] button { border: 0; background: none; color: inherit; cursor: pointer; }
+/* Shared DSH selectors and topic-footer controls own their styles in both the
+   workspace and body portal. Do not strip their native fill/border/typography. */
+[data-arkme-workspace] button:not([data-arkme-conversation-selector], .arkme-self-topic-create-button, .arkme-dsh-view-options-button), [data-arkme-workspace] input, [data-arkme-workspace] textarea { font: inherit; }
+[data-arkme-workspace] button:not([data-arkme-conversation-selector], .arkme-self-topic-create-button, .arkme-dsh-view-options-button) { border: 0; background: none; color: inherit; cursor: pointer; }
 [data-arkme-workspace] [data-arkme-theme-image="dark"] { display: none !important; }
 
 .arkme-redesign-root {
@@ -1080,7 +1082,7 @@ body[data-ds-dark-theme] [aria-label="客户端日历"]:has(> button[aria-label=
 }
 body[data-ds-dark-theme] [aria-label="客户端日历"]:has(> button[aria-label="关闭日历"])
   section[aria-label="客户端日历"] button[data-selected="false"][aria-label*="条记录"] > span:last-child {
-  background: var(--dsw-alias-bg-layer-2) !important;
+  background: transparent !important;
   color: var(--dsw-alias-label-secondary) !important;
 }
 body[data-ds-dark-theme] [aria-label="客户端日历"]:has(> button[aria-label="关闭日历"])
@@ -1876,3 +1878,23 @@ body[data-ds-dark-theme] .arkme-detail-extension-input-shell {
 .arkme-conversation-profile-actions { grid-template-columns: minmax(0, 1fr); }
 
 body[data-ds-dark-theme] .arkme-peer-membership-disc { fill: #171717; stroke: #343434; }
+
+/* Match DSH\'s solid selector footer: shared rules live in conversation-selector-style.ts. */
+.arkme-self-topic-sort-option {
+  display: flex;
+  min-width: 176px;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  white-space: nowrap;
+}
+.arkme-self-topic-sort-option-title {
+  color: var(--dsw-alias-label-primary, #17191c);
+  line-height: 20px;
+}
+.arkme-self-topic-sort-option-description {
+  color: var(--dsw-alias-label-secondary, #68707c);
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 18px;
+}
