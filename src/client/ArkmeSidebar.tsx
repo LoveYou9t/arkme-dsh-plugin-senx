@@ -3902,7 +3902,8 @@ export function ArkmeSurface({
       })
       return
     }
-    if (recordOwnerId(target.recordOwnerUserId) !== 0) return
+    if (sourceIsChat && recordOwnerId(target.recordOwnerUserId) !== 0) return
+    if (conversationCacheRef.current.getTimeline(conversationKey) === undefined) return
     if (loadingOlder) return
     if (!hasMore || nextCursor === undefined || conversationTargetPagingRef.current.pages >= 80) {
       setError('已打开对应会话，但暂未能在当前历史中定位该条消息')
@@ -6858,6 +6859,7 @@ export function ArkmeSurface({
               selectedSource={selectedSource}
               trigger="none"
               onSelect={activateSelfSource}
+              onSelectionRefreshed={updateSourceProjection}
               onSelectionInvalidated={invalidateTopicSelection}
               onSelfSourcesResolution={acceptSelfSourcesResolution}
               onCreateWarning={message => { showMessageActionStatus(message, false) }}

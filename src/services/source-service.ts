@@ -2101,6 +2101,7 @@ export class SourceService {
         },
       ),
       ...(sourceKey === undefined ? {} : { sourceKey }),
+      ...(source.kind === 'topic' ? { topicHierarchyKey: await this.topicHierarchyKey(source.userId, source.ownerRef) } : {}),
       kind: source.kind,
       displayName: source.displayName,
       activeAtMillis: source.conversationListActivityAtMillis ?? 0,
