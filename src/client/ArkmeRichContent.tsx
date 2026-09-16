@@ -803,7 +803,7 @@ export function ArkmeMediaPreview({ blocks, selected, onSelect, onClose, preview
         <span aria-hidden style={styles.previewActionWideGap} />
         <ArkmeFileActionNavButton label="下一个媒体" direction="right" disabled={nextDisabled} onClick={() => { if (!nextDisabled) { if (navigation) navigation.next?.(); else selectMedia(blocks[index + 1]!) } }} />
         <span aria-hidden style={styles.previewActionWideGap} />
-        <ArkmeFileActions block={selected} original={original} copySourceUrl={originalUrl} onImageCopyNotice={showActionNotice} showDownloadStatus={false} hideDownloadAfterSave={false} style={styles.previewActionPair} />
+        <ArkmeFileActions block={selected} original={original} copySourceUrl={previewUrl ?? (selected.mediaRef === selected.localFileRef ? undefined : `${mediaRoute}?ref=${encodeURIComponent(selected.mediaRef)}`)} onImageCopyNotice={showActionNotice} showDownloadStatus={false} hideDownloadAfterSave={false} style={styles.previewActionPair} />
       </div>
       <ArkmeFileActionToast notice={actionNotice} style={styles.previewActionToast} />
     </div>
