@@ -485,6 +485,7 @@ export function ArkmeArkoSurface() {
   const messageSelectionScope = profileUserId === undefined ? 'anonymous' : `user:${String(profileUserId)}:session:${String(session?.sessionId ?? 0)}`
   const messageActions = useArkmeMessageActions({
     scopeKey: messageSelectionScope,
+    forwardSource: { name: arkoPresentationName(profile), avatar: <ArkmeArkoAvatar size={34} /> },
     selectionItems: messageSelectionItems,
     items: messageActionItems,
   })

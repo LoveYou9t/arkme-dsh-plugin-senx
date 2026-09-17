@@ -63,13 +63,17 @@ export function observeSelectedNativeNodes(chat: NativeChat, keys: ReadonlySet<s
 }
 
 /** Native user content and assistant display blocks are separate host contracts. */
-export function nativeSelectionCopyText(chat: NativeChat, key: string): string {
+function nativeSelectionText(chat: NativeChat, key: string): string {
   const node = chat.nodes.get(key)
   if (!isSelectableNativeNode(node) || node.key !== key || !('data' in node) || !object(node.data)) throw new Error('当前消息暂不可用，请重新选择')
   const blocks = node.kind === 'user' ? node.data.content : node.data.blocks
   if (!Array.isArray(blocks)) throw new Error('当前消息暂不可用，请重新选择')
   return blocks.filter(block => object(block) && (node.kind === 'user' ? block.type : block.kind) === 'text' && typeof block.text === 'string')
-    .map(block => block.text).join('').trim()
+    .map(block => block.text).join('')
+}
+
+export function nativeSelectionCopyText(chat: NativeChat, key: string): string {
+  return nativeSelectionText(chat, key).trim()
 }
 
 /** Freeze the selected public projections; DOM order and selection order are not message order. */
@@ -82,8 +86,8 @@ export function nativeSelectionForwardSnapshot(chat: NativeChat, sessionId: stri
       || typeof node.anchorSeq !== 'number' || !Number.isSafeInteger(node.anchorSeq) || node.anchorSeq < 0
       || !('data' in node) || !object(node.data) || typeof node.data.time !== 'number'
       || !Number.isSafeInteger(node.data.time) || node.data.time <= 0) throw new Error('所选消息暂不可用，请重新选择')
-    const text = nativeSelectionCopyText(chat, key)
-    if (!text) throw new Error('所选消息没有可转发正文，请调整选择')
+    const text = nativeSelectionText(chat, key)
+    if (!text.trim()) throw new Error('所选消息没有可转发正文，请调整选择')
     const size = new TextEncoder().encode(text).byteLength
     bytes += size
     if (size > NATIVE_FORWARD_MAX_TEXT_BYTES || bytes > NATIVE_FORWARD_MAX_TOTAL_BYTES) throw new Error('所选正文超过转发大小限制，请减少选择')

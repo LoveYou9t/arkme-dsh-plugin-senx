@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import type { ArkmeAuthSnapshot, ArkmeSourceSendResult } from '../types.js'
 import type { NativeChatForwardSnapshot } from '../native-chat-forward-contract.js'
+import { DeepSeekLogoMark } from './ArkmeDshAgentInputMarker.js'
 import { ArkmeForwardPicker } from './ArkmeForwardPicker.js'
 import { callArkme } from './api.js'
 import { nativeSelectionForwardSnapshot, type NativeChat } from './harness-native-selection.js'
@@ -60,7 +61,7 @@ export function NativeForwardAction({ chat, keys, sessionId, doc, onComplete, ch
   </>
   return <>
     {children(button)}
-    {attempt && createPortal(<ArkmeForwardPicker open={attempt.open} delivery={{ send: async (target, identity, commentText, signal) => {
+    {attempt && createPortal(<ArkmeForwardPicker open={attempt.open} source={{ name: 'DeepSeek Harness', avatar: <DeepSeekLogoMark style={{ width: 30, height: 30, opacity: 1, color: arkmeTheme.accent }} /> }} messageCount={attempt.snapshot.messages.length} delivery={{ send: async (target, identity, commentText, signal) => {
       return await callArkme<ArkmeSourceSendResult>('native-chat.forward', {
         snapshot: attempt.snapshot, expectedUserId: attempt.userId, targetSourceRef: target.sourceRef,
         requestId: `dsh-forward-${identity.requestId}`, recordUid: identity.recordUid,

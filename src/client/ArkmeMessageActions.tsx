@@ -1,4 +1,4 @@
-import { ArkmeForwardPicker } from './ArkmeForwardPicker.js'
+import { ArkmeForwardPicker, type ForwardSourcePresentation } from './ArkmeForwardPicker.js'
 import { copyText } from './clipboard-text.js'
 import { messageSelectionStyles, messageSelectionMenuStyles, ArkmeSelectActionIcon } from './message-selection-presentation.js'
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent } from 'react'
@@ -90,6 +90,7 @@ export function useArkmeMessageActions(input: {
   items: readonly ArkmeMessageActionViewItem[]
   /** Visible selection facts, independent of the signed action capabilities. */
   selectionItems?: readonly ArkmeMessageSelectionItem[]
+  forwardSource?: ForwardSourcePresentation
   onForwarded?: (target: ArkmeSourceItem, result: ArkmeSourceSendResult) => void
 }) {
   const [selectedIds, setSelectedIds] = useState<Set<string>>()
@@ -235,7 +236,7 @@ export function useArkmeMessageActions(input: {
       <button type="button" role="menuitem" aria-label="转发" style={{ ...styles.menuButton, opacity: menuItem.forwardAvailable ? 1 : .4 }} disabled={!menuItem.forwardAvailable} onClick={() => { void openForward([menuItem]) }}><span style={styles.menuIcon}><MessageActionIcon kind="forward" size={18} /></span><span>转发</span></button>
     </div>}
     {status !== '' && <div style={styles.status} role="status">{status}</div>}
-    {picker !== undefined && <ArkmeForwardPicker key={JSON.stringify([input.scopeKey, ...picker.items.map(item => [item.conversationRef, item.id])])} open={picker.open}
+    {picker !== undefined && <ArkmeForwardPicker key={JSON.stringify([input.scopeKey, ...picker.items.map(item => [item.conversationRef, item.id])])} open={picker.open} {...(input.forwardSource ? { source: input.forwardSource } : {})} messageCount={picker.items.length}
       delivery={{ send: async (target, identity, commentText, signal) => {
         if (picker.items.some(item => !input.items.some(current => current.id === item.id && current.forwardAvailable && current.conversationRef === item.conversationRef))) {
           throw new Error('所选消息已变化，请退出后重新选择')

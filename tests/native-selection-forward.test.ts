@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { nativeSelectionForwardSnapshot, type NativeChat } from '../src/client/harness-native-selection.js'
+import { nativeSelectionForwardSnapshot, nativeSelectionCopyText, type NativeChat } from '../src/client/harness-native-selection.js'
 const user = (key: string, anchorSeq: number, text = key) => ({ key, anchorSeq, target: 'chat', visibility: 'visible', kind: 'user', data: { time: 1000, content: [{ type: 'text', text }] } })
 const chat = (nodes: unknown[]) => ({ nodes: { get: (key: string) => nodes.find(value => (value as { key: string }).key === key) } }) as NativeChat
 
@@ -39,4 +39,12 @@ it('accepts the total snapshot byte boundary and rejects the whole oversized bat
   expect(nativeSelectionForwardSnapshot(chat(nodes), 'session', keys).messages).toHaveLength(32)
   keys.add('32')
   expect(() => nativeSelectionForwardSnapshot(chat(nodes), 'session', keys)).toThrow('大小限制')
+})
+
+it('preserves Markdown whitespace in forwarding while keeping copy-text normalization separate', () => {
+  const text = '    code_block()\n\n'
+  const source = chat([user('a', 1, text)])
+  expect(nativeSelectionForwardSnapshot(source, 'session', new Set(['a'])).messages[0]?.text).toBe(text)
+  expect(nativeSelectionCopyText(source, 'a')).toBe('code_block()')
+  expect(() => nativeSelectionForwardSnapshot(chat([user('a', 1, ' \n ')]), 'session', new Set(['a']))).toThrow()
 })

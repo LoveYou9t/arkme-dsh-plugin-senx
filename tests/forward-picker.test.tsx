@@ -121,3 +121,22 @@ it('releases the sending lock after timeout and retries with the original identi
     expect(send.mock.calls[1]![1]).toEqual(send.mock.calls[0]![1])
   } finally { vi.useRealTimers() }
 })
+
+it('retries failed targets and unfinished comments without redelivering completed targets', async () => {
+  const targets = [target, { ...target, sourceKey: 'chat:two', sourceRef: 'two' }, { ...target, sourceKey: 'chat:three', sourceRef: 'three' }]
+  api.call.mockReset().mockImplementation(async (_op, params) => ({ items: params.directory === 'root' ? targets : [], hasMore: false }))
+  const send = vi.fn().mockResolvedValueOnce({ itemUid: 'one', localState: 'synced' })
+    .mockRejectedValueOnce(new Error('unknown outcome'))
+    .mockResolvedValueOnce({ itemUid: 'three', localState: 'synced', warningText: '附言发送失败' })
+    .mockResolvedValue({ itemUid: 'confirmed', localState: 'synced' })
+  const events = await mount(send)
+  for (const node of renderer!.root.findAllByType('strong')) await act(async () => node.parent!.parent!.props.onClick())
+  await act(async () => button('转发').props.onClick())
+  expect(send).toHaveBeenCalledTimes(3)
+  expect(events.onComplete).not.toHaveBeenCalled()
+  await act(async () => button('转发').props.onClick())
+  expect(send).toHaveBeenCalledTimes(5)
+  expect(send.mock.calls[3]!.slice(0, 3)).toEqual(send.mock.calls[1]!.slice(0, 3))
+  expect(send.mock.calls[4]!.slice(0, 3)).toEqual(send.mock.calls[2]!.slice(0, 3))
+  expect(events.onComplete).toHaveBeenCalledTimes(1)
+})

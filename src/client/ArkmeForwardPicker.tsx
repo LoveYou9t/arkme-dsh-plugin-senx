@@ -1,10 +1,15 @@
-import { useEffect, useRef, useState, type CSSProperties } from 'react'
+import { useEffect, useRef, useState, type ReactNode, type CSSProperties } from 'react'
 import type { ArkmeSourceItem, ArkmeSourceList, ArkmeSourceSendResult } from '../types.js'
 import { arkmeSourceAllowsUserWrite } from '../topic-policy.js'
 import { callArkme, ArkmeClientError } from './api.js'
 import { arkmeTheme } from './arkme-theme.js'
 import { ArkmeSelectActionIcon } from './message-selection-presentation.js'
 import { arkmeSourceIdentityKey } from './source-identity.js'
+
+export interface ForwardSourcePresentation {
+  name: string
+  avatar: ReactNode
+}
 
 export interface ForwardRequestIdentity {
   requestId: string
@@ -52,8 +57,10 @@ const styles: Record<string, CSSProperties> = {
 }
 
 /** Shared target UI. Source identity and delivery remain owned by the caller. */
-export function ArkmeForwardPicker({ open = true, delivery, onClose, onComplete, onStatus, onForwarded }: {
+export function ArkmeForwardPicker({ open = true, source, messageCount, delivery, onClose, onComplete, onStatus, onForwarded }: {
   open?: boolean
+  source?: ForwardSourcePresentation
+  messageCount?: number
   delivery: ArkmeForwardDelivery
   onClose(): void
   onComplete(): void
@@ -197,6 +204,11 @@ export function ArkmeForwardPicker({ open = true, delivery, onClose, onComplete,
         {!Object.values(pages).some(page => page.loading || page.error) && filtered.length === 0 && <div>{keyword.trim() ? '已加载对象中没有匹配结果' : '暂无可转发对象'}</div>}
         {error && <div style={{ color: arkmeTheme.danger, padding: 8 }}>{error}</div>}
       </div>
+      {source && <div data-arkme-forward-source="true" style={{ display: 'flex', alignItems: 'center', gap: 10, margin: '8px 16px 0', padding: '10px 12px', borderRadius: 8, background: arkmeTheme.subtle }}>
+        <span aria-hidden style={{ width: 34, height: 34, flex: 'none', display: 'grid', placeItems: 'center' }}>{source.avatar}</span>
+        <span style={{ minWidth: 0 }}><span style={{ display: 'block', color: arkmeTheme.text, fontSize: 14 }}>{source.name}</span>
+          <span style={{ color: arkmeTheme.secondary, fontSize: 12 }}>{messageCount === undefined ? '聊天记录' : `${messageCount} 条消息`}</span></span>
+      </div>}
       <textarea style={{ ...styles.input, minHeight: 58, resize: 'vertical' }} value={comment} placeholder="附言（可选）" disabled={sending || submitted} onChange={event => setComment(event.target.value)} />
       <footer style={styles.dialogFooter}><button type="button" style={styles.dialogButton} disabled={sending} onClick={close}>取消</button><button type="button" style={{ ...styles.dialogButton, ...styles.primary, opacity: selected.length === 0 || sending ? .45 : 1 }} disabled={!selected.length || sending} onClick={() => { void send() }}>{sending ? '转发中…' : '转发'}</button></footer>
     </section>

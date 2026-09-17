@@ -363,7 +363,7 @@ describe('native DSH snapshot forwarding', () => {
     const result = await service.forwardNative(snapshot, userId, options)
     expect(result.itemUid).toBe('delivered')
     const body = r.authenticatedChatPost.mock.calls[0]?.[1] as Record<string, unknown>
-    expect(body.source_items).toEqual(snapshot.messages.map((message, index) => ({ source_type: 'agent', render_format: 'markdown', source_identity_kind: 'agent_message', source_identity_id: expect.stringMatching(/^dsh:[0-9a-f]{64}$/), snapshot_text: message.text, source_sender_user_id: index === 0 ? userId : 0 })))
+    expect(body.source_items).toEqual(snapshot.messages.map((message, index) => ({ source_type: 'agent', render_format: 'markdown', source_identity_kind: 'agent_message', source_identity_id: expect.stringMatching(/^dsh:[0-9a-f]{64}$/), snapshot_text: message.text, source_sender_user_id: index === 0 ? userId : 0, ...(index === 0 ? {} : { source_avatar_kind: 'deepseek' }) })))
     expect(JSON.stringify(body)).not.toContain('agent_session_id')
     expect(JSON.stringify(body.source_items)).not.toContain('record_uid')
     await service.forwardNative(snapshot, userId, options)
@@ -379,7 +379,8 @@ describe('native DSH snapshot forwarding', () => {
     const payload = body.content_payload.forward_records
     expect(payload.source_record_uids).toEqual([])
     expect(payload.items.map(item => item.send_at)).toEqual([1000, 2000])
-    expect(payload.items.map(item => item.source_display_name)).toEqual(['我', 'DSH'])
+    expect(payload.items.map(item => item.source_display_name)).toEqual(['我', 'DeepSeek Harness'])
+    expect(payload.items.map(item => item.source_avatar_kind)).toEqual([undefined, 'deepseek'])
     expect(payload.items.every(item => !('record_uid' in item))).toBe(true)
   })
   it('rejects account mismatch, duplicate identities, wrong order, unsupported roles and oversized text before writes', async () => {

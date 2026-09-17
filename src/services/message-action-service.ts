@@ -209,7 +209,7 @@ export class MessageActionService {
       keys.add(item.key); previous = item.anchorSeq
       return { ownerKind: 'dsh_native', sessionId, messageIdentity: item.key, role: item.role,
         textContent: item.text, createdAtMillis: item.createdAtMillis, sortOrdinal: item.anchorSeq,
-        senderUserId: item.role === 'user' ? session.userId : 0, senderName: item.role === 'user' ? '我' : 'DSH' }
+        senderUserId: item.role === 'user' ? session.userId : 0, senderName: item.role === 'user' ? '我' : 'DeepSeek Harness' }
     })
     return await this.deliver(references, session, options)
   }

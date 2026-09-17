@@ -131,7 +131,7 @@ export function ArkmeBotConversationSurface({
         forwardAvailable: message.messageActionCapabilities?.forward === true,
       }]
   )), [messages])
-  const messageActions = useArkmeMessageActions({ scopeKey: bot.botRef, items: messageActionItems })
+  const messageActions = useArkmeMessageActions({ scopeKey: bot.botRef, items: messageActionItems, forwardSource: { name: bot.name, avatar: <RobotIcon size={24} weight="fill" /> } })
 
   useEffect(() => {
     activeRef.current = true

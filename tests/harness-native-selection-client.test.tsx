@@ -605,6 +605,9 @@ async function setupForward(authResult?: () => Promise<unknown>) {
 it('forwards from the native selection through the shared picker and exits only after confirmed success', async () => {
   const s = await setupForward()
   expect(s.doc.querySelector('[role="dialog"]')).not.toBeNull()
+  const source = s.doc.querySelector('[data-arkme-forward-source]')!
+  expect(source.textContent).toBe('DeepSeek Harness1 条消息')
+  expect(source.querySelector('svg')).not.toBeNull()
   expect(s.doc.body.textContent).toContain('已选 1 条')
   await s.click('[role="dialog"] strong')
   await act(async () => { [...s.doc.querySelectorAll<HTMLButtonElement>('[role="dialog"] button')].find(button => button.textContent === '转发')!.click() })

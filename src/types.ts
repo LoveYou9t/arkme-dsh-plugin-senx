@@ -1837,6 +1837,8 @@ export interface ArkmeForwardTranscriptSegment {
 }
 
 export interface ArkmeForwardRecordPreviewItem {
+  /** Built-in AI presentation asset; never a user identity. */
+  avatarKind?: 'deepseek'
   templateKind?: number
   displayKind?: number
   senderName: string

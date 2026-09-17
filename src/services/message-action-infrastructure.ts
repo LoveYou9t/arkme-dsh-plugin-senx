@@ -176,6 +176,7 @@ export class ArkmeMessageActionGateway implements MessageActionGateway {
     if (reference.ownerKind === 'dsh_native') return {
       source_type: 'agent', render_format: 'markdown', source_identity_kind: 'agent_message',
       source_identity_id: this.nativeIdentity(reference), snapshot_text: reference.textContent, source_sender_user_id: reference.senderUserId,
+      ...(reference.role === 'assistant' ? { source_avatar_kind: 'deepseek' } : {}),
     }
     if (reference.ownerKind === 'agent') return {
       source_type: 'agent', render_format: 'markdown', source_identity_kind: 'agent_message',
@@ -215,6 +216,7 @@ export class ArkmeMessageActionGateway implements MessageActionGateway {
           source_type: reference.ownerKind === 'agent' || reference.ownerKind === 'dsh_native' ? 'agent' : reference.ownerKind === 'bot_chat' ? 'chat_record' : 'record',
           ...(reference.ownerKind === 'dsh_native' ? {
             render_format: 'markdown', source_identity_kind: 'agent_message', source_identity_id: this.nativeIdentity(reference),
+            ...(reference.role === 'assistant' ? { source_avatar_kind: 'deepseek' } : {}),
           } : reference.ownerKind === 'agent' ? {
             render_format: 'markdown', source_identity_kind: 'agent_message',
             source_identity_id: `${String(reference.agentSessionId)}:${reference.messageIdentity}`,
