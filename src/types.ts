@@ -3081,6 +3081,8 @@ export interface ArkmeAiVideoListResult {
 
 export interface ArkmeFileAssetDisplayItem {
   fileAssetUid: string
+  fileKind?: number
+  size?: number
   fileName?: string
   mimeType?: string
   previewUrl?: string

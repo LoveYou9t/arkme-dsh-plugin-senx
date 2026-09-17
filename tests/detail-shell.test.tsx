@@ -56,3 +56,20 @@ it('returns focus to the original trigger after opening and closing a subview', 
   expect(document.activeElement).toBe(trigger)
   trigger.remove()
 })
+
+it('keeps keyboard focus in the detail after the back button disappears', async () => {
+  const render = async (history: boolean) => act(async () => root.render(<ArkmeDetailShell title="详情" label="详情" onClose={() => {}}
+    {...(history ? { onBack: () => {}, backLabel: '返回详情' } : {})}>内容</ArkmeDetailShell>))
+  await render(false); await render(true)
+  expect(document.activeElement?.getAttribute('aria-label')).toBe('返回详情')
+  await render(false)
+  expect(document.activeElement?.getAttribute('aria-label')).toBe('关闭详情')
+})
+it('does not steal external focus when a subview is dismissed programmatically', async () => {
+  const elsewhere = document.createElement('button'); document.body.append(elsewhere)
+  await act(async () => root.render(<ArkmeDetailShell title="历史" label="历史" onClose={() => {}} onBack={() => {}}>历史</ArkmeDetailShell>))
+  elsewhere.focus()
+  await act(async () => root.render(<ArkmeDetailShell title="详情" label="详情" onClose={() => {}}>正文</ArkmeDetailShell>))
+  expect(document.activeElement).toBe(elsewhere)
+  elsewhere.remove()
+})

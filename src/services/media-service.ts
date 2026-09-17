@@ -319,6 +319,8 @@ export class MediaService {
       return {
         fileAssetUid: stringValue(item.file_asset_uid).trim(),
         status: stringValue(item.status).trim(),
+        ...(typeof item.file_kind === 'number' ? { fileKind: item.file_kind } : {}),
+        ...(typeof item.size === 'number' ? { size: item.size } : {}),
         ...(stringValue(item.file_name).trim() === '' ? {} : { fileName: stringValue(item.file_name).trim() }),
         ...(stringValue(item.mime_type).trim() === '' ? {} : { mimeType: stringValue(item.mime_type).trim() }),
         ...(previewUrl === undefined ? {} : { previewUrl }),
@@ -1070,7 +1072,8 @@ export class MediaService {
         try {
           const assets = await this.queryFileAssets(native.slice(start, start + 50).map(ref => stringValue(ref.file_asset_uid)), signal)
           accept(assets.map(asset => ({ file_asset_uid: asset.fileAssetUid, file_name: asset.fileName,
-            mime_type: asset.mimeType, download_url: asset.downloadUrl, preview_url: asset.previewUrl })))
+            mime_type: asset.mimeType, file_kind: asset.fileKind, size: asset.size,
+            download_url: asset.downloadUrl, preview_url: asset.previewUrl })))
         } catch (error) {
           if (signal?.aborted) throw error
         }

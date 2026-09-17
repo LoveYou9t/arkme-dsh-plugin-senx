@@ -72,6 +72,7 @@ export function ArkmeDetailShell({ title, label, subtitle, footer, footerHidden 
   const hasBack = onBack !== undefined
   useEffect(() => {
     if (hasBack) backRef.current?.focus({ preventScroll: true })
+    else if (document.activeElement === document.body) closeRef.current?.focus({ preventScroll: true })
   }, [hasBack])
   return <aside ref={panelRef} role="dialog" aria-label={label} aria-labelledby={titleId} style={{ ...styles.drawer, ...resize.style }} data-arkme-note-detail="true">
     {resize.handle}

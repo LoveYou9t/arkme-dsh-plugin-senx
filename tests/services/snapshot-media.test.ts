@@ -27,6 +27,16 @@ describe('snapshot media through existing APIs', () => {
     expect(f.runtime.authenticatedPost.mock.calls.every(call => call[0] === '/api/v1/files/assets/query')).toBe(true)
     expect(pages.map(page => page.length)).toEqual([51, 1])
   })
+  it('preserves native asset kind and size when the snapshot has no filename or MIME', async () => {
+    const f = fixture()
+    f.runtime.authenticatedPost.mockResolvedValueOnce({ items: [{ file_asset_uid: 'voice', file_name: '录音',
+      file_kind: 2, size: 8192, download_url: 'https://example.test/voice' }] } as never)
+    const raw = snapshot([{ file_asset_uid: 'voice', content_file_role: 2, sort_order: 0 }])
+    const [display] = await f.media.hydrateRecordSnapshotMediaPage([raw], session)
+    expect(f.media.richContentBlocks(raw, 42, display)).toEqual([expect.objectContaining({
+      kind: 'audio', size: 8192, fileName: '录音', fileAssetUid: 'voice',
+    })])
+  })
   it('uses chat only for foreign-owner addresses, never replaces history with current membership', async () => {
     const f = fixture()
     const raw = snapshot([ref('retained'), ref('removed')])
