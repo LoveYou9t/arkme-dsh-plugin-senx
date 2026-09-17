@@ -412,17 +412,23 @@ export function ArkmeFileCard({ block, fallback = false, onOpen, previewOpen = f
   const downloading = original.reception.state === 'receiving'
   const percent = original.reception.totalBytes > 0 ? Math.min(99, Math.floor(original.reception.receivedBytes / original.reception.totalBytes * 100)) : undefined
   const downloadLabel = original.localRef !== undefined ? '' : downloading ? `下载中${percent === undefined ? '' : ` ${percent}%`}` : original.reception.state === 'failed' ? '下载失败' : '未下载'
-  useEffect(() => () => { controller.current?.abort() }, [block.mediaRef, block.localFileRef])
+  const identity = block.fileAssetUid ?? block.localFileRef ?? block.originalRef ?? block.mediaRef
+  useEffect(() => {
+    setOpening(false)
+    return () => controller.current?.abort()
+  }, [identity])
   const showReception = () => { if (onOpen !== undefined) onOpen(block); else setOpen(true) }
   const activate = async () => {
-    if (opening) return
+    if (controller.current !== undefined && !controller.current.signal.aborted) return
     if (original.localRef === undefined || arkmeCanPreviewFile(block)) { showReception(); return }
     const request = new AbortController(); controller.current = request
     setOpening(true)
     try { await fileSdk.openLocalFile(original.localRef, request.signal) }
     catch {
       if (!request.signal.aborted) showReception()
-    } finally { if (!request.signal.aborted) setOpening(false) }
+    } finally {
+      if (controller.current === request) { controller.current = undefined; setOpening(false) }
+    }
   }
   return <><button type="button" aria-busy={opening} disabled={opening} onClick={event => { event.stopPropagation(); void activate() }} style={{ ...styles.file, border: 0, textAlign: 'left', cursor: opening ? 'progress' : 'pointer', position: 'relative' }} data-arkme-file-card={fallback ? 'fallback' : 'file'}>
     <span style={{ ...styles.fileIconBox, position: 'relative' }}><ArkmeFileIcon fileName={block.fileName} mimeType={block.mimeType} /><UploadProgress block={block} /></span>
