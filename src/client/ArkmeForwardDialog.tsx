@@ -127,8 +127,8 @@ export function arkmeForwardTargetTimeLabel(value: number, now: number = Date.no
 
 
 /** Presentation shared by native DSH, AI conversations and Arkme message forwarding. */
-export function ArkmeForwardTargetRow({ target, selected, disabled, meta, onToggle }: {
-  target: ArkmeSourceItem; selected: boolean; disabled?: boolean; meta: string; onToggle(): void
+export function ArkmeForwardTargetRow({ target, selected, disabled, meta, statusText, onToggle }: {
+  target: ArkmeSourceItem; selected: boolean; disabled?: boolean; meta: string; statusText?: string; onToggle(): void
 }) {
   return <button type="button" style={{ ...styles.forwardTargetRow, ...(selected ? styles.forwardTargetRowSelected : {}) }}
     aria-pressed={selected} disabled={disabled} onClick={onToggle}>
@@ -137,7 +137,7 @@ export function ArkmeForwardTargetRow({ target, selected, disabled, meta, onTogg
     <ArkmeDirectorySourceAvatar source={target} size={38} />
     <span style={styles.forwardTargetText}>
       <span style={styles.forwardTargetName}><ArkmeRichText text={target.displayName} presentation="preview" /></span>
-      <span style={styles.forwardTargetMeta}><ArkmeRichText text={target.latestPreview?.trim() || meta} presentation="preview" /></span>
+      <span style={styles.forwardTargetMeta}><ArkmeRichText text={statusText ?? (target.latestPreview?.trim() || meta)} presentation="preview" /></span>
     </span>
     <span style={styles.forwardTargetTime}>{arkmeForwardTargetTimeLabel(target.activeAtMillis)}</span>
   </button>

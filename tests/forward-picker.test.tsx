@@ -141,3 +141,15 @@ it('retries failed targets and unfinished comments without redelivering complete
   expect(send.mock.calls[4]!.slice(0, 3)).toEqual(send.mock.calls[2]!.slice(0, 3))
   expect(events.onComplete).toHaveBeenCalledTimes(1)
 })
+
+it('shows confirmed delivery status instead of the target latest message after partial failure', async () => {
+  api.call.mockReset().mockImplementation(async (_op, params) => ({ items: params.directory === 'root'
+    ? [{ ...target, latestPreview: '旧消息正文' }, { ...target, sourceKey: 'chat:two', sourceRef: 'two' }] : [], hasMore: false }))
+  const send = vi.fn().mockResolvedValueOnce({ itemUid: 'sent', localState: 'synced' }).mockRejectedValueOnce(new Error('offline'))
+  await mount(send)
+  for (const node of targetButtons()) await act(async () => node.props.onClick())
+  await act(async () => button('转发').props.onClick())
+  const done = targetButtons().find(node => node.props.disabled)!
+  const text = (node: typeof done | string): string => typeof node === 'string' ? node : node.children.map(child => text(child)).join('')
+  expect(text(done)).toContain('已转发')
+})

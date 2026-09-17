@@ -173,7 +173,8 @@ export function ArkmeForwardPicker({ open = true, source, messageCount, delivery
         {[...filtered.filter(target => target.kind === 'send_to_self'), ...filtered.filter(target => target.kind !== 'send_to_self')].map(target => {
           const key = targetKey(target); const checked = selected.includes(key)
           return <li key={key}><ArkmeForwardTargetRow target={target} selected={checked}
-            disabled={sending || completed.current.has(key)} meta={completed.current.has(key) ? '已转发' : targetMeta(target)} onToggle={() => {
+            disabled={sending || completed.current.has(key)} meta={targetMeta(target)}
+            {...(completed.current.has(key) ? { statusText: '已转发' } : {})} onToggle={() => {
               if (busy.current || completed.current.has(key)) return
               if (!checked && selected.length >= 5) { onStatus('最多选择 5 个转发对象'); return }
               setSelected(checked ? selected.filter(value => value !== key) : [...selected, key]); setError('')
