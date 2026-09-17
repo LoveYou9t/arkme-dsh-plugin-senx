@@ -101,6 +101,7 @@ function fakeService() {
     sourceMemberRecords: vi.fn(async (sourceRef: string, memberRef: string, mode: string, options: unknown) => ({ sourceRef, memberRef, mode, options })),
     messageReadReceiptSummaries: vi.fn(async (sourceRef: string, items: unknown, options: unknown) => ({ sourceRef, items, options })),
     messageReadReceiptDetail: vi.fn(async (sourceRef: string, itemUid: string, sequence: number, options: unknown) => ({ sourceRef, itemUid, sequence, options })),
+    recordEditHistoryPage: vi.fn(async () => ({ items: [], hasMore: false })),
     messageSnapshotDetail: vi.fn(async (sourceRef: string, actionRef: string, options: unknown) => ({ sourceRef, actionRef, options })),
     officialAuthorProfile: vi.fn(async () => ({ userId: 11, displayName: '阿森', avatarRef: 'author-avatar-ref' })),
     openOfficialAuthorPrivateChat: vi.fn(async () => ({ source: { sourceRef: 'official-author-source' } })),
@@ -1664,3 +1665,12 @@ it('resolves the self target from the session without accepting a caller account
   await dispatchArkmeHostOperation(service as never, 'sources.self-target', { userId: 999 }, undefined, undefined, undefined, undefined, signal)
   expect(service.selfTarget).toHaveBeenCalledWith(signal)
 })
+
+ it('dispatches revision reads with only signed source/action, cursor and cancellation', async () => {
+  const service = fakeService()
+  const signal = new AbortController().signal
+  await dispatchArkmeHostOperation(service as never, 'source.record-edit-history', {
+    sourceRef: 'source', messageActionRef: 'action', cursorEditAt: 100, recordUid: 'forged', userId: 999,
+  }, undefined, undefined, undefined, undefined, signal)
+  expect(service.recordEditHistoryPage).toHaveBeenCalledWith('source', 'action', 100, signal)
+ })
