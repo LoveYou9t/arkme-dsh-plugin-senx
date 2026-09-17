@@ -537,6 +537,7 @@ export class ArkmeService {
   }
 
   private clearAccountState(userIds: readonly number[]): void {
+    this.calendar.dispose()
     this.directory.reset()
     this.realtime.resetAttentionSummary()
     for (const userId of userIds) this.privacy.clear(userId)
@@ -1834,7 +1835,7 @@ export class ArkmeService {
   }
 
   async calendarBuckets(
-    options: { startDate: string; endDate: string; timezone?: string; signal?: AbortSignal },
+    options: { startDate: string; endDate: string; timezone?: string; sourceRef?: string; background?: boolean; signal?: AbortSignal },
   ): Promise<ArkmeCalendarBucketPage> {
     return await this.calendar.bucketPage(options)
   }
@@ -1842,6 +1843,7 @@ export class ArkmeService {
   async calendarRecords(
     options: {
       bucketDate: string
+      sourceRef?: string
       timezone?: string
       limit?: number
       cursor?: ArkmeRecordCursor
@@ -2044,7 +2046,7 @@ export class ArkmeService {
 
   async createText(recordUid: string, textContent: string): Promise<ArkmeCreateTextResult> {
     const result = await this.record.createText(recordUid, textContent)
-    await this.realtime.invalidateRecordProjection(); return result
+    await this.realtime.invalidateRecordProjection({ contentOnly: true }); return result
   }
 
   async listRecordTags(limit = 100, signal?: AbortSignal): Promise<ArkmeRecordTagList> {
@@ -2056,7 +2058,7 @@ export class ArkmeService {
     textContent: string,
   ): Promise<ArkmeConversationWriteResult> {
     const result = await this.record.createTextForConversation(recordUid, textContent)
-    if (result.localState !== 'failed') await this.realtime.invalidateRecordProjection(); return result
+    if (result.localState !== 'failed') await this.realtime.invalidateRecordProjection({ contentOnly: true }); return result
   }
 
   async createDSHAgentInputText(recordUid: string, textContent: string, sendAtMillis: number): Promise<ArkmeCreateTextResult> {

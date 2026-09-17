@@ -411,7 +411,8 @@ export interface ArkmeSelfSummary {
   totalSec: number
 }
 
-export type ArkmeCalendarScopeKind = 'self'
+// 'self' is the account-wide calendar (including chat and DSH inputs).
+export type ArkmeCalendarScopeKind = 'self' | 'send_to_self' | 'topic' | 'uncategorized'
 
 export interface ArkmeCalendarBucketDay {
   bucketDate: string
@@ -3333,6 +3334,8 @@ export type ArkmeChatClientEvent = {
   type: 'projection-invalidated'
   revision: number
   projection: 'record' | 'chat.direct_message_admission'
+  /** Confirmed content-only writes may retain visible topic counts while revalidating. */
+  retainTopicCounts?: boolean
 } | {
   type: 'message-notification'
   revision: number
