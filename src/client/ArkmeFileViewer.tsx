@@ -19,6 +19,14 @@ export function arkmeFileSize(size: number): string {
   return size >= 1024 * 1024 ? `${(size / 1024 / 1024).toFixed(1)} MB` : size >= 1024 ? `${(size / 1024).toFixed(1)} KB` : `${size} B`
 }
 
+function canPreviewTextFile(block: ArkmeContentBlock): boolean {
+  return /\.(md|markdown|txt|csv|log)$/i.test(block.fileName) && block.size <= 2 * 1024 * 1024
+}
+
+export function arkmeCanPreviewFile(block: ArkmeContentBlock): boolean {
+  return canPreviewTextFile(block) || arkmeCanInlineLocalFile(block.mimeType, block.fileName)
+}
+
 export function useArkmeOriginal(block: ArkmeContentBlock | undefined, autoReceive = false, refreshKey?: unknown) {
   const identity = block?.localFileRef ?? block?.originalRef ?? block?.mediaRef
   const [snapshot, setSnapshot] = useState<{ identity: string; value: ArkmeFileReception }>()
@@ -421,9 +429,9 @@ export function ArkmeFileViewer({ block, onClose, blocks = [block], onSelect, op
   const [error, setError] = useState('')
   const [openRequested, setOpenRequested] = useState(openLocalFile)
   const url = original.localRef === undefined ? undefined : arkmeLocalFileUrl(original.localRef)
-  const textFile = /\.(md|markdown|txt|csv|log)$/i.test(block.fileName) && block.size <= 2 * 1024 * 1024
+  const textFile = canPreviewTextFile(block)
   const visualKind = arkmeBrowserVisualKind(block.mimeType, block.fileName)
-  const browserPreview = !forceDownload && (textFile || arkmeCanInlineLocalFile(block.mimeType, block.fileName))
+  const browserPreview = !forceDownload && arkmeCanPreviewFile(block)
   const receptionNoun = forceDownload && (block.kind === 'image' || block.kind === 'video')
     ? block.kind === 'image' ? '图片' : '视频'
     : '文件'

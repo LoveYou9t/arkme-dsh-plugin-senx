@@ -449,6 +449,57 @@ describe('client file preview interaction', () => {
     } finally { if (view) await act(async () => view.unmount()) }
   })
 
+  it('reopens received Markdown in the same preview after closing it', async () => {
+    vi.stubGlobal('document', { body: {}, activeElement: null })
+    const file = { fileRef: original.localRef, fileName: 'received.md', mimeType: 'text/markdown', size: 7, fileKind: 4 as const }
+    let received = false
+    vi.spyOn(ArkmeSdk.prototype, 'receiveFile').mockImplementation(async (_ref, start) => {
+      if (start) received = true
+      return received ? { state: 'ready', receivedBytes: 7, totalBytes: 7, file } : { state: 'missing', receivedBytes: 0, totalBytes: 7 }
+    })
+    const open = vi.spyOn(ArkmeSdk.prototype, 'openLocalFile').mockResolvedValue({ opened: true, file })
+    vi.stubGlobal('fetch', async () => new Response('# Again'))
+    let view!: ReactTestRenderer
+    try {
+      await act(async () => { view = create(<ArkmeFileCard block={{ ...block, fileName: file.fileName, mimeType: file.mimeType, size: 7, originalRef: 'arkme-media-v1.reopen' }} />) })
+      const clickCard = async () => { await act(async () => view.root.findByProps({ 'data-arkme-file-card': 'file' }).props.onClick({ stopPropagation: vi.fn() })) }
+      await clickCard()
+      await act(async () => view.root.findAllByType('button').find(button => button.props.children === '接收文件')!.props.onClick())
+      expect(view.root.findByType('h1').props.children).toBe('Again')
+      await act(async () => view.root.findByProps({ 'aria-label': '关闭文件预览' }).props.onClick())
+      expect(view.root.findAllByProps({ role: 'dialog' })).toHaveLength(0)
+      await clickCard()
+      expect(view.root.findByType('h1').props.children).toBe('Again')
+      expect(open).not.toHaveBeenCalled()
+    } finally { if (view) await act(async () => view.unmount()) }
+  })
+
+  it.each([
+    ['cached.MARKDOWN', 'text/x-web-markdown', 2 * 1024 * 1024, true],
+    ['notes.txt', 'text/plain', 12, true],
+    ['table.csv', 'text/csv', 12, true],
+    ['app.log', 'text/plain', 12, true],
+    ['photo.png', 'application/octet-stream', 12, true],
+    ['video.mp4', 'application/octet-stream', 12, true],
+    ['sound.mp3', 'audio/mpeg', 12, true],
+    ['large.md', 'text/markdown', 2 * 1024 * 1024 + 1, false],
+    ['report.pdf', 'application/pdf', 12, false],
+    ['report.docx', 'application/octet-stream', 12, false],
+    ['dump.xml', 'application/xml', 12, false],
+    ['photo.heic', 'image/heic', 12, false],
+  ])('routes cached %s using the existing viewer capability', async (fileName, mimeType, size, preview) => {
+    const file = { fileRef: original.localRef, fileName, mimeType, size, fileKind: 4 as const }
+    const open = vi.spyOn(ArkmeSdk.prototype, 'openLocalFile').mockResolvedValue({ opened: true, file })
+    const onOpen = vi.fn()
+    let view!: ReactTestRenderer
+    try {
+      await act(async () => { view = create(<ArkmeFileCard block={{ ...block, fileName, mimeType, size, localFileRef: original.localRef }} onOpen={onOpen} />) })
+      await act(async () => view.root.findByProps({ 'data-arkme-file-card': 'file' }).props.onClick({ stopPropagation: vi.fn() }))
+      expect(onOpen).toHaveBeenCalledTimes(preview ? 1 : 0)
+      expect(open).toHaveBeenCalledTimes(preview ? 0 : 1)
+    } finally { if (view) await act(async () => view.unmount()) }
+  })
+
   it('opens an already received file directly from its card without rendering the file dialog', async () => {
     const open = vi.spyOn(ArkmeSdk.prototype, 'openLocalFile').mockResolvedValue({ opened: true, file: { fileRef: original.localRef, fileName: 'a.pdf', mimeType: 'application/pdf', size: 3, fileKind: 4 } })
     const onOpen = vi.fn()
