@@ -1,3 +1,4 @@
+import { recordManualEditFact } from '../record-edit-history.js'
 import { arkmeEmojiTokenSafePrefix } from '../arkme-emoji-text.js'
 import { isDshAgentInputRawRecord } from '../dsh-agent-input-source.js'
 import { projectCallRecord } from '../call-record-presentation.js'
@@ -1643,6 +1644,7 @@ export class RecordService {
   recordTimelineItem(item: ArkmeSelfRecordItem): ArkmeTimelineItem {
     return {
       itemUid: item.recordUid,
+      ...(item.hasManualEdit === undefined ? {} : { hasManualEdit: item.hasManualEdit }),
       senderName: '我',
       isMe: true,
       sendAtMillis: item.sendAtMillis,
@@ -1732,6 +1734,7 @@ export class RecordService {
       displayKind: numberValue(item.display_kind ?? core.display_kind),
       version: numberValue(item.version ?? core.version),
       recordVersion: numberValue(item.record_core === undefined ? item.version : core.version),
+      ...(recordManualEditFact(raw) === undefined ? {} : { hasManualEdit: recordManualEditFact(raw) }),
       updateAtMillis: numberValue(item.update_at ?? core.update_at),
       recordDurationMillis: numberValue(item.record_duration_millis ?? core.record_duration_millis),
       editDurationMillis: numberValue(item.edit_duration_millis ?? core.edit_duration_millis),
@@ -1765,6 +1768,7 @@ export class RecordService {
       status: numberValue(core.status),
       version: numberValue(core.version),
       creationSource: recordCreationSource(raw),
+      ...(recordManualEditFact(raw) === undefined ? {} : { hasManualEdit: recordManualEditFact(raw) }),
       displayKind: numberValue(item.display_kind ?? core.display_kind),
       ...(forwardRecords === undefined ? {} : { forwardRecords }),
       ...(contentBlocks === undefined ? {} : { contentBlocks }),

@@ -216,6 +216,8 @@ export type ArkmeTeamJoinResult =
 
 export interface ArkmeDirectoryContactProfile {
   contactRef: string
+  /** Public World/catalog identity, matching the marketplace author navigation target. */
+  worldUserId?: number
   displayName: string
   nickname: string
   remark: string
@@ -374,6 +376,7 @@ export interface ArkmeRecordCursor {
 }
 
 export interface ArkmeSelfRecordItem {
+  hasManualEdit?: boolean | undefined
   /** Frozen long-recording selection returned by the Record owner. */
   forwardRecords?: ArkmeForwardRecordsPreview
   recordUid: string
@@ -990,7 +993,16 @@ export interface ArkmeImageSearchResult {
   queryGuard: ArkmeSearchQueryGuard
 }
 
+export interface ArkmeDshInputOrigin {
+  sessionId: string
+  eventSeq: number
+}
+
 export interface ArkmeSearchRecordItem {
+  /** DSH input identity resolved from local public session events; never persisted by record sync. */
+  dshOrigin?: ArkmeDshInputOrigin
+  /** Local lookup could not inspect every session; never proof of absence. */
+  dshOriginUnverified?: true
   recordUid: string
   /** Record owner required by Chat's exact timeline locator; never the current viewer. */
   recordOwnerUserId?: RecordOwnerId
@@ -1190,6 +1202,7 @@ export interface ArkmeProviderCapabilities {
     topicHomeVisibility?: true
     /** Paged five-section directory, including coverage and Host-owned recovery. */
     groupSelfNickname?: true
+    remoteRecordSearch?: true
     contactDirectoryReads?: true
     sourceTimeline: true
     /** Forward snapshots include typed transcripts and account-bound attachment references. */
@@ -1617,6 +1630,8 @@ export interface ArkmeTimelineMentionTarget {
 }
 
 export interface ArkmeTimelineItem {
+  /** Record owner manual-edit fact; independent of AI polish and content version. */
+  hasManualEdit?: boolean | undefined
   /** Display-only call status; room, participant and call identifiers stay host-side. */
   callRecord?: {
     mediaType: 'audio' | 'video'
@@ -3067,6 +3082,8 @@ export interface ArkmeAiVideoListResult {
 
 export interface ArkmeFileAssetDisplayItem {
   fileAssetUid: string
+  fileKind?: number
+  size?: number
   fileName?: string
   mimeType?: string
   previewUrl?: string
@@ -3431,6 +3448,7 @@ export type ArkmePluginOperation =
   | 'records.cache'
   | 'records.refresh'
   | 'records.search'
+  | 'search.records'
   | 'records.list'
   | 'records.tags.list'
   | 'records.tags.query'
@@ -3659,7 +3677,6 @@ export type ArkmeHostOperation = ArkmePluginOperation
   | 'recordings.speaker.cached-options'
   | 'recordings.speaker.recommendation'
   | 'recordings.speaker.assign-item'
-  | 'search.records'
   | 'search.scene'
   | 'search.recordings'
   | 'search.history'
@@ -3694,6 +3711,7 @@ export type ArkmeHostOperation = ArkmePluginOperation
   | 'source.related-quick-notes.from-message'
   | 'source.related-quick-notes.from-moment'
   | 'source.related-quick-note.detail'
+  | 'source.record-edit-history'
   | 'extensions.catalog.list'
   | 'extensions.classification.tree'
   | 'extensions.classification.items'

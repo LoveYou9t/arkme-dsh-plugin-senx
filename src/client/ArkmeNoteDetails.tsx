@@ -1,3 +1,4 @@
+import { ArkmeRecordEditHistory } from './ArkmeRecordEditHistory.js'
 import { ArkmeBotSenderName } from './ArkmeBotIdentity.js'
 import { ArkmeDetailShell } from './ArkmeDetailShell.js'
 import { arkmeDetailExtensionComposerStyles } from './detail-extension-composer-style.js'
@@ -5,6 +6,7 @@ import { ArkmeRichComposerInput, type ArkmeRichComposerHandle } from './ArkmeRic
 import type { ArkmeMarkdownDraft } from './markdown-editor.js'
 import type { ArkmeProviderCapabilities } from '../types.js'
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react'
+import { CaretRight } from '@phosphor-icons/react/dist/icons/CaretRight'
 import { FileTextIcon } from '@phosphor-icons/react/dist/csr/FileText'
 import type {
   ArkmeBotList,
@@ -703,12 +705,13 @@ function DetailExtensionParent({ parent }: { parent: NonNullable<ArkmeTimelineIt
 }
 
 function DetailExtensionContext({
-  state, optimistic, selectedRecordUid, sourceRef, shareWebsite, onMessageCopyLinkOpen, onMentionClick, isMentionClickable, onRetry, onSelect,
+  state, optimistic, selectedRecordUid, sourceRef, sourceIdentityKey, shareWebsite, onMessageCopyLinkOpen, onMentionClick, isMentionClickable, onRetry, onSelect,
 }: {
   state: ArkmeDetailExtensionLoadState
   optimistic: readonly ArkmeMessageCopyLinkExtensionItem[]
   selectedRecordUid?: string | undefined
   sourceRef?: string | undefined
+  sourceIdentityKey?: string | undefined
   shareWebsite?: string | undefined
   onMessageCopyLinkOpen?: ((sid: string) => void) | undefined
   onMentionClick?: (mentionText: string, mentionTarget?: ArkmeTimelineMentionTarget) => void
@@ -754,6 +757,7 @@ function DetailExtensionContext({
             item={timelineItem}
             highlightMentions
             {...(sourceRef === undefined ? {} : { sourceRef })}
+            {...(sourceIdentityKey === undefined ? {} : { sourceIdentityKey })}
             {...(shareWebsite === undefined ? {} : { shareWebsite })}
             {...(onMessageCopyLinkOpen === undefined ? {} : { onMessageCopyLinkOpen })}
             {...(onMentionClick === undefined ? {} : { onMentionClick })}
@@ -774,12 +778,13 @@ function relatedQuickNoteReferenceExpired(error: unknown): boolean {
 }
 
 export function ArkmeTimelineDetailDrawer({
-  item, sourceBadge, sourceRef, sourceKind, conversationMembers, canExtend = true, showOriginal, onClose, onToggleOriginal, shareWebsite, onMessageCopyLinkOpen, onExtensionSent, onToast,
+  item, sourceBadge, sourceRef, sourceIdentityKey, sourceKind, conversationMembers, canExtend = true, showOriginal, onClose, onToggleOriginal, shareWebsite, onMessageCopyLinkOpen, onExtensionSent, onToast,
   onOpenPrivateChatMember, messageCreationBlocked = false, messageCreationRestriction = '',
 }: {
   sourceBadge?: ReactNode
   item: ArkmeTimelineItem
   sourceRef?: string | undefined
+  sourceIdentityKey?: string | undefined
   canExtend?: boolean
   sourceKind?: ArkmeSourceKind | undefined
   conversationMembers?: readonly ArkmeConversationMemberItem[] | undefined
@@ -794,6 +799,7 @@ export function ArkmeTimelineDetailDrawer({
   messageCreationBlocked?: boolean
   messageCreationRestriction?: string
 }) {
+  const [editHistoryTarget, setEditHistoryTarget] = useState<string>()
   const [relatedView, setRelatedView] = useState<ArkmeRelatedDrawerView>('source-detail')
   const [relatedState, setRelatedState] = useState<ArkmeRelatedQuickNotesLoadState>({ kind: 'idle' })
   const [relatedDetailState, setRelatedDetailState] = useState<ArkmeRelatedQuickNoteDetailState>({ kind: 'idle' })
@@ -812,6 +818,8 @@ export function ArkmeTimelineDetailDrawer({
   })
   const messageActionRef = item.messageActionRef?.trim() ?? ''
   const normalizedSourceRef = sourceRef?.trim() ?? ''
+  const historyTarget = `${normalizedSourceRef}:${item.itemUid}`
+  const historyOpen = editHistoryTarget === historyTarget && messageActionRef !== ''
   const quickNoteDetailsSupported = item.quickNoteDetailsSupported !== false
   const loadRelated = useCallback(() => {
     listAbortRef.current?.abort()
@@ -883,6 +891,7 @@ export function ArkmeTimelineDetailDrawer({
     listAbortRef.current?.abort()
     detailAbortRef.current?.abort()
     extensionAbortRef.current?.abort()
+    setEditHistoryTarget(undefined)
     setRelatedView('source-detail')
     setRelatedState({ kind: 'idle' })
     setRelatedDetailState({ kind: 'idle' })
@@ -891,17 +900,20 @@ export function ArkmeTimelineDetailDrawer({
     setSelectedExtensionRecordUid(undefined)
     setMemberProfile(undefined)
     scrollTopByViewRef.current = { 'source-detail': 0, 'related-list': 0, 'related-detail': 0 }
-    loadRelated()
-    loadExtensionContext()
     return () => {
       listAbortRef.current?.abort()
       detailAbortRef.current?.abort()
       extensionAbortRef.current?.abort()
     }
-  }, [item.itemUid, loadExtensionContext, loadRelated])
+  }, [item.itemUid, sourceIdentityKey ?? normalizedSourceRef, quickNoteDetailsSupported])
   useEffect(() => {
-    if (bodyRef.current !== null) bodyRef.current.scrollTop = scrollTopByViewRef.current[relatedView]
-  }, [relatedView])
+    // Refresh owner data with current access refs without resetting the open detail view.
+    loadRelated()
+    loadExtensionContext()
+  }, [item.itemUid, sourceIdentityKey, loadExtensionContext, loadRelated])
+  useEffect(() => {
+    if (bodyRef.current !== null) bodyRef.current.scrollTop = historyOpen ? 0 : scrollTopByViewRef.current[relatedView]
+  }, [relatedView, historyOpen])
   const navigateRelated = (nextView: ArkmeRelatedDrawerView) => {
     if (bodyRef.current !== null) scrollTopByViewRef.current[relatedView] = bodyRef.current.scrollTop
     setRelatedView(nextView)
@@ -976,7 +988,10 @@ export function ArkmeTimelineDetailDrawer({
       />
     </ArkmeDetailShell>
   }
-  return <ArkmeDetailShell title="快记详情" label="快记详情" onClose={closeDrawer} bodyRef={bodyRef} footer={extensionFooter}>
+  return <ArkmeDetailShell title={historyOpen ? "编辑记录" : "快记详情"} label={historyOpen ? "编辑记录" : "快记详情"}
+    onClose={closeDrawer} bodyRef={bodyRef} footer={extensionFooter} footerHidden={historyOpen}
+    {...(historyOpen ? { onBack: () => { setEditHistoryTarget(undefined) }, backLabel: '返回快记详情' } : {})}>
+    {historyOpen ? <ArkmeRecordEditHistory key={historyTarget} sourceRef={normalizedSourceRef} messageActionRef={messageActionRef} author={item} /> : <>
     <div style={{ ...styles.row, alignItems: 'center', marginBottom: 20, ...(item.senderKind === 'bot' ? { gap: 10 } : {}) }}>
       <ArkmeUserAvatar senderKind={item.senderKind} {...(item.avatarRef === undefined ? {} : { avatarRef: item.avatarRef })} size={40} label="作者头像" />
       <div style={styles.content}><div style={styles.name}>{item.senderKind === 'bot' ? <ArkmeBotSenderName name={arkmeTimelineDetailSenderText(item)} detail /> : arkmeTimelineDetailSenderText(item)}</div>
@@ -990,6 +1005,7 @@ export function ArkmeTimelineDetailDrawer({
         item={{ ...item, textContent }}
         highlightMentions
         {...(sourceRef === undefined ? {} : { sourceRef })}
+        {...(sourceIdentityKey === undefined ? {} : { sourceIdentityKey })}
         {...(shareWebsite === undefined ? {} : { shareWebsite })}
         {...(onMessageCopyLinkOpen === undefined ? {} : { onMessageCopyLinkOpen })}
         onMentionClick={openMentionMemberProfile}
@@ -997,6 +1013,13 @@ export function ArkmeTimelineDetailDrawer({
       />
     </div>
     {sourceBadge}
+    <style>{`.arkme-edit-history-entry { background: transparent; } .arkme-edit-history-entry:hover { background: ${arkmeTheme.hover}; }`}</style>
+    {item.hasManualEdit === true && normalizedSourceRef !== '' && messageActionRef !== '' && <button
+      type="button" aria-label="已编辑" className="arkme-edit-history-entry" style={{ display: 'flex', alignItems: 'center', gap: 2, height: 32, marginTop: 5, padding: 0, border: 0, borderRadius: 4, color: arkmeTheme.tertiary, font: 'inherit', fontSize: 12, cursor: 'pointer' }}
+      onClick={() => {
+        if (bodyRef.current !== null) scrollTopByViewRef.current['source-detail'] = bodyRef.current.scrollTop
+        setEditHistoryTarget(historyTarget)
+      }}>已编辑<CaretRight size={12} style={{ flex: 'none' }} aria-hidden /></button>}
     {quickNoteDetailsSupported && item.extensionParent !== undefined && <DetailExtensionParent parent={item.extensionParent} />}
     {quickNoteDetailsSupported && <ArkmeRelatedQuickNotesCard
       state={relatedState}
@@ -1008,6 +1031,7 @@ export function ArkmeTimelineDetailDrawer({
       optimistic={optimisticExtensions}
       {...(selectedExtensionRecordUid === undefined ? {} : { selectedRecordUid: selectedExtensionRecordUid })}
       {...(sourceRef === undefined ? {} : { sourceRef })}
+      {...(sourceIdentityKey === undefined ? {} : { sourceIdentityKey })}
       {...(shareWebsite === undefined ? {} : { shareWebsite })}
       {...(onMessageCopyLinkOpen === undefined ? {} : { onMessageCopyLinkOpen })}
       onMentionClick={openMentionMemberProfile}
@@ -1022,6 +1046,7 @@ export function ArkmeTimelineDetailDrawer({
       onClose={() => { setMemberProfile(undefined) }}
       onSend={openPrivateFromProfile}
     />}
+    </>}
   </ArkmeDetailShell>
 }
 

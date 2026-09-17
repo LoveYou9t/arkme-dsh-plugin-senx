@@ -1,3 +1,7 @@
+import { stringValue } from './services/service.js'
+import { RecordEditHistoryService } from './services/record-edit-history-service.js'
+import type { ArkmeRecordEditHistoryPage } from './record-edit-history.js'
+import { arkmeRecordTextFormat } from './markdown.js'
 import type { RecordOwnerId } from './record-owner-id.js'
 import { RecordDeletionService } from './services/record-deletion-service.js'
 import { RecordTopicAssignmentService } from './services/record-topic-assignment-service.js'
@@ -328,6 +332,7 @@ export class ArkmeService {
   private readonly linkMetadata: ArkmeLinkMetadataService
   private readonly aiPolish: GroupAiPolishService
   private readonly chat: ChatService
+  private readonly recordEditHistory: RecordEditHistoryService
   private readonly relatedQuickNote: RelatedQuickNoteService
   private readonly contact: ContactService
   private readonly contactDirectory: ContactDirectoryService
@@ -348,6 +353,7 @@ export class ArkmeService {
     outgoingCallBroker = new ArkmeOutgoingCallBroker(),
     billingGateway?: ArkmeBillingGateway,
     linkDocumentReader?: ArkmeLinkDocumentReader,
+    localDshQuery?: () => unknown,
   ) {
     this.accountScope = createArkmeAccountSessionOwner(sessionStore, fetchImpl)
     this.runtime = new ServiceRuntime(config, sessionStore, stateStore, fetchImpl, pendingSessionStore, this.accountScope)
@@ -389,6 +395,7 @@ export class ArkmeService {
     }, async () => { await this.realtime.invalidateRecordProjection() })
     this.calendar = new CalendarService(this.runtime, this.privacy, this.media, this.record, this.source)
     this.search = new SearchService(this.runtime, this.record, this.media, this.source, this.privacy)
+    if (localDshQuery !== undefined) this.search.localDshQuery = localDshQuery
     this.bot = new BotService(this.runtime, this.source)
     this.messageActions = new MessageActionService(
       new ArkmeMessageActionGateway(
@@ -466,6 +473,19 @@ export class ArkmeService {
       async () => { await this.realtime.invalidateRecordProjection() },
       this.messageActions,
     )
+    this.recordEditHistory = new RecordEditHistoryService(this.runtime, {
+      projectPage: async (snapshots, target, signal) => {
+        const session = await this.runtime.requireSession()
+        if (session.userId !== target.viewerUserId) throw new ArkmePluginError('record-edit-history-invalid', '编辑记录暂不可用，请刷新后重试', true, 403)
+        const displayPages = await this.media.hydrateRecordSnapshotMediaPage(snapshots, session, target.kind === 'chat' ? target : undefined, signal)
+        return snapshots.map((snapshot, index) => {
+          const contentBlocks = this.media.richContentBlocks(snapshot, session.userId, displayPages[index])
+          return { title: stringValue(snapshot.title), textContent: stringValue(snapshot.text_content),
+            textFormat: arkmeRecordTextFormat(snapshot), contentBlocks,
+            ...(this.media.recordMediaUnavailable(snapshot, contentBlocks) ? { mediaUnavailable: true } : {}) }
+        })
+      },
+    })
     this.relatedQuickNote = new RelatedQuickNoteService(this.runtime, this.record, this.media, this.profile, this.privacy)
     this.contactDirectory = new ContactDirectoryService(
       this.runtime, this.source, this.bot, this.profile, this.world, this.chat,
@@ -756,6 +776,7 @@ export class ArkmeService {
         localFirstDirectory: true,
         topicHomeVisibility: true,
         groupSelfNickname: true,
+        remoteRecordSearch: true,
         contactDirectoryReads: true,
         sourceTimeline: true,
         forwardContent: true,
@@ -1193,6 +1214,10 @@ export class ArkmeService {
 
   /** @internal Built-in loopback UI only; excluded from the published Provider declaration. */
   async interwovenMomentDetail(sourceRef: string, momentRef: string, signal?: AbortSignal): Promise<ArkmeInterwovenDetail> { return await this.interwoven.interwovenMomentDetail(sourceRef, momentRef, signal) }
+
+  async recordEditHistoryPage(sourceRef: string, messageActionRef: string, cursorEditAt = 0, signal?: AbortSignal): Promise<ArkmeRecordEditHistoryPage> {
+    return await this.recordEditHistory.page(await this.chat.recordEditHistoryTarget(sourceRef, messageActionRef), cursorEditAt, signal)
+  }
 
   async relatedQuickNotesFromMessage(sourceRef: string, messageActionRef: string, signal?: AbortSignal): Promise<ArkmeRelatedQuickNoteList> { return await this.relatedQuickNote.list(await this.chat.relatedQuickNoteLocator(sourceRef, messageActionRef), signal) }
   async relatedQuickNotesFromMoment(sourceRef: string, momentRef: string, signal?: AbortSignal): Promise<ArkmeRelatedQuickNoteList> { return await this.relatedQuickNote.list(await this.interwoven.relatedQuickNoteLocator(sourceRef, momentRef, signal), signal) }

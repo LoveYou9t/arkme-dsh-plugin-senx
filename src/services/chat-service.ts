@@ -1,3 +1,5 @@
+import { recordManualEditFact } from '../record-edit-history.js'
+import type { RecordEditHistoryTarget } from './record-edit-history-service.js'
 import { recordOwnerId, type RecordOwnerId } from '../record-owner-id.js'
 import { isDshAgentInputRawRecord } from '../dsh-agent-input-source.js'
 import { identifyTimelineSender, botDisplayName, type BotDisplayProfiles, type BotDisplayProfilesReader } from '../chat-sender-display.js'
@@ -3278,6 +3280,15 @@ export class ChatService {
     return extensionCount <= 0 ? undefined : { extensionCount, extensions }
   }
 
+  async recordEditHistoryTarget(sourceRef: string, messageActionRef: string): Promise<RecordEditHistoryTarget> {
+    const session = await this.runtime.requireSession()
+    const source = await this.source.openSourceRef(sourceRef.trim(), session.userId)
+    const reference = await this.openMessageActionRef(messageActionRef, session.userId, source)
+    const identity = { viewerUserId: session.userId, recordUid: reference.recordUid }
+    return reference.sourceKind === 'record' ? { ...identity, kind: 'owned' }
+      : { ...identity, kind: 'chat', chatSessionUid: reference.chatSessionUid, relationUid: reference.relationUid, recordOwnerUserId: reference.recordOwnerUserId }
+  }
+
   async sourceMessageExtensionContext(
     sourceRef: string,
     messageActionRef: string,
@@ -5143,6 +5154,7 @@ export class ChatService {
           sequence: numberValue(relation.seq),
           ...(numberValue(record.version ?? payload.version) > 0 ? { recordVersion: numberValue(record.version ?? payload.version) } : {}),
           ...(aiPolish === undefined ? {} : { aiPolish }),
+          ...(recordManualEditFact(item) === undefined ? {} : { hasManualEdit: recordManualEditFact(item) }),
           ...(forwardRecords === undefined ? {} : { forwardRecords }),
           ...(sharedRecording === undefined ? {} : { sharedRecording }),
           ...(extensionProjection === undefined ? {} : extensionProjection),
@@ -6023,6 +6035,7 @@ export class ChatService {
         sequence: numberValue(relation.seq),
         ...(numberValue(record.version ?? payload.version) > 0 ? { recordVersion: numberValue(record.version ?? payload.version) } : {}),
         ...(aiPolish === undefined ? {} : { aiPolish }),
+        ...(recordManualEditFact(item) === undefined ? {} : { hasManualEdit: recordManualEditFact(item) }),
         templateKind: numberValue(payload.template_kind),
         displayKind: numberValue(payload.display_kind),
         version: numberValue(payload.version ?? record.version),

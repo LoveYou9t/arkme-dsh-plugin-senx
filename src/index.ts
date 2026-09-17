@@ -21,7 +21,7 @@ import { registerDSHAgentInputRecordSync } from './dsh-agent-input-sync.js'
 import { createArkmeHostApi } from './host-api.js'
 import { readDirectoryPage } from './directory-reader.js'
 import { openDshHostPath } from './dsh-host-capabilities.js'
-import { ARKME_HARNESS_EMBED_PATH, ARKME_HARNESS_MODEL_CLIENT_PATH, ARKME_HARNESS_ONBOARDING_CLIENT_PATH, ARKME_HARNESS_TRAJECTORY_CLIENT_PATH, ARKME_HARNESS_SIDEBAR_CLIENT_PATH } from './harness-embed-contract.js'
+import { ARKME_HARNESS_EMBED_PATH, ARKME_HARNESS_MODEL_CLIENT_PATH, ARKME_HARNESS_ONBOARDING_CLIENT_PATH, ARKME_HARNESS_TRAJECTORY_CLIENT_PATH, ARKME_HARNESS_SIDEBAR_CLIENT_PATH, ARKME_NATIVE_SELECTION_CLIENT_PATH } from './harness-embed-contract.js'
 import {
   createHarnessEmbedRouteHandler,
   dshRootDocumentHeaders,
@@ -284,7 +284,7 @@ export function apply(ctx: Context, config: Config): void {
   const rawSessionStore = createArkmeSessionStore(`${config.keychainServicePrefix}.${config.environment}`)
   const sessionStore = new ObservedArkmeSessionStore(rawSessionStore)
   const pendingSessionStore = createArkmeSessionStore(`${config.keychainServicePrefix}.${config.environment}.pending-binding`)
-  const service = new ArkmeService({ ...config, fileStateDirectory: join(stateDirectory, 'files'), recordingImportDirectory: join(stateDirectory, 'recording-imports') }, sessionStore, localDatabase, fetch, pendingSessionStore)
+  const service = new ArkmeService({ ...config, fileStateDirectory: join(stateDirectory, 'files'), recordingImportDirectory: join(stateDirectory, 'recording-imports') }, sessionStore, localDatabase, fetch, pendingSessionStore, undefined, undefined, undefined, () => ctx.get('sessionQuery'))
   const openApiMcpCredentialNamespace = `${config.keychainServicePrefix}.${config.environment}.openapi-mcp`
   const openApiMcpController = new ManagedOpenApiMcpController({
     mountMcp: config.openApiMcpEnabled,
@@ -687,23 +687,35 @@ export function apply(ctx: Context, config: Config): void {
     expectedPort: ctx.webServer.port,
     allowNonLoopback: config.allowNonLoopback,
   })
-  const sessionClient = config.dshRemoteFeatureEnabled ? {
+  const sessionClient = {
     source: readFileSync(new URL('../lib/harness-session-client.js', import.meta.url)),
-    apiPath: config.routePath,
-  } : undefined
-  if (sessionClient !== undefined) {
-    ctx.effect(() => ctx.webServer.register({
-      kind: 'exact', path: HARNESS_SESSION_CLIENT_PATH,
-      handler: (_request, response) => {
-        response.writeHead(200, { 'Content-Type': 'application/javascript', 'Cache-Control': 'no-cache' })
-        response.end(sessionClient.source)
-      },
-    }), 'arkme: Harness session observer asset')
+    ...(config.dshRemoteFeatureEnabled ? { apiPath: config.routePath } : {}),
   }
+  ctx.effect(() => ctx.webServer.register({
+    kind: 'exact', path: HARNESS_SESSION_CLIENT_PATH,
+    handler: (_request, response) => {
+      response.writeHead(200, { 'Content-Type': 'application/javascript', 'Cache-Control': 'no-cache' })
+      response.end(sessionClient.source)
+    },
+  }), 'arkme: Harness session observer asset')
   const harnessModelClient = readFileSync(new URL('../lib/harness-model-client.js', import.meta.url))
   const harnessOnboardingClient = readFileSync(new URL('../lib/harness-onboarding-client.js', import.meta.url))
   const harnessTrajectoryClient = readFileSync(new URL('../lib/harness-trajectory-client.js', import.meta.url))
   const harnessSidebarClient = readFileSync(new URL('../lib/harness-sidebar-client.js', import.meta.url))
+  let selectionClientRevision: string | undefined
+  try {
+    const selectionClient = readFileSync(new URL('../lib/harness-native-selection-client.js', import.meta.url))
+    selectionClientRevision = createHash('sha256').update(selectionClient).digest('hex')
+    ctx.effect(() => ctx.webServer.register({
+      kind: 'exact', path: ARKME_NATIVE_SELECTION_CLIENT_PATH,
+      handler: (_request, response) => {
+        response.writeHead(200, { 'Content-Type': 'application/javascript', 'Cache-Control': 'no-cache' })
+        response.end(selectionClient)
+      },
+    }), 'arkme: optional native selection asset')
+  } catch {
+    ctx.logger.warn('dsh-arkme: optional native selection asset unavailable')
+  }
   ctx.effect(() => ctx.webServer.register({
     kind: 'exact', path: ARKME_HARNESS_SIDEBAR_CLIENT_PATH,
     handler: (_request, response) => {
@@ -726,6 +738,7 @@ export function apply(ctx: Context, config: Config): void {
     },
   }), 'arkme: Harness onboarding bridge asset')
   const harnessEmbedHandler = createHarnessEmbedRouteHandler({
+    ...(selectionClientRevision === undefined ? {} : { selectionClientRevision }),
     sidebarClient: {
       id: '@senguoyun/dsh-arkme/harness-sidebar', url: ARKME_HARNESS_SIDEBAR_CLIENT_PATH,
       rev: createHash('sha256').update(harnessSidebarClient).digest('hex'),
@@ -739,10 +752,10 @@ export function apply(ctx: Context, config: Config): void {
       rev: createHash('sha256').update(harnessOnboardingClient).digest('hex'),
       external: ['react'],
     },
-    ...(sessionClient === undefined ? {} : { sessionClient: {
+    sessionClient: {
       revision: createHash('sha256').update(sessionClient.source).digest('hex').slice(0, 12),
-      apiPath: sessionClient.apiPath,
-    } }),
+      ...('apiPath' in sessionClient ? { apiPath: sessionClient.apiPath } : {}),
+    },
     modelClient: {
       id: '@senguoyun/dsh-arkme/harness-model',
       url: ARKME_HARNESS_MODEL_CLIENT_PATH,

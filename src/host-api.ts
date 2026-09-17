@@ -1719,6 +1719,9 @@ export async function dispatchArkmeHostOperation(
       requiredRelatedQuickNoteParam(params, 'momentRef'),
       requestSignal,
     )
+    case 'source.record-edit-history': return await service.recordEditHistoryPage(
+      stringParam(params, 'sourceRef'), stringParam(params, 'messageActionRef'), numberParam(params, 'cursorEditAt', 0), requestSignal,
+    )
     case 'source.related-quick-note.detail': return await service.relatedQuickNoteDetail(
       requiredRelatedQuickNoteParam(params, 'sourceRef'),
       requiredRelatedQuickNoteParam(params, 'relatedRef'),
