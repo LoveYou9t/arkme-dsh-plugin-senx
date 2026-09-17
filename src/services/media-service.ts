@@ -1021,6 +1021,87 @@ export class MediaService {
     return refs
   }
 
+  /** Snapshot membership comes only from its refs; current media is an access-address source. */
+  async hydrateRecordSnapshotMediaPage(
+    snapshots: Record<string, unknown>[],
+    session: ArkmeSessionCredentials,
+    chat?: { chatSessionUid: string; recordUid: string; recordOwnerUserId: number | string; relationUid: string },
+    signal?: AbortSignal,
+  ): Promise<unknown[][]> {
+    const refsBySnapshot = snapshots.map(snapshot => this.recordMediaRefs(snapshot))
+    if (this.runtime.config.richMediaRenderEnabled === false) return snapshots.map(() => [])
+    const refs = [...new Map(refsBySnapshot.flat().map(ref => [stringValue(ref.file_asset_uid), ref])).values()]
+    if (refs.length === 0) return snapshots.map(() => [])
+    const displays = new Map<string, Record<string, unknown>>()
+    const expected = new Set(refs.map(ref => stringValue(ref.file_asset_uid)))
+    const accept = (items: unknown[]) => {
+      for (const raw of items) {
+        const item = objectValue(raw)
+        const uid = stringValue(item.file_asset_uid)
+        if (expected.has(uid) && stringValue(item.preview_url ?? item.download_url).trim() !== '') displays.set(uid, item)
+      }
+    }
+    for (const snapshot of snapshots) accept(listValue(snapshot.media_display_items))
+    accept(refs)
+    const check = async () => {
+      signal?.throwIfAborted()
+      if ((await this.runtime.requireSession()).userId !== session.userId) {
+        throw new ArkmePluginError('media-account-changed', '账号已切换，请重新打开内容', true, 403)
+      }
+    }
+    await check()
+    if (chat !== undefined && refs.some(ref => !displays.has(stringValue(ref.file_asset_uid)))) {
+      try {
+        const result = objectValue(await this.runtime.authenticatedChatPost('/api/v1/chats/records/media-display', {
+          chat_session_uid: chat.chatSessionUid, record_uid: chat.recordUid,
+          record_owner_user_id: chat.recordOwnerUserId, rel_uid: chat.relationUid,
+        }, session, signal))
+        if (result.record_uid === chat.recordUid && result.chat_session_uid === chat.chatSessionUid) accept(listValue(result.media_display_items))
+      } catch (error) {
+        if (signal?.aborted) throw error
+      }
+      await check()
+    }
+    // An owner's file lookup is not a substitute for another user's chat authorization.
+    if (chat === undefined || String(chat.recordOwnerUserId) === String(session.userId)) {
+      const native = refs.filter(ref => ref.legacy_file_ref !== true && !displays.has(stringValue(ref.file_asset_uid)))
+      for (let start = 0; start < native.length; start += 50) {
+        await check()
+        try {
+          const assets = await this.queryFileAssets(native.slice(start, start + 50).map(ref => stringValue(ref.file_asset_uid)), signal)
+          accept(assets.map(asset => ({ file_asset_uid: asset.fileAssetUid, file_name: asset.fileName,
+            mime_type: asset.mimeType, download_url: asset.downloadUrl, preview_url: asset.previewUrl })))
+        } catch (error) {
+          if (signal?.aborted) throw error
+        }
+      }
+      const legacy = refs.filter(ref => ref.legacy_file_ref === true && ref.legacy_remote_available === true
+        && !displays.has(stringValue(ref.file_asset_uid)))
+      if (legacy.length > 0) {
+        await check()
+        try {
+          const credentials = await this.ossCredentials(session, signal)
+          const client = new OSS({ region: 'oss-cn-hangzhou', secure: true,
+            bucket: this.runtime.config.environment === 'prod' ? 'jotmo-userfiles' : 'jotmo-userfiles-test',
+            accessKeyId: credentials.accessKeyId, accessKeySecret: credentials.accessKeySecret, stsToken: credentials.stsToken })
+          for (const ref of legacy) {
+            const fileUid = stringValue(ref.file_uid).trim()
+            if (fileUid === '' || fileUid === '.' || fileUid === '..' || /[\\/\x00-\x1f]/.test(fileUid)) continue
+            const path = `${md5Text(String(session.userId))}/${String(session.userId)}/${fileUid}`
+            accept([{ ...ref, download_url: client.signatureUrl(path, { method: 'GET', expires: 1800 }) }])
+          }
+        } catch (error) {
+          if (signal?.aborted) throw error
+        }
+      }
+    }
+    await check()
+    return refsBySnapshot.map(refs => refs.flatMap(ref => {
+      const display = displays.get(stringValue(ref.file_asset_uid))
+      return display === undefined ? [] : [display]
+    }))
+  }
+
   async hydrateRecordMediaPage(
     rawItems: unknown[],
     session: ArkmeSessionCredentials,

@@ -3242,7 +3242,7 @@ export class ChatService {
     const reference = await this.openMessageActionRef(messageActionRef, session.userId, source)
     const identity = { viewerUserId: session.userId, recordUid: reference.recordUid }
     return reference.sourceKind === 'record' ? { ...identity, kind: 'owned' }
-      : { ...identity, kind: 'chat', chatSessionUid: reference.chatSessionUid, relationUid: reference.relationUid }
+      : { ...identity, kind: 'chat', chatSessionUid: reference.chatSessionUid, relationUid: reference.relationUid, recordOwnerUserId: reference.recordOwnerUserId }
   }
 
   async sourceMessageExtensionContext(

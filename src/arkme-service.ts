@@ -474,11 +474,16 @@ export class ArkmeService {
       this.messageActions,
     )
     this.recordEditHistory = new RecordEditHistoryService(this.runtime, {
-      project: (snapshot, viewerUserId) => {
-        const contentBlocks = this.media.richContentBlocks(snapshot, viewerUserId)
-        return { title: stringValue(snapshot.title), textContent: stringValue(snapshot.text_content),
-          textFormat: arkmeRecordTextFormat(snapshot), contentBlocks,
-          ...(this.media.recordMediaUnavailable(snapshot, contentBlocks) ? { mediaUnavailable: true } : {}) }
+      projectPage: async (snapshots, target, signal) => {
+        const session = await this.runtime.requireSession()
+        if (session.userId !== target.viewerUserId) throw new ArkmePluginError('record-edit-history-invalid', '编辑记录暂不可用，请刷新后重试', true, 403)
+        const displayPages = await this.media.hydrateRecordSnapshotMediaPage(snapshots, session, target.kind === 'chat' ? target : undefined, signal)
+        return snapshots.map((snapshot, index) => {
+          const contentBlocks = this.media.richContentBlocks(snapshot, session.userId, displayPages[index])
+          return { title: stringValue(snapshot.title), textContent: stringValue(snapshot.text_content),
+            textFormat: arkmeRecordTextFormat(snapshot), contentBlocks,
+            ...(this.media.recordMediaUnavailable(snapshot, contentBlocks) ? { mediaUnavailable: true } : {}) }
+        })
       },
     })
     this.relatedQuickNote = new RelatedQuickNoteService(this.runtime, this.record, this.media, this.profile, this.privacy)
