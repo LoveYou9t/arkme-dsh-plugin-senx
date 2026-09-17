@@ -3,6 +3,8 @@ import { act, create, type ReactTestRenderer } from 'react-test-renderer'
 import { describe, expect, it, vi } from 'vitest'
 import type { ArkmeRecordEditHistoryPage, ArkmeRecordEditHistoryReader } from '../src/record-edit-history.js'
 vi.mock('../src/client/ArkmeRichContent.js', () => ({ ArkmeMessageContent: ({ item }: { item: { textContent: string } }) => <p>{item.textContent}</p> }))
+import { ArkmeMessageContent } from '../src/client/ArkmeRichContent.js'
+import { ArkmeUserAvatar } from '../src/client/ArkmeAvatar.js'
 import { ArkmeRecordEditHistory } from '../src/client/ArkmeRecordEditHistory.js'
 const page = (id: string): ArkmeRecordEditHistoryPage => ({ items: [{ revisionUid: id, kind: 'manual', editAtMillis: 1700000000000, content: { title: '', textContent: id, contentBlocks: [] } }], hasMore: false })
 async function render(reader: ArkmeRecordEditHistoryReader) {
@@ -22,6 +24,22 @@ describe('edit history view', () => {
     act(() => view.unmount())
     expect(signal?.aborted).toBe(true)
   })
+  it.each([true, false])('keeps author direction and read-only revision identity in history bubbles (mine=%s)', async isMe => {
+    const reader = { page: vi.fn().mockResolvedValue(page('revision-only')) }
+    let view!: ReactTestRenderer
+    await act(async () => { view = create(<ArkmeRecordEditHistory sourceRef="s" messageActionRef="a" reader={reader} author={{ isMe, senderName: '作者', senderKind: 'bot' }} />) })
+    expect(view.root.findByProps({ 'data-arkme-history-row': true }).props.style.flexDirection).toBe(isMe ? 'row-reverse' : 'row')
+    expect(view.root.findByType(ArkmeUserAvatar).props).toMatchObject({ size: 32, senderKind: 'bot', label: '作者' })
+    const content = view.root.findByType(ArkmeMessageContent).props
+    expect(content.presentation).toBe('detail')
+    expect(content.item.itemUid).toBe('revision-only')
+    expect(content.item.messageActionRef).toBeUndefined()
+    expect(content.sourceRef).toBeUndefined()
+    expect(view.root.findByProps({ 'data-arkme-history-latest': true }).props.style.fontSize).toBe(10)
+    expect(view.root.findByProps({ 'data-arkme-history-time': true }).props.style.gridTemplateColumns).toBe('1fr auto 1fr')
+    act(() => view.unmount())
+  })
+
   it('keeps pagination reachable when a whole page is filtered and blocks duplicate loads', async () => {
     let resolve!: (value: ArkmeRecordEditHistoryPage) => void
     const reader = { page: vi.fn<ArkmeRecordEditHistoryReader['page']>()
