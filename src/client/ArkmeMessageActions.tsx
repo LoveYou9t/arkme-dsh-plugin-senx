@@ -1,4 +1,4 @@
-import { messageSelectionStyles, ArkmeSelectActionIcon } from './message-selection-presentation.js'
+import { messageSelectionStyles, messageSelectionMenuStyles, ArkmeSelectActionIcon } from './message-selection-presentation.js'
 import { arkmeSourceAllowsUserWrite } from '../topic-policy.js'
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent } from 'react'
 import type {
@@ -133,17 +133,7 @@ function MessageActionIcon({ kind, size = 18 }: { kind: 'copy' | 'link' | 'selec
 }
 
 const styles: Record<string, CSSProperties> = {
-  menu: {
-    position: 'fixed', zIndex: 1700, width: 178, padding: 6, boxSizing: 'border-box', borderRadius: 10,
-    border: `1px solid ${arkmeTheme.border}`, background: arkmeTheme.menu,
-    boxShadow: '0 14px 36px rgba(20,23,31,.16)',
-  },
-  menuButton: {
-    width: '100%', minHeight: 34, display: 'flex', alignItems: 'center', gap: 10,
-    padding: '8px 10px', boxSizing: 'border-box', border: 0, borderRadius: 8, background: 'transparent',
-    color: arkmeTheme.text, cursor: 'pointer', font: 'inherit', fontSize: 13, textAlign: 'left',
-  },
-  menuIcon: { width: 18, flex: 'none', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', color: arkmeTheme.secondary },
+  ...messageSelectionMenuStyles,
   selectBar: messageSelectionStyles.selectBar,
   selectButton: messageSelectionStyles.selectBarButton,
   icon: messageSelectionStyles.selectBarIconTile,
