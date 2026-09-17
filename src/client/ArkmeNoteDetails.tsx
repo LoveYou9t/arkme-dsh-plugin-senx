@@ -1012,7 +1012,7 @@ export function ArkmeTimelineDetailDrawer({
       onClick={() => {
         if (bodyRef.current !== null) scrollTopByViewRef.current['source-detail'] = bodyRef.current.scrollTop
         setEditHistoryTarget(historyTarget)
-      }}>已编辑<CaretRight size={9} style={{ width: 4.5, height: 9 }} aria-hidden /></button>}
+      }}>已编辑<CaretRight size={12} style={{ flex: 'none' }} aria-hidden /></button>}
     {quickNoteDetailsSupported && item.extensionParent !== undefined && <DetailExtensionParent parent={item.extensionParent} />}
     {quickNoteDetailsSupported && <ArkmeRelatedQuickNotesCard
       state={relatedState}
