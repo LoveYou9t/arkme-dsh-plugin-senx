@@ -47,3 +47,13 @@ it('disables close and composer while delivering and ignores backdrop dismissal'
   view!.root.findByType('textarea').props.onKeyDown({ key: 'Enter', nativeEvent: { isComposing: false }, preventDefault: vi.fn() })
   expect(send).not.toHaveBeenCalled()
 })
+
+it('describes native snapshots as forwarded notes, with the first selected speaker and body', async () => {
+  const { nativeForwardPreview } = await import('../src/client/NativeForwardAction.js')
+  const messages = [{ key: 'a', anchorSeq: 1, role: 'assistant' as const, text: '第一行\n  第二行', createdAtMillis: 1 }]
+  const single = nativeForwardPreview({ sessionId: 'session', messages })
+  expect(single).toEqual({ title: '我和DeepSeek Harness的快记', subtitle: 'DeepSeek Harness：第一行 第二行' })
+  expect(single.icon).toBeUndefined()
+  expect(nativeForwardPreview({ sessionId: 'session', messages: [{ ...messages[0]!, role: 'user', text: '问题' }, ...messages] })).toEqual({ title: '我和DeepSeek Harness的2条快记', subtitle: '我：问题' })
+  expect(messages[0]!.text).toBe('第一行\n  第二行')
+})

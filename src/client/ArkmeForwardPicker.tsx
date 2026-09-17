@@ -6,8 +6,9 @@ import { ArkmeForwardDialog, ArkmeForwardTargetRow, arkmeForwardStyles as styles
 import { arkmeSourceIdentityKey } from './source-identity.js'
 
 export interface ForwardSourcePresentation {
-  name: string
-  avatar: ReactNode
+  title: string
+  subtitle?: string
+  icon?: ReactNode
 }
 
 export interface ForwardRequestIdentity {
@@ -164,8 +165,8 @@ export function ArkmeForwardPicker({ open = true, source, messageCount, delivery
   }}>
     <ArkmeForwardDialog dialogRef={dialog} viewport keyword={keyword} onKeywordChange={setKeyword} sending={sending}
       selectedTargets={targets.filter(target => selected.includes(targetKey(target)))}
-      previewIcon={source?.avatar} previewTitle={source?.name ?? '聊天记录'}
-      previewSubtitle={messageCount === undefined ? '聊天记录' : `${messageCount} 条消息`}
+      previewIcon={source?.icon} previewTitle={source?.title ?? '聊天记录'}
+      previewSubtitle={source?.subtitle ?? (messageCount === undefined ? '聊天记录' : `${messageCount} 条消息`)}
       comment={comment} onCommentChange={setComment} commentDisabled={submitted} error={error}
       onClose={close} onSend={() => { void send() }}>
       <ul style={styles.forwardTargetList} aria-label="转发对象列表">

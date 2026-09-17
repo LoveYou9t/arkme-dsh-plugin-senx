@@ -608,7 +608,7 @@ it('forwards from the native selection through the shared picker and exits only 
   expect(s.doc.querySelector('[data-arkme-forward-source]')).toBeNull()
   await s.click('[role="dialog"] button[aria-pressed]')
   const source = s.doc.querySelector('[data-arkme-forward-source]')!
-  expect(source.textContent).toBe('DeepSeek Harness1 条消息')
+  expect(source.textContent).toBe('我和DeepSeek Harness的快记我：**source**')
   expect(source.querySelector('svg')).not.toBeNull()
   expect(s.doc.body.textContent).toContain('已选 1 条')
   await act(async () => { [...s.doc.querySelectorAll<HTMLButtonElement>('[role="dialog"] button')].find(button => button.getAttribute('aria-label') === '发送转发')!.click() })

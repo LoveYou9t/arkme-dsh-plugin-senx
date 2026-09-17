@@ -2,12 +2,20 @@ import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import type { ArkmeAuthSnapshot, ArkmeSourceSendResult } from '../types.js'
 import type { NativeChatForwardSnapshot } from '../native-chat-forward-contract.js'
-import { DeepSeekLogoMark } from './ArkmeDshAgentInputMarker.js'
-import { ArkmeForwardPicker } from './ArkmeForwardPicker.js'
+import { ArkmeForwardPicker, type ForwardSourcePresentation } from './ArkmeForwardPicker.js'
 import { callArkme } from './api.js'
 import { nativeSelectionForwardSnapshot, type NativeChat } from './harness-native-selection.js'
 import { ArkmeSelectActionIcon, messageSelectionStyles } from './message-selection-presentation.js'
 import { arkmeTheme } from './arkme-theme.js'
+
+export function nativeForwardPreview(snapshot: NativeChatForwardSnapshot): ForwardSourcePresentation {
+  const count = snapshot.messages.length
+  const first = snapshot.messages[0]
+  return {
+    title: `我和DeepSeek Harness的${count > 1 ? `${count}条` : ''}快记`,
+    subtitle: first ? `${first.role === 'user' ? '我' : 'DeepSeek Harness'}：${first.text.trim().replace(/\s+/g, ' ')}` : '',
+  }
+}
 
 /** This action exists only for the active native session/selection lifetime. */
 export function NativeForwardAction({ chat, keys, sessionId, doc, onComplete, children }: {
@@ -61,7 +69,7 @@ export function NativeForwardAction({ chat, keys, sessionId, doc, onComplete, ch
   </>
   return <>
     {children(button)}
-    {attempt && createPortal(<ArkmeForwardPicker open={attempt.open} source={{ name: 'DeepSeek Harness', avatar: <DeepSeekLogoMark style={{ width: 30, height: 30, opacity: 1, color: arkmeTheme.accent }} /> }} messageCount={attempt.snapshot.messages.length} delivery={{ send: async (target, identity, commentText, signal) => {
+    {attempt && createPortal(<ArkmeForwardPicker open={attempt.open} source={nativeForwardPreview(attempt.snapshot)} messageCount={attempt.snapshot.messages.length} delivery={{ send: async (target, identity, commentText, signal) => {
       return await callArkme<ArkmeSourceSendResult>('native-chat.forward', {
         snapshot: attempt.snapshot, expectedUserId: attempt.userId, targetSourceRef: target.sourceRef,
         requestId: `dsh-forward-${identity.requestId}`, recordUid: identity.recordUid,
