@@ -815,6 +815,8 @@ export function ArkmeTimelineDetailDrawer({
   })
   const messageActionRef = item.messageActionRef?.trim() ?? ''
   const normalizedSourceRef = sourceRef?.trim() ?? ''
+  const historyTarget = `${normalizedSourceRef}:${item.itemUid}`
+  const historyOpen = editHistoryTarget === historyTarget && messageActionRef !== ''
   const quickNoteDetailsSupported = item.quickNoteDetailsSupported !== false
   const loadRelated = useCallback(() => {
     listAbortRef.current?.abort()
@@ -904,8 +906,8 @@ export function ArkmeTimelineDetailDrawer({
     }
   }, [item.itemUid, loadExtensionContext, loadRelated])
   useEffect(() => {
-    if (bodyRef.current !== null) bodyRef.current.scrollTop = scrollTopByViewRef.current[relatedView]
-  }, [relatedView, editHistoryTarget])
+    if (bodyRef.current !== null) bodyRef.current.scrollTop = historyOpen ? 0 : scrollTopByViewRef.current[relatedView]
+  }, [relatedView, historyOpen])
   const navigateRelated = (nextView: ArkmeRelatedDrawerView) => {
     if (bodyRef.current !== null) scrollTopByViewRef.current[relatedView] = bodyRef.current.scrollTop
     setRelatedView(nextView)
@@ -938,8 +940,6 @@ export function ArkmeTimelineDetailDrawer({
   const textContent = showOriginal && item.aiPolish?.originalText !== undefined ? item.aiPolish.originalText
     : item.aiPolish?.state === 'polished' && item.aiPolish.polishedText !== undefined ? item.aiPolish.polishedText : item.textContent
   const canToggle = item.aiPolish?.state === 'polished' && item.aiPolish.originalText !== undefined && item.aiPolish.polishedText !== undefined
-  const historyTarget = `${normalizedSourceRef}:${item.itemUid}`
-  const historyOpen = editHistoryTarget === historyTarget && messageActionRef !== ''
   const extensionFooter = !quickNoteDetailsSupported || !canExtend || normalizedSourceRef === '' || messageActionRef === '' ? undefined : <DetailExtensionComposer
     sourceRef={normalizedSourceRef}
     sourceKind={sourceKind}

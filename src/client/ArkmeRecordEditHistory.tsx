@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ArkmeRecordEditHistoryPage, ArkmeRecordEditHistoryReader } from '../record-edit-history.js'
 import type { ArkmeTimelineItem } from '../types.js'
 import { ArkmeUserAvatar } from './ArkmeAvatar.js'
+import { ArkmeRichText } from './ArkmeRichText.js'
 import { ArkmeMessageContent } from './ArkmeRichContent.js'
 import { callArkme } from './api.js'
 import { arkmeTheme } from './arkme-theme.js'
@@ -86,7 +87,8 @@ export function ArkmeRecordEditHistory({ sourceRef, messageActionRef, reader = h
         <div data-arkme-history-row style={{ display: 'flex', flexDirection: mine ? 'row-reverse' : 'row', alignItems: 'flex-start', gap: 10 }}>
           <ArkmeUserAvatar {...(author?.avatarRef === undefined ? {} : { avatarRef: author.avatarRef })} {...(author?.senderKind === undefined ? {} : { senderKind: author.senderKind })} size={32} label={author?.senderName || '作者头像'} />
           <div data-arkme-history-bubble style={{ minWidth: 0, maxWidth: 'calc(100% - 84px)', minHeight: 42, boxSizing: 'border-box', padding: 10, borderRadius: mine ? '12px 4px 12px 12px' : '4px 12px 12px 12px', border: `1px solid ${arkmeTheme.borderSoft}`, background: mine ? arkmeTheme.messageOwn : arkmeTheme.messageOther, overflowWrap: 'anywhere' }}>
-            {(revision.content.title || revision.content.textContent || revision.content.contentBlocks.length > 0 || !revision.content.mediaUnavailable) && <ArkmeMessageContent presentation="detail" item={{
+            {revision.content.title && <h3 style={{ margin: '0 0 8px', fontSize: 14, lineHeight: 1.7 }}><ArkmeRichText text={revision.content.title} presentation="preview" /></h3>}
+            {(revision.content.textContent || revision.content.contentBlocks.length > 0 || (!revision.content.title && !revision.content.mediaUnavailable)) && <ArkmeMessageContent presentation="detail" item={{
               ...revision.content, mediaUnavailable: false, itemUid: revision.revisionUid, senderName: author?.senderName ?? '', isMe: mine,
               sendAtMillis: revision.editAtMillis, status: 1,
             }} />}

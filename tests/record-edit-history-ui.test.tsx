@@ -40,6 +40,16 @@ describe('edit history view', () => {
     act(() => view.unmount())
   })
 
+  it('shows a snapshot title even without current-message article metadata', async () => {
+    const result = page('body')
+    result.items[0]!.content = { title: '历史标题', textContent: '', contentBlocks: [] }
+    const view = await render({ page: vi.fn().mockResolvedValue(result) })
+    expect(view.root.findAllByType('h3')).toHaveLength(1)
+    expect(JSON.stringify(view.toJSON())).toContain('历史标题')
+    expect(view.root.findAllByType(ArkmeMessageContent)).toHaveLength(0)
+    act(() => view.unmount())
+  })
+
   it('keeps pagination reachable when a whole page is filtered and blocks duplicate loads', async () => {
     let resolve!: (value: ArkmeRecordEditHistoryPage) => void
     const reader = { page: vi.fn<ArkmeRecordEditHistoryReader['page']>()

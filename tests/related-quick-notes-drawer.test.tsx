@@ -103,6 +103,7 @@ describe('normal timeline related quick note drawer', () => {
     expect(bodies.length).toBeGreaterThan(0)
     bodies[bodies.length - 1]!.scrollTop = 480
     await act(async () => view.root.findAllByType('button').find(node => node.props['aria-label'] === '已编辑')!.props.onClick())
+    expect(bodies[bodies.length - 1]!.scrollTop).toBe(0)
     await act(async () => view.root.findByProps({ 'aria-label': '返回快记详情' }).props.onClick())
     expect(bodies[bodies.length - 1]!.scrollTop).toBe(480)
     act(() => view.unmount())
