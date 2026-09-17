@@ -376,6 +376,7 @@ export interface ArkmeRecordCursor {
 }
 
 export interface ArkmeSelfRecordItem {
+  hasManualEdit?: boolean | undefined
   /** Frozen long-recording selection returned by the Record owner. */
   forwardRecords?: ArkmeForwardRecordsPreview
   recordUid: string
@@ -1629,6 +1630,8 @@ export interface ArkmeTimelineMentionTarget {
 }
 
 export interface ArkmeTimelineItem {
+  /** Record owner manual-edit fact; independent of AI polish and content version. */
+  hasManualEdit?: boolean | undefined
   /** Display-only call status; room, participant and call identifiers stay host-side. */
   callRecord?: {
     mediaType: 'audio' | 'video'
@@ -3079,6 +3082,8 @@ export interface ArkmeAiVideoListResult {
 
 export interface ArkmeFileAssetDisplayItem {
   fileAssetUid: string
+  fileKind?: number
+  size?: number
   fileName?: string
   mimeType?: string
   previewUrl?: string
@@ -3706,6 +3711,7 @@ export type ArkmeHostOperation = ArkmePluginOperation
   | 'source.related-quick-notes.from-message'
   | 'source.related-quick-notes.from-moment'
   | 'source.related-quick-note.detail'
+  | 'source.record-edit-history'
   | 'extensions.catalog.list'
   | 'extensions.classification.tree'
   | 'extensions.classification.items'
