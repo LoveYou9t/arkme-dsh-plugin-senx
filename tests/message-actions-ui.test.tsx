@@ -353,3 +353,35 @@ describe('shared owner message action UI', () => {
     expect(renderer!.root.findByProps({ role: 'status' }).children.join('')).toBe('最多选择 5 个转发对象')
   })
 })
+
+it('resumes the same frozen forwarding attempt after closing and ends it when copy-link succeeds', async () => {
+  mocks.callArkme.mockReset().mockImplementation(async (operation: string, params: { directory?: string }) => {
+    if (operation === 'sources.list') return { items: params.directory === 'root' ? [{ sourceRef: 'target', sourceKey: 'target', kind: 'private_chat', displayName: '目标' }] : [], hasMore: false }
+    if (operation === 'message-actions.copy-link') return { sid: 'link', url: 'https://jotmo.example/s/link' }
+    if (operation === 'message-actions.forward') throw new Error('结果未知')
+    throw new Error(operation)
+  })
+  vi.stubGlobal('window', { innerWidth: 1200, innerHeight: 800, addEventListener: vi.fn(), removeEventListener: vi.fn(), setTimeout, clearTimeout })
+  vi.stubGlobal('document', { defaultView: { navigator: { clipboard: { writeText: vi.fn(async () => {}) } } } })
+  let view: ReactTestRenderer
+  await act(async () => { view = create(<Harness conversationRef="same" />) })
+  const menu = async () => { await act(async () => view!.root.findByProps({ 'data-message': 'one' }).props.onContextMenu({ preventDefault() {}, stopPropagation() {}, clientX: 1, clientY: 1 })) }
+  try {
+    await menu(); await act(async () => button(view!, '转发')!.props.onClick())
+    await act(async () => view!.root.findByType('strong').parent!.parent!.props.onClick())
+    await act(async () => view!.root.findByType('textarea').props.onChange({ target: { value: '原附言' } }))
+    await act(async () => button(view!, '转发')!.props.onClick())
+    const first = mocks.callArkme.mock.calls.find(([op]) => op === 'message-actions.forward')![1]
+    await act(async () => button(view!, '取消')!.props.onClick())
+    await menu(); await act(async () => button(view!, '转发')!.props.onClick())
+    expect(view!.root.findByType('textarea').props.value).toBe('原附言')
+    await act(async () => button(view!, '转发')!.props.onClick())
+    const calls = mocks.callArkme.mock.calls.filter(([op]) => op === 'message-actions.forward')
+    expect(calls).toHaveLength(2)
+    expect(calls[1]![1]).toEqual(first)
+    await act(async () => button(view!, '取消')!.props.onClick())
+    await menu(); await act(async () => button(view!, '复制链接')!.props.onClick())
+    await menu(); await act(async () => button(view!, '转发')!.props.onClick())
+    expect(view!.root.findByType('textarea').props.value).toBe('')
+  } finally { await act(async () => view!.unmount()); vi.unstubAllGlobals() }
+})
