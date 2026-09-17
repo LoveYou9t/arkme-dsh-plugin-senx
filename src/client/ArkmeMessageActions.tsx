@@ -1,3 +1,4 @@
+import { copyText } from './clipboard-text.js'
 import { messageSelectionStyles, messageSelectionMenuStyles, ArkmeSelectActionIcon } from './message-selection-presentation.js'
 import { arkmeSourceAllowsUserWrite } from '../topic-policy.js'
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent } from 'react'
@@ -89,33 +90,6 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
 
-async function copyText(value: string): Promise<void> {
-  if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText !== undefined) {
-    try {
-      await navigator.clipboard.writeText(value)
-      return
-    } catch {
-      // Embedded WebViews may expose Clipboard but deny it; match the normal
-      // conversation surface by falling back to the selected textarea path.
-    }
-  }
-  if (typeof document === 'undefined') throw new Error('复制失败，请稍后重试')
-  const textarea = document.createElement('textarea')
-  textarea.value = value
-  textarea.setAttribute('readonly', 'true')
-  textarea.style.position = 'fixed'
-  textarea.style.left = '-9999px'
-  textarea.style.top = '0'
-  document.body.appendChild(textarea)
-  const selection = document.getSelection()
-  const activeElement = document.activeElement instanceof HTMLElement ? document.activeElement : undefined
-  textarea.select()
-  const copied = document.execCommand('copy')
-  textarea.remove()
-  selection?.removeAllRanges()
-  activeElement?.focus()
-  if (!copied) throw new Error('复制失败，请稍后重试')
-}
 
 function targetMeta(source: ArkmeSourceItem): string {
   if (source.kind === 'private_chat') return '私聊'

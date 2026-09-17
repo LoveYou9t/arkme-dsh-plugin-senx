@@ -60,3 +60,13 @@ export function observeSelectedNativeNodes(chat: NativeChat, keys: ReadonlySet<s
     return dispose
   } catch (error) { dispose(); throw error }
 }
+
+/** Native user content and assistant display blocks are separate host contracts. */
+export function nativeSelectionCopyText(chat: NativeChat, key: string): string {
+  const node = chat.nodes.get(key)
+  if (!isSelectableNativeNode(node) || node.key !== key || !('data' in node) || !object(node.data)) throw new Error('当前消息暂不可用，请重新选择')
+  const blocks = node.kind === 'user' ? node.data.content : node.data.blocks
+  if (!Array.isArray(blocks)) throw new Error('当前消息暂不可用，请重新选择')
+  return blocks.filter(block => object(block) && (node.kind === 'user' ? block.type : block.kind) === 'text' && typeof block.text === 'string')
+    .map(block => block.text).join('').trim()
+}

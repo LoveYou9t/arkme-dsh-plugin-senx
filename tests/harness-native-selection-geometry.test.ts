@@ -1,8 +1,19 @@
 // @vitest-environment jsdom
 import { afterEach, expect, it, vi } from 'vitest'
-import { measureNativeSelection, sameSelectionPosition } from '../src/client/harness-native-selection-geometry.js'
+import { measureNativeSelection, sameSelectionPosition, nativeSelectionHighlightSelector } from '../src/client/harness-native-selection-geometry.js'
 
 afterEach(() => document.body.replaceChildren())
+it('escapes opaque keys without widening the highlight selector', () => {
+  const flow = document.createElement('div'); flow.dataset.chatFlow = ''
+  const row = document.createElement('div'); row.dataset.chatFlowKind = 'user'
+  const other = document.createElement('div'); other.dataset.chatFlowKind = 'user'; other.dataset.chatAnchorKey = 'other'
+  document.body.append(flow); flow.append(row, other)
+  for (const key of ['user:opaque', 'user:"], body { color:red } /*', 'user:中文\\\n']) {
+    row.dataset.chatAnchorKey = key
+    expect([...document.querySelectorAll(nativeSelectionHighlightSelector(new Set([key])))]).toEqual([row])
+  }
+  expect(nativeSelectionHighlightSelector(new Set())).toBe('')
+})
 function rect(left: number, top: number, width: number, height: number): DOMRect {
   return { left, top, width, height, right: left + width, bottom: top + height, x: left, y: top, toJSON() {} }
 }

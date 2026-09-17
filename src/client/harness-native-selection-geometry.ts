@@ -5,7 +5,21 @@ const HIT = 32
 const GAP = 10
 export interface SelectionPosition { left: number; top: number }
 export interface NativeSelectionSeat extends SelectionPosition { key: string; row: HTMLElement }
-export interface NativeSelectionLayout { seats: readonly NativeSelectionSeat[]; cramped: boolean; viewport: HTMLElement | null }
+export interface NativeSelectionLayout { seats: readonly NativeSelectionSeat[]; cramped: boolean; viewport: HTMLElement | null; highlight?: { left: number; right: number }; actionDock?: HTMLElement }
+
+// The composer stays mounted and keeps its height/draft while selection occupies its space.
+export const nativeSelectionActionOverlayCss = `
+  :has(> [data-slot="conversation.input.dock"] > [data-arkme-native-selection="actions"]) { position: relative; }
+  [data-slot="conversation.input.dock"] > [data-arkme-native-selection="actions"] { position: absolute; inset: 0; z-index: 1; }
+  [data-slot="conversation.input.dock"]:has(> [data-arkme-native-selection="actions"]) + [data-slot="conversation.composer.bar"] { visibility: hidden; }
+`
+
+export function nativeSelectionHighlightSelector(keys: ReadonlySet<string>): string {
+  return [...keys].map(key => {
+    const escaped = key.replace(/[^\w-]/gu, character => `\\${character.codePointAt(0)!.toString(16)} `)
+    return `[data-chat-flow] ${ROW}[data-chat-anchor-key="${escaped}"]`
+  }).join(',')
+}
 
 function viewportBounds(viewport: HTMLElement) {
   const box = viewport.getBoundingClientRect()
@@ -136,7 +150,13 @@ export function watchNativeSelectionGeometry(options: {
     }
     seats.sort((a, b) => a.top - b.top)
     const cramped = flow.getBoundingClientRect().left - viewportBounds(viewport).left < HIT + GAP
-    options.publish({ seats, cramped: cramped || (blocked && seats.length === 0), viewport })
+    const column = flow.getBoundingClientRect()
+    const bounds = viewportBounds(viewport)
+    const docks = doc.querySelectorAll<HTMLElement>('[data-slot="conversation.input.dock"]')
+    options.publish({ seats, cramped: cramped || (blocked && seats.length === 0), viewport,
+      highlight: { left: Math.max(0, column.left - bounds.left - 8), right: Math.max(0, bounds.right - column.right - 8) },
+      ...(docks.length === 1 && docks[0]!.nextElementSibling?.matches('[data-slot="conversation.composer.bar"]') ? { actionDock: docks[0]! } : {}),
+    })
   }
   function dispose() {
     if (stopped) return
@@ -187,9 +207,9 @@ export function observeNativeChatPresence(doc: Document, publish: (present: bool
   return () => observer.disconnect()
 }
 
-/** Resolve only message body context clicks; native controls keep their own menu. */
-export function nativeSelectionContextRow(doc: Document, target: EventTarget | null, chat: NativeChat): { key: string; row: HTMLElement } | undefined {
-  if (!(target instanceof doc.defaultView!.Element) || target.closest('button, a, input, textarea, select, [contenteditable]:not([contenteditable="false"]), [role="menu"], [role="dialog"]')) return
+/** Resolve a selectable message body for pointer actions; native controls keep their own behavior. */
+export function nativeSelectionMessageRow(doc: Document, target: EventTarget | null, chat: NativeChat): { key: string; row: HTMLElement } | undefined {
+  if (!(target instanceof doc.defaultView!.Element) || target.closest('button, a, input, textarea, select, [role="link"], [role="button"], [contenteditable]:not([contenteditable="false"]), [role="menu"], [role="dialog"]')) return
   const row = target.closest<HTMLElement>(ROW)
   const flows = doc.querySelectorAll('[data-chat-flow]')
   if (!row?.isConnected || row.hidden || flows.length !== 1 || row.closest('[data-chat-flow]') !== flows[0]) return
@@ -197,4 +217,29 @@ export function nativeSelectionContextRow(doc: Document, target: EventTarget | n
   if (!key || [...flows[0]!.querySelectorAll<HTMLElement>(ROW)].filter(candidate => candidate.dataset.chatAnchorKey === key).length !== 1) return
   const node = chat.nodes.get(key)
   return isSelectableNativeNode(node) && node.key === key && node.kind === row.dataset.chatFlowKind ? { key, row } : undefined
+}
+
+/** Expanded row paint is outside the native row box; resolve only bare scroll/flow space. */
+export function nativeSelectionPointerRow(doc: Document, event: MouseEvent, chat: NativeChat, viewport: HTMLElement | null): { key: string; row: HTMLElement } | undefined {
+  const direct = nativeSelectionMessageRow(doc, event.target, chat)
+  if (direct) return direct
+  const target = event.target
+  if (!viewport?.isConnected || !(target instanceof doc.defaultView!.Element) || !viewport.contains(target)) return
+  const flow = viewport.querySelector<HTMLElement>('[data-chat-flow]')
+  if (!flow || !(target === viewport || target === flow || target.contains(flow))) return
+  const clip = viewportBounds(viewport)
+  if (event.clientX < clip.left + 8 || event.clientX > clip.right - 8 || event.clientY < clip.top || event.clientY > clip.bottom) return
+  let nearest: HTMLElement | undefined
+  let distance = Infinity
+  let ambiguous = false
+  for (const row of flow.querySelectorAll<HTMLElement>(ROW)) {
+    if (row.hidden || row.parentElement?.closest(ROW)) continue
+    const box = row.getBoundingClientRect()
+    if (box.width <= 0 || box.height <= 0 || event.clientY < box.top - 8 || event.clientY > box.bottom + 8) continue
+    const gap = Math.max(box.top - event.clientY, event.clientY - box.bottom, 0)
+    if (gap < distance) { nearest = row; distance = gap; ambiguous = false }
+    else if (gap === distance) ambiguous = true
+  }
+  // Resolve geometry before eligibility: a tool/running row must shield adjacent messages.
+  return nearest && !ambiguous ? nativeSelectionMessageRow(doc, nearest, chat) : undefined
 }

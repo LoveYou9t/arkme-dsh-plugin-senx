@@ -15,7 +15,7 @@ async function setup() {
   const frame = document.createElement('iframe'); surface.append(frame); document.body.append(surface)
   const doc = frame.contentDocument!; const win = doc.defaultView!
   const callbacks = new Set<() => void>()
-  let node: { key: string; target: string; kind: string; visibility: string; data: { status?: string; blocks?: Array<{ kind: string; text: string }> } } = { key: 'user:opaque', target: 'chat', kind: 'user', visibility: 'visible', data: {} }
+  let node: { key: string; target: string; kind: string; visibility: string; data: { content?: Array<{ type: string; text?: string }>; status?: string; blocks?: Array<{ kind: string; text: string }> } } = { key: 'user:opaque', target: 'chat', kind: 'user', visibility: 'visible', data: {} }
   const chat = { order: [node.key], nodes: {
     get: (key: string) => key === node.key ? node : undefined,
     source: () => ({ subscribe: (cb: () => void) => { callbacks.add(cb); return () => { callbacks.delete(cb) } } }),
@@ -75,6 +75,114 @@ it('enters from a message context menu and selects that message', async () => {
   expect(s.doc.querySelector('[role="checkbox"]')?.getAttribute('aria-checked')).toBe('true')
 })
 
+it('overlays the Arkme action bar on the mounted composer, keeps zero selection, and exits without enabling unfinished actions', async () => {
+  const s = await setup()
+  const dock = s.doc.createElement('div'); dock.dataset.slot = 'conversation.input.dock'
+  const input = s.doc.createElement('textarea')
+  const composer = s.doc.createElement('div'); composer.dataset.slot = 'conversation.composer.bar'; composer.append(input)
+  input.value = 'unsent draft'
+  s.doc.body.append(dock, composer)
+  await s.enter()
+  const bar = s.doc.querySelector('[data-arkme-native-selection="actions"]')!
+  expect(bar?.parentElement).toBe(dock)
+  const buttons = [...bar.querySelectorAll('button')]
+  expect(buttons.map(button => button.textContent)).toEqual(['复制文本', '复制链接', '转发', '退出多选'])
+  expect(buttons.slice(1, 3).every(button => button.disabled && button.title === '暂未接入')).toBe(true)
+  expect(buttons[0]!.disabled).toBe(false)
+  expect(buttons[3]!.disabled).toBe(false)
+  await s.click('[role="checkbox"]')
+  expect(s.doc.body.textContent).toContain('已选 0 条')
+  expect(buttons[0]!.isConnected).toBe(false)
+  expect(bar.querySelector<HTMLButtonElement>('[aria-label="复制文本"]')!.disabled).toBe(true)
+  expect(dock.contains(bar)).toBe(true)
+  expect(input.isConnected).toBe(true)
+  expect(input.value).toBe('unsent draft')
+  expect(bar.querySelector('style')?.textContent).toContain('visibility: hidden')
+  await s.click('[data-arkme-native-selection="actions"] [aria-label="退出多选"]')
+  expect(dock.children.length).toBe(0)
+  expect(input.value).toBe('unsent draft')
+  expect(input.isConnected).toBe(true)
+  expect(s.doc.querySelector('[role="checkbox"]')).toBeNull()
+})
+
+it.each([2, 0])('only autofocuses a menu opened without a secondary mouse button (%s)', async button => {
+  const s = await setup()
+  await act(async () => s.row.dispatchEvent(new s.win.MouseEvent('contextmenu', { bubbles: true, cancelable: true, button })))
+  const item = s.doc.querySelector('[role="menuitem"]')!
+  expect(item).not.toBeNull()
+  expect(s.doc.activeElement === item).toBe(button !== 2)
+})
+
+it('highlights only selected message keys and removes styling on cancellation and exit', async () => {
+  const s = await setup()
+  const original = s.row.outerHTML
+  await s.enter()
+  const style = () => s.doc.querySelector<HTMLStyleElement>('[data-arkme-native-selection="highlight"]')
+  expect(style()?.textContent).toContain('background:')
+  const rule = style()!.sheet!.cssRules[0] as CSSStyleRule
+  expect(s.row.matches(rule.selectorText)).toBe(true)
+  expect(s.flow.matches(rule.selectorText)).toBe(false)
+  const background = style()!.sheet!.cssRules[1] as CSSStyleRule
+  expect(background.selectorText).toContain('::before')
+  expect(background.style.getPropertyValue('left')).toBe('-72px')
+  expect(background.style.getPropertyValue('right')).toBe('-32px')
+  expect(background.style.getPropertyValue('top')).toBe('-8px')
+  expect(background.style.getPropertyValue('bottom')).toBe('-8px')
+  expect(background.style.getPropertyValue('pointer-events')).toBe('none')
+  expect(background.style.getPropertyValue('border-radius')).toBe('6px')
+  expect(s.row.outerHTML).toBe(original)
+  await s.click('[role="checkbox"]')
+  expect(style()?.textContent ?? '').toBe('')
+  expect(s.doc.querySelector('[role="checkbox"]')).not.toBeNull()
+  await s.click('[role="checkbox"]')
+  expect(style()?.textContent).toContain('background:')
+  await s.click('[data-arkme-native-selection="header"] button')
+  expect(style()).toBeNull()
+  expect(s.row.outerHTML).toBe(original)
+})
+
+it.each(['account', 'hidden', 'pagehide', 'view', 'session', 'source-failure'])('removes expanded highlight and subscriptions on %s', async reason => {
+  const s = await setup()
+  const dock = s.doc.createElement('div'); dock.dataset.slot = 'conversation.input.dock'
+  const composer = s.doc.createElement('div'); composer.dataset.slot = 'conversation.composer.bar'; s.doc.body.append(dock, composer)
+  await s.enter()
+  expect(dock.querySelector('[data-arkme-native-selection="actions"]')).not.toBeNull()
+  expect(s.doc.querySelector('[data-arkme-native-selection="highlight"]')?.textContent).toContain('::before')
+  if (reason === 'session') await s.render('another-session')
+  else await act(async () => {
+    if (reason === 'account') s.surface.dataset.arkmeAccountId = 'different'
+    if (reason === 'hidden') s.surface.dataset.arkmeVisible = 'false'
+    if (reason === 'pagehide') s.win.dispatchEvent(new s.win.Event('pagehide'))
+    if (reason === 'view') s.changeView('trajectory')
+    if (reason === 'source-failure') {
+      s.breakNodeSource()
+      s.row.dataset.chatAnchorKey = 'replacement'
+    }
+  })
+  await s.flush()
+  expect(s.doc.querySelector('[data-arkme-native-selection="highlight"]')).toBeNull()
+  expect(s.doc.querySelector('[data-arkme-native-selection="controls"]')).toBeNull()
+  expect(dock.children.length).toBe(0)
+  expect(s.callbacks.size).toBe(0)
+  const down = new s.win.MouseEvent('mousedown', { bubbles: true, cancelable: true })
+  await act(async () => s.row.dispatchEvent(down))
+  expect(down.defaultPrevented).toBe(false)
+})
+
+it('remeasures expanded background after resizing without changing selected identity', async () => {
+  const s = await setup()
+  await s.enter()
+  s.move(120, 100)
+  await act(async () => s.win.dispatchEvent(new s.win.Event('resize')))
+  await s.flush()
+  const style = s.doc.querySelector<HTMLStyleElement>('[data-arkme-native-selection="highlight"]')!
+  const background = style.sheet!.cssRules[1] as CSSStyleRule
+  expect(background.style.getPropertyValue('left')).toBe('-112px')
+  expect(background.style.getPropertyValue('right')).toBe('-0px')
+  expect(s.doc.body.textContent).toContain('已选 1 条')
+  expect(s.row.style.cssText).toBe('')
+})
+
 it('keeps checked controls visible throughout scrolling and follows the row', async () => {
   const s = await setup()
   await act(async () => s.row.dispatchEvent(new s.win.MouseEvent('contextmenu', { bubbles: true, cancelable: true })))
@@ -108,6 +216,9 @@ it('reuses Arkme checkboxes, preserves native clicks, and clears on session swit
   expect(s.doc.querySelector('[data-arkme-native-selection="controls"]')).toBeNull()
   expect(s.doc.body.textContent).not.toContain('已选 1 条')
   expect(s.callbacks.size).toBe(0)
+  const down = new s.win.MouseEvent('mousedown', { bubbles: true, cancelable: true })
+  await act(async () => s.row.dispatchEvent(down))
+  expect(down.defaultPrevented).toBe(false)
 })
 
 it('rejects stale click positions, pauses for narrow space, and retains the selected key', async () => {
@@ -127,6 +238,9 @@ it('rejects stale click positions, pauses for narrow space, and retains the sele
   await act(async () => { s.surface.dataset.arkmeVisible = 'false' })
   expect(s.doc.querySelector('[data-arkme-native-selection="controls"]')).toBeNull()
   expect(s.callbacks.size).toBe(0)
+  const down = new s.win.MouseEvent('mousedown', { bubbles: true, cancelable: true })
+  await act(async () => s.row.dispatchEvent(down))
+  expect(down.defaultPrevented).toBe(false)
 })
 
 it('keeps zero selection active and isolates missing native DOM', async () => {
@@ -251,6 +365,9 @@ it('isolates node-source failure and leaves native actions usable', async () => 
   await s.click('[data-chat-anchor-key] button')
   expect(nativeClick).toHaveBeenCalledOnce()
   expect(s.callbacks.size).toBe(0)
+  const down = new s.win.MouseEvent('mousedown', { bubbles: true, cancelable: true })
+  await act(async () => s.row.dispatchEvent(down))
+  expect(down.defaultPrevented).toBe(false)
 })
 
 it('disables ambiguous duplicate anchors instead of selecting the wrong row', async () => {
@@ -262,6 +379,9 @@ it('disables ambiguous duplicate anchors instead of selecting the wrong row', as
   expect(s.doc.querySelector('[role="menu"]')).toBeNull()
   expect(s.doc.querySelector('[role="checkbox"]')).toBeNull()
   expect(s.callbacks.size).toBe(0)
+  const down = new s.win.MouseEvent('mousedown', { bubbles: true, cancelable: true })
+  await act(async () => s.row.dispatchEvent(down))
+  expect(down.defaultPrevented).toBe(false)
 })
 
 
@@ -326,6 +446,9 @@ it('closes an open context menu on account change before it can select old data'
   expect(s.doc.querySelector('[role="menuitem"]')).toBeNull()
   expect(s.doc.querySelector('[data-arkme-native-selection="header"]')).toBeNull()
   expect(s.callbacks.size).toBe(0)
+  const down = new s.win.MouseEvent('mousedown', { bubbles: true, cancelable: true })
+  await act(async () => s.row.dispatchEvent(down))
+  expect(down.defaultPrevented).toBe(false)
 })
 
 it('does not revive controls from queued layout work after exit', async () => {
@@ -337,4 +460,123 @@ it('does not revive controls from queued layout work after exit', async () => {
   expect(s.doc.querySelector('[data-arkme-native-selection="controls"]')).toBeNull()
   expect(s.doc.querySelector('[data-arkme-native-selection="header"]')).toBeNull()
   expect(s.callbacks.size).toBe(0)
+  const down = new s.win.MouseEvent('mousedown', { bubbles: true, cancelable: true })
+  await act(async () => s.row.dispatchEvent(down))
+  expect(down.defaultPrevented).toBe(false)
+})
+
+it('keeps header exit available without hiding an unrecognized composer', async () => {
+  const s = await setup()
+  const dock = s.doc.createElement('div'); dock.dataset.slot = 'conversation.input.dock'; s.doc.body.append(dock)
+  await s.enter()
+  expect(s.doc.querySelector('[data-arkme-native-selection="actions"]')).toBeNull()
+  await s.click('[data-arkme-native-selection="header"] button')
+  expect(s.doc.querySelector('[role="checkbox"]')).toBeNull()
+})
+
+it('copies one current native message and retains selection with success feedback', async () => {
+  const s = await setup()
+  const dock = s.doc.createElement('div'); dock.dataset.slot = 'conversation.input.dock'
+  const composer = s.doc.createElement('div'); composer.dataset.slot = 'conversation.composer.bar'; s.doc.body.append(dock, composer)
+  const writeText = vi.fn().mockResolvedValue(undefined)
+  Object.defineProperty(s.win.navigator, 'clipboard', { configurable: true, value: { writeText } })
+  await s.enter()
+  await act(async () => s.setNode({ key: 'user:opaque', target: 'chat', kind: 'user', visibility: 'visible', data: { content: [{ type: 'text', text: '  hello  ' }] } }))
+  await s.click('[aria-label="复制文本"]')
+  expect(writeText).toHaveBeenCalledWith('hello')
+  expect(s.doc.body.textContent).toContain('已复制')
+  expect(s.doc.body.textContent).toContain('已选 1 条')
+})
+
+it('toggles selection from body and row whitespace only while selection is active', async () => {
+  const s = await setup()
+  const body = s.doc.createElement('span'); body.textContent = 'body'; s.row.append(body)
+  await act(async () => body.click())
+  expect(s.doc.querySelector('[data-arkme-native-selection="header"]')).toBeNull()
+  await s.enter()
+  await act(async () => body.click())
+  expect(s.doc.body.textContent).toContain('已选 0 条')
+  await act(async () => s.row.click())
+  expect(s.doc.body.textContent).toContain('已选 1 条')
+  await s.click('[role="checkbox"]')
+  expect(s.doc.body.textContent).toContain('已选 0 条')
+  await s.click('[data-arkme-native-selection="header"] button')
+  await act(async () => body.click())
+  expect(s.doc.querySelector('[data-arkme-native-selection="header"]')).toBeNull()
+})
+
+it.each(['button', 'a', 'input', 'textarea', 'select', 'role-link', 'role-button', 'editable'])('preserves native %s interaction without toggling selection', async kind => {
+  const s = await setup()
+  const control = s.doc.createElement(kind.startsWith('role-') || kind === 'editable' ? 'span' : kind)
+  if (kind.startsWith('role-')) control.setAttribute('role', kind.slice(5))
+  if (kind === 'editable') control.setAttribute('contenteditable', 'true')
+  const action = vi.fn(); control.addEventListener('click', action); s.row.append(control)
+  await s.enter()
+  await act(async () => control.click())
+  expect(action).toHaveBeenCalledOnce()
+  expect(s.doc.body.textContent).toContain('已选 1 条')
+})
+
+it('does not toggle canceled or no-longer-selectable message clicks', async () => {
+  const s = await setup(); await s.enter()
+  const cancel = (event: Event) => event.preventDefault()
+  s.row.addEventListener('click', cancel)
+  await act(async () => s.row.click())
+  expect(s.doc.body.textContent).toContain('已选 1 条')
+  s.row.removeEventListener('click', cancel)
+  await act(async () => s.changeKind('tool'))
+  await act(async () => s.row.click())
+  expect(s.doc.body.textContent).toContain('已选 0 条')
+})
+
+it('selects expanded gutter space and prevents text selection only within selectable messages', async () => {
+  const s = await setup(); await s.enter()
+  const down = new s.win.MouseEvent('mousedown', { bubbles: true, cancelable: true, clientX: 20, clientY: 120 })
+  await act(async () => s.viewport.dispatchEvent(down))
+  expect(down.defaultPrevented).toBe(true)
+  await act(async () => s.viewport.dispatchEvent(new s.win.MouseEvent('click', { bubbles: true, clientX: 20, clientY: 120 })))
+  expect(s.doc.body.textContent).toContain('已选 0 条')
+  const bodyDown = new s.win.MouseEvent('mousedown', { bubbles: true, cancelable: true })
+  await act(async () => s.row.dispatchEvent(bodyDown))
+  expect(bodyDown.defaultPrevented).toBe(true)
+  const controlDown = new s.win.MouseEvent('mousedown', { bubbles: true, cancelable: true })
+  await act(async () => s.row.querySelector('button')!.dispatchEvent(controlDown))
+  expect(controlDown.defaultPrevented).toBe(false)
+  const outsideDown = new s.win.MouseEvent('mousedown', { bubbles: true, cancelable: true, clientX: 20, clientY: 400 })
+  await act(async () => s.viewport.dispatchEvent(outsideDown))
+  expect(outsideDown.defaultPrevented).toBe(false)
+  await s.click('[data-arkme-native-selection="header"] button')
+  const restored = new s.win.MouseEvent('mousedown', { bubbles: true, cancelable: true })
+  await act(async () => s.row.dispatchEvent(restored))
+  expect(restored.defaultPrevented).toBe(false)
+})
+
+it('does not select a neighboring message from blank space beside a tool row', async () => {
+  const s = await setup(); await s.enter()
+  const tool = s.doc.createElement('div'); tool.dataset.chatAnchorKey = 'tool:one'; tool.dataset.chatFlowKind = 'tool'
+  tool.getBoundingClientRect = () => ({ left: 80, top: 195, right: 760, bottom: 235, width: 680, height: 40, x: 80, y: 195, toJSON() {} })
+  s.flow.append(tool)
+  await act(async () => s.viewport.dispatchEvent(new s.win.MouseEvent('click', { bubbles: true, clientX: 20, clientY: 196 })))
+  expect(s.doc.body.textContent).toContain('已选 1 条')
+})
+
+it('does not guess a message for equally close expanded rows', async () => {
+  const s = await setup(); await s.enter()
+  const next = s.doc.createElement('div'); next.dataset.chatAnchorKey = 'next'; next.dataset.chatFlowKind = 'user'
+  next.getBoundingClientRect = () => ({ left: 80, top: 200, right: 760, bottom: 240, width: 680, height: 40, x: 80, y: 200, toJSON() {} })
+  s.flow.append(next)
+  const event = new s.win.MouseEvent('mousedown', { bubbles: true, cancelable: true, clientX: 20, clientY: 195 })
+  await act(async () => s.viewport.dispatchEvent(event))
+  expect(event.defaultPrevented).toBe(false)
+  await act(async () => s.viewport.dispatchEvent(new s.win.MouseEvent('click', { bubbles: true, clientX: 20, clientY: 195 })))
+  expect(s.doc.body.textContent).toContain('已选 1 条')
+})
+
+it.each([[4, 120], [798, 120], [20, 59], [20, 561], [20, 250]])('ignores gutter points outside the clip or row (%s, %s)', async (x, y) => {
+  const s = await setup(); await s.enter()
+  const event = new s.win.MouseEvent('mousedown', { bubbles: true, cancelable: true, clientX: x, clientY: y })
+  await act(async () => s.viewport.dispatchEvent(event))
+  expect(event.defaultPrevented).toBe(false)
+  await act(async () => s.viewport.dispatchEvent(new s.win.MouseEvent('click', { bubbles: true, clientX: x, clientY: y })))
+  expect(s.doc.body.textContent).toContain('已选 1 条')
 })
