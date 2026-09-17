@@ -1837,6 +1837,8 @@ export interface ArkmeForwardTranscriptSegment {
 }
 
 export interface ArkmeForwardRecordPreviewItem {
+  templateKind?: number
+  displayKind?: number
   senderName: string
   /** Opaque Provider image reference for the snapshotted sender. */
   avatarRef?: string
@@ -3568,6 +3570,7 @@ export type ArkmePluginOperation =
   | 'files.send.reconcile'
   | 'files.local.list'
   | 'files.local.open'
+  | 'files.local.open-folder'
   | 'files.local.remove'
   | 'files.send'
   | 'files.send.tasks'

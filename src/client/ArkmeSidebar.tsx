@@ -495,7 +495,7 @@ const styles: Record<string, CSSProperties> = {
   contactDialogBody: { flex: 1, minHeight: 0, overflow: 'hidden' },
   header: {
     flex: 'none', height: 68, display: 'flex', alignItems: 'center', padding: '12px 16px 12px 20px',
-    boxSizing: 'border-box', borderBottom: `1px solid ${colors.border}`, position: 'relative', gap: 2,
+    boxSizing: 'border-box', borderBottom: `1px solid ${colors.border}`, position: 'relative', gap: 4,
   },
   titleGroup: { flex: 1, minWidth: 0, display: 'flex', alignItems: 'center' },
   headerAvatar: { flex: 'none', display: 'grid', placeItems: 'center', marginRight: 6 },
@@ -2422,6 +2422,7 @@ export function ArkmeSurface({
     }
   }
   const captureComposerAsyncScope = (): ArkmeComposerAsyncScope => ({ ...composerAsyncScopeRef.current })
+  const renderedComposerAsyncScope = captureComposerAsyncScope()
   const sameComposerAsyncScope = (expected: ArkmeComposerAsyncScope): boolean => {
     const current = composerAsyncScopeRef.current
     return activeConversationRef.current
@@ -5995,6 +5996,48 @@ export function ArkmeSurface({
     setDrawer(undefined)
     requestAnimationFrame(() => { textareaRef.current?.focus() })
   }, [activeRecordReeditComposer, closeMessageMenu, showMessageActionStatus, source])
+  const defaultExtensionMentionTargetRef = useRef<typeof composerExtensionTarget>()
+  const defaultExtensionMentionCaretRef = useRef<{ draftKey: string; text: string }>()
+  useLayoutEffect(() => {
+    const pending = defaultExtensionMentionCaretRef.current
+    if (pending === undefined) return
+    if (pending.draftKey !== composerDraftKey) {
+      defaultExtensionMentionCaretRef.current = undefined
+      return
+    }
+    if (composerDraft.text !== pending.text) return
+    defaultExtensionMentionCaretRef.current = undefined
+    // Wait for the controlled editor to render the mention before placing the caret.
+    focusEditedComposer(pending.text.length)
+  }, [composerDraft.text, composerDraftKey, focusEditedComposer])
+  useEffect(() => {
+    if (composerExtensionTarget === undefined) {
+      defaultExtensionMentionTargetRef.current = undefined
+      return
+    }
+    if (defaultExtensionMentionTargetRef.current === composerExtensionTarget
+      || source?.kind !== 'group_chat' || source.sourceRef !== composerExtensionTarget.sourceRef
+      || !activeConversation || activeRecordReeditComposer !== undefined) return
+    const item = composerExtensionTarget.item
+    const member = item.memberRef === undefined ? undefined : conversationMemberByRef.get(item.memberRef)
+    if (member === undefined && !conversationMemberSnapshot.complete && conversationMemberSnapshot.error === undefined) return
+    defaultExtensionMentionTargetRef.current = composerExtensionTarget
+    if (item.isMe || member === undefined || member.isSelf || member.status !== 'active'
+      || member.mentionRef === undefined || member.mentionDisplayName === undefined) return
+    const current = arkmeComposerDraftStore.get(composerDraftKey)
+    if (current.attachments.length > 0 || current.emojis.length > 0) return
+    const mention = current.mentions.length === 1 ? current.mentions[0] : undefined
+    const onlyMention = mention !== undefined && mention.all !== true
+      && current.text.trim() === current.text.slice(mention.startIndex, mention.startIndex + mention.length).trim()
+    if (current.text.trim() !== '' && !onlyMention) return
+    insertMemberMentionAt(member, 0, current.text.length)
+    if (composerDraftKey !== undefined) defaultExtensionMentionCaretRef.current = {
+      draftKey: composerDraftKey,
+      text: arkmeComposerDraftStore.get(composerDraftKey).text,
+    }
+  }, [activeConversation, activeRecordReeditComposer, composerDraftKey, composerExtensionTarget,
+    conversationMemberByRef, conversationMemberSnapshot.complete, conversationMemberSnapshot.error,
+    insertMemberMentionAt, source])
   const closeRecordReedit = useCallback(async () => {
     const target = recordReeditComposerRef.current
     if (target === undefined || target.busy || preparationJobs.current.has(arkmeRecordReeditPreparationKey(target))) return
@@ -7090,11 +7133,11 @@ export function ArkmeSurface({
       >
         {selfTopicDirectoryOwner}
         {!selfWorkspaceSelected && selfTopicMenuOwner}
-        {authView !== 'login' && !arkoContentVisible && !utilityContentVisible && !botConversationVisible && <header className="arkme-conversation-header" style={styles.header}>
+        {authView !== 'login' && !arkoContentVisible && !utilityContentVisible && !botConversationVisible && <header data-arkme-window-drag-region="conversation" className="arkme-conversation-header" style={styles.header}>
           {authenticated && conversationBackdropVisible && source?.kind === 'group_chat' && <span style={styles.headerAvatar}>
             <ArkmeDirectorySourceAvatar source={source} size={34} />
           </span>}
-          <div style={styles.titleGroup}>
+          <div data-arkme-window-drag-region="conversation" style={styles.titleGroup}>
             {selfWorkspaceSelected
               ? selfTopicMenuOwner
               : <div style={styles.titleBlock}>
@@ -7963,7 +8006,10 @@ export function ArkmeSurface({
                 if (composerDraftKey === undefined) throw new Error('请先选择聊天')
                 return await uploadFavoriteSticker(file)
               }}
-              onStickerSent={async () => { await loadTimeline() }}
+              onStickerSent={async () => {
+                if (!sameComposerAsyncScope(renderedComposerAsyncScope)) return
+                await loadTimeline(undefined, false, 40, 'return-to-latest')
+              }}
               onError={message => { setError(message) }}
             /></div><div style={styles.composerSendArea}>
               <ArkmeComposerInputStats
