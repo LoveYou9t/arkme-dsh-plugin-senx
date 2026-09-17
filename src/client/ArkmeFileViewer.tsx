@@ -7,6 +7,9 @@ import { arkmeBrowserVisualKind, arkmeCanInlineLocalFile, type ArkmeFileReceptio
 import { createArkmeSdk } from '../sdk/index.js'
 
 const sdk = createArkmeSdk()
+const markdownLabels = { code: { copyLabel: '复制', copiedLabel: '复制成功' }, footnotes: '脚注' }
+// Newer hosts require labels; older hosts read codeLabels instead.
+const markdownLabelProps = { labels: markdownLabels, codeLabels: markdownLabels.code }
 const receptionListeners = new Map<string, Set<(value: ArkmeFileReception) => void>>()
 function publishReception(identity: string, value: ArkmeFileReception) {
   for (const listener of receptionListeners.get(identity) ?? []) listener(value)
@@ -480,7 +483,7 @@ export function ArkmeFileViewer({ block, onClose, blocks = [block], onSelect, op
         : visualKind === 'image' ? <img src={url} alt={block.fileName} style={mediaStyle} />
           : visualKind === 'video' ? <video src={url} controls style={mediaStyle} />
             : block.mimeType.startsWith('audio/') && arkmeCanInlineLocalFile(block.mimeType, block.fileName) ? <audio src={url} controls />
-              : textFile ? <div style={{ maxHeight: '65vh', overflow: 'auto', overflowWrap: 'anywhere' }}>{/\.(md|markdown)$/i.test(block.fileName) ? <MarkdownText text={text} /> : <pre style={{ whiteSpace: 'pre-wrap' }}>{text}</pre>}</div>
+              : textFile ? <div style={{ maxHeight: '65vh', overflow: 'auto', overflowWrap: 'anywhere' }}>{/\.(md|markdown)$/i.test(block.fileName) ? <MarkdownText text={text} {...markdownLabelProps} /> : <pre style={{ whiteSpace: 'pre-wrap' }}>{text}</pre>}</div>
                 : null}
       {error && <p role="alert">{error}</p>}
       <ArkmeFileActionToast notice={actionNotice} style={{ position: 'absolute', left: 74, right: 74, bottom: -8 }} />
