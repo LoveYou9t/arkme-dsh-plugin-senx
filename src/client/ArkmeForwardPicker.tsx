@@ -1,9 +1,8 @@
-import { useEffect, useRef, useState, type ReactNode, type CSSProperties } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import type { ArkmeSourceItem, ArkmeSourceList, ArkmeSourceSendResult } from '../types.js'
 import { arkmeSourceAllowsUserWrite } from '../topic-policy.js'
 import { callArkme, ArkmeClientError } from './api.js'
-import { arkmeTheme } from './arkme-theme.js'
-import { ArkmeSelectActionIcon } from './message-selection-presentation.js'
+import { ArkmeForwardDialog, ArkmeForwardTargetRow, arkmeForwardStyles as styles } from './ArkmeForwardDialog.js'
 import { arkmeSourceIdentityKey } from './source-identity.js'
 
 export interface ForwardSourcePresentation {
@@ -34,27 +33,6 @@ const DIRECTORIES: readonly Directory[] = ['root', 'send_to_self']
 interface DirectoryPage { items: ArkmeSourceItem[]; loading: boolean; error: string; cursor: string | undefined }
 const emptyPage = (): DirectoryPage => ({ items: [], loading: true, error: '', cursor: undefined })
 const directoryLabel = (directory: Directory) => directory === 'root' ? '聊天对象' : '自己与主题'
-
-const styles: Record<string, CSSProperties> = {
-  closeButton: { width: 34, height: 34, flex: 'none', display: 'grid', placeItems: 'center', padding: 0, border: 0, background: 'transparent', color: arkmeTheme.text, cursor: 'pointer' },
-  backdrop: {
-    position: 'fixed', inset: 0, zIndex: 1750, display: 'flex', alignItems: 'center', justifyContent: 'center',
-    padding: 18, boxSizing: 'border-box', background: 'rgba(23,25,28,.34)',
-  },
-  dialog: {
-    width: 'min(520px, 100%)', maxHeight: 'min(680px, calc(100vh - 36px))', display: 'flex', flexDirection: 'column',
-    borderRadius: 12, background: arkmeTheme.layer2, boxShadow: '0 20px 54px rgba(23,25,28,.22)', overflow: 'hidden',
-  },
-  dialogHeader: { display: 'flex', alignItems: 'center', padding: '16px 18px', borderBottom: `1px solid ${arkmeTheme.border}` },
-  dialogTitle: { flex: 1, margin: 0, fontSize: 17, lineHeight: '24px' },
-  input: { margin: '12px 16px 4px', padding: '9px 11px', border: `1px solid ${arkmeTheme.border}`, borderRadius: 8, background: arkmeTheme.input, color: arkmeTheme.text },
-  targetList: { flex: 1, minHeight: 140, overflowY: 'auto', padding: '8px 12px' },
-  target: { width: '100%', display: 'flex', alignItems: 'center', gap: 10, padding: '9px 8px', border: 0, borderRadius: 8, background: 'transparent', color: arkmeTheme.text, textAlign: 'left', cursor: 'pointer' },
-  targetCheck: { width: 20, height: 20, display: 'grid', placeItems: 'center', border: `1px solid ${arkmeTheme.border}`, borderRadius: 6 },
-  dialogFooter: { display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 8, padding: '12px 16px', borderTop: `1px solid ${arkmeTheme.border}` },
-  dialogButton: { minWidth: 72, height: 34, padding: '0 14px', border: `1px solid ${arkmeTheme.border}`, borderRadius: 8, background: arkmeTheme.elevated, color: arkmeTheme.text, cursor: 'pointer' },
-  primary: { border: 0, background: arkmeTheme.accent, color: '#fff' },
-}
 
 /** Shared target UI. Source identity and delivery remain owned by the caller. */
 export function ArkmeForwardPicker({ open = true, source, messageCount, delivery, onClose, onComplete, onStatus, onForwarded }: {
@@ -173,7 +151,7 @@ export function ArkmeForwardPicker({ open = true, source, messageCount, delivery
   if (!open) return null
   const close = () => { if (!busy.current) onClose() }
   const filtered = targets.filter(target => !keyword.trim() || `${target.displayName} ${targetMeta(target)}`.toLowerCase().includes(keyword.trim().toLowerCase()))
-  return <div data-arkme-forward-picker="true" style={styles.backdrop} onMouseDown={event => { if (event.target === event.currentTarget) close() }} onKeyDown={event => {
+  return <div data-arkme-forward-picker="true" onKeyDown={event => {
     if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); close() }
     if (event.key === 'Tab') {
       const controls = [...(dialog.current?.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), textarea:not(:disabled)') ?? [])]
@@ -184,33 +162,29 @@ export function ArkmeForwardPicker({ open = true, source, messageCount, delivery
       else if (!event.shiftKey && (current === last || !controls.includes(current as HTMLElement))) { event.preventDefault(); first.focus() }
     }
   }}>
-    <section ref={dialog} style={styles.dialog} role="dialog" aria-modal="true" aria-label="选择转发对象">
-      <header style={styles.dialogHeader}><h3 style={styles.dialogTitle}>转发给</h3><button type="button" aria-label="关闭转发对象选择" style={styles.closeButton} disabled={sending} onClick={close}><ArkmeSelectActionIcon kind="close" size={16} /></button></header>
-      <input style={styles.input} value={keyword} placeholder="搜索" aria-label="搜索转发对象" disabled={sending} onChange={event => setKeyword(event.target.value)} />
-      <div style={styles.targetList}>
-        {filtered.map(target => {
+    <ArkmeForwardDialog dialogRef={dialog} viewport keyword={keyword} onKeywordChange={setKeyword} sending={sending}
+      selectedTargets={targets.filter(target => selected.includes(targetKey(target)))}
+      previewIcon={source?.avatar} previewTitle={source?.name ?? '聊天记录'}
+      previewSubtitle={messageCount === undefined ? '聊天记录' : `${messageCount} 条消息`}
+      comment={comment} onCommentChange={setComment} commentDisabled={submitted} error={error}
+      onClose={close} onSend={() => { void send() }}>
+      <ul style={styles.forwardTargetList} aria-label="转发对象列表">
+        {[...filtered.filter(target => target.kind === 'send_to_self'), ...filtered.filter(target => target.kind !== 'send_to_self')].map(target => {
           const key = targetKey(target); const checked = selected.includes(key)
-          return <button key={key} type="button" style={styles.target} disabled={sending || completed.current.has(key)} onClick={() => {
-            if (busy.current || completed.current.has(key)) return
-            if (!checked && selected.length >= 5) { onStatus('最多选择 5 个转发对象'); return }
-            setSelected(checked ? selected.filter(value => value !== key) : [...selected, key]); setError('')
-          }}><span style={{ ...styles.targetCheck, background: checked ? arkmeTheme.accent : 'transparent', color: checked ? '#fff' : arkmeTheme.text }}>{checked ? '✓' : ''}</span><span style={{ flex: 1 }}><strong>{target.displayName}</strong><small style={{ display: 'block', color: arkmeTheme.secondary }}>{completed.current.has(key) ? '已转发' : targetMeta(target)}</small></span></button>
+          return <li key={key}><ArkmeForwardTargetRow target={target} selected={checked}
+            disabled={sending || completed.current.has(key)} meta={completed.current.has(key) ? '已转发' : targetMeta(target)} onToggle={() => {
+              if (busy.current || completed.current.has(key)) return
+              if (!checked && selected.length >= 5) { onStatus('最多选择 5 个转发对象'); return }
+              setSelected(checked ? selected.filter(value => value !== key) : [...selected, key]); setError('')
+            }} /></li>
         })}
+      </ul>
         {DIRECTORIES.map(directory => <div key={directory}>
           {pages[directory].loading && <div>{directoryLabel(directory)}正在加载…</div>}
           {pages[directory].error && <div role="alert">{directoryLabel(directory)}：{pages[directory].error}<button type="button" disabled={sending} onClick={() => { void load(directory, Boolean(pages[directory].cursor)) }}>重新加载</button></div>}
           {!pages[directory].loading && !pages[directory].error && pages[directory].cursor && <button type="button" disabled={sending} onClick={() => { void load(directory, true) }}>加载更多{directoryLabel(directory)}</button>}
         </div>)}
         {!Object.values(pages).some(page => page.loading || page.error) && filtered.length === 0 && <div>{keyword.trim() ? '已加载对象中没有匹配结果' : '暂无可转发对象'}</div>}
-        {error && <div style={{ color: arkmeTheme.danger, padding: 8 }}>{error}</div>}
-      </div>
-      {source && <div data-arkme-forward-source="true" style={{ display: 'flex', alignItems: 'center', gap: 10, margin: '8px 16px 0', padding: '10px 12px', borderRadius: 8, background: arkmeTheme.subtle }}>
-        <span aria-hidden style={{ width: 34, height: 34, flex: 'none', display: 'grid', placeItems: 'center' }}>{source.avatar}</span>
-        <span style={{ minWidth: 0 }}><span style={{ display: 'block', color: arkmeTheme.text, fontSize: 14 }}>{source.name}</span>
-          <span style={{ color: arkmeTheme.secondary, fontSize: 12 }}>{messageCount === undefined ? '聊天记录' : `${messageCount} 条消息`}</span></span>
-      </div>}
-      <textarea style={{ ...styles.input, minHeight: 58, resize: 'vertical' }} value={comment} placeholder="附言（可选）" disabled={sending || submitted} onChange={event => setComment(event.target.value)} />
-      <footer style={styles.dialogFooter}><button type="button" style={styles.dialogButton} disabled={sending} onClick={close}>取消</button><button type="button" style={{ ...styles.dialogButton, ...styles.primary, opacity: selected.length === 0 || sending ? .45 : 1 }} disabled={!selected.length || sending} onClick={() => { void send() }}>{sending ? '转发中…' : '转发'}</button></footer>
-    </section>
+    </ArkmeForwardDialog>
   </div>
 }

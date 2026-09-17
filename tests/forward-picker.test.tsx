@@ -5,7 +5,8 @@ vi.mock('../src/client/api.js', () => ({ callArkme: api.call, ArkmeClientError: 
 import { ArkmeForwardPicker, type ArkmeForwardDelivery } from '../src/client/ArkmeForwardPicker.js'
 let renderer: ReactTestRenderer | undefined
 const target = { sourceRef: 'ref', sourceKey: 'chat:one', kind: 'private_chat', displayName: '目标' }
-const button = (text: string) => renderer!.root.findAllByType('button').find(node => node.children.join('') === text)!
+const button = (text: string) => renderer!.root.findAllByType('button').find(node => text === '转发' ? node.props['aria-label'] === '发送转发' : text === '转发中…' ? node.props['aria-label'] === '转发中' : text === '取消' ? node.props['aria-label'] === '关闭转发对象选择' : node.children.join('') === text)!
+const targetButtons = () => renderer!.root.findAllByType('button').filter(node => typeof node.props['aria-pressed'] === 'boolean')
 afterEach(async () => { await act(async () => renderer?.unmount()); renderer = undefined; vi.restoreAllMocks() })
 async function mount(send: ArkmeForwardDelivery['send']) {
   const onClose = vi.fn(); const onComplete = vi.fn(); const onStatus = vi.fn()
@@ -20,8 +21,8 @@ it('deduplicates rapid send clicks, freezes the comment and keeps the same ident
   let reject: ((e: Error) => void) | undefined
   const send = vi.fn().mockImplementationOnce(() => new Promise((_resolve, fail) => { reject = fail })).mockResolvedValue({ itemUid: 'sent', localState: 'synced' })
   const events = await mount(send)
-  await act(async () => renderer!.root.findByType('strong').parent!.parent!.props.onClick())
-  await act(async () => renderer!.root.findByType('textarea').props.onChange({ target: { value: 'note' } }))
+  await act(async () => targetButtons()[0]!.props.onClick())
+  await act(async () => renderer!.root.findByType('textarea').props.onChange({ currentTarget: { value: 'note' } }))
   await act(async () => { button('转发').props.onClick(); button('转发').props.onClick() })
   expect(send).toHaveBeenCalledTimes(1)
   await act(async () => { reject!(new Error('unknown outcome')) })
@@ -36,7 +37,7 @@ it('aborts pending delivery on unmount and ignores a late success', async () => 
   let finish: ((value: unknown) => void) | undefined
   const send = vi.fn(() => new Promise(resolve => { finish = resolve })) as unknown as ArkmeForwardDelivery['send']
   const events = await mount(send)
-  await act(async () => renderer!.root.findByType('strong').parent!.parent!.props.onClick())
+  await act(async () => targetButtons()[0]!.props.onClick())
   await act(async () => button('转发').props.onClick())
   const signal = vi.mocked(send).mock.calls[0]![3]
   await act(async () => renderer!.unmount()); renderer = undefined
@@ -51,23 +52,23 @@ it('loads subsequent directory pages, deduplicates by stable target key and can 
   expect(renderer!.root.findAllByProps({ role: 'alert' })).toHaveLength(2)
   api.call.mockImplementation(async (_op, params) => params.directory === 'send_to_self' ? { items: [], hasMore: false } : params.cursor ? { items: [{ ...target, sourceRef: 'ref-new' }], hasMore: false } : { items: [target], hasMore: true, nextCursor: 'next' })
   await act(async () => button('重新加载').props.onClick())
-  expect(renderer!.root.findAllByType('strong')).toHaveLength(1)
+  expect(targetButtons()).toHaveLength(1)
   expect(api.call.mock.calls.some(([, params]) => params.cursor === 'next')).toBe(false)
   await act(async () => button('加载更多聊天对象').props.onClick())
   expect(api.call).toHaveBeenCalledWith('sources.list', { directory: 'root', limit: 80, cursor: 'next' }, expect.any(AbortSignal))
-  expect(renderer!.root.findAllByType('strong')).toHaveLength(1)
+  expect(targetButtons()).toHaveLength(1)
   expect(send).not.toHaveBeenCalled()
 })
 it('allocates fresh identities for a new dialog while retries in the same dialog reuse them', async () => {
   directory()
   const send = vi.fn().mockRejectedValue(new Error('offline'))
   await mount(send)
-  await act(async () => renderer!.root.findByType('strong').parent!.parent!.props.onClick())
+  await act(async () => targetButtons()[0]!.props.onClick())
   await act(async () => button('转发').props.onClick())
   const first = send.mock.calls[0]![1]
   await act(async () => renderer!.unmount()); renderer = undefined
   await mount(send)
-  await act(async () => renderer!.root.findByType('strong').parent!.parent!.props.onClick())
+  await act(async () => targetButtons()[0]!.props.onClick())
   await act(async () => button('转发').props.onClick())
   expect(send.mock.calls[1]![1]).not.toEqual(first)
 })
@@ -78,8 +79,8 @@ it('keeps chat targets usable when the personal directory fails', async () => {
   })
   const send = vi.fn().mockResolvedValue({ itemUid: 'sent', localState: 'synced' })
   await mount(send)
-  expect(renderer!.root.findAllByType('strong')).toHaveLength(1)
-  await act(async () => renderer!.root.findByType('strong').parent!.parent!.props.onClick())
+  expect(targetButtons()).toHaveLength(1)
+  await act(async () => targetButtons()[0]!.props.onClick())
   expect(button('转发').props.disabled).toBe(false)
   await act(async () => button('转发').props.onClick())
   expect(send).toHaveBeenCalledTimes(1)
@@ -93,10 +94,10 @@ it('preserves topic selection and retry identity when a later page rotates its a
       : { items: [topic], hasMore: true, nextCursor: 'next' })
   const send = vi.fn().mockRejectedValueOnce(new Error('unknown outcome')).mockResolvedValue({ itemUid: 'sent', localState: 'synced' })
   await mount(send)
-  await act(async () => renderer!.root.findByType('strong').parent!.parent!.props.onClick())
+  await act(async () => targetButtons()[0]!.props.onClick())
   await act(async () => button('转发').props.onClick())
   await act(async () => button('加载更多自己与主题').props.onClick())
-  expect(renderer!.root.findAllByType('strong')).toHaveLength(1)
+  expect(targetButtons()).toHaveLength(1)
   await act(async () => button('转发').props.onClick())
   expect(send).toHaveBeenCalledTimes(2)
   expect(send.mock.calls[1]![0].sourceRef).toBe('topic-new')
@@ -110,7 +111,7 @@ it('releases the sending lock after timeout and retries with the original identi
       signal.addEventListener('abort', () => reject(new Error('aborted')), { once: true })
     })).mockResolvedValue({ itemUid: 'sent', localState: 'synced' })
     await mount(send)
-    await act(async () => renderer!.root.findByType('strong').parent!.parent!.props.onClick())
+    await act(async () => targetButtons()[0]!.props.onClick())
     await act(async () => button('转发').props.onClick())
     expect(button('转发中…').props.disabled).toBe(true)
     await act(async () => { await vi.advanceTimersByTimeAsync(30_000) })
@@ -130,7 +131,7 @@ it('retries failed targets and unfinished comments without redelivering complete
     .mockResolvedValueOnce({ itemUid: 'three', localState: 'synced', warningText: '附言发送失败' })
     .mockResolvedValue({ itemUid: 'confirmed', localState: 'synced' })
   const events = await mount(send)
-  for (const node of renderer!.root.findAllByType('strong')) await act(async () => node.parent!.parent!.props.onClick())
+  for (const node of targetButtons()) await act(async () => node.props.onClick())
   await act(async () => button('转发').props.onClick())
   expect(send).toHaveBeenCalledTimes(3)
   expect(events.onComplete).not.toHaveBeenCalled()

@@ -605,12 +605,13 @@ async function setupForward(authResult?: () => Promise<unknown>) {
 it('forwards from the native selection through the shared picker and exits only after confirmed success', async () => {
   const s = await setupForward()
   expect(s.doc.querySelector('[role="dialog"]')).not.toBeNull()
+  expect(s.doc.querySelector('[data-arkme-forward-source]')).toBeNull()
+  await s.click('[role="dialog"] button[aria-pressed]')
   const source = s.doc.querySelector('[data-arkme-forward-source]')!
   expect(source.textContent).toBe('DeepSeek Harness1 条消息')
   expect(source.querySelector('svg')).not.toBeNull()
   expect(s.doc.body.textContent).toContain('已选 1 条')
-  await s.click('[role="dialog"] strong')
-  await act(async () => { [...s.doc.querySelectorAll<HTMLButtonElement>('[role="dialog"] button')].find(button => button.textContent === '转发')!.click() })
+  await act(async () => { [...s.doc.querySelectorAll<HTMLButtonElement>('[role="dialog"] button')].find(button => button.getAttribute('aria-label') === '发送转发')!.click() })
   expect(api.call).toHaveBeenCalledWith('native-chat.forward', expect.objectContaining({ expectedUserId: 42, snapshot: { sessionId: 'one', messages: [{ key: 'user:opaque', anchorSeq: 1, role: 'user', text: '**source**', createdAtMillis: 1000 }] } }), expect.any(AbortSignal))
   expect(s.doc.querySelector('[role="dialog"]')).toBeNull()
   expect(s.doc.querySelector('[data-arkme-native-selection="actions"]')).toBeNull()
@@ -648,8 +649,8 @@ it('resumes native forwarding with the same frozen snapshot and delivery identit
     if (args[0] === 'native-chat.forward') throw new Error('unknown outcome')
     return original(...args)
   })
-  await s.click('[role="dialog"] strong')
-  const send = async () => act(async () => { [...s.doc.querySelectorAll<HTMLButtonElement>('[role="dialog"] button')].find(button => button.textContent === '转发')!.click() })
+  await s.click('[role="dialog"] button[aria-pressed]')
+  const send = async () => act(async () => { [...s.doc.querySelectorAll<HTMLButtonElement>('[role="dialog"] button')].find(button => button.getAttribute('aria-label') === '发送转发')!.click() })
   await send()
   const first = api.call.mock.calls.find(([operation]) => operation === 'native-chat.forward')![1]
   await s.click('[aria-label="关闭转发对象选择"]')
