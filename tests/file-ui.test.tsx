@@ -406,7 +406,7 @@ describe('client file preview interaction', () => {
     let view!: ReactTestRenderer
     try {
       await act(async () => { view = create(<ArkmeFileViewer block={{ ...block, fileName: 'missing.md', localFileRef: original.localRef }} openLocalFile onClose={onClose} />) })
-      expect(JSON.stringify(view.toJSON())).toContain('文件预览失败，请下载后打开')
+      expect(JSON.stringify(view.toJSON())).toContain('文件预览失败，请重试或另存为后打开')
       expect(view.root.findByProps({ 'aria-label': '另存为文件' }).props.disabled).toBe(false)
       await act(async () => view.root.findByProps({ 'aria-label': '关闭文件预览' }).props.onClick())
       expect(onClose).toHaveBeenCalledOnce()
@@ -808,6 +808,24 @@ describe('client file preview interaction', () => {
     await act(async () => cancel(new DOMException('cancelled', 'AbortError')))
     await act(async () => view.unmount())
   })
+  it('retains an opened preview when the same asset renews its access reference', async () => {
+    vi.stubGlobal('document', { body: {}, activeElement: null })
+    const fetcher = vi.fn(async () => new Response('# retained'))
+    vi.stubGlobal('fetch', fetcher)
+    const file = { ...block, fileAssetUid: 'asset-md', fileName: 'a.md', localFileRef: original.localRef, mediaRef: 'old' }
+    let view!: ReactTestRenderer
+    try {
+      await act(async () => { view = create(<ArkmeFileViewer block={file} onClose={() => {}} />) })
+      await act(async () => view.root.findByProps({ 'aria-label': '打开文件' }).props.onClick())
+      await act(async () => view.update(<ArkmeFileViewer block={{ ...file, mediaRef: 'renewed' }} onClose={() => {}} />))
+      expect(view.root.findAllByProps({ 'aria-label': '打开文件' })).toHaveLength(0)
+      expect(view.root.findByType('h1').props.children).toBe('retained')
+      expect(fetcher).toHaveBeenCalledOnce()
+      await act(async () => view.update(<ArkmeFileViewer block={{ ...file, fileAssetUid: 'different', localFileRef: 'arkme-file-v1.00000000-0000-4000-8000-000000000002' }} onClose={() => {}} />))
+      expect(view.root.findByProps({ 'aria-label': '打开文件' })).toBeDefined()
+    } finally { await act(async () => view.unmount()) }
+  })
+
   it('hides Open while previewing and keeps download and folder actions', async () => {
     vi.stubGlobal('document', { body: {}, activeElement: null })
     vi.stubGlobal('fetch', async () => new Response('# preview'))

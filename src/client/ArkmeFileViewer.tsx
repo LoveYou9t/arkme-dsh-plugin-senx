@@ -444,6 +444,7 @@ export function ArkmeFileViewer({ block, onClose, blocks = [block], onSelect, op
   const [text, setText] = useState<string>()
   const [error, setError] = useState('')
   const [openRequested, setOpenRequested] = useState(openLocalFile ? 1 : 0)
+  const fileIdentity = block.fileAssetUid ?? block.localFileRef ?? block.originalRef ?? block.mediaRef
   const url = original.localRef === undefined ? undefined : arkmeLocalFileUrl(original.localRef)
   const textFile = canPreviewTextFile(block)
   const visualKind = arkmeBrowserVisualKind(block.mimeType, block.fileName)
@@ -460,7 +461,7 @@ export function ArkmeFileViewer({ block, onClose, blocks = [block], onSelect, op
   const index = Math.max(0, blocks.findIndex(value => value.mediaRef === block.mediaRef))
   const previousDisabled = navigation === undefined ? onSelect === undefined || index <= 0 : navigation.previous === undefined
   const nextDisabled = navigation === undefined ? onSelect === undefined || index >= blocks.length - 1 : navigation.next === undefined
-  useEffect(() => { setOpenRequested(openLocalFile ? 1 : 0); setError('') }, [block.mediaRef, openLocalFile])
+  useEffect(() => { setOpenRequested(openLocalFile ? 1 : 0); setError('') }, [fileIdentity, openLocalFile])
   useEffect(() => { clearActionNotice() }, [block.mediaRef, clearActionNotice])
   useEffect(() => {
     const previous = document.activeElement as HTMLElement | null
@@ -475,7 +476,7 @@ export function ArkmeFileViewer({ block, onClose, blocks = [block], onSelect, op
       if (!response.ok) throw new Error('文件预览失败')
       const value = await response.text()
       if (!controller.signal.aborted) setText(value)
-    }).catch(() => { if (!controller.signal.aborted) setError('文件预览失败，请下载后打开') })
+    }).catch(() => { if (!controller.signal.aborted) setError('文件预览失败，请重试或另存为后打开') })
     return () => controller.abort()
   }, [url, textFile, showContent, openRequested])
   const preview = () => {
