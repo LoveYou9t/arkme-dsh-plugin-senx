@@ -518,15 +518,15 @@ export function ArkmeFileViewer({ block, onClose, blocks = [block], onSelect, op
         <div role="group" aria-label="文件操作" style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
           {!showContent && <button type="button" aria-label="打开文件" disabled={openBusy || unavailable} onClick={systemFile ? nativeOpen.open : preview}
             style={{ ...filePanelActionStyle, opacity: openBusy || unavailable ? .5 : 1, cursor: openBusy ? 'progress' : unavailable ? 'default' : 'pointer' }}>打开</button>}
-          <button type="button" aria-label="下载文件" disabled={download.saving || unavailable} onClick={() => { void download.save() }}
-            style={{ ...filePanelActionStyle, opacity: download.saving || unavailable ? .5 : 1, cursor: download.saving ? 'progress' : unavailable ? 'default' : 'pointer' }}>下载</button>
+          <button type="button" aria-label="另存为文件" disabled={download.saving || unavailable} onClick={() => { void download.save() }}
+            style={{ ...filePanelActionStyle, opacity: download.saving || unavailable ? .5 : 1, cursor: download.saving ? 'progress' : unavailable ? 'default' : 'pointer' }}>另存为</button>
           <button type="button" aria-label="打开文件夹" disabled={nativeOpen.opening || original.localRef === undefined} onClick={nativeOpen.openFolder}
-            title={original.localRef === undefined ? '请先打开或下载文件' : '打开 Arkme 已接收文件所在的文件夹'}
+            title={original.localRef === undefined ? '请先打开或另存为文件' : '打开 Arkme 已接收文件所在的文件夹'}
             style={{ ...filePanelActionStyle, opacity: nativeOpen.opening || original.localRef === undefined ? .5 : 1, cursor: nativeOpen.opening ? 'progress' : original.localRef === undefined ? 'default' : 'pointer' }}>打开文件夹</button>
         </div>
         {nativeOpen.opening && <p role="status">正在打开…</p>}
         {showContent && nativeOpen.error && <p role="alert">{nativeOpen.error}</p>}
-        {download.saving && <p role="status">正在下载...</p>}
+        {download.saving && <p role="status">正在保存...</p>}
         {download.notice && <p role="status">{download.notice}</p>}
       </div>}
       {error && <div><p role="alert">{error}</p><button type="button" onClick={preview} style={filePanelActionStyle}>重试预览</button></div>}
