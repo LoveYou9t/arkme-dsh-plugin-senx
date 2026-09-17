@@ -516,8 +516,8 @@ export function ArkmeFileViewer({ block, onClose, blocks = [block], onSelect, op
                 : null}
       {filePanel && <div style={{ marginTop: 16 }}>
         <div role="group" aria-label="文件操作" style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-          <button type="button" aria-label="打开文件" disabled={openBusy || unavailable} onClick={systemFile ? nativeOpen.open : preview}
-            style={{ ...filePanelActionStyle, opacity: openBusy || unavailable ? .5 : 1, cursor: openBusy ? 'progress' : unavailable ? 'default' : 'pointer' }}>打开</button>
+          {!showContent && <button type="button" aria-label="打开文件" disabled={openBusy || unavailable} onClick={systemFile ? nativeOpen.open : preview}
+            style={{ ...filePanelActionStyle, opacity: openBusy || unavailable ? .5 : 1, cursor: openBusy ? 'progress' : unavailable ? 'default' : 'pointer' }}>打开</button>}
           <button type="button" aria-label="下载文件" disabled={download.saving || unavailable} onClick={() => { void download.save() }}
             style={{ ...filePanelActionStyle, opacity: download.saving || unavailable ? .5 : 1, cursor: download.saving ? 'progress' : unavailable ? 'default' : 'pointer' }}>下载</button>
           <button type="button" aria-label="打开文件夹" disabled={nativeOpen.opening || original.localRef === undefined} onClick={nativeOpen.openFolder}
@@ -529,7 +529,7 @@ export function ArkmeFileViewer({ block, onClose, blocks = [block], onSelect, op
         {download.saving && <p role="status">正在下载...</p>}
         {download.notice && <p role="status">{download.notice}</p>}
       </div>}
-      {error && <p role="alert">{error}</p>}
+      {error && <div><p role="alert">{error}</p><button type="button" onClick={preview} style={filePanelActionStyle}>重试预览</button></div>}
       <ArkmeFileActionToast notice={actionNotice} style={{ position: 'absolute', left: 74, right: 74, bottom: -8 }} />
       <div style={{ position: 'absolute', left: 0, right: 0, bottom: -56, color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
         <ArkmeFileActionNavButton label="上一个文件" direction="left" disabled={previousDisabled} onClick={() => { if (!previousDisabled) { if (navigation) navigation.previous?.(); else onSelect?.(blocks[index - 1]!) } }} />

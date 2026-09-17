@@ -808,7 +808,19 @@ describe('client file preview interaction', () => {
     await act(async () => cancel(new DOMException('cancelled', 'AbortError')))
     await act(async () => view.unmount())
   })
-  it('actually reloads Markdown after a read failure when Open is retried', async () => {
+  it('hides Open while previewing and keeps download and folder actions', async () => {
+    vi.stubGlobal('document', { body: {}, activeElement: null })
+    vi.stubGlobal('fetch', async () => new Response('# preview'))
+    let view!: ReactTestRenderer
+    try {
+      await act(async () => { view = create(<ArkmeFileViewer block={{ ...block, fileName: 'a.md', localFileRef: original.localRef }} openLocalFile onClose={() => {}} />) })
+      expect(view.root.findAllByProps({ 'aria-label': '打开文件' })).toHaveLength(0)
+      expect(view.root.findByProps({ 'aria-label': '下载文件' })).toBeDefined()
+      expect(view.root.findByProps({ 'aria-label': '打开文件夹' })).toBeDefined()
+    } finally { await act(async () => view.unmount()) }
+  })
+
+  it('reloads failed Markdown through the explicit preview retry action', async () => {
     vi.stubGlobal('document', { body: {}, activeElement: null })
     const fetcher = vi.fn().mockRejectedValueOnce(new Error('offline')).mockResolvedValue(new Response('# recovered'))
     vi.stubGlobal('fetch', fetcher)
@@ -816,7 +828,8 @@ describe('client file preview interaction', () => {
     await act(async () => { view = create(<ArkmeFileViewer block={{ ...block, fileName: 'a.md', localFileRef: original.localRef }} onClose={() => {}} />) })
     await act(async () => view.root.findByProps({ 'aria-label': '打开文件' }).props.onClick())
     expect(view.root.findByProps({ role: 'alert' })).toBeDefined()
-    await act(async () => view.root.findByProps({ 'aria-label': '打开文件' }).props.onClick())
+    expect(view.root.findAllByProps({ 'aria-label': '打开文件' })).toHaveLength(0)
+    await act(async () => view.root.findAllByType('button').find(button => button.props.children === '重试预览')!.props.onClick())
     expect(fetcher).toHaveBeenCalledTimes(2)
     expect(view.root.findByType('h1').props.children).toBe('recovered')
     await act(async () => view.unmount())
