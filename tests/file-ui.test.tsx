@@ -570,6 +570,8 @@ describe('client file preview interaction', () => {
     ['image', 'photo.jpg', 'image/jpeg', 'img'],
     ['video', 'movie.mp4', 'video/mp4', 'video'],
     ['audio', 'track.mp3', 'audio/mpeg', 'audio'],
+    ['audio with mixed-case MIME', 'track.mp3', 'Audio/MPEG', 'audio'],
+    ['audio with padded MIME', 'track.mp3', ' audio/mpeg ', 'audio'],
   ])('uses the real %s preview even when an old block was marked as a generic file', async (_label, fileName, mimeType, element) => {
     vi.stubGlobal('window', {})
     vi.stubGlobal('document', { body: {}, activeElement: null })
