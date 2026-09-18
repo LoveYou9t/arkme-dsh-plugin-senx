@@ -1,0 +1,78 @@
+/* Geometry follows DSH InputBar; all selectors belong to this opt-in surface.
+   DSH does not publicly export its InputBar CSS or session-bound component. */
+.arkme-dsh-composer {
+  box-sizing: border-box;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 100%;
+  min-width: 0;
+  padding-top: 10px;
+  border: 1px solid var(--dsw-alias-border-l2-darkmode-thin, var(--dsw-alias-border-l2));
+  border-radius: 22px;
+  background: var(--dsw-specific-input-major);
+  color: var(--dsw-alias-label-primary);
+  box-shadow: var(--dsw-shadow-lv2);
+  font-family: var(--dsw-font-family, inherit);
+  --dsh-scrollbar-thumb: var(--dsw-alias-scrollbar-bg-l2);
+  --dsh-scrollbar-thumb-hover: var(--dsw-alias-scrollbar-hover-l2);
+}
+.arkme-dsh-composer-editor { min-width: 0; padding: 0 16px; }
+.arkme-dsh-composer-input {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 48px;
+  max-height: 336px;
+  overflow-y: auto;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: inherit;
+  font-size: 16px;
+  line-height: 24px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+.arkme-dsh-composer-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  padding: 2px 8px 6px;
+  flex-wrap: wrap;
+}
+.arkme-dsh-composer-tools { display: flex; align-items: center; flex: none; }
+.arkme-dsh-composer-hint {
+  flex: 1 1 0;
+  min-width: 0;
+  color: var(--dsw-alias-label-secondary);
+  font-size: 12px;
+  line-height: 18px;
+  overflow-wrap: anywhere;
+}
+.arkme-dsh-composer-trailing {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  max-width: 100%;
+  margin-left: auto;
+}
+.arkme-dsh-composer .arkme-dsh-composer-primary {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: var(--dsw-alias-button-info-fill, var(--dsw-alias-state-business-primary));
+  color: var(--dsw-static-neutral-bluish-00);
+  transform: translateY(-2px);
+}
+.arkme-dsh-composer .arkme-dsh-composer-primary:hover:not(:disabled) {
+  background: var(--dsw-alias-button-info-hover, var(--dsw-alias-state-business-primary));
+}

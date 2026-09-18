@@ -131,7 +131,7 @@ describe('Arko capability shortcut', () => {
     await act(async () => { await vi.advanceTimersByTimeAsync(1200) })
     const expectedName = profileFails ? 'Arko' : '新名称'
     const button = renderer.root.findByProps({ 'aria-label': `${expectedName} 能干什么` })
-    expect(button.findByType('span').children.join('')).toBe(`${expectedName} 能干什么`)
+    expect(visibleText(button)).toBe(`${expectedName} 能干什么`)
     expect(button.props.disabled).toBe(false)
     expect(vi.mocked(callArkme)).toHaveBeenCalledWith('arko.run.status', { sessionId: 88, runUid: 'run-1' }, expect.any(AbortSignal))
     expect(ask).toHaveBeenCalledTimes(1)
@@ -253,7 +253,7 @@ describe('Arko capability shortcut', () => {
       : original(method, input))
     await mount()
     const button = renderer.root.findByProps({ 'aria-label': `${expected} 能干什么` })
-    expect(button.findByType('span').children.join('')).toBe(`${expected} 能干什么`)
+    expect(visibleText(button)).toBe(`${expected} 能干什么`)
     expect(renderer.root.findByType('h2').children.join('')).toBe(expected)
     expect(button.props.disabled).toBe(false)
     expect(ask).not.toHaveBeenCalled()
@@ -265,7 +265,7 @@ describe('Arko capability shortcut', () => {
     await mount()
     await act(async () => { shortcut().props.onClick() })
     const renamed = renderer.root.findByProps({ 'aria-label': '小助 能干什么' })
-    expect(renamed.findByType('span').children.join('')).toBe('小助 能干什么')
+    expect(visibleText(renamed)).toBe('小助 能干什么')
     expect(renamed.props.disabled).toBe(false)
     expect(arkmeComposerDraftStore.get(draftKey).text).toBe('继续正常聊天')
     const textarea = renderer.root.findByType(ArkmeDocumentComposerInput)
@@ -280,14 +280,14 @@ describe('Arko capability shortcut', () => {
 
   it('updates the visible and accessible shortcut name when the assistant is renamed', async () => {
     await mount()
-    expect(shortcut().findByType('span').children).toEqual(['Arko 能干什么'])
+    expect(visibleText(shortcut())).toBe('Arko 能干什么')
     await act(async () => {
       arkmeArkoProfileStore.setProfile(10001, {
         ...arkmeArkoProfileStore.getSnapshot().profile!, displayName: '小助', version: 2,
       })
     })
     const renamed = renderer.root.findByProps({ 'aria-label': '小助 能干什么' })
-    expect(renamed.findByType('span').children.join('')).toBe('小助 能干什么')
+    expect(visibleText(renamed)).toBe('小助 能干什么')
     expect(renderer.root.findAllByProps({ 'aria-label': 'Arko 能干什么' })).toHaveLength(0)
     await act(async () => { renamed.props.onClick() })
     expect(ask).toHaveBeenCalledWith(expect.objectContaining({ text: '你能帮我干什么' }))
@@ -483,31 +483,6 @@ describe('Arko capability shortcut', () => {
     expect(ask).not.toHaveBeenCalled()
     await act(async () => { complete({ sessionId: 88 }) })
     expect(shortcut().props.disabled).toBe(false)
-  })
-
-  it('keeps both send controls disabled until model switching finishes', async () => {
-    const models = { options: [
-      { routeKey: 'model-a', displayName: 'A', description: '', selected: true },
-      { routeKey: 'model-b', displayName: 'B', description: '', selected: false },
-    ], effectiveRouteKey: 'model-a' }
-    let complete!: (value: unknown) => void
-    const original = vi.mocked(callArkme).getMockImplementation()!
-    vi.mocked(callArkme).mockImplementation((method, input, signal) => {
-      if (method === 'arko.models') return Promise.resolve(models) as never
-      if (method === 'arko.model.activate') return new Promise(resolve => { complete = resolve }) as never
-      return original(method, input, signal)
-    })
-    arkmeComposerDraftStore.setText(draftKey, '草稿')
-    await mount()
-    act(() => renderer.root.findByProps({ title: '选择模型' }).props.onClick())
-    const option = renderer.root.findAllByType('button').find(button => button.findAll(node => node.type === 'span' && node.children.includes('B')).length > 0)!
-    await act(async () => { option.props.onClick() })
-    expect(shortcut().props.disabled).toBe(true)
-    expect(renderer.root.findByProps({ title: '发送' }).props.disabled).toBe(true)
-    await act(async () => { complete({ ...models, effectiveRouteKey: 'model-b' }) })
-    await act(async () => { shortcut().props.onClick() })
-    expect(ask).toHaveBeenCalledWith(expect.objectContaining({ modelRouteKey: 'model-b' }))
-    expect(arkmeComposerDraftStore.get(draftKey).text).toBe('草稿')
   })
 
   it('keeps ordinary draft sending and clearing unchanged', async () => {

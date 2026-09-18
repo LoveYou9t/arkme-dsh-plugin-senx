@@ -290,8 +290,8 @@ it('keeps model switching isolated from the open detail and preserves the draft'
   await click(bubble('完整回答'))
   const originalPanel = detail()
   await click(host.querySelector('[title="选择模型"]')!)
-  const modal = host.querySelector('[aria-modal="true"]')!
-  await click([...modal.querySelectorAll('button')].find(b => b.textContent?.includes('模型B'))!)
+  const menu = document.querySelector('[role="menu"]')!
+  await click([...menu.querySelectorAll('button')].find(b => b.textContent?.includes('模型B'))!)
   expect((host.querySelector('[title="发送"]') as HTMLButtonElement).disabled).toBe(true)
   await act(async () => { finish({ ...models, effectiveRouteKey: 'b' }) })
   expect(detail()).toBe(originalPanel)

@@ -131,8 +131,8 @@ describe('Arkme conversation composer presentation', () => {
     expect(arkmeConversationComposerHeight(630)).toBe(336)
   })
 
-  it('keeps Agent behavior in the Arko surface while both surfaces consume shared presentation', () => {
-    for (const source of [sidebarSource, arkoSource]) {
+  it('keeps Arko on the DSH presentation without changing the ordinary chat layout', () => {
+    for (const source of [sidebarSource]) {
       expect(source).toContain("from './conversation-composer-presentation.js'")
       expect(source).toContain('...arkmeConversationComposerLayout.composer')
       expect(source).toContain('...arkmeConversationComposerLayout.composerInner')
@@ -140,6 +140,8 @@ describe('Arkme conversation composer presentation', () => {
       expect(source).toContain('...arkmeConversationComposerLayout.tools')
       expect(source).not.toMatch(/Math\.min\(textarea\.scrollHeight,\s*(180|336)\)/)
     }
+    expect(arkoSource).toContain('<ArkmeDshComposer')
+    expect(arkoSource).not.toContain('arkmeConversationComposerLayout')
     expect(arkoSource).toContain('<ArkmeDocumentComposerInput')
     expect(sidebarSource).toContain('<ArkmeRichComposerInput')
     expect(sidebarSource).toContain('onSelectionChange={updateComposerRichTrigger}')
