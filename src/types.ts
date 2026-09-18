@@ -1169,6 +1169,11 @@ export interface ArkmeCallVideoPerspective {
   posterUrl?: string
 }
 
+/** A share is a public capability plus login, never the account-bound callRef. */
+export interface ArkmeCallShareLink { url: string }
+export interface ArkmeCallShareViewer { viewId: string; userId: number; displayName: string; avatarRef?: string; viewedAtMillis: number }
+export interface ArkmeCallShareViewers { items: ArkmeCallShareViewer[]; nextCursor: string }
+
 export interface ArkmeCallDetail {
   callRef: string
   title: string
@@ -3624,6 +3629,8 @@ export type ArkmePluginOperation =
   | 'calls.outgoing.diag'
   | 'calls.history.list'
   | 'calls.history.detail'
+  | 'calls.share.ensure'
+  | 'calls.share.viewers'
   | 'calls.history.summary.retry'
   | 'extensions.mine.list'
   | 'extensions.mine.publish'

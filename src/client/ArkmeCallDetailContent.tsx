@@ -1,3 +1,4 @@
+import { ArkmeCallShareControls } from './ArkmeCallShareControls.js'
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react'
 import { ArrowClockwise } from '@phosphor-icons/react/dist/icons/ArrowClockwise'
 import { Pause } from '@phosphor-icons/react/dist/icons/Pause'
@@ -339,6 +340,7 @@ export function ArkmeCallDetailContent({ selectedItem, detail, detailState, deta
             <header style={styles.transcriptHeader} data-arkme-call-transcript-header="aligned">
               <h3 style={styles.transcriptTitle}>通话转写</h3>
               <span style={styles.transcriptCount}>{detail.transcriptSegments.length} 段对话</span>
+              {!selectedIsSample && detailState === 'ready' && <div style={{ marginLeft: 'auto', alignSelf: 'center', display: 'flex' }}><ArkmeCallShareControls callRef={detail.callRef} /></div>}
             </header>
             {detail.transcriptSegments.map(segment => {
               const mine = segment.speakerUserId !== undefined && detail.participants.some(participant => participant.isCurrentUser && participant.userId === segment.speakerUserId)
@@ -389,6 +391,7 @@ export function ArkmeCallDetailContent({ selectedItem, detail, detailState, deta
             <header style={styles.transcriptHeader} data-arkme-call-transcript-header="aligned">
               <h3 style={styles.transcriptTitle}>通话转写</h3>
               <span style={styles.transcriptCount}>0 段对话</span>
+              {!selectedIsSample && detailState === 'ready' && <div style={{ marginLeft: 'auto', alignSelf: 'center', display: 'flex' }}><ArkmeCallShareControls callRef={detail.callRef} /></div>}
             </header>
             <p role="status" style={styles.transcriptEmpty}>{detail.transcriptFailed ? '转写失败' : detail.transcriptPending ? '转写处理中' : '暂无转写内容'}</p>
           </section>}
